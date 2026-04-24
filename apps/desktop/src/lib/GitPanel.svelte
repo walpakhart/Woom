@@ -100,10 +100,9 @@
   }
 
   function discardFile(f: FileStatus) {
-    const isUntracked = f.code.startsWith('?');
-    const verb = isUntracked ? 'Delete untracked file' : 'Discard changes in';
-    const ok = confirm(`${verb} "${f.path}"?\n\nThis cannot be undone.`);
-    if (!ok) return;
+    // Per-file discard is a single-click, no-confirm action. "Discard all"
+    // still confirms because that's a bulk destructive op; single files
+    // are easily re-typed / re-added if mistaken.
     void withBusy('discard', () => invoke('git_discard', { repo, paths: [f.path] }));
   }
 

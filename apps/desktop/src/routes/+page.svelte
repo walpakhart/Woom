@@ -2272,7 +2272,7 @@
   </div>
 {/if}
 
-<div id="app">
+<div id="app" class:is-dragging={dragPayload !== null}>
   <Rail
     bind:view
     inboxCount={inboxState.items.length}
@@ -3002,6 +3002,13 @@
   .pill-group.has-menu.drag-over .pill-menu {
     display: flex;
     animation: fadeIn 120ms ease-out;
+  }
+  /* During any drag (ticket card, file, OS file), force-open every pill's
+     menu so the user can aim at a specific column without having to first
+     hover the pill without the menu. WebKit sometimes suppresses `:hover`
+     mid-drag; the explicit class is the robust trigger. */
+  #app.is-dragging .pill-group.has-menu .pill-menu {
+    display: flex;
   }
   /* Drag-hover — accent outline so "here's the drop target" reads clearly,
      distinct from plain `:hover`. */
