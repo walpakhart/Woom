@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="50%" y1="0%" x2="50%" y2="100%">
+      <stop offset="0%" stop-color="#1A0F0A"/>
+      <stop offset="100%" stop-color="#070302"/>
+    </linearGradient>
+    <radialGradient id="ember" cx="50%" cy="82%" r="58%">
+      <stop offset="0%" stop-color="#FFB072" stop-opacity="0.95"/>
+      <stop offset="30%" stop-color="#FF8A42" stop-opacity="0.7"/>
+      <stop offset="60%" stop-color="#EE6B1F" stop-opacity="0.35"/>
+      <stop offset="90%" stop-color="#8A2E0C" stop-opacity="0.08"/>
+      <stop offset="100%" stop-color="#8A2E0C" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="anvilBody" x1="50%" y1="0%" x2="50%" y2="100%">
+      <stop offset="0%" stop-color="#E8D6C2"/>
+      <stop offset="25%" stop-color="#B69479"/>
+      <stop offset="55%" stop-color="#70503B"/>
+      <stop offset="85%" stop-color="#3B2418"/>
+      <stop offset="100%" stop-color="#1F120B"/>
+    </linearGradient>
+    <linearGradient id="topShine" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FFEEDB" stop-opacity="0.9"/>
+      <stop offset="100%" stop-color="#FFEEDB" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="hotIngot" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#FFAA5C" stop-opacity="0"/>
+      <stop offset="35%" stop-color="#FFD18A" stop-opacity="0.95"/>
+      <stop offset="50%" stop-color="#FFFFFF" stop-opacity="1"/>
+      <stop offset="65%" stop-color="#FFD18A" stop-opacity="0.95"/>
+      <stop offset="100%" stop-color="#FFAA5C" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="softGlow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="22" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="ingotGlow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="8" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <!-- rounded background -->
+  <rect width="1024" height="1024" fill="url(#bg)" rx="220"/>
+
+  <!-- ember glow rising from under the anvil -->
+  <ellipse cx="512" cy="790" rx="460" ry="220" fill="url(#ember)" filter="url(#softGlow)"/>
+
+  <!-- sparks drifting up -->
+  <circle cx="300" cy="300" r="5" fill="#FFD8AA" opacity="0.75"/>
+  <circle cx="720" cy="250" r="7" fill="#FFAA5C" opacity="0.9"/>
+  <circle cx="770" cy="330" r="4" fill="#FFEEDB" opacity="0.8"/>
+  <circle cx="260" cy="380" r="3" fill="#FFD8AA" opacity="0.6"/>
+  <circle cx="640" cy="180" r="6" fill="#FF8A42" opacity="0.85"/>
+  <circle cx="420" cy="230" r="3" fill="#FFEEDB" opacity="0.55"/>
+  <circle cx="820" cy="420" r="4" fill="#FFAA5C" opacity="0.7"/>
+
+  <!-- anvil: horn (left triangle) -->
+  <path d="M 90 450 L 210 410 L 210 495 Z" fill="url(#anvilBody)"/>
+
+  <!-- anvil top beam (working surface) -->
+  <rect x="200" y="400" width="680" height="100" fill="url(#anvilBody)" rx="6"/>
+
+  <!-- top surface shine -->
+  <rect x="220" y="402" width="640" height="18" fill="url(#topShine)" rx="4"/>
+
+  <!-- hot glowing ingot sitting on the surface -->
+  <rect x="360" y="388" width="280" height="20" fill="url(#hotIngot)" filter="url(#ingotGlow)" rx="4"/>
+
+  <!-- waist (trapezoid narrowing down) -->
+  <path d="M 360 500 L 664 500 L 700 620 L 324 620 Z" fill="url(#anvilBody)"/>
+
+  <!-- base -->
+  <rect x="160" y="620" width="704" height="110" fill="url(#anvilBody)" rx="14"/>
+
+  <!-- subtle base highlight -->
+  <rect x="180" y="624" width="664" height="8" fill="#FFEEDB" opacity="0.18" rx="4"/>
+</svg>

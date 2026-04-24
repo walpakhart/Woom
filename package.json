@@ -1,0 +1,19 @@
+{
+  "name": "forgehold",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Forgehold — a team-scale operating layer for developers.",
+  "scripts": {
+    "sidecars:debug": "cargo build --manifest-path apps/desktop/src-tauri/Cargo.toml -p forgehold-jira -p forgehold-github -p forgehold-memory",
+    "sidecars:release": "cargo build --manifest-path apps/desktop/src-tauri/Cargo.toml -p forgehold-jira -p forgehold-github -p forgehold-memory --release",
+    "dev": "pnpm sidecars:debug && pnpm --filter @forgehold/desktop tauri dev",
+    "build": "pnpm sidecars:release && pnpm --filter @forgehold/desktop tauri build",
+    "build:universal": "pnpm sidecars:release && pnpm --filter @forgehold/desktop tauri build --target universal-apple-darwin",
+    "check": "pnpm --filter @forgehold/desktop check"
+  },
+  "engines": {
+    "node": ">=20",
+    "pnpm": ">=10"
+  },
+  "packageManager": "pnpm@10.17.1"
+}

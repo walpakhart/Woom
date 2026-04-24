@@ -1,0 +1,66 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Forgehold",
+  "version": "0.1.0",
+  "identifier": "com.forgehold.desktop",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "pnpm build",
+    "frontendDist": "../build"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Forgehold",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 960,
+        "minHeight": 640,
+        "resizable": true,
+        "fullscreen": false,
+        "titleBarStyle": "Transparent",
+        "hiddenTitle": true,
+        "backgroundColor": "#0C1117",
+        "dragDropEnabled": false
+      }
+    ],
+    "security": {
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["**"]
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app", "dmg"],
+    "externalBin": [
+      "binaries/forgehold-github",
+      "binaries/forgehold-jira",
+      "binaries/forgehold-memory"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "category": "DeveloperTool",
+    "copyright": "© 2026 Forgehold",
+    "shortDescription": "Team-scale operating layer for developers",
+    "longDescription": "Forgehold aggregates objects from Jira, GitHub, Slack, and Claude Code into a single workbench, and lets you compose workflows between them with drag and drop.",
+    "macOS": {
+      "minimumSystemVersion": "13.0",
+      "entitlements": null,
+      "exceptionDomain": null,
+      "frameworks": null,
+      "providerShortName": null,
+      "signingIdentity": "-"
+    }
+  },
+  "plugins": {}
+}

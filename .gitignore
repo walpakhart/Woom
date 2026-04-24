@@ -1,0 +1,39 @@
+# Dependencies
+node_modules/
+target/
+
+# Build outputs
+build/
+dist/
+.svelte-kit/
+
+# Tauri build outputs
+**/src-tauri/target/
+**/src-tauri/gen/schemas/
+
+# Env + secrets
+.env
+.env.local
+.env.*.local
+*.pem
+*.p12
+
+# Editor
+.vscode/*
+!.vscode/extensions.json
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Local data
+.forge-data/
+
+# Claude Code local state
+.claude/
