@@ -1,4 +1,4 @@
-# Forgehold — Technical Specification
+# Forge — Technical Specification
 
 **Version:** 0.1 (draft)
 **Last updated:** 2026-04-22
@@ -12,7 +12,7 @@
 
 Provide an interface where an engineer drags **work objects** (tickets, PRs,
 messages, comments) onto **actions** (AI agent, send, remind, transform),
-and Forgehold orchestrates everything through a common protocol — without the
+and Forge orchestrates everything through a common protocol — without the
 user having to think about APIs, tokens, or formats.
 
 ### Goals (MVP)
@@ -28,21 +28,12 @@ user having to think about APIs, tokens, or formats.
 
 - Mobile app.
 - Cloud sync between devices. (Coming in v0.3.)
+- A built-in code editor. Zed / VS Code stay in place.
 - Our own LLM. We use Claude through the SDK.
 - A long list of integrations. Four integrations, done well.
 - A visual no-code builder for complex workflows. A workflow is a linear chain.
 - **Windows and Linux builds.** MVP ships macOS only; cross-platform is
   post-v1.0. Every design decision below assumes macOS semantics (see §13).
-
-### Goal reversal (2026-04-23)
-
-- **A built-in code editor is now in scope.** Previously excluded in
-  favor of Zed/VS Code, but reversed so users can watch Claude edit
-  files live and intervene without context-switching. Editor backed by
-  **CodeMirror 6** (small bundle, clean Vite/Svelte integration), git UI
-  backed by shelling out to `git` on PATH. Zed/VS Code integration
-  remains via MCP (RULES.md) — users who prefer their own editor can
-  keep using them.
 
 ---
 
@@ -62,7 +53,7 @@ A unit of work pulled from a Source. Universal interface:
 
 ```
 Object {
-  id: String               // Forgehold-global, not external
+  id: String               // Forge-global, not external
   source_id: String
   external_id: String      // "PROJ-1234", "owner/repo#5", "CXXX/ts=..."
   kind: ObjectKind         // Ticket | PullRequest | Issue | Message | Thread | Comment | Commit
@@ -77,7 +68,7 @@ Object {
 }
 ```
 
-An Object is **not** copied into Forgehold as authoritative — it's a projection
+An Object is **not** copied into Forge as authoritative — it's a projection
 of external state with a TTL. The source of truth is Jira/GitHub/Slack.
 
 ### 2.3 Action
@@ -159,7 +150,7 @@ draggable like any other object.
 
 ### 2.7 Repository
 
-A local clone of a git repo that Forgehold tracks. Separate from the GitHub
+A local clone of a git repo that Forge tracks. Separate from the GitHub
 Source (which is about the API), a first-class entity. Provides the target
 for Claude runs via worktrees. Details in [REPOS.md](REPOS.md).
 
@@ -238,16 +229,16 @@ lifecycle (spawn, health check, restart).
 
 ### 4.3 MCP layer
 
-**Forgehold as an MCP host**: connects to its own MCP servers (jira/github/
+**Forge as an MCP host**: connects to its own MCP servers (jira/github/
 slack) and uses their tools for native actions (without an LLM).
 
-**Forgehold as an MCP server**: Forgehold exposes an MCP API outward. This lets:
-- Claude Code in Zed invoke Forgehold tools and fetch object context.
+**Forge as an MCP server**: Forge exposes an MCP API outward. This lets:
+- Claude Code in Zed invoke Forge tools and fetch object context.
 - Other agents and scripts do the same.
 - Third-party MCP hosts (Cursor, Windsurf) access workflows.
 
 **forge-claude MCP wrapper**: when a workflow step is a Claude action,
-Forgehold starts the Claude Agent SDK in headless mode and gives the agent
+Forge starts the Claude Agent SDK in headless mode and gives the agent
 access to its MCP servers plus the user's repo. The agent writes code,
 commits to a worktree, returns a diff as an Artifact.
 
@@ -255,11 +246,11 @@ commits to a worktree, returns a diff as an Artifact.
 
 Two paths:
 
-**Path A — embedded agent:** Forgehold starts the Claude Agent SDK itself.
+**Path A — embedded agent:** Forge starts the Claude Agent SDK itself.
 Pros: full control, unified UX. Cons: duplicates functionality already in
 the `claude` CLI.
 
-**Path B — bridge to the existing Claude Code:** Forgehold invokes the `claude`
+**Path B — bridge to the existing Claude Code:** Forge invokes the `claude`
 CLI in headless mode (`-p` / `--print`) with the required MCP servers.
 Pros: the user already configured `~/.claude/settings.json`, no need to
 duplicate. Cons: the CLI is not always convenient for UI streaming.
@@ -326,7 +317,7 @@ CREATE TABLE credential (
 );
 
 CREATE TABLE object_cache (
-  id           TEXT PRIMARY KEY,       -- Forgehold global id
+  id           TEXT PRIMARY KEY,       -- Forge global id
   source_id    TEXT NOT NULL,
   external_id  TEXT NOT NULL,
   kind         TEXT NOT NULL,
@@ -566,7 +557,7 @@ Resolution of all v0.1 open questions:
 - **MCP client:** use `rmcp` (Rust MCP SDK) as a dependency. Fork or
   custom client only if we hit streaming limits during M4. Saves ~1 week
   of bootstrap.
-- **Artifact storage:** `~/Library/Application Support/Forgehold/artifacts/`
+- **Artifact storage:** `~/Library/Application Support/Forge/artifacts/`
   (macOS; equivalents elsewhere). Auto-cleanup after 14 days LRU,
   hard cap 5 GB per workspace. Pinned artifacts (flag `pinned: bool`)
   are exempt from cleanup.
@@ -575,7 +566,7 @@ Resolution of all v0.1 open questions:
   documents different limits. Every MCP server reaches the network via
   `forge-runtime::http_client`, which enforces the bucket. Retry with
   jitter and backoff is built in.
-- **Zed integration:** **MCP-only** in MVP. Forgehold exposes an MCP server,
+- **Zed integration:** **MCP-only** in MVP. Forge exposes an MCP server,
   Zed connects natively. A dedicated Zed extension is v0.2+.
 - **Telemetry:** no network telemetry in MVP. Local crash logs in the
   app data dir; the user exports them manually (share sheet) to help
@@ -589,7 +580,7 @@ Resolution of all v0.1 open questions:
 
 ## 11. Repositories (summary, detail in REPOS.md)
 
-Forgehold treats local git repos as first-class entities, separate from the
+Forge treats local git repos as first-class entities, separate from the
 GitHub Source (which is API-only). Capabilities:
 
 - Clone by URL or from the GitHub picker (UI similar to GitHub Desktop).
@@ -608,10 +599,10 @@ See [REPOS.md](REPOS.md) for the entity schema, lifecycle, UI, and security.
 Rules like "write code this way, name the branch this way, follow these
 conventions" — composable rule sets scoped by visibility.
 
-- **Scopes:** `global` (workspace) / `repo` (in `.forgehold/rules.md`) /
+- **Scopes:** `global` (workspace) / `repo` (in `.forge/rules.md`) /
   `folder:<path>` / `run` (ephemeral).
 - **Composition:** a narrower scope overrides a broader one.
-- **Integration:** Forgehold injects rules as a system-prompt prefix on
+- **Integration:** Forge injects rules as a system-prompt prefix on
   every Claude run; the native `CLAUDE.md` in the repo is still read
   (by Claude directly — we don't break it).
 - **Policies in rules** (branch template, commit template, post-run
@@ -641,7 +632,7 @@ choose a download.
 ### 13.2 Bundle layout
 
 ```
-Forgehold.app/
+Forge.app/
 └── Contents/
     ├── Info.plist                 # bundle id, URI scheme, min version
     ├── PkgInfo
@@ -653,7 +644,7 @@ Forgehold.app/
     │   └── forge-claude           # sidecar (Claude Agent SDK bridge)
     ├── Resources/
     │   ├── icon.icns              # 16–1024pt full set
-    │   ├── Forgehold.sdef             # (optional) AppleScript support
+    │   ├── Forge.sdef             # (optional) AppleScript support
     │   └── en.lproj/
     │       └── InfoPlist.strings
     ├── Frameworks/                # WebKit and anything we vendor
@@ -666,10 +657,10 @@ Forgehold.app/
 | Key                              | Value                                         |
 |----------------------------------|-----------------------------------------------|
 | `CFBundleIdentifier`             | `com.forge.desktop`                           |
-| `CFBundleName`                   | `Forgehold`                                       |
+| `CFBundleName`                   | `Forge`                                       |
 | `LSMinimumSystemVersion`         | `13.0`                                        |
 | `LSApplicationCategoryType`      | `public.app-category.developer-tools`         |
-| `NSHumanReadableCopyright`       | `© 2026 Forgehold`                                |
+| `NSHumanReadableCopyright`       | `© 2026 Forge`                                |
 | `CFBundleURLTypes`               | `forge://` scheme for OAuth callbacks         |
 | `NSAppleEventsUsageDescription`  | Reason for scripting access (if used)         |
 | `LSUIElement`                    | `false` (regular window app, not background)  |
@@ -712,7 +703,7 @@ After signing, the `.dmg` is submitted to Apple's notary service via
 `notarytool`:
 
 ```bash
-xcrun notarytool submit Forgehold.dmg \
+xcrun notarytool submit Forge.dmg \
   --apple-id "$APPLE_ID" \
   --team-id "$TEAM_ID" \
   --password "$APP_SPECIFIC_PASSWORD" \
@@ -722,7 +713,7 @@ xcrun notarytool submit Forgehold.dmg \
 Then the ticket is stapled:
 
 ```bash
-xcrun stapler staple Forgehold.dmg
+xcrun stapler staple Forge.dmg
 ```
 
 Tauri's bundler handles both steps automatically if `APPLE_ID`,
@@ -737,9 +728,9 @@ sandbox, which would complicate sidecar spawning and `claude` CLI
 bridging.
 
 **DMG layout:**
-- Custom background image with "drag Forgehold to Applications" hint.
+- Custom background image with "drag Forge to Applications" hint.
 - `/Applications` symlink.
-- `Forgehold.app` positioned at a pleasing offset.
+- `Forge.app` positioned at a pleasing offset.
 - Built via `create-dmg` or Tauri's built-in DMG builder.
 
 **Auto-updates:** deferred to v0.2. Decision between Tauri's built-in
@@ -775,7 +766,7 @@ pnpm tauri dev             # hot reload, unsigned debug build
 pnpm tauri build --target universal-apple-darwin
 ```
 
-Produces `Forgehold.app` and `Forgehold_<version>_universal.dmg`, signed and
+Produces `Forge.app` and `Forge_<version>_universal.dmg`, signed and
 notarized (if env vars are present), in `target/universal-apple-darwin/release/bundle/`.
 
 **CI (GitHub Actions on `macos-latest`):**

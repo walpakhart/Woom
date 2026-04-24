@@ -62,6 +62,11 @@
     border-right: 1px solid var(--border-neutral);
     background: rgba(10, 17, 30, 0.6);
     backdrop-filter: blur(8px);
+    /* Guarantee the rail renders above workbench tabs / pill hover menus
+       so its badges and active-view indicator stay readable even when a
+       neighbouring panel has its own stacking context. */
+    position: relative;
+    z-index: 5;
   }
   .rail-top, .rail-bottom { display: flex; flex-direction: column; align-items: center; gap: 6px; }
   .rail-bottom { margin-top: auto; }

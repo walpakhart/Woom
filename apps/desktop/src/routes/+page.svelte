@@ -32,6 +32,8 @@
     activeInstances,
     activeWorkbench,
     firstInstanceOfKind,
+    listInstancesOfKind,
+    goToInstance,
     registerInstanceRemovedHook
   } from '$lib/state/layout.svelte';
   import {
@@ -115,6 +117,32 @@
   let view = $state<View>('workbench');
   let paletteOpen = $state(false);
   let tab = $state<DetailTab>('conversation');
+
+  // Biometric gate. Before first unlock the UI shows a "Locked" overlay so
+  // credentials in keychain can't be pulled until the user taps Touch ID
+  // (or confirms with the Mac passcode). `biometryError` surfaces the last
+  // LAContext failure so we can show "cancelled" / "not enrolled" etc.
+  let appLocked = $state(true);
+  let biometryInFlight = $state(false);
+  let biometryError = $state<string | null>(null);
+
+  async function biometricUnlock() {
+    if (biometryInFlight) return;
+    biometryInFlight = true;
+    biometryError = null;
+    try {
+      await invoke('biometric_unlock', { reason: 'Unlock Forgehold to access your stored credentials' });
+      appLocked = false;
+      // Now that we're allowed through, pull connection status + inboxes.
+      await refreshAllStatus();
+      if (connectedGithub) void refreshInbox();
+      if (connectedJira) void refreshJiraInbox();
+    } catch (e) {
+      biometryError = typeof e === 'string' ? e : String(e);
+    } finally {
+      biometryInFlight = false;
+    }
+  }
 
   // Live clock — kept in +page.svelte because it's a cross-cutting timer that
   // drives every relative-time label in the app (inbox, jira, chat, detail,
@@ -371,6 +399,7 @@
 
   let refreshInterval: ReturnType<typeof setInterval> | null = null;
   let tickInterval: ReturnType<typeof setInterval> | null = null;
+  let tauriDropUnlisten: UnlistenFn | null = null;
 
   // Wire the layout→sessions hook once. Any closed panel instance (via the X
   // button or workbench deletion) orphans its pinned sessions back to the
@@ -387,15 +416,54 @@
         if (ed) setEditorRepoPath(savedEditorRoot, ed.id);
       }
     } catch {/* ignore */}
-    await refreshAllStatus();
-    if (connectedGithub) void refreshInbox();
-    if (connectedJira) void refreshJiraInbox();
     tickInterval = setInterval(() => (now = Date.now()), 30_000);
+    // Biometric gate runs first — refreshAllStatus + inbox fetches live
+    // inside `biometricUnlock` so nothing hits the keychain before the
+    // user authenticates.
+    void biometricUnlock();
+
+    // Tauri's native drag-drop channel — delivers Finder drops as native
+    // absolute paths, bypassing the WebKit sandbox that sometimes hides
+    // `text/uri-list` from DOM drop handlers. DOM handlers stay wired for
+    // internal drags (tickets / file tree); this listener is the robust
+    // path for OS files.
+    tauriDropUnlisten = await listen<{ paths?: string[]; position?: { x: number; y: number } }>(
+      'tauri://drag-drop',
+      (e) => {
+        const paths = Array.isArray(e.payload.paths) ? e.payload.paths : [];
+        if (paths.length === 0) return;
+        const pos = e.payload.position;
+        if (!pos) return;
+        // Hit-test the pointer: walk up from elementFromPoint to find a
+        // `.wb-column`, then route only claude/cursor columns onward.
+        const el = document.elementFromPoint(pos.x, pos.y) as HTMLElement | null;
+        const col = el?.closest('.wb-column') as HTMLElement | null;
+        const colKind = col?.dataset.kind;
+        const colInstanceId = col?.dataset.instanceId;
+        if (!colInstanceId || (colKind !== 'claude' && colKind !== 'cursor')) return;
+        const kind = colKind as 'claude' | 'cursor';
+        const activeId = sessionsState.activeByInstance[colInstanceId];
+        let target = activeId
+          ? sessionsState.list.find((s) => s.id === activeId) ?? null
+          : null;
+        if (!target) {
+          target = sessionsState.list.find((s) => s.columnInstanceId === colInstanceId) ?? null;
+        }
+        if (!target) {
+          const id = newClaudeSession({ agentKind: kind, columnInstanceId: colInstanceId });
+          target = sessionsState.list.find((s) => s.id === id) ?? null;
+        }
+        if (!target) return;
+        const n = attachPathsToSession(target.id, paths);
+        if (n > 0) setActiveSessionInColumn(colInstanceId, target.id);
+      }
+    );
   });
 
   onDestroy(() => {
     if (refreshInterval) clearInterval(refreshInterval);
     if (tickInterval) clearInterval(tickInterval);
+    tauriDropUnlisten?.();
   });
 
   $effect(() => {
@@ -833,6 +901,41 @@
     ensureEditorShowing(path);
   }
 
+  /** Handle a click on a @file/@dir mention inside a rendered chat bubble.
+      `path` is whatever the mention's @token resolved to — usually a path
+      relative to the session's cwd/worktree/editor. We try each of those
+      three roots, in priority order, until something exists on disk. */
+  async function openMentionPath(path: string) {
+    const candidates: string[] = [];
+    if (path.startsWith('/')) {
+      candidates.push(path);
+    } else {
+      const trimmed = path.replace(/\/$/, '');
+      const roots = [
+        activeSession?.worktreePath,
+        activeSession?.cwd,
+        editorRepoPath
+      ].filter((r): r is string => !!r);
+      for (const root of roots) {
+        candidates.push(`${root.replace(/\/$/, '')}/${trimmed}`);
+      }
+    }
+    for (const abs of candidates) {
+      try {
+        const ok = await invoke<boolean>('fs_path_exists', { path: abs });
+        if (ok) {
+          ensureEditorShowing(abs);
+          return;
+        }
+      } catch {
+        // keep trying the next candidate
+      }
+    }
+    // Last-ditch: open the first candidate anyway — the Editor will surface
+    // its own "file not found" state if the path is wrong.
+    if (candidates[0]) ensureEditorShowing(candidates[0]);
+  }
+
   /** Open (or scroll to) a column of the given kind. Singleton kinds only
       ever get one instance. Multi-instance kinds open their first matching
       instance (or create one if none exist). Close via the X on the column
@@ -978,15 +1081,19 @@
     appendSessionMessage(id, { role: 'user', content: text, at: new Date().toISOString() });
     // Auto-title from first user message when chat had no mentions
     const curr = sessionsState.list.find((x) => x.id === id);
+    // Snapshot the mentions BEFORE clearing so we can still bake them into
+    // the prompt below. The attachments strip disappears immediately after
+    // send — that's what the user asked for.
+    const mentionsSnapshot = curr?.mentions ?? [];
     if (
       curr &&
       curr.messages.filter((m) => m.role === 'user').length === 1 &&
       curr.mentions.length === 0
     ) {
       const autoTitle = text.slice(0, 36) + (text.length > 36 ? '…' : '');
-      updateSession(id, { title: autoTitle, input: '', sending: true });
+      updateSession(id, { title: autoTitle, input: '', sending: true, mentions: [] });
     } else {
-      updateSession(id, { input: '', sending: true });
+      updateSession(id, { input: '', sending: true, mentions: [] });
     }
     // Append empty assistant message that streaming will fill.
     appendSessionMessage(id, {
@@ -997,11 +1104,14 @@
     startThinkingTimer();
     void scrollChatBottom();
 
-    // Build prompt: include full context for each @mention.
+    // Build prompt: include full context for each @mention. Uses the
+    // snapshot taken just before we cleared `mentions` on the session,
+    // so the CLI still gets the context even though the UI no longer
+    // shows the chips.
     const sess = sessionsState.list.find((x) => x.id === id);
     let prompt = text;
-    if (sess && sess.mentions.length) {
-      const ctx = sess.mentions
+    if (mentionsSnapshot.length) {
+      const ctx = mentionsSnapshot
         .map((m) => {
           if (m.source === 'file') {
             const abs = m.body ?? m.externalId;
@@ -1174,6 +1284,100 @@
 
   // Workbench-tab inline rename state.
   let editingWorkbench = $state<{ id: string; draft: string } | null>(null);
+
+  // Workbench-bar pill hover/click state. A delayed leave lets the user
+  // slide their mouse from the pill onto the menu without it snapping
+  // shut mid-transit.
+  let hoveredPill = $state<PanelKind | null>(null);
+  let pillLeaveTimer: ReturnType<typeof setTimeout> | null = null;
+  function onPillEnter(kind: PanelKind) {
+    if (pillLeaveTimer) {
+      clearTimeout(pillLeaveTimer);
+      pillLeaveTimer = null;
+    }
+    hoveredPill = kind;
+  }
+  function onPillLeave() {
+    if (pillLeaveTimer) clearTimeout(pillLeaveTimer);
+    pillLeaveTimer = setTimeout(() => {
+      hoveredPill = null;
+      pillLeaveTimer = null;
+    }, 140);
+  }
+  /** Click handler for the main pill body. Prefers an instance in the
+      active workbench; otherwise jumps (and switches workbench) to the
+      first one found. Creates nothing — the `+` button owns creation. */
+  function navToKind(kind: PanelKind) {
+    const insts = listInstancesOfKind(kind);
+    if (insts.length === 0) return;
+    const inCurrent = insts.find(
+      (i) => i.workbenchId === layoutState.activeWorkbenchId
+    );
+    const target = inCurrent ?? insts[0];
+    void goToInstance(target.id, target.workbenchId);
+  }
+
+  // ---- Pill drop targets ----
+  // Drag a Jira/GH ticket (or a file from the Editor tree) onto a pill and
+  // drop it on a specific column instance — even one living in a different
+  // workbench. Cross-workbench "attach this to that chat" shortcut.
+  let pillDragOverKind = $state<PanelKind | null>(null);
+  let pillDragOverInstance = $state<string | null>(null);
+
+  /** Only agent pills accept drops — github/jira/editor don't host
+      sessions that can take @mentions. Require something droppable:
+      internal drag payload (ticket / file-tree) or OS files in the
+      dataTransfer. */
+  function pillCanAccept(e: DragEvent, kind: PanelKind): boolean {
+    if (kind !== 'claude' && kind !== 'cursor') return false;
+    const types = e.dataTransfer?.types;
+    if (dragPayload) return true;
+    if (types?.includes('application/x-forgehold-file')) return true;
+    if (types && types.length > 0) return true;
+    return false;
+  }
+
+  function onPillDragOver(e: DragEvent, kind: PanelKind, instanceId: string | null) {
+    if (!pillCanAccept(e, kind)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+    pillDragOverKind = kind;
+    pillDragOverInstance = instanceId;
+  }
+
+  function onPillDragLeave(kind: PanelKind, instanceId: string | null) {
+    if (pillDragOverKind === kind && pillDragOverInstance === instanceId) {
+      pillDragOverKind = null;
+      pillDragOverInstance = null;
+    }
+  }
+
+  function onPillDrop(e: DragEvent, kind: PanelKind, specificInstanceId: string | null) {
+    if (!pillCanAccept(e, kind)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    pillDragOverKind = null;
+    pillDragOverInstance = null;
+
+    const insts = listInstancesOfKind(kind);
+    if (insts.length === 0) return;
+    const target = specificInstanceId
+      ? insts.find((i) => i.id === specificInstanceId)
+      : insts.find((i) => i.workbenchId === layoutState.activeWorkbenchId) ?? insts[0];
+    if (!target) return;
+
+    // Switch workbench if the target column lives elsewhere, so the user
+    // visibly "lands" on it.
+    if (target.workbenchId !== layoutState.activeWorkbenchId) {
+      setActiveWorkbench(target.workbenchId);
+    }
+    void scrollInstanceIntoView(target.id);
+
+    // Reuse the per-column drop logic — same event, specific instanceId.
+    onAgentDrop(target.id, kind as 'claude' | 'cursor', e);
+  }
+
   function startWorkbenchRename(id: string, current: string) {
     editingWorkbench = { id, draft: current };
   }
@@ -2044,6 +2248,30 @@
 
 <div class="bg"></div>
 
+{#if appLocked}
+  <div class="lock-screen" role="dialog" aria-modal="true">
+    <div class="lock-card">
+      <Sigil size={72} />
+      <h1 class="lock-title">Forgehold is locked</h1>
+      <p class="lock-sub">
+        Authenticate with Touch ID (or your Mac passcode) to unlock your stored
+        credentials for Jira, GitHub, and Claude.
+      </p>
+      {#if biometryError}
+        <div class="lock-err">{biometryError}</div>
+      {/if}
+      <button class="btn btn--primary" onclick={biometricUnlock} disabled={biometryInFlight}>
+        {#if biometryInFlight}
+          <span class="dot-pulse"></span><span class="dot-pulse"></span><span class="dot-pulse"></span>
+        {:else}
+          <svg class="i i-sm" viewBox="0 0 24 24"><path d="M12 11c-2 0-3.5 1.5-3.5 4v2c0 1.5.5 3 2 4M12 11c2 0 3.5 1.5 3.5 4v2c0 1.5-.5 3-2 4M12 11V3M12 3a4 4 0 0 0-4 4v4M12 3a4 4 0 0 1 4 4v4"/></svg>
+          Unlock with Touch ID
+        {/if}
+      </button>
+    </div>
+  </div>
+{/if}
+
 <div id="app">
   <Rail
     bind:view
@@ -2119,67 +2347,84 @@
           </button>
         </div>
         <div class="wb-bar">
-          {#if connectedGithub}
-            {@const meta = connectionsMeta.find((c) => c.id === 'github')}
-            <div class="pill-group" class:active={hasGithub}>
-              <button class="pill" onclick={() => openColumn('github')} title="Open GitHub column">
+          {#snippet pill(kind: PanelKind, label: string, meta: typeof connectionsMeta[number] | undefined)}
+            {@const insts = listInstancesOfKind(kind)}
+            {@const count = insts.length}
+            {@const inCurrent = insts.some((i) => i.workbenchId === layoutState.activeWorkbenchId)}
+            <div
+              class="pill-group"
+              class:active={inCurrent}
+              class:dim={count === 0}
+              class:has-menu={count > 0}
+              class:drag-over={pillDragOverKind === kind && pillDragOverInstance === null}
+              ondragover={(e) => onPillDragOver(e, kind, null)}
+              ondragleave={() => onPillDragLeave(kind, null)}
+              ondrop={(e) => onPillDrop(e, kind, null)}
+              role="presentation"
+            >
+              <button
+                class="pill"
+                onclick={() => navToKind(kind)}
+                disabled={count === 0}
+                title={count === 0 ? `No ${label} columns yet — click + to create` : `Jump to ${label}`}
+              >
                 {#if meta?.iconSvg}
                   <span class="pill-icon {meta.iconClass}"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">{@html meta.iconSvg}</svg></span>
+                {:else if kind === 'editor'}
+                  <span class="pill-icon pill-icon--editor"><svg viewBox="0 0 24 24"><path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z"/></svg></span>
                 {/if}
-                <span class="pill-label">GitHub</span>
-                <span class="pill-count mono">{inboxState.items.length}</span>
+                <span class="pill-label">{label}</span>
+                {#if count > 0}
+                  <span class="pill-count mono">{count}</span>
+                {/if}
               </button>
+              <button
+                class="pill-add"
+                onclick={() => spawnColumnInstance(kind)}
+                title={`New ${label} column`}
+                aria-label={`New ${label} column`}
+              >
+                <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+              </button>
+              {#if count > 0}
+                <div class="pill-menu" role="menu">
+                  <div class="pill-menu-head">{label} · {count} {count === 1 ? 'column' : 'columns'}</div>
+                  {#each insts as inst (inst.id)}
+                    {@const isCurrent = inst.workbenchId === layoutState.activeWorkbenchId}
+                    <button
+                      class="pill-menu-item"
+                      class:is-current={isCurrent}
+                      class:drag-over={pillDragOverKind === kind && pillDragOverInstance === inst.id}
+                      role="menuitem"
+                      ondragover={(e) => onPillDragOver(e, kind, inst.id)}
+                      ondragleave={() => onPillDragLeave(kind, inst.id)}
+                      ondrop={(e) => onPillDrop(e, kind, inst.id)}
+                      onclick={() => void goToInstance(inst.id, inst.workbenchId)}
+                    >
+                      <span class="pill-menu-dot" class:is-active={isCurrent}></span>
+                      <span class="pill-menu-name mono">{inst.name}</span>
+                      <span class="pill-menu-wb mono" title="Workbench">{inst.workbenchName}</span>
+                    </button>
+                  {/each}
+                </div>
+              {/if}
             </div>
+          {/snippet}
+
+          {#if connectedGithub}
+            {@render pill('github', 'GitHub', connectionsMeta.find((c) => c.id === 'github'))}
           {/if}
           {#if connectedJira}
-            {@const meta = connectionsMeta.find((c) => c.id === 'jira')}
-            <div class="pill-group" class:active={hasJira}>
-              <button class="pill" onclick={() => openColumn('jira')} title="Open Jira column">
-                {#if meta?.iconSvg}
-                  <span class="pill-icon {meta.iconClass}"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">{@html meta.iconSvg}</svg></span>
-                {/if}
-                <span class="pill-label">Jira</span>
-                <span class="pill-count mono">{inboxState.jiraItems.length}</span>
-              </button>
-            </div>
+            {@render pill('jira', 'Jira', connectionsMeta.find((c) => c.id === 'jira'))}
           {/if}
           {#if connectedClaude}
-            {@const meta = connectionsMeta.find((c) => c.id === 'claude')}
-            <div class="pill-group" class:active={hasClaude}>
-              <button class="pill" onclick={() => openColumn('claude')} title="Open Claude column">
-                {#if meta?.iconSvg}
-                  <span class="pill-icon {meta.iconClass}"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">{@html meta.iconSvg}</svg></span>
-                {/if}
-                <span class="pill-label">Claude</span>
-              </button>
-              <button class="pill-add" onclick={() => spawnColumnInstance('claude')} title="New Claude column" aria-label="New Claude column">
-                <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
-              </button>
-            </div>
+            {@render pill('claude', 'Claude', connectionsMeta.find((c) => c.id === 'claude'))}
           {/if}
           {#if connectedCursor}
-            {@const meta = connectionsMeta.find((c) => c.id === 'cursor')}
-            <div class="pill-group" class:active={hasCursor}>
-              <button class="pill" onclick={() => openColumn('cursor')} title="Open Cursor column">
-                {#if meta?.iconSvg}
-                  <span class="pill-icon {meta.iconClass}"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">{@html meta.iconSvg}</svg></span>
-                {/if}
-                <span class="pill-label">Cursor</span>
-              </button>
-              <button class="pill-add" onclick={() => spawnColumnInstance('cursor')} title="New Cursor column" aria-label="New Cursor column">
-                <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
-              </button>
-            </div>
+            {@render pill('cursor', 'Cursor', connectionsMeta.find((c) => c.id === 'cursor'))}
           {/if}
-          <div class="pill-group" class:active={hasEditor}>
-            <button class="pill" onclick={() => openColumn('editor')} title="Open Editor column">
-              <span class="pill-icon pill-icon--editor"><svg viewBox="0 0 24 24"><path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z"/></svg></span>
-              <span class="pill-label">Editor</span>
-            </button>
-            <button class="pill-add" onclick={() => spawnColumnInstance('editor')} title="New Editor column" aria-label="New Editor column">
-              <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
-            </button>
-          </div>
+          {@render pill('editor', 'Editor', undefined)}
+
           <div style="flex:1"></div>
           <button class="icon-btn" title="Search" aria-label="Search" onclick={() => (paletteOpen = true)}>
             <svg class="i i-sm" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" /><path d="m20 20-3-3" /></svg>
@@ -2276,6 +2521,7 @@
                 onSetSessionInput={setSessionInput}
                 onSendClaudeMessage={() => void sendClaudeMessage()}
                 onStopClaude={() => void stopClaude()}
+                onOpenMentionPath={(p) => void openMentionPath(p)}
               />
             {:else if inst.kind === 'cursor' && connectedCursor}
               <AgentColumn
@@ -2323,6 +2569,7 @@
                 onSetSessionInput={setSessionInput}
                 onSendClaudeMessage={() => void sendClaudeMessage()}
                 onStopClaude={() => void stopClaude()}
+                onOpenMentionPath={(p) => void openMentionPath(p)}
               />
             {:else if inst.kind === 'editor'}
               <EditorColumn
@@ -2465,6 +2712,50 @@
       radial-gradient(ellipse 900px 500px at 90% 100%, rgba(16, 185, 129, 0.06), transparent 60%);
   }
   #app { position: relative; z-index: 1; display: grid; grid-template-columns: 56px 1fr; height: 100vh; }
+
+  /* Touch ID / device-owner-auth gate shown at launch. Sits over the app
+     (z-index 500) so the workbench doesn't flash through before unlock —
+     the underlying app still mounts so the moment we flip `appLocked=false`
+     the usual UI is already primed. */
+  .lock-screen {
+    position: fixed; inset: 0; z-index: 500;
+    background: radial-gradient(ellipse at center, rgba(12, 17, 23, 0.92), rgba(12, 17, 23, 0.98));
+    backdrop-filter: blur(20px);
+    display: flex; align-items: center; justify-content: center;
+    animation: fadeIn 200ms ease-out;
+  }
+  .lock-card {
+    max-width: 420px;
+    padding: 44px 40px 36px;
+    text-align: center;
+    display: flex; flex-direction: column; align-items: center; gap: 14px;
+    background: var(--bg-1);
+    border: 1px solid var(--border-neutral-hi);
+    border-radius: 16px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  }
+  .lock-title {
+    font-size: 22px; font-weight: 600; color: var(--text-0);
+    letter-spacing: -0.015em; margin: 8px 0 0;
+  }
+  .lock-sub {
+    font-size: 13.5px; color: var(--text-1); margin: 0;
+    line-height: 1.55; max-width: 340px;
+  }
+  .lock-err {
+    font-size: 12px; color: var(--error);
+    padding: 8px 12px; border-radius: 6px;
+    background: rgba(214, 72, 44, 0.1);
+    border: 1px solid rgba(214, 72, 44, 0.25);
+  }
+  .lock-card .btn {
+    margin-top: 6px;
+    min-width: 220px;
+  }
+  @keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
 
 
   .main {
@@ -2611,7 +2902,9 @@
     border: 1px solid var(--border-neutral);
     border-radius: 999px;
     background: var(--bg-1);
-    overflow: hidden;
+    /* No `overflow: hidden` — it would clip the absolute-positioned
+       hover menu (and any focus ring). Rounded corners on inner buttons
+       use border-radius directly so nothing pokes out of the pill shape. */
     transition: border-color 140ms, background 140ms, box-shadow 140ms;
     position: relative;
   }
@@ -2636,6 +2929,8 @@
     font-size: 12.5px; font-weight: 500;
     background: none; border: none; cursor: pointer;
     transition: color 140ms;
+    border-top-left-radius: 999px;
+    border-bottom-left-radius: 999px;
   }
   .pill:hover { color: var(--text-0); }
   .pill-group.active .pill { color: var(--text-0); }
@@ -2663,10 +2958,104 @@
     color: var(--text-2);
     background: none; border: none; cursor: pointer;
     border-left: 1px solid var(--border-neutral);
+    border-top-right-radius: 999px;
+    border-bottom-right-radius: 999px;
     transition: all 140ms;
   }
   .pill-add:hover { color: var(--accent-bright); background: var(--accent-soft); }
   .pill-add svg { width: 12px; height: 12px; stroke: currentColor; stroke-width: 2; stroke-linecap: round; fill: none; }
+
+  /* "No columns yet" state — the pill body is disabled but the + next to
+     it still pops to the foreground so the create path reads clearly. */
+  .pill-group.dim { opacity: 0.55; }
+  .pill-group.dim .pill { cursor: default; }
+  .pill-group.dim:hover { opacity: 0.85; border-color: var(--border-neutral-hi); }
+  .pill:disabled { cursor: default; }
+
+  /* Hover-expand menu: lists every instance of this kind with its bench
+     name + workbench it lives in. Clicking an item switches workbench (if
+     needed) and scrolls the column into view.
+     Kept in the DOM all the time (when count>0) but hidden — that way the
+     CSS `:hover` chain covers both pill AND menu (since the menu is a DOM
+     descendant of `.pill-group`), so sliding from pill to menu never
+     triggers a close. `top: 100%` (no gap) keeps the hit area continuous. */
+  .pill-menu {
+    position: absolute; top: 100%; left: 0;
+    margin-top: 4px;
+    min-width: 240px; max-width: 320px;
+    background: var(--bg-2);
+    border: 1px solid var(--border-hi);
+    border-radius: 10px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+    padding: 4px;
+    display: none;
+    flex-direction: column; gap: 1px;
+    z-index: 40;
+  }
+  /* Transparent "bridge" filling the 4px margin gap so the hover hit-area
+     between pill and menu is continuous. */
+  .pill-menu::before {
+    content: '';
+    position: absolute; top: -6px; left: 0; right: 0; height: 6px;
+  }
+  .pill-group.has-menu:hover .pill-menu,
+  .pill-group.has-menu.drag-over .pill-menu {
+    display: flex;
+    animation: fadeIn 120ms ease-out;
+  }
+  /* Drag-hover — accent outline so "here's the drop target" reads clearly,
+     distinct from plain `:hover`. */
+  .pill-group.drag-over {
+    box-shadow: 0 0 0 2px var(--accent), 0 0 12px var(--accent-glow);
+  }
+  .pill-menu-item.drag-over {
+    background: var(--accent);
+    color: #1a0a04;
+  }
+  .pill-menu-item.drag-over .pill-menu-dot {
+    background: #1a0a04; box-shadow: none;
+  }
+  .pill-menu-item.drag-over .pill-menu-wb {
+    background: rgba(26, 10, 4, 0.2); color: #1a0a04; border-color: transparent;
+  }
+  .pill-menu-head {
+    font-size: 10px; font-weight: 600; letter-spacing: 0.05em;
+    color: var(--text-mute); text-transform: uppercase;
+    padding: 7px 10px 5px;
+    border-bottom: 1px solid var(--border-neutral);
+    margin-bottom: 3px;
+  }
+  .pill-menu-item {
+    display: flex; align-items: center; gap: 8px;
+    padding: 7px 10px;
+    border-radius: 6px;
+    font-size: 12px; color: var(--text-1);
+    text-align: left;
+    transition: background 100ms;
+    cursor: pointer;
+  }
+  .pill-menu-item:hover { background: var(--bg-3); color: var(--text-0); }
+  .pill-menu-item.is-current { background: var(--accent-soft); color: var(--accent-bright); }
+  .pill-menu-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--text-mute);
+    flex-shrink: 0;
+  }
+  .pill-menu-dot.is-active {
+    background: var(--accent-bright);
+    box-shadow: 0 0 6px var(--accent-glow);
+  }
+  .pill-menu-name {
+    flex: 1; font-size: 11.5px; color: inherit;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .pill-menu-wb {
+    font-size: 10px; color: var(--text-mute);
+    padding: 1px 6px; border-radius: 3px;
+    background: var(--bg-1);
+    border: 1px solid var(--border-neutral);
+    flex-shrink: 0;
+  }
 
   .wb-columns {
     flex: 1;

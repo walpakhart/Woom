@@ -1,4 +1,4 @@
-# Forgehold — MVP Plan
+# Forge — MVP Plan
 
 **Target:** a working single-player macOS desktop app with Jira +
 GitHub + Slack + Claude Code, including local-repo management (GitHub
@@ -29,8 +29,8 @@ Universal `.app` bundle (see SPEC.md §13).
   + prettier + a non-signed `tauri build` smoke test.
 
 **Deliverable:** `pnpm tauri build --target universal-apple-darwin`
-produces `Forgehold.app` that opens on macOS 13+, shows a window saying
-"Forgehold", and initializes the DB on first run. Unsigned is acceptable
+produces `Forge.app` that opens on macOS 13+, shows a window saying
+"Forge", and initializes the DB on first run. Unsigned is acceptable
 for M0; signing verified but not yet in CI.
 
 ### M1 — Auth & Sources (week 2–3)
@@ -112,7 +112,7 @@ Per-scope rules injected into Claude runs. Details in [RULES.md](RULES.md).
 - [ ] Inline "add rule for this run" field on the Claude drop zone.
 - [ ] Don't touch `CLAUDE.md` — Claude reads it natively.
 
-**Deliverable:** you set up `.forgehold/rules.md` with a branch template
+**Deliverable:** you set up `.forge/rules.md` with a branch template
 and a post-run check; launching a run creates a branch from the
 template and runs typecheck automatically.
 
@@ -173,7 +173,7 @@ Slack channel — saved as a template.
 - [ ] GitHub Actions release workflow: tagged push → builds, signs,
   notarizes, publishes `.dmg` + stapled `.app` as release assets.
 
-**Deliverable:** a signed, notarized `Forgehold.dmg` (Universal) that
+**Deliverable:** a signed, notarized `Forge.dmg` (Universal) that
 opens without Gatekeeper warnings on any macOS 13+ Mac. Drag-install
 to Applications, launch, full MVP flow works end-to-end.
 
@@ -234,8 +234,8 @@ All of these are explicitly in the post-MVP roadmap (see SPEC.md §9).
 The user can complete this sequence in under 2 minutes without docs:
 
 1. First launch: sign into Jira / GitHub / Slack.
-2. Click "+ Clone" → pick `acme/forgehold` in the GitHub picker → clone.
-3. Open `.forgehold/rules.md`, confirm a branch template and post-run check
+2. Click "+ Clone" → pick `acme/forge` in the GitHub picker → clone.
+3. Open `.forge/rules.md`, confirm a branch template and post-run check
    already exist (or create them).
 4. See Jira ticket PROJ-1234 in the Inbox.
 5. Drag it onto the Claude Code zone (repo is auto-populated).

@@ -49,6 +49,24 @@ pub enum AgentError {
     Cursor(#[from] cursor::CursorRunError),
 }
 
+/// Kind-dispatched one-off commit-message generator. Both adapters ship
+/// their own headless path that takes the staged diff and returns a
+/// one-liner — this just picks the right one for the agent the user has
+/// linked to the editor.
+pub async fn generate_commit_message(
+    kind: AgentKind,
+    repo: &std::path::Path,
+) -> Result<String, AgentError> {
+    match kind {
+        AgentKind::Claude => {
+            crate::claude::generate_commit_message(repo).await.map_err(AgentError::from)
+        }
+        AgentKind::Cursor => {
+            crate::cursor::generate_commit_message(repo).await.map_err(AgentError::from)
+        }
+    }
+}
+
 pub async fn ask(
     kind: AgentKind,
     app: tauri::AppHandle,

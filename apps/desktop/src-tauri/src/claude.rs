@@ -304,6 +304,105 @@ pub async fn ask(
     Ok(final_text)
 }
 
+/// One-off headless Claude call: feed it the staged git diff from `repo`
+/// and return a single-line commit message. Separate from the chat-session
+/// `ask()` path — uses a throwaway session so it never lands in the user's
+/// chat history or the active linked-column transcript.
+pub async fn generate_commit_message(repo: &std::path::Path) -> Result<String, ClaudeRunError> {
+    let status = detect();
+    if !status.detected {
+        return Err(ClaudeRunError::NotInstalled);
+    }
+    if !status.ready {
+        return Err(ClaudeRunError::NotAuthed);
+    }
+    let bin = status.path.as_deref().unwrap_or("claude");
+
+    // Pull the staged diff. If nothing's staged, caller asked for a commit
+    // message out of nothing — surface that explicitly.
+    let diff_out = tokio::process::Command::new("git")
+        .current_dir(repo)
+        .args(["diff", "--cached"])
+        .output()
+        .await?;
+    if !diff_out.status.success() {
+        let stderr = String::from_utf8_lossy(&diff_out.stderr).trim().to_string();
+        return Err(ClaudeRunError::Failed(format!(
+            "git diff --cached failed: {}",
+            if stderr.is_empty() { "unknown error".into() } else { stderr }
+        )));
+    }
+    let diff = String::from_utf8_lossy(&diff_out.stdout);
+    if diff.trim().is_empty() {
+        return Err(ClaudeRunError::Failed(
+            "Nothing is staged — stage at least one change before asking for a commit message.".into(),
+        ));
+    }
+
+    // Tight prompt — we want just the subject line, no chatter.
+    let prompt = format!(
+        "Write a single git commit message for the following staged diff.\n\n\
+         Rules:\n\
+         - Imperative mood (\"Add X\", \"Fix Y\", not \"Added X\").\n\
+         - Under 72 characters.\n\
+         - No quotes, no markdown, no preamble, no explanation.\n\
+         - Output ONLY the commit message on a single line.\n\n\
+         ```diff\n{diff}```"
+    );
+
+    let mut cmd = tokio::process::Command::new(bin);
+    cmd.arg("-p").arg(&prompt);
+    cmd.current_dir(repo);
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
+
+    // Mirror the PATH augmentation from `ask()` — Tauri-launched processes
+    // inherit a skinny PATH, and the same `claude` binary lookup pattern
+    // applies here.
+    if let Ok(p) = std::env::var("PATH") {
+        let mut parts: Vec<String> = p.split(':').map(String::from).collect();
+        for e in ["/opt/homebrew/bin", "/usr/local/bin"] {
+            if !parts.iter().any(|d| d == e) {
+                parts.push(e.into());
+            }
+        }
+        if let Some(h) = home_dir() {
+            for sub in [".local/bin", ".claude/local/bin", ".claude/local", ".bun/bin", ".volta/bin"] {
+                let full = h.join(sub).to_string_lossy().into_owned();
+                if !parts.iter().any(|d| d == &full) {
+                    parts.push(full);
+                }
+            }
+        }
+        cmd.env("PATH", parts.join(":"));
+    }
+
+    let out = cmd.output().await?;
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        let code = out.status.code().unwrap_or(-1);
+        return Err(ClaudeRunError::Failed(format!(
+            "claude exited {code}{}",
+            if stderr.is_empty() { String::new() } else { format!(" — {stderr}") }
+        )));
+    }
+    let raw = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    // Strip common wrappers the model sometimes adds even when instructed
+    // otherwise (backticks, quotes, a trailing period run-on). Keep it
+    // single-line — the commit-message field is one-line.
+    let cleaned = raw
+        .lines()
+        .next()
+        .unwrap_or("")
+        .trim()
+        .trim_matches(|c: char| c == '"' || c == '\'' || c == '`')
+        .to_string();
+    if cleaned.is_empty() {
+        return Err(ClaudeRunError::Failed("claude returned an empty response".into()));
+    }
+    Ok(cleaned)
+}
+
 /// Removes its path on drop. Used to clean up the temp MCP config.
 struct TempFile(PathBuf);
 

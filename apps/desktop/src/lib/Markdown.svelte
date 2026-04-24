@@ -3,10 +3,23 @@
 
   interface Props {
     source: string;
+    /** Clicking an @file/@dir mention in rendered output calls this with
+        the bare path (without the @). When omitted the mention renders
+        as a non-clickable highlight (same as before). */
+    onOpenFile?: (path: string) => void;
   }
-  let { source }: Props = $props();
+  let { source, onOpenFile }: Props = $props();
 
   marked.setOptions({ gfm: true, breaks: false });
+
+  /** Which token flavor a match is — governs which class/dataset the span
+      carries, so file tokens can be wired up clickable and ticket tokens
+      render as plain highlights. */
+  function mentionClass(token: string): string {
+    if (token.startsWith('#')) return 'ment ment-issue';
+    if (/^[A-Z][A-Z0-9_]*-\d+$/.test(token)) return 'ment ment-ticket';
+    return 'ment ment-file ment-clickable';
+  }
 
   const html = $derived.by(() => {
     if (!source) return '';
@@ -19,15 +32,32 @@
       // Must operate on rendered HTML; avoid matching inside existing tags.
       return raw.replace(
         /(^|[\s>(\[])@((?:#\d+)|(?:[A-Z][A-Z0-9_]*-\d+)|(?:[a-zA-Z0-9_.\-]+\/[a-zA-Z0-9_./\-]*))/g,
-        '$1<span class="ment">@$2</span>'
+        (_m, lead: string, token: string) => {
+          const cls = mentionClass(token);
+          // Escape double-quotes in the path just in case — only relevant
+          // for file tokens because tickets/issues never contain them.
+          const safe = token.replace(/"/g, '&quot;');
+          return `${lead}<span class="${cls}" data-path="${safe}">@${token}</span>`;
+        }
       );
     } catch {
       return source;
     }
   });
+
+  /** Delegate clicks to any clickable mention inside the rendered tree. */
+  function onClickProse(ev: MouseEvent) {
+    const t = ev.target as HTMLElement | null;
+    const el = t?.closest?.('.ment-clickable') as HTMLElement | null;
+    if (!el) return;
+    const path = el.dataset.path;
+    if (!path) return;
+    ev.preventDefault();
+    onOpenFile?.(path);
+  }
 </script>
 
-<div class="prose">{@html html}</div>
+<div class="prose" onclick={onClickProse} role="presentation">{@html html}</div>
 
 <style>
   .prose {
@@ -160,5 +190,14 @@
     font-size: 0.92em;
     border: 1px solid rgba(16, 185, 129, 0.22);
     font-weight: 500;
+  }
+  /* File / folder mentions are clickable — show the pointer and a mild
+     hover so it's obvious you can open them. Ticket + issue mentions
+     stay pure highlight (no interaction yet). */
+  .prose :global(.ment-clickable) { cursor: pointer; transition: all 120ms; }
+  .prose :global(.ment-clickable:hover) {
+    color: #0a111e;
+    background: var(--accent-bright);
+    border-color: var(--accent);
   }
 </style>

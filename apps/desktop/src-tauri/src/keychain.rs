@@ -19,8 +19,7 @@ use security_framework_sys::{
     base::errSecItemNotFound,
     item::{
         kSecAttrAccessControl, kSecAttrAccount, kSecAttrService, kSecClass,
-        kSecClassGenericPassword, kSecMatchLimit, kSecReturnData,
-        kSecUseDataProtectionKeychain, kSecValueData,
+        kSecClassGenericPassword, kSecMatchLimit, kSecReturnData, kSecValueData,
     },
     keychain_item::{SecItemAdd, SecItemCopyMatching, SecItemDelete},
 };
@@ -69,39 +68,31 @@ fn access_control() -> Result<SecAccessControl, KeychainError> {
     .map_err(KeychainError::from)
 }
 
-/// Common query fields. Shared between read/write/delete so all three target
-/// the same keychain. The `kSecUseDataProtectionKeychain=true` flag is the
-/// critical one — without it, macOS uses the legacy file-based login
-/// keychain where `SecAccessControl` is silently ignored and reads fall
-/// back to the "enter keychain password" dialog. With it, items live in
-/// the modern data-protection keychain and biometric access control works
-/// the iOS way.
-fn base_pairs(key: &str) -> Vec<(CFString, CFType)> {
-    vec![
-        (cf_string_from_ref(unsafe { kSecClass }), cf_string_from_ref(unsafe { kSecClassGenericPassword }).as_CFType()),
-        (cf_string_from_ref(unsafe { kSecAttrService }), CFString::new(SERVICE).as_CFType()),
-        (cf_string_from_ref(unsafe { kSecAttrAccount }), CFString::new(key).as_CFType()),
-        (cf_string_from_ref(unsafe { kSecUseDataProtectionKeychain }), CFBoolean::true_value().as_CFType()),
-    ]
-}
-
 pub fn set(key: &str, value: &str) -> Result<(), KeychainError> {
     // SecItemAdd returns errSecDuplicateItem if (service, account) exists.
     // Delete first to make writes idempotent.
     let _ = delete(key);
     let ac = access_control()?;
-    let mut pairs = base_pairs(key);
-    pairs.push((cf_string_from_ref(unsafe { kSecValueData }), CFData::from_buffer(value.as_bytes()).as_CFType()));
-    pairs.push((cf_string_from_ref(unsafe { kSecAttrAccessControl }), ac.as_CFType()));
+    let pairs: Vec<(CFString, CFType)> = vec![
+        (cf_string_from_ref(unsafe { kSecClass }), cf_string_from_ref(unsafe { kSecClassGenericPassword }).as_CFType()),
+        (cf_string_from_ref(unsafe { kSecAttrService }), CFString::new(SERVICE).as_CFType()),
+        (cf_string_from_ref(unsafe { kSecAttrAccount }), CFString::new(key).as_CFType()),
+        (cf_string_from_ref(unsafe { kSecValueData }), CFData::from_buffer(value.as_bytes()).as_CFType()),
+        (cf_string_from_ref(unsafe { kSecAttrAccessControl }), ac.as_CFType()),
+    ];
     let dict = CFDictionary::from_CFType_pairs(&pairs);
     let status = unsafe { SecItemAdd(dict.as_concrete_TypeRef(), ptr::null_mut()) };
     check(status)
 }
 
 pub fn get(key: &str) -> Result<Option<String>, KeychainError> {
-    let mut pairs = base_pairs(key);
-    pairs.push((cf_string_from_ref(unsafe { kSecReturnData }), CFBoolean::true_value().as_CFType()));
-    pairs.push((cf_string_from_ref(unsafe { kSecMatchLimit }), CFNumber::from(1i64).as_CFType()));
+    let pairs: Vec<(CFString, CFType)> = vec![
+        (cf_string_from_ref(unsafe { kSecClass }), cf_string_from_ref(unsafe { kSecClassGenericPassword }).as_CFType()),
+        (cf_string_from_ref(unsafe { kSecAttrService }), CFString::new(SERVICE).as_CFType()),
+        (cf_string_from_ref(unsafe { kSecAttrAccount }), CFString::new(key).as_CFType()),
+        (cf_string_from_ref(unsafe { kSecReturnData }), CFBoolean::true_value().as_CFType()),
+        (cf_string_from_ref(unsafe { kSecMatchLimit }), CFNumber::from(1i64).as_CFType()),
+    ];
     let dict = CFDictionary::from_CFType_pairs(&pairs);
     let mut result: CFTypeRef = ptr::null_mut();
     let status = unsafe { SecItemCopyMatching(dict.as_concrete_TypeRef(), &mut result) };
@@ -118,7 +109,12 @@ pub fn get(key: &str) -> Result<Option<String>, KeychainError> {
 }
 
 pub fn delete(key: &str) -> Result<(), KeychainError> {
-    let dict = CFDictionary::from_CFType_pairs(&base_pairs(key));
+    let pairs: Vec<(CFString, CFType)> = vec![
+        (cf_string_from_ref(unsafe { kSecClass }), cf_string_from_ref(unsafe { kSecClassGenericPassword }).as_CFType()),
+        (cf_string_from_ref(unsafe { kSecAttrService }), CFString::new(SERVICE).as_CFType()),
+        (cf_string_from_ref(unsafe { kSecAttrAccount }), CFString::new(key).as_CFType()),
+    ];
+    let dict = CFDictionary::from_CFType_pairs(&pairs);
     let status = unsafe { SecItemDelete(dict.as_concrete_TypeRef()) };
     if status == errSecItemNotFound {
         return Ok(());

@@ -1,4 +1,5 @@
 mod agent;
+mod biometry;
 mod claude;
 mod cursor;
 mod fs;
@@ -136,6 +137,7 @@ pub fn run() {
             claude_status,
             claude_ask,
             claude_stop,
+            agent_generate_commit_message,
             agent_status,
             fs_read_file,
             fs_write_file,
@@ -143,6 +145,8 @@ pub fn run() {
             fs_path_exists,
             fs_bash_run,
             git_status,
+            git_check_ignore,
+            git_ls_files,
             git_branches,
             git_current_branch,
             git_checkout,
@@ -169,6 +173,7 @@ pub fn run() {
             worktree_list,
             worktree_diff,
             worktree_apply,
+            biometric_unlock,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -765,6 +770,17 @@ fn claude_stop(runners: State<'_, Runners>, session_id: String) -> Result<bool, 
     Ok(agent::stop(&runners, &session_id))
 }
 
+#[tauri::command]
+async fn agent_generate_commit_message(
+    repo: String,
+    #[allow(non_snake_case)] agentKind: AgentKind,
+) -> Result<String, String> {
+    let path = std::path::PathBuf::from(&repo);
+    agent::generate_commit_message(agentKind, &path)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 // ---------- FS ----------
 
 #[tauri::command]
@@ -797,6 +813,16 @@ fn fs_bash_run(cwd: String, command: String) -> Result<BashResult, String> {
 #[tauri::command]
 fn git_status(repo: String) -> Result<GitStatus, String> {
     git::status(&repo)
+}
+
+#[tauri::command]
+fn git_check_ignore(repo: String, paths: Vec<String>) -> Vec<String> {
+    git::check_ignore(&repo, &paths)
+}
+
+#[tauri::command]
+fn git_ls_files(repo: String) -> Vec<String> {
+    git::ls_files(&repo)
 }
 
 #[tauri::command]
@@ -966,4 +992,12 @@ fn worktree_diff(
 #[tauri::command]
 fn worktree_apply(repo: String, session_id: String) -> Result<String, String> {
     worktree::apply(&repo, &session_id)
+}
+
+// ---------- Biometry (Touch ID) ----------
+
+#[tauri::command]
+async fn biometric_unlock(reason: Option<String>) -> Result<(), String> {
+    let reason = reason.unwrap_or_else(|| "Unlock Forgehold".to_string());
+    biometry::authenticate(&reason).await
 }

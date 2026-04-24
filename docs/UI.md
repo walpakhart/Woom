@@ -1,4 +1,4 @@
-# Forgehold — UI / UX Specification
+# Forge — UI / UX Specification
 
 **Version:** 0.1 (draft)
 **Last updated:** 2026-04-22
@@ -11,7 +11,7 @@
 
 ## 1. Design Philosophy
 
-Five principles Forgehold stands on:
+Five principles Forge stands on:
 
 1. **Object-first.** Every card is an object you can pick up and move.
    That's the core mechanic; everything else bends around it.
@@ -76,7 +76,7 @@ a compatible object is over it.
 
 ```
 --success:  #10B981
---running:  #F59E0B    /* same as forgehold brand — makes running "ours" */
+--running:  #F59E0B    /* same as forge brand — makes running "ours" */
 --error:    #EF4444
 --info:     #3B82F6
 ```
@@ -148,7 +148,7 @@ Switching Dashboard ↔ Workbench is a sidebar tab or ⌘1 / ⌘2.
 ```
 ╔══════════════════════════════════════════════════════════════════════════════════╗
 ║                                                                                  ║
-║  ⌘ forgehold ⌂ acme-team ▾        ⌕  search or press ⌘K            ⚡ 2   👤    ║
+║  ⌘ forge     ⌂ acme-team ▾        ⌕  search or press ⌘K            ⚡ 2   👤    ║
 ║                                                                                  ║
 ╠══════════╤══════════════════════════════════════════════╤════════════════════════╣
 ║          │                                              │                        ║
@@ -304,7 +304,7 @@ drop zone: live text (what Claude is writing) and a progress ring.
 
 ```
 ╔══════════════════════════════════════════════════════════════════════════════════╗
-║  ⌘ forgehold ⌂ acme-team ▾        ⌕  search or press ⌘K            ⚡ 2   👤    ║
+║  ⌘ forge     ⌂ acme-team ▾        ⌕  search or press ⌘K            ⚡ 2   👤    ║
 ╠══════════════════════════════════════════════════════════════════════════════════╣
 ║                                                                                  ║
 ║   Good morning, Nik.                          ACTIVE                             ║
@@ -438,7 +438,7 @@ A dedicated view (⌘3), reachable from the sidebar and the command palette.
 
 ```
 ╔══════════════════════════════════════════════════════════════════════════════════╗
-║  ⌘ forgehold ⌂ acme-team ▾        ⌕  search or press ⌘K            ⚡ 2   👤    ║
+║  ⌘ forge     ⌂ acme-team ▾        ⌕  search or press ⌘K            ⚡ 2   👤    ║
 ╠══════════════════════════════════════════════════════════════════════════════════╣
 ║                                                                                  ║
 ║  REPOSITORIES                                                   [ + Clone ]     ║
@@ -446,8 +446,8 @@ A dedicated view (⌘3), reachable from the sidebar and the command palette.
 ║  Filter: [ all ▾ ]  [ frontend ] [ infra ] [ legacy ]       ⌕ search repos      ║
 ║                                                                                  ║
 ║  ┌──────────────────────────────────────────────────────────────────────────┐   ║
-║  │ ┃ forgehold                                             github · main     │   ║
-║  │ ┃ Forgehold desktop app                                                       │   ║
+║  │ ┃ forge                                                 github · main     │   ║
+║  │ ┃ Forge desktop app                                                       │   ║
 ║  │ ┃ ● clean  ↑ 0  ↓ 2     fetched 3m ago                                   │   ║
 ║  │ ┃ [ Open in Zed ]  [ Fetch ]  [ New branch ]   ⚙ Work with Claude       │   ║
 ║  └──────────────────────────────────────────────────────────────────────────┘   ║
@@ -485,10 +485,10 @@ A dedicated view (⌘3), reachable from the sidebar and the command palette.
 │   ◉ GitHub (linked: @nikk)                          │
 │   ○ Custom URL                                       │
 │                                                      │
-│   ⌕ search your repos…          [ acme/forgehold ▾ ]   │
+│   ⌕ search your repos…          [ acme/forge ▾ ]   │
 │                                                      │
 │  To:                                                 │
-│   ~/Repos/forgehold-clones/forgehold                  📁     │
+│   ~/Repos/forge-clones/forge                  📁     │
 │                                                      │
 │  Branch:                                             │
 │   main  ▾                                            │
@@ -508,9 +508,9 @@ Clicking a repo row opens an inline drawer or the detail view:
 ╔══════════════════════════════════════════════════════════════════════════════════╗
 ║  ← Repositories                                                                  ║
 ║                                                                                  ║
-║  ┃ forgehold                                                                     ║
-║  ┃ ~/Repos/pers/forgehold                                                        ║
-║  ┃ github · acme/forgehold                                                       ║
+║  ┃ forge                                                                         ║
+║  ┃ ~/Repos/pers/forge                                                            ║
+║  ┃ github · acme/forge                                                           ║
 ║                                                                                  ║
 ║  [ Open in Zed ]   [ Fetch ]   [ New branch ]   [ Edit rules ]                  ║
 ║                                                                                  ║
@@ -534,7 +534,7 @@ Clicking a repo row opens an inline drawer or the detail view:
 ║                                                                                  ║
 ║  ─── RULES ─────────────────────────────────────────────────────────────────    ║
 ║                                                                                  ║
-║   Repo rules: .forgehold/rules.md  (2 folder scopes defined)        [ Edit ]        ║
+║   Repo rules: .forge/rules.md  (2 folder scopes defined)        [ Edit ]        ║
 ║                                                                                  ║
 ╚══════════════════════════════════════════════════════════════════════════════════╝
 ```
@@ -545,7 +545,7 @@ Clicking `⚙ Work with Claude` on a repo card opens a mini dialog without
 requiring a ticket:
 
 ```
-╭────────────── Work on forgehold with Claude ──────────────╮
+╭────────────── Work on forge with Claude ──────────────╮
 │                                                        │
 │  Describe the task:                                    │
 │  ┌──────────────────────────────────────────────────┐ │
@@ -578,7 +578,7 @@ requiring a ticket:
 ║  Settings › Rules                                                                ║
 ╠══════════════════════════════════════════════════════════════════════════════════╣
 ║                                                                                  ║
-║  Scope:  [ ● Global ] [ Repo: forgehold ▾ ] [ Folder: /apps/desktop/src/lib/ui ▾ ]  ║
+║  Scope:  [ ● Global ] [ Repo: forge ▾ ] [ Folder: /apps/desktop/src/lib/ui ▾ ]  ║
 ║                                                                                  ║
 ║  ┌─────────────────────────────────┐   ┌─────────────────────────────────┐     ║
 ║  │ # TypeScript                    │   │ PREVIEW                         │     ║
@@ -593,7 +593,7 @@ requiring a ticket:
 ║  │ - all handlers return Result    │   │ • no any, use unknown           │     ║
 ║  │ - no direct DB access           │   │ • Conventional Commits          │     ║
 ║  │                                 │   │                                 │     ║
-║  │                                 │   │ From repo forgehold:            │     ║
+║  │                                 │   │ From repo forge:                │     ║
 ║  │                                 │   │ • Branch: feat/PROJ-{slug}      │     ║
 ║  │                                 │   │                                 │     ║
 ║  │                                 │   │ From folder /api:               │     ║
@@ -604,7 +604,7 @@ requiring a ticket:
 ║  │                                 │   │ feat/PROJ-1234-fix-auth-retry   │     ║
 ║  └─────────────────────────────────┘   └─────────────────────────────────┘     ║
 ║                                                                                  ║
-║  [ Save ]    [ Save & commit to .forgehold/rules.md ]       Last saved: 2m ago     ║
+║  [ Save ]    [ Save & commit to .forge/rules.md ]       Last saved: 2m ago     ║
 ║                                                                                  ║
 ╚══════════════════════════════════════════════════════════════════════════════════╝
 ```
@@ -615,7 +615,7 @@ Key points:
   will receive.
 - Test case: pick a hypothetical object + folder, see what applies.
 - Repo rules get a "Save & commit" button (auto `git add` + commit to
-  `.forgehold/rules.md`).
+  `.forge/rules.md`).
 
 ### 11.2 Inline run override
 

@@ -222,6 +222,133 @@ pub async fn ask(
     Ok((final_text, chat_id))
 }
 
+/// Headless one-off: feed the staged diff and return a one-line commit
+/// message. Minted on a throwaway cursor-agent chat so the agent's real
+/// conversation history stays clean. Same prompt shape as claude's version
+/// so commit messages feel consistent regardless of which agent wrote them.
+pub async fn generate_commit_message(
+    repo: &std::path::Path,
+) -> Result<String, CursorRunError> {
+    let status = detect();
+    if !status.detected {
+        return Err(CursorRunError::NotInstalled);
+    }
+    if !status.ready {
+        return Err(CursorRunError::NotAuthed);
+    }
+    let bin = status.path.as_deref().unwrap_or("cursor-agent");
+
+    // Staged diff — the thing we want summarized.
+    let diff_out = tokio::process::Command::new("git")
+        .current_dir(repo)
+        .args(["diff", "--cached"])
+        .output()
+        .await
+        .map_err(CursorRunError::Io)?;
+    if !diff_out.status.success() {
+        let stderr = String::from_utf8_lossy(&diff_out.stderr).trim().to_string();
+        return Err(CursorRunError::Failed(format!(
+            "git diff --cached failed: {}",
+            if stderr.is_empty() { "unknown error".into() } else { stderr }
+        )));
+    }
+    let diff = String::from_utf8_lossy(&diff_out.stdout);
+    if diff.trim().is_empty() {
+        return Err(CursorRunError::Failed(
+            "Nothing is staged — stage at least one change before asking for a commit message.".into(),
+        ));
+    }
+
+    let prompt = format!(
+        "Write a single git commit message for the following staged diff.\n\n\
+         Rules:\n\
+         - Imperative mood (\"Add X\", \"Fix Y\", not \"Added X\").\n\
+         - Under 72 characters.\n\
+         - No quotes, no markdown, no preamble, no explanation.\n\
+         - Output ONLY the commit message on a single line.\n\n\
+         ```diff\n{diff}```"
+    );
+
+    // cursor-agent needs an active chat to `-p` into; mint a throwaway one.
+    let create_out = Command::new(bin)
+        .arg("create-chat")
+        .envs(extended_env())
+        .output()
+        .map_err(CursorRunError::Io)?;
+    if !create_out.status.success() {
+        return Err(CursorRunError::Failed(format!(
+            "cursor-agent create-chat: {}",
+            String::from_utf8_lossy(&create_out.stderr).trim()
+        )));
+    }
+    let chat_id = String::from_utf8_lossy(&create_out.stdout).trim().to_string();
+
+    let mut cmd = tokio::process::Command::new(bin);
+    cmd.arg("-p")
+        .arg(&prompt)
+        .arg("--output-format")
+        .arg("stream-json")
+        .arg("--resume")
+        .arg(&chat_id)
+        .arg("--force")
+        .arg("--approve-mcps")
+        .arg("--workspace")
+        .arg(repo);
+    cmd.current_dir(repo);
+    for (k, v) in extended_env() {
+        cmd.env(k, v);
+    }
+    if std::env::var("CURSOR_AUTH_TOKEN").is_err() {
+        if let Some(tok) = read_cursor_access_token() {
+            cmd.env("CURSOR_AUTH_TOKEN", tok);
+        }
+    }
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
+
+    let out = cmd.output().await.map_err(CursorRunError::Io)?;
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        let code = out.status.code().unwrap_or(-1);
+        return Err(CursorRunError::Failed(format!(
+            "cursor-agent exited {code}{}",
+            if stderr.is_empty() { String::new() } else { format!(" — {stderr}") }
+        )));
+    }
+
+    // Parse stream-json events for the final `result` payload. Same shape
+    // as claude's; we already parse it in `ask()`.
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let mut final_text = String::new();
+    for line in stdout.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
+            if v.get("type").and_then(|t| t.as_str()) == Some("result") {
+                if let Some(r) = v.get("result").and_then(|r| r.as_str()) {
+                    final_text = r.to_string();
+                }
+            }
+        }
+    }
+
+    let cleaned = final_text
+        .lines()
+        .next()
+        .unwrap_or("")
+        .trim()
+        .trim_matches(|c: char| c == '"' || c == '\'' || c == '`')
+        .to_string();
+    if cleaned.is_empty() {
+        return Err(CursorRunError::Failed(
+            "cursor returned an empty response".into(),
+        ));
+    }
+    Ok(cleaned)
+}
+
 /// Translate one cursor-agent stream line into zero or more Claude-style
 /// events. Most events pass through (cursor's `assistant`/`result` shape is
 /// identical). `tool_call` → synthesized `assistant` event with a `tool_use`

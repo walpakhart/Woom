@@ -2,7 +2,7 @@
   import { invoke } from '@tauri-apps/api/core';
 
   interface Entry { name: string; path: string; is_dir: boolean; size: number; }
-  interface Item { name: string; path: string; is_dir: boolean; depth: number; expanded: boolean; }
+  interface Item { name: string; path: string; is_dir: boolean; depth: number; expanded: boolean; ignored: boolean; }
 
   interface Props {
     rootPath: string;
@@ -17,6 +17,19 @@
   let loading = $state(false);
   let error = $state<string | null>(null);
 
+  /** Batch-check `paths` against the repo's gitignore rules. Returns a Set
+      of ignored absolute paths. Silent on failure (non-git dir, transient
+      git error) — the tree keeps rendering without dimming. */
+  async function checkIgnored(paths: string[]): Promise<Set<string>> {
+    if (!rootPath || paths.length === 0) return new Set();
+    try {
+      const out = await invoke<string[]>('git_check_ignore', { repo: rootPath, paths });
+      return new Set(out);
+    } catch {
+      return new Set();
+    }
+  }
+
   async function loadRoot() {
     if (!rootPath) {
       items = [];
@@ -26,8 +39,10 @@
     error = null;
     try {
       const kids = await invoke<Entry[]>('fs_list_dir', { path: rootPath });
+      const ignored = await checkIgnored(kids.map((e) => e.path));
       items = kids.map((e) => ({
-        name: e.name, path: e.path, is_dir: e.is_dir, depth: 0, expanded: false
+        name: e.name, path: e.path, is_dir: e.is_dir, depth: 0, expanded: false,
+        ignored: ignored.has(e.path)
       }));
     } catch (e: unknown) {
       error = e instanceof Error ? e.message : String(e);
@@ -61,8 +76,12 @@
       error = e instanceof Error ? e.message : String(e);
       return;
     }
+    const ignoredHere = await checkIgnored(kids.map((e) => e.path));
     const inserted: Item[] = kids.map((e) => ({
-      name: e.name, path: e.path, is_dir: e.is_dir, depth: it.depth + 1, expanded: false
+      name: e.name, path: e.path, is_dir: e.is_dir, depth: it.depth + 1, expanded: false,
+      // A child inside an already-ignored dir is also ignored by definition —
+      // saves a follow-up `git check-ignore` roundtrip for deep ignored trees.
+      ignored: it.ignored || ignoredHere.has(e.path)
     }));
     items = [
       ...items.slice(0, idx),
@@ -106,9 +125,10 @@
       class="tree-row"
       class:selected={selectedPath === it.path && !it.is_dir}
       class:dir={it.is_dir}
+      class:ignored={it.ignored}
       style="padding-left: {8 + it.depth * 12}px"
       onclick={() => toggle(i)}
-      title={it.path}
+      title={it.ignored ? `${it.path}\n(gitignored)` : it.path}
       draggable="true"
       ondragstart={(e) => {
         if (!e.dataTransfer) return;
@@ -149,6 +169,12 @@
   .tree-row:hover { background: var(--bg-2); color: var(--text-0); }
   .tree-row.selected { background: var(--accent-soft); color: var(--accent-bright); }
   .tree-row.dir { color: var(--text-0); font-weight: 500; }
+  /* Gitignored files/dirs — dimmed + italic so they read as "outside git"
+     at a glance (mirrors VS Code / IntelliJ). `.selected` still wins, so
+     opening an ignored file still shows the accent highlight. */
+  .tree-row.ignored { color: var(--text-mute); font-style: italic; opacity: 0.65; }
+  .tree-row.ignored:hover { color: var(--text-2); opacity: 0.85; }
+  .tree-row.ignored.dir { color: var(--text-mute); font-weight: 400; }
   .tree-chevron {
     display: inline-flex; width: 14px; height: 14px;
     align-items: center; justify-content: center; flex-shrink: 0;

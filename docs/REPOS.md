@@ -1,9 +1,9 @@
-# Forgehold — Repositories
+# Forge — Repositories
 
 **Version:** 0.1 (draft)
 **Last updated:** 2026-04-22
 
-> How Forgehold manages local git repositories and ties them to the Claude
+> How Forge manages local git repositories and ties them to the Claude
 > agent and the GitHub Source.
 
 ---
@@ -13,9 +13,9 @@
 The GitHub **Source** (see SPEC.md §2.1) is a connector to the GitHub API:
 it reads issues, PRs, and comments. It *does not* touch local code.
 
-**Repository** is a clone of a git repo on disk that Forgehold tracks — it
+**Repository** is a clone of a git repo on disk that Forge tracks — it
 knows how to clone, update, branch, and hand the repo to the Claude
-agent. A Repository can be linked to a GitHub Source (so Forgehold sees its
+agent. A Repository can be linked to a GitHub Source (so Forge sees its
 issues), or stand on its own (e.g. a local or GitLab repo we don't have
 a Source for yet).
 
@@ -34,12 +34,12 @@ This split buys us:
 struct Repository {
     id: Uuid,
     workspace_id: Uuid,
-    name: String,                    // "forgehold" or "acme/forgehold"
-    remote_url: Option<String>,      // git@github.com:acme/forgehold.git
+    name: String,                    // "forge" or "acme/forge"
+    remote_url: Option<String>,      // git@github.com:acme/forge.git
     local_path: String,              // absolute path on disk
     default_branch: String,          // from git, usually "main"
     linked_source_id: Option<Uuid>,  // optional link to a GitHub Source
-    rules_path: Option<String>,      // typically ".forgehold/rules.md"
+    rules_path: Option<String>,      // typically ".forge/rules.md"
     tags: Vec<String>,               // filtering: "frontend", "infra"
     last_fetched_at: Option<Timestamp>,
     created_at: Timestamp,
@@ -103,7 +103,7 @@ UX:
 - A dialog with a URL field and a "My GitHub repos" dropdown (populated
   from the linked GitHub Source via API).
 - `target_dir` auto-completes from settings: "where to store repos"
-  (default: `~/Repos/forgehold-clones/`).
+  (default: `~/Repos/forge-clones/`).
 - Clone progress streams to the UI (`git clone --progress`).
 
 ### 3.2 Fetch / Pull
@@ -134,7 +134,7 @@ Input:  { repo_id, include_remote?: bool }
 Output: Vec<BranchInfo>
 ```
 
-Important: **Forgehold never runs `git checkout` when there are uncommitted
+Important: **Forge never runs `git checkout` when there are uncommitted
 changes without explicit user confirmation.** This rule applies to every
 destructive git operation.
 
@@ -157,7 +157,7 @@ directory. This is critical:
   away without affecting the main tree.
 - It's easy to diff the result against main.
 
-Worktrees live in `~/Library/Application Support/Forgehold/worktrees/<run_id>/`
+Worktrees live in `~/Library/Application Support/Forge/worktrees/<run_id>/`
 and are auto-removed 24 hours after the run finishes (unless the user
 pins the artifact).
 
@@ -170,7 +170,7 @@ Output: void
 ```
 
 Spawns `zed <path>` or `code <path>`. The default editor is read from
-Forgehold settings (or the `$EDITOR` env var).
+Forge settings (or the `$EDITOR` env var).
 
 ---
 
@@ -179,10 +179,10 @@ Forgehold settings (or the `$EDITOR` env var).
 When the user drops a ticket onto Claude Code, the system has to know
 **where to work**. Target repo resolution:
 
-1. Explicit user choice in the drop zone (chip: "work in: acme/forgehold").
+1. Explicit user choice in the drop zone (chip: "work in: acme/forge").
 2. A default repo on the Source: if the ticket is from a Jira source, we
    look up its `default_repo_id` (a setting).
-3. Ticket metadata: if the description references `acme/forgehold`, we try
+3. Ticket metadata: if the description references `acme/forge`, we try
    to auto-resolve.
 4. Prompt the user: if nothing matched, ask explicitly.
 
@@ -210,7 +210,7 @@ Before the run starts:
 | `github.create_pr`       | create a PR from an artifact diff (via GitHub source) |
 | `repo.open_in_editor`    | final step: open the result in Zed                 |
 
-**Note:** Forgehold never commits or pushes without explicit user consent
+**Note:** Forge never commits or pushes without explicit user consent
 (the "auto-commit and push" checkbox in workflow settings is **off by
 default**).
 
@@ -241,22 +241,22 @@ Post-MVP we're considering "linked runs" with shared context.
 ### 7.1 Global settings
 
 ```toml
-# ~/Library/Application Support/Forgehold/settings.toml
+# ~/Library/Application Support/Forge/settings.toml
 [repos]
-default_clone_dir = "~/Repos/forgehold-clones"
+default_clone_dir = "~/Repos/forge-clones"
 default_editor = "zed"                   # or "code", "cursor", "system"
 auto_fetch_interval_seconds = 300        # 5 min
-worktree_dir = "~/Library/Application Support/Forgehold/worktrees"
+worktree_dir = "~/Library/Application Support/Forge/worktrees"
 worktree_ttl_hours = 24
 ```
 
 ### 7.2 Per-repo overrides
 
-In `.forgehold/repo.toml` inside the repository:
+In `.forge/repo.toml` inside the repository:
 
 ```toml
 [repo]
-display_name = "Forgehold Desktop"
+display_name = "Forge Desktop"
 default_branch = "main"                  # overrides the git default
 claude_worktree_from = "main"            # base branch for run worktrees
 auto_commit = false                      # safe by default

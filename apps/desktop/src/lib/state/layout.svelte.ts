@@ -492,6 +492,37 @@ export function startResizeById(instanceId: string, ev: PointerEvent) {
   autoscrollRaf = requestAnimationFrame(step);
 }
 
+/** Flat list of all instances of `kind` across every workbench, tagged
+ *  with the workbench they live in. Used by the workbench bar pills to
+ *  show a count + a per-instance hover menu. */
+export function listInstancesOfKind(
+  kind: PanelKind
+): { id: string; name: string; workbenchId: string; workbenchName: string }[] {
+  const out: { id: string; name: string; workbenchId: string; workbenchName: string }[] = [];
+  for (const wb of layoutState.workbenches) {
+    for (const inst of wb.instances) {
+      if (inst.kind === kind) {
+        out.push({
+          id: inst.id,
+          name: inst.name,
+          workbenchId: wb.id,
+          workbenchName: wb.name
+        });
+      }
+    }
+  }
+  return out;
+}
+
+/** Jump to `instanceId` in whichever workbench owns it. Switches the
+ *  active workbench first if needed, then scrolls the column into view. */
+export async function goToInstance(instanceId: string, workbenchId: string) {
+  if (workbenchId !== layoutState.activeWorkbenchId) {
+    setActiveWorkbench(workbenchId);
+  }
+  await scrollInstanceIntoView(instanceId);
+}
+
 /** Scroll-into-view the given instance in the current workbench. */
 export async function scrollInstanceIntoView(instanceId: string) {
   await tick();

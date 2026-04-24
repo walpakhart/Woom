@@ -17,8 +17,14 @@
     repo: string;
     onStatusChange?: (files: FileStatus[]) => void;
     onOpenDiff?: (path: string, staged: boolean) => void;
+    /** Which agent the ✨-button should route to, or null to grey it out.
+        Parent picks this from the first AI session linked to *this* editor
+        (either Claude or Cursor). Both adapters ship a headless
+        commit-message generator, so the button works with whichever
+        agent the user has bridged. */
+    aiKind?: 'claude' | 'cursor' | null;
   }
-  let { repo, onStatusChange, onOpenDiff }: Props = $props();
+  let { repo, onStatusChange, onOpenDiff, aiKind = null }: Props = $props();
 
   let status = $state<GitStatus | null>(null);
   let branches = $state<Branch[]>([]);
@@ -101,10 +107,62 @@
     void withBusy('discard', () => invoke('git_discard', { repo, paths: [f.path] }));
   }
 
+  /** Discard only UNSTAGED changes — intentionally does NOT touch staged
+      files so the user can't accidentally wipe a whole commit's worth of
+      work with one click. For staged files the UI offers "unstage all"
+      instead (below), which is non-destructive. */
+  function discardAllUnstaged() {
+    const files = (status?.files ?? []).filter((f) => f.unstaged && !f.staged);
+    if (files.length === 0) return;
+    const untrackedCount = files.filter((f) => f.code.startsWith('?')).length;
+    const modifiedCount = files.length - untrackedCount;
+    const parts: string[] = [];
+    if (modifiedCount > 0) parts.push(`${modifiedCount} modified file${modifiedCount === 1 ? '' : 's'}`);
+    if (untrackedCount > 0) parts.push(`${untrackedCount} untracked file${untrackedCount === 1 ? '' : 's'}`);
+    const ok = confirm(
+      `Discard unstaged changes?\n\nThis will revert ${parts.join(' and ')}.\n\nStaged files are left alone. This cannot be undone.`
+    );
+    if (!ok) return;
+    const paths = files.map((f) => f.path);
+    void withBusy('discard-all', () => invoke('git_discard', { repo, paths }));
+  }
+
+  /** Unstage every staged file (safe — just `git reset HEAD --`, no file
+      content is touched). Moves them back into the Changes section so the
+      user can review / stage selectively / discard if needed. */
+  function unstageAll() {
+    const paths = (status?.files ?? []).filter((f) => f.staged).map((f) => f.path);
+    if (paths.length === 0) return;
+    void withBusy('unstage-all', () => invoke('git_unstage', { repo, paths }));
+  }
+
   async function doCommit() {
     if (!commitMsg.trim()) return;
     await withBusy('commit', () => invoke<string>('git_commit', { repo, message: commitMsg.trim() }));
     commitMsg = '';
+  }
+
+  let aiGenerating = $state(false);
+  let aiError = $state<string | null>(null);
+  async function generateAiCommitMessage() {
+    if (!aiKind || aiGenerating) return;
+    if (stagedFiles.length === 0) {
+      aiError = 'Stage changes first — AI needs a staged diff to summarize.';
+      return;
+    }
+    aiGenerating = true;
+    aiError = null;
+    try {
+      const msg = await invoke<string>('agent_generate_commit_message', {
+        repo,
+        agentKind: aiKind
+      });
+      commitMsg = msg;
+    } catch (e) {
+      aiError = typeof e === 'string' ? e : String(e);
+    } finally {
+      aiGenerating = false;
+    }
   }
 
   async function doCommitAndPush() {
@@ -238,6 +296,7 @@
         {#if stagedFiles.length > 0}
           <div class="gp-section-head">
             <span class="gp-section-title">Staged ({stagedFiles.length})</span>
+            <button class="gp-link" onclick={unstageAll} disabled={!!busy} title="Move every staged file back to Changes (non-destructive)">unstage all</button>
           </div>
           {#each stagedFiles as f (f.path)}
             <div class="gp-file-row gp-file-row--staged">
@@ -254,7 +313,10 @@
         {#if unstagedFiles.length > 0}
           <div class="gp-section-head">
             <span class="gp-section-title">Changes ({unstagedFiles.length})</span>
-            <button class="gp-link" onclick={stageAll} disabled={!!busy}>stage all</button>
+            <span class="gp-section-actions">
+              <button class="gp-link" onclick={stageAll} disabled={!!busy}>stage all</button>
+              <button class="gp-link gp-link--danger" onclick={discardAllUnstaged} disabled={!!busy} title="Revert every file in this list — staged files are NOT touched">discard all</button>
+            </span>
           </div>
           {#each unstagedFiles as f (f.path)}
             <div class="gp-file-row">
@@ -276,15 +338,36 @@
 
     {#if stagedFiles.length > 0}
       <div class="gp-commit">
-        <input
-          class="gp-input"
-          placeholder="Commit message"
-          bind:value={commitMsg}
-          onkeydown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') void (e.shiftKey ? doCommitAndPush() : doCommit()); }}
-        />
+        <div class="gp-commit-input-wrap">
+          <input
+            class="gp-input gp-commit-input"
+            placeholder={aiGenerating ? 'AI is writing…' : 'Commit message'}
+            bind:value={commitMsg}
+            disabled={aiGenerating}
+            onkeydown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') void (e.shiftKey ? doCommitAndPush() : doCommit()); }}
+          />
+          <button
+            class="gp-ai-btn"
+            onclick={generateAiCommitMessage}
+            disabled={!aiKind || aiGenerating || !!busy}
+            title={aiKind
+              ? `Ask the linked ${aiKind === 'claude' ? 'Claude' : 'Cursor'} chat to write a commit message from the staged diff`
+              : 'No Claude or Cursor chat is linked to this Editor — link one to enable AI commit messages'}
+            aria-label="Write commit message with AI"
+          >
+            {#if aiGenerating}
+              <span class="gp-ai-spinner"></span>
+            {:else}
+              <svg class="i i-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.5 4.5L18 9l-4.5 1.5L12 15l-1.5-4.5L6 9l4.5-1.5L12 3z"/><path d="M19 14l0.8 2.4L22 17l-2.2 0.6L19 20l-0.8-2.4L16 17l2.2-0.6L19 14z"/></svg>
+            {/if}
+          </button>
+        </div>
         <button class="gp-commit-btn" onclick={doCommit} disabled={!commitMsg.trim() || !!busy} title="⌘↵">Commit</button>
         <button class="gp-commit-btn gp-commit-btn--alt" onclick={doCommitAndPush} disabled={!commitMsg.trim() || !!busy} title="⇧⌘↵">&amp; push</button>
       </div>
+      {#if aiError}
+        <div class="gp-ai-error">{aiError}</div>
+      {/if}
     {/if}
   {/if}
 
@@ -361,7 +444,10 @@
   }
   .gp-btn-ghost:hover:not(:disabled) { background: var(--bg-2); color: var(--text-0); }
 
-  .gp-body { flex: 1; overflow: auto; padding: 4px 0; min-height: 0; }
+  /* `scrollbar-gutter: stable` reserves the scrollbar track even when the
+     list fits — without it, the scrollbar overlays the right-side action
+     buttons (discard / stage) and covers them. */
+  .gp-body { flex: 1; overflow: auto; padding: 4px 0; min-height: 0; scrollbar-gutter: stable; }
   .gp-empty { padding: 12px; font-size: 12px; color: var(--text-2); text-align: center; }
   .gp-file-row {
     display: flex; align-items: stretch;
@@ -394,14 +480,21 @@
   .gp-file-act--discard:hover { color: var(--error); }
   .gp-link { font-size: 11px; color: var(--accent-bright); }
   .gp-link:hover { text-decoration: underline; }
+  .gp-link:disabled { opacity: 0.45; cursor: default; }
+  .gp-link--danger { color: var(--error); }
+  .gp-section-actions { display: inline-flex; gap: 10px; align-items: baseline; }
 
   .gp-commit {
-    display: flex; gap: 6px;
+    display: flex; flex-wrap: wrap; row-gap: 6px; gap: 6px;
     padding: 8px 10px;
     border-top: 1px solid var(--border-neutral);
     background: var(--bg-2);
     flex-shrink: 0;
   }
+  /* In narrow columns, the commit-message field takes the whole first row
+     and the Commit / & push buttons wrap below. Keeps the input usable
+     instead of shrinking to a few characters wide. */
+  .gp-commit-input-wrap { flex: 1 1 200px; min-width: 140px; }
   .gp-input {
     flex: 1;
     padding: 6px 10px;
@@ -425,6 +518,35 @@
   .gp-commit-btn:disabled { opacity: 0.4; cursor: default; }
   .gp-commit-btn--alt { background: var(--bg-3); color: var(--accent-bright); border: 1px solid var(--border-hi2); }
   .gp-commit-btn--alt:hover:not(:disabled) { background: var(--bg-2); color: var(--accent); }
+
+  /* Composite commit-message field: text input + an embedded ✨ AI button
+     on the right so the AI shortcut reads as part of the input rather than
+     a floating action. */
+  .gp-commit-input-wrap { position: relative; display: flex; }
+  .gp-commit-input { padding-right: 34px; flex: 1; min-width: 0; }
+  .gp-ai-btn {
+    position: absolute; top: 50%; right: 4px; transform: translateY(-50%);
+    width: 26px; height: 26px; border-radius: 5px;
+    display: inline-flex; align-items: center; justify-content: center;
+    color: var(--accent-bright); background: transparent;
+    transition: all 120ms;
+  }
+  .gp-ai-btn:hover:not(:disabled) { background: var(--accent-soft); color: var(--accent); }
+  .gp-ai-btn:disabled { color: var(--text-mute); opacity: 0.5; cursor: not-allowed; }
+  .gp-ai-spinner {
+    width: 12px; height: 12px; border-radius: 50%;
+    border: 1.5px solid var(--border-neutral-hi);
+    border-top-color: var(--accent-bright);
+    animation: spin 640ms linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .gp-ai-error {
+    padding: 4px 12px 8px;
+    font-size: 11.5px; color: var(--error);
+    background: var(--bg-2);
+    border-top: 1px dashed rgba(214, 72, 44, 0.3);
+    flex-shrink: 0;
+  }
 
   .gp-pr {
     display: flex; align-items: center; gap: 6px;

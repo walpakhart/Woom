@@ -23,7 +23,7 @@
         "titleBarStyle": "Transparent",
         "hiddenTitle": true,
         "backgroundColor": "#0C1117",
-        "dragDropEnabled": false
+        "dragDropEnabled": true
       }
     ],
     "security": {

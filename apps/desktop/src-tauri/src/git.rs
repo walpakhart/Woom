@@ -138,6 +138,81 @@ pub fn status(repo: &str) -> Result<GitStatus, String> {
     Ok(GitStatus { branch, upstream, ahead, behind, files })
 }
 
+/// Flat list of files in this repo — tracked + untracked minus ignored.
+/// Used by the chat-composer's `@`-autocomplete popover. Falls back to
+/// an empty list on any error so the popover just shows no files instead
+/// of the whole UI breaking.
+pub fn ls_files(repo: &str) -> Vec<String> {
+    let mut cmd = git(repo);
+    cmd.args(["ls-files", "-z", "--cached", "--others", "--exclude-standard"]);
+    let out = match cmd.output() {
+        Ok(o) => o,
+        Err(_) => return Vec::new(),
+    };
+    if !out.status.success() {
+        return Vec::new();
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .split('\0')
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .collect()
+}
+
+/// Return the subset of `paths` that are gitignored by this repo. Uses
+/// `git check-ignore --stdin -z` so behavior matches exactly what `git add`
+/// would skip (nested .gitignore + .git/info/exclude + global ignore all
+/// honored). The `-z` flag only works with `--stdin`, so paths are piped
+/// in NUL-separated. Non-fatal on error — bad repo or transient failure
+/// just returns an empty list rather than blocking the file tree render.
+pub fn check_ignore(repo: &str, paths: &[String]) -> Vec<String> {
+    use std::io::Write;
+    if paths.is_empty() {
+        return Vec::new();
+    }
+    let mut cmd = git(repo);
+    cmd.args(["check-ignore", "-z", "--stdin"]);
+    cmd.stdin(std::process::Stdio::piped());
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
+
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+
+    if let Some(mut stdin) = child.stdin.take() {
+        let mut payload: Vec<u8> = Vec::with_capacity(
+            paths.iter().map(|p| p.len() + 1).sum(),
+        );
+        for (i, p) in paths.iter().enumerate() {
+            if i > 0 {
+                payload.push(0);
+            }
+            payload.extend_from_slice(p.as_bytes());
+        }
+        let _ = stdin.write_all(&payload);
+        // Dropping `stdin` here closes the pipe so git knows input is done.
+    }
+
+    let out = match child.wait_with_output() {
+        Ok(o) => o,
+        Err(_) => return Vec::new(),
+    };
+    let code = out.status.code().unwrap_or(-1);
+    // `git check-ignore` exit codes: 0 = one or more paths ignored,
+    // 1 = none ignored (expected; empty list), 128 = fatal (e.g. not a repo).
+    if code == 1 || code == 128 {
+        return Vec::new();
+    }
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    stdout
+        .split('\0')
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .collect()
+}
+
 pub fn branches(repo: &str) -> Result<Vec<Branch>, String> {
     let mut cmd = git(repo);
     cmd.args([
@@ -214,32 +289,65 @@ pub fn unstage(repo: &str, paths: &[String]) -> Result<(), String> {
     run(cmd).map(|_| ())
 }
 
-/// Discard local changes for a set of paths. For each path:
-///   - tracked → `git checkout HEAD -- <path>` (full revert incl. staged diff)
-///   - untracked → delete the file from disk
+/// Discard local changes for a set of paths. Bucketed by their relationship
+/// to HEAD, because the right revert op differs:
+///   - in HEAD        → `git checkout HEAD -- <path>` (full revert incl. staged diff)
+///   - staged, new    → `git reset HEAD -- <path>` then `rm` from disk
+///                       (added to index but doesn't exist in HEAD — `checkout
+///                        HEAD --` fails with `pathspec did not match any files`)
+///   - untracked      → just `rm` from disk
 ///
 /// Destructive: callers must confirm with the user before invoking this.
 pub fn discard(repo: &str, paths: &[String]) -> Result<(), String> {
     if paths.is_empty() {
         return Ok(());
     }
-    let mut tracked: Vec<&String> = Vec::new();
+    let mut in_head: Vec<&String> = Vec::new();
+    let mut staged_added: Vec<&String> = Vec::new();
     let mut untracked: Vec<&String> = Vec::new();
     for p in paths {
-        // `git ls-files --error-unmatch` returns nonzero for untracked files.
-        let mut c = git(repo);
-        c.args(["ls-files", "--error-unmatch", "--", p]);
-        let is_tracked = c.output().map(|o| o.status.success()).unwrap_or(false);
-        if is_tracked { tracked.push(p); } else { untracked.push(p); }
+        // `ls-tree HEAD` checks membership in the HEAD tree — prints the
+        // blob line on hit, nothing on miss.
+        let head_hit = {
+            let mut c = git(repo);
+            c.args(["ls-tree", "HEAD", "--", p]);
+            c.output()
+                .map(|o| o.status.success() && !o.stdout.is_empty())
+                .unwrap_or(false)
+        };
+        if head_hit {
+            in_head.push(p);
+            continue;
+        }
+        // Not in HEAD but maybe staged-added — `ls-files --cached` checks
+        // the index specifically (no worktree).
+        let in_index = {
+            let mut c = git(repo);
+            c.args(["ls-files", "--cached", "--error-unmatch", "--", p]);
+            c.output().map(|o| o.status.success()).unwrap_or(false)
+        };
+        if in_index {
+            staged_added.push(p);
+        } else {
+            untracked.push(p);
+        }
     }
 
-    if !tracked.is_empty() {
+    if !in_head.is_empty() {
         let mut cmd = git(repo);
-        cmd.args(["checkout", "HEAD", "--"]).args(tracked);
+        cmd.args(["checkout", "HEAD", "--"]).args(&in_head);
         run(cmd).map(|_| ())?;
     }
 
-    for p in untracked {
+    // Unstage added-to-index-but-new-to-HEAD files so `rm` below doesn't
+    // leave orphan index entries pointing at deleted paths.
+    if !staged_added.is_empty() {
+        let mut cmd = git(repo);
+        cmd.args(["reset", "HEAD", "--"]).args(&staged_added);
+        run(cmd).map(|_| ())?;
+    }
+
+    for p in staged_added.iter().chain(untracked.iter()) {
         let full = std::path::Path::new(repo).join(p);
         match std::fs::remove_file(&full) {
             Ok(_) => {}

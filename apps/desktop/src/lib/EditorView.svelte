@@ -39,6 +39,16 @@
     onUnlinkAgent
   }: Props = $props();
 
+  // Pick which linked agent the AI commit-message button routes to. Claude
+  // wins over Cursor when both are linked — not a user preference, just a
+  // stable tiebreaker so the UI is deterministic. Either one uses the
+  // same headless one-off path on the backend.
+  const linkedAiKind = $derived<'claude' | 'cursor' | null>(
+    linkedAgents.find((a) => a.kind === 'claude')?.kind
+      ?? linkedAgents.find((a) => a.kind === 'cursor')?.kind
+      ?? null
+  );
+
   let showLinkPicker = $state(false);
 
   let tabs = $state<string[]>([]);
@@ -339,7 +349,7 @@
               <FileTree rootPath={repoPath} selectedPath={activePath} onSelect={openFile} {gitStatusByPath} />
             {/snippet}
             {#snippet end()}
-              <GitPanel bind:this={gitPanel} repo={repoPath} onStatusChange={onGitStatusChange} onOpenDiff={openDiff} />
+              <GitPanel bind:this={gitPanel} repo={repoPath} onStatusChange={onGitStatusChange} onOpenDiff={openDiff} aiKind={linkedAiKind} />
             {/snippet}
           </Splitter>
         </aside>
@@ -433,12 +443,21 @@
   }
   .ev-left-head {
     display: flex; align-items: center; gap: 8px;
+    row-gap: 6px;
+    flex-wrap: wrap;
     padding: 10px 12px;
     border-bottom: 1px solid var(--border-neutral);
     background: var(--bg-2);
     flex-shrink: 0;
   }
-  .ev-root-name { flex: 1; font-size: 12.5px; color: var(--text-0); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* Root name claims the first row on its own when buttons would overflow —
+     `min-width: 0` + `flex: 1 0 100%` on narrow columns makes the row
+     wrap icons below instead of squishing the name. */
+  .ev-root-name {
+    flex: 1 1 120px; min-width: 0;
+    font-size: 12.5px; color: var(--text-0); font-weight: 600;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
   .ev-icon-btn {
     width: 24px; height: 24px; border-radius: 4px;
     display: inline-flex; align-items: center; justify-content: center;

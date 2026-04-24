@@ -1,4 +1,4 @@
-# Forgehold — Rules System
+# Forge — Rules System
 
 **Version:** 0.1 (draft)
 **Last updated:** 2026-04-22
@@ -16,7 +16,7 @@ how to phrase commits, the style inside a specific folder, which tests
 are mandatory. Today this lives in people's heads, READMEs, or
 CONTRIBUTING.md — and the Claude agent has to be re-briefed every time.
 
-Forgehold Rules is a declarative way to describe those rules once and have
+Forge Rules is a declarative way to describe those rules once and have
 them injected into every Claude run automatically.
 
 ---
@@ -27,8 +27,8 @@ Four levels, from broad to narrow:
 
 | Scope             | Where it lives                    | Applies to                                    |
 |-------------------|-----------------------------------|-----------------------------------------------|
-| `global`          | Forgehold app data (workspace-wide)   | All runs in the workspace                     |
-| `repo`            | `.forgehold/rules.md` in the repo     | All runs in this repository                   |
+| `global`          | Forge app data (workspace-wide)   | All runs in the workspace                     |
+| `repo`            | `.forge/rules.md` in the repo     | All runs in this repository                   |
 | `folder:<path>`   | section in the repo `rules.md`    | Runs touching files in this folder            |
 | `run`             | ephemeral, inline in the drop zone| The current run only                          |
 
@@ -53,7 +53,7 @@ for sections.
 
 ```markdown
 ---
-name: Forgehold repo rules
+name: Forge repo rules
 version: 1
 ---
 
@@ -75,7 +75,7 @@ version: 1
 
 ```markdown
 ---
-name: Forgehold repo rules
+name: Forge repo rules
 version: 1
 ---
 
@@ -86,7 +86,7 @@ version: 1
 
 ## UI components
 - Use Svelte 5 runes, not the old `$:` syntax
-- Styling — Tailwind + design tokens from `@forgehold/ui/tokens`
+- Styling — Tailwind + design tokens from `@forge/ui/tokens`
 - Motion components must import `motion-presets` (no hardcoded values)
 
 @scope folder:/crates/forge-core
@@ -110,7 +110,7 @@ The frontmatter can hold Claude-run parameters:
 
 ```yaml
 ---
-name: Forgehold repo rules
+name: Forge repo rules
 version: 1
 claude:
   branch_from: main              # which branch to base the worktree on
@@ -139,7 +139,7 @@ When a Claude run starts:
 
 ```
 1. Load global rules (from workspace app data).
-2. Load repo rules (from .forgehold/rules.md).
+2. Load repo rules (from .forge/rules.md).
 3. Determine the run's "working area":
    - If a target folder is explicit — use it.
    - If not — keep all folder rules potentially applicable, and the
@@ -160,7 +160,7 @@ Conflicts across levels:
 
 ## 5. How rules reach Claude
 
-Forgehold assembles a system prompt prefix:
+Forge assembles a system prompt prefix:
 
 ```
 You are working on {repo.name} in a worktree at {worktree.path}.
@@ -198,19 +198,19 @@ the task itself.
 ### 5.1 Interaction with native CLAUDE.md
 
 Claude already reads `CLAUDE.md` and `.claude/CLAUDE.md` in the repo.
-Forgehold Rules **does not** break that — we don't modify CLAUDE.md.
+Forge Rules **does not** break that — we don't modify CLAUDE.md.
 
 Behavior:
 - If the repo has a `CLAUDE.md`, Claude reads it natively.
-- If the user has `.forgehold/rules.md`, Forgehold injects it as an additional
+- If the user has `.forge/rules.md`, Forge injects it as an additional
   system prompt.
-- Both work together: CLAUDE.md for baseline constants, Forgehold Rules for
+- Both work together: CLAUDE.md for baseline constants, Forge Rules for
   workflow specifics (templates, policies, dynamic data like ticket
   info).
 
 **UI recommendation:** when a user creates repo rules and there's no
 CLAUDE.md yet, offer to export the baseline to CLAUDE.md (so things
-work outside Forgehold too, in plain Claude Code).
+work outside Forge too, in plain Claude Code).
 
 ---
 
@@ -261,7 +261,7 @@ solves the classic "which rules actually apply?" problem.
 
 ### 7.1 Repo rules are committed to the repo
 
-`.forgehold/rules.md` is a normal file in the repo. Reviewed via git, PRs,
+`.forge/rules.md` is a normal file in the repo. Reviewed via git, PRs,
 blame. The team agrees on rules the same way they agree on code.
 
 ### 7.2 Global rules are local for now
@@ -272,7 +272,7 @@ they'll sync through the backend as a workspace-shared resource.
 ### 7.3 Rule migration
 
 The `version: 1` field in the frontmatter guards against future
-breaking schema changes. If Forgehold sees `version: 2` and doesn't support
+breaking schema changes. If Forge sees `version: 2` and doesn't support
 it, it refuses to apply and asks the user to update the app.
 
 ---
@@ -281,7 +281,7 @@ it, it refuses to apply and asks the user to update the app.
 
 Say we have:
 
-**`~/Library/Application Support/Forgehold/rules.global.md`** (workspace):
+**`~/Library/Application Support/Forge/rules.global.md`** (workspace):
 ```markdown
 ---
 name: Acme Team standards
@@ -292,10 +292,10 @@ name: Acme Team standards
 - Tests obligatory for new exported functions
 ```
 
-**`<repo>/.forgehold/rules.md`** (repo-level):
+**`<repo>/.forge/rules.md`** (repo-level):
 ```markdown
 ---
-name: Forgehold desktop rules
+name: Forge desktop rules
 claude:
   branch_template: "feat/{ticket.key}-{ticket.slug}"
   post_run_checks: ["pnpm typecheck"]
@@ -316,7 +316,7 @@ on Claude Code. Run rules are empty.
 **The effective prompt prefix Claude receives:**
 
 ```
-You are working on forgehold in worktree /Users/nik/.../worktrees/run-abc.
+You are working on forge in worktree /Users/nik/.../worktrees/run-abc.
 Default branch: main.
 
 ## Rules from your workspace
@@ -347,7 +347,7 @@ PROJ-1234: Add retry button to auth dialog
 
 The agent runs in a worktree on branch
 `feat/PROJ-1234-add-retry-button-to-auth-dialog`. After finishing,
-Forgehold invokes `pnpm typecheck`; if it passes, the artifact is marked
+Forge invokes `pnpm typecheck`; if it passes, the artifact is marked
 green; if it fails, red with the error output.
 
 ---
