@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
+  import { ask } from '@tauri-apps/plugin-dialog';
   import { openUrl } from '@tauri-apps/plugin-opener';
 
   interface FileStatus { path: string; code: string; staged: boolean; unstaged: boolean; }
@@ -110,7 +111,7 @@
       files so the user can't accidentally wipe a whole commit's worth of
       work with one click. For staged files the UI offers "unstage all"
       instead (below), which is non-destructive. */
-  function discardAllUnstaged() {
+  async function discardAllUnstaged() {
     const files = (status?.files ?? []).filter((f) => f.unstaged && !f.staged);
     if (files.length === 0) return;
     const untrackedCount = files.filter((f) => f.code.startsWith('?')).length;
@@ -118,8 +119,16 @@
     const parts: string[] = [];
     if (modifiedCount > 0) parts.push(`${modifiedCount} modified file${modifiedCount === 1 ? '' : 's'}`);
     if (untrackedCount > 0) parts.push(`${untrackedCount} untracked file${untrackedCount === 1 ? '' : 's'}`);
-    const ok = confirm(
-      `Discard unstaged changes?\n\nThis will revert ${parts.join(' and ')}.\n\nStaged files are left alone. This cannot be undone.`
+    // `window.confirm` gets swallowed by Tauri's WebKit — use the dialog
+    // plugin's native `ask` so the modal actually appears.
+    const ok = await ask(
+      `This will revert ${parts.join(' and ')}.\n\nStaged files are left alone. This cannot be undone.`,
+      {
+        title: 'Discard unstaged changes?',
+        kind: 'warning',
+        okLabel: 'Discard',
+        cancelLabel: 'Cancel'
+      }
     );
     if (!ok) return;
     const paths = files.map((f) => f.path);
