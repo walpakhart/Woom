@@ -213,17 +213,21 @@
   //
   // Detects when the user is actively typing a mention (@-token with no
   // whitespace from `@` to caret) and pops a filtered list of Jira issues,
-  // GitHub inbox items and repo files. Picking an item replaces the
-  // query with `@<externalId>` and attaches a Mention to the session so
-  // the prompt builder can bake context in on send.
+  // GitHub inbox items, Sentry issues, and repo files. Picking an item
+  // replaces the query with `@<externalId>` and attaches a Mention to the
+  // session so the prompt builder can bake context in on send.
 
   type MentionCandidate = {
-    source: 'jira' | 'github' | 'file';
+    source: 'jira' | 'github' | 'sentry' | 'file';
     externalId: string;
     title: string;
     hint: string;
     isDir?: boolean;
     absPath?: string;
+    /** Sentry-only — compact context (`type: value · culprit · level`)
+        baked into the resulting Mention's `body` so prompt builder
+        forwards it to Claude before MCP follow-up calls. */
+    sentryBody?: string;
   };
 
   let textareaEl = $state<HTMLTextAreaElement | null>(null);
@@ -442,6 +446,35 @@
         });
       }
 
+      // Sentry issues — externalId is the short id (e.g. `BMS-API-J6`).
+      // `sentryBody` is the compact context block stitched into the Mention
+      // so Claude can answer "what's @CATALOG-API-76?" without an MCP
+      // round-trip for the basics.
+      for (const it of inboxState.sentryItems) {
+        const s = Math.max(score(it.short_id, q), score(it.title, q));
+        if (s < 0) continue;
+        const bodyParts: string[] = [];
+        if (it.metadata_type || it.metadata_value) {
+          const t = it.metadata_type ?? '';
+          const v = it.metadata_value ?? '';
+          bodyParts.push(`${t}${t && v ? ': ' : ''}${v}`.trim());
+        }
+        if (it.culprit) bodyParts.push(`at ${it.culprit}`);
+        bodyParts.push(`level=${it.level}`);
+        if (it.project_slug) bodyParts.push(`project=${it.project_slug}`);
+        if (it.permalink) bodyParts.push(it.permalink);
+        out.push({
+          cand: {
+            source: 'sentry',
+            externalId: it.short_id,
+            title: it.title,
+            hint: `Sentry · ${it.level}`,
+            sentryBody: bodyParts.join(' · ')
+          },
+          s: s + 8 // small boost — Sentry short-ids are reference-y too
+        });
+      }
+
       // Files + folders — filter only when the user has typed at least
       // one char; otherwise the popover would dump the whole repo.
       if (q.length > 0 && fileIndex) {
@@ -485,13 +518,16 @@
     const newInput = before + insertion + after;
 
     const alreadyMentioned = activeSess.mentions.some((m) => m.externalId === c.externalId);
+    let mentionBody: string | null = null;
+    if (c.source === 'file') mentionBody = c.absPath ?? null;
+    else if (c.source === 'sentry') mentionBody = c.sentryBody ?? null;
     const mention: Mention = alreadyMentioned
       ? activeSess.mentions.find((m) => m.externalId === c.externalId)!
       : {
           source: c.source,
           externalId: c.externalId,
           title: c.title,
-          body: c.source === 'file' ? c.absPath ?? null : null,
+          body: mentionBody,
           isDir: c.isDir ?? false
         };
     const mentions = alreadyMentioned
