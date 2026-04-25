@@ -1,5 +1,6 @@
 <script lang="ts">
   import { marked } from 'marked';
+  import { openUrl } from '@tauri-apps/plugin-opener';
 
   interface Props {
     source: string;
@@ -52,19 +53,43 @@
     }
   });
 
-  /** Delegate clicks to any clickable mention inside the rendered tree. */
+  /** Delegate clicks to any clickable mention inside the rendered tree.
+      Also intercepts any plain anchor tag click — markdown links land in
+      Tauri's embedded WebView by default, which strips logged-in cookies,
+      ad-blockers, and password manager. Route them through the system
+      browser via `tauri-plugin-opener` so external URLs always open in
+      the user's actual browser (Chrome / Safari / Firefox). Mirrors the
+      "Open on GitHub" buttons in the focus pane.
+      Internal anchors (`#section`) and JS-only links (`javascript:`) are
+      left to the default behaviour. */
   function onClickProse(ev: MouseEvent) {
     const t = ev.target as HTMLElement | null;
-    const el = t?.closest?.('.ment-clickable') as HTMLElement | null;
-    if (!el) return;
-    const path = el.dataset.path;
-    if (!path) return;
+    if (!t) return;
+    const mention = t.closest?.('.ment-clickable') as HTMLElement | null;
+    if (mention) {
+      const path = mention.dataset.path;
+      if (path) {
+        ev.preventDefault();
+        onOpenFile?.(path);
+      }
+      return;
+    }
+    const a = t.closest?.('a[href]') as HTMLAnchorElement | null;
+    if (!a) return;
+    const href = a.getAttribute('href') ?? '';
+    // In-page anchors and explicit non-http schemes we don't want to
+    // hijack (mailto / tel work via the system handler, javascript: is
+    // a no-op anyway). Route only http(s) externally.
+    if (!/^https?:\/\//i.test(href)) return;
     ev.preventDefault();
-    onOpenFile?.(path);
+    void openUrl(href);
   }
 </script>
 
-<div class="prose" onclick={onClickProse} role="presentation">{@html html}</div>
+<!-- `auxclick` is the middle-button equivalent of click; without it cmd+click
+     and middle-click would fall through to the WebView's default (which is
+     basically a no-op in Tauri but feels broken to the user). -->
+<div class="prose" onclick={onClickProse} onauxclick={onClickProse} role="presentation">{@html html}</div>
 
 <style>
   .prose {
