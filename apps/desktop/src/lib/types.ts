@@ -111,6 +111,13 @@ export type ClaudeSession = {
   /** Which column instance this session is attached to. Null means the session
       "floats" and will reattach to the first matching-kind column it finds. */
   columnInstanceId: string | null;
+  /** One-shot recap to inject into the system prompt on the NEXT turn. Set
+      whenever cwd changes — Claude / cursor-agent scope conversations by
+      project, so a cwd switch starts a fresh CLI conversation that doesn't
+      remember prior turns. Stuffing the last few UI-side messages back in
+      keeps continuity for the user without permanently inflating prompts.
+      Cleared after the next turn ships. */
+  cwdSwitchRecap: string | null;
 };
 
 export interface RepoInfo {

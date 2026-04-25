@@ -201,12 +201,16 @@
   /** Update an agent session's cwd safely. Both Claude CLI and cursor-agent
    *  scope conversations by *project directory* (cwd-derived), so resuming
    *  an old session id under a new cwd fails ("No conversation found with
-   *  session ID …"). When the cwd actually changes, rotate `claudeUuid`
-   *  and clear `claudeResumable` so the next turn creates a fresh
-   *  conversation in the new project. The chat history visible in
-   *  Forgehold's UI is unaffected — only the CLI-side resume pointer
-   *  is reset. `breakLink: true` also unlinks from the editor (used by
-   *  manual user actions like `pickCwd`). */
+   *  session ID …"). When the cwd actually changes:
+   *    - rotate `claudeUuid` and clear `claudeResumable` so the next turn
+   *      creates a fresh conversation in the new project
+   *    - snapshot the recent UI conversation into `cwdSwitchRecap` so
+   *      the next turn's system prompt can prime the FRESH CLI session
+   *      with what was just being discussed. Without this the agent
+   *      would lose all conversational context every time the user
+   *      asked to "switch to the other repo and continue".
+   *  `breakLink: true` also unlinks from the editor (used by manual user
+   *  actions like `pickCwd`). */
   function applySessionCwd(
     sessionId: string,
     newCwd: string | null,
@@ -220,12 +224,46 @@
     if (cwdChanged) {
       patch.claudeUuid = genUuid();
       patch.claudeResumable = false;
+      patch.cwdSwitchRecap = buildCwdSwitchRecap(sess, oldCwd, newCwd);
     }
     if (opts.breakLink) {
       patch.linkedToEditor = false;
       patch.linkedToEditorInstanceId = null;
     }
     updateSession(sessionId, patch);
+  }
+
+  /** Snapshot the last few user/assistant exchanges into a self-contained
+   *  prose block. Injected into the next turn's system prompt so the
+   *  fresh CLI session in the new project has continuity. Each message
+   *  is truncated to ~800 chars to keep token cost bounded — verbatim
+   *  long replies aren't recoverable, but the gist + most recent ask is.
+   *  Returns null when there's nothing useful to recap. */
+  function buildCwdSwitchRecap(
+    sess: ClaudeSession,
+    oldCwd: string | null,
+    newCwd: string | null
+  ): string | null {
+    const meaningful = sess.messages.filter(
+      (m) => (m.role === 'user' || m.role === 'assistant') && m.content.trim().length > 0
+    );
+    if (meaningful.length === 0) return null;
+    const recent = meaningful.slice(-6);
+    const lines: string[] = [];
+    lines.push('Your cwd just changed mid-conversation. The CLI you run on uses a fresh session in the new project, so you have no memory of prior turns from its perspective. Forgehold preserved the last few exchanges below for continuity:');
+    if (oldCwd) lines.push(`- Previous cwd: ${oldCwd}`);
+    if (newCwd) lines.push(`- New cwd: ${newCwd}`);
+    lines.push('');
+    lines.push('Recent exchanges (oldest → newest):');
+    for (const m of recent) {
+      const role = m.role === 'user' ? 'User' : 'You (assistant)';
+      const text = m.content.trim();
+      const trimmed = text.length > 800 ? `${text.slice(0, 799)}…` : text;
+      lines.push(`${role}: ${trimmed}`);
+    }
+    lines.push('');
+    lines.push('Continue from there with the new cwd in mind. The old project\'s files are no longer your working tree — if the user asks to keep working on the prior thread, your tools (Read/Write/Bash) are now scoped to the new project.');
+    return lines.join('\n');
   }
 
   // ---- Drag autoscroll for card DnD (Jira/GitHub → Claude column) ----
@@ -1240,6 +1278,12 @@
       if (result.sessionUuid && result.sessionUuid !== claudeUuid) {
         patch.claudeUuid = result.sessionUuid;
       }
+      // One-shot recap consumed — clear so it doesn't re-inject on every
+      // subsequent turn. Only fires after a successful run; if the turn
+      // erred out, recap stays so the retry still gets the context.
+      if (sess?.cwdSwitchRecap) {
+        patch.cwdSwitchRecap = null;
+      }
       updateSession(id, patch);
     } catch (e) {
       const msg = typeof e === 'string' ? e : String(e);
@@ -1317,6 +1361,15 @@
 
     const calling = sessionsState.list.find((s) => s.id === callingSessionId);
     const callingInstanceId = calling?.columnInstanceId ?? null;
+
+    // One-shot recap if the user just switched the agent's cwd. Cleared
+    // after the turn ships (in sendClaudeMessage's success path).
+    if (calling?.cwdSwitchRecap) {
+      lines.push('');
+      lines.push('---');
+      lines.push(calling.cwdSwitchRecap);
+      lines.push('---');
+    }
 
     for (const wb of layoutState.workbenches) {
       const isActive = wb.id === layoutState.activeWorkbenchId;
