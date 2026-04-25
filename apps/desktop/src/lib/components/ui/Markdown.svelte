@@ -14,10 +14,15 @@
 
   /** Which token flavor a match is — governs which class/dataset the span
       carries, so file tokens can be wired up clickable and ticket tokens
-      render as plain highlights. */
+      render as plain highlights.
+
+      Ticket pattern accepts BOTH single-segment Jira keys (`DEVOPS-437`)
+      AND multi-segment Sentry short-ids (`CATALOG-API-76`, `BMS-API-J6`).
+      Trailing segment must be alphanumeric (allows Sentry's base-32-style
+      suffixes like `J6` / `JX5` in addition to plain numbers). */
   function mentionClass(token: string): string {
     if (token.startsWith('#')) return 'ment ment-issue';
-    if (/^[A-Z][A-Z0-9_]*-\d+$/.test(token)) return 'ment ment-ticket';
+    if (/^[A-Z][A-Z0-9_]*(?:-[A-Z0-9_]+)+$/.test(token)) return 'ment ment-ticket';
     return 'ment ment-file ment-clickable';
   }
 
@@ -26,12 +31,14 @@
     try {
       const raw = marked.parse(source, { async: false }) as string;
       // Highlight @mentions:
-      //   @DEVOPS-437 / @EFF-21190 — Jira keys
-      //   @#482                     — GitHub issue/PR numbers
-      //   @path/to/file.ext or @dir/ — file/folder references from the Editor tree
+      //   @DEVOPS-437 / @EFF-21190               — Jira keys (single segment)
+      //   @CATALOG-API-76 / @BMS-API-J6          — Sentry short-ids (multi-segment)
+      //   @#482                                  — GitHub issue/PR numbers
+      //   @path/to/file.ext or @dir/             — file/folder paths
+      //   @file.ext (with a dot)                 — bare filename mentions
       // Must operate on rendered HTML; avoid matching inside existing tags.
       return raw.replace(
-        /(^|[\s>(\[])@((?:#\d+)|(?:[A-Z][A-Z0-9_]*-\d+)|(?:[a-zA-Z0-9_.\-]+\/[a-zA-Z0-9_./\-]*))/g,
+        /(^|[\s>(\[])@((?:#\d+)|(?:[A-Z][A-Z0-9_]*(?:-[A-Z0-9_]+)+)|(?:[a-zA-Z0-9_.\-]+\/[a-zA-Z0-9_./\-]*)|(?:[a-zA-Z0-9_\-]+\.[a-zA-Z0-9]+))/g,
         (_m, lead: string, token: string) => {
           const cls = mentionClass(token);
           // Escape double-quotes in the path just in case — only relevant

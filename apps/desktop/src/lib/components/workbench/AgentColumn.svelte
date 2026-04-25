@@ -266,7 +266,10 @@
     mentions: { externalId: string }[],
     fileSet: Set<string>
   ): boolean {
-    if (/^[A-Z][A-Z0-9_]*-\d+$/.test(token)) return true;
+    // Single-segment Jira keys (DEVOPS-437) + multi-segment Sentry short
+    // ids (CATALOG-API-76, BMS-API-J6). Trailing segment alphanumeric so
+    // base-32-suffix Sentry ids match too.
+    if (/^[A-Z][A-Z0-9_]*(?:-[A-Z0-9_]+)+$/.test(token)) return true;
     if (/^#\d+$/.test(token)) return true;
     if (mentions.some((m) => m.externalId === token)) return true;
     if (token.includes('/')) return true;
