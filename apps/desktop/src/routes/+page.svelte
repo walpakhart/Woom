@@ -198,6 +198,36 @@
     }
   }
 
+  /** Update an agent session's cwd safely. Both Claude CLI and cursor-agent
+   *  scope conversations by *project directory* (cwd-derived), so resuming
+   *  an old session id under a new cwd fails ("No conversation found with
+   *  session ID …"). When the cwd actually changes, rotate `claudeUuid`
+   *  and clear `claudeResumable` so the next turn creates a fresh
+   *  conversation in the new project. The chat history visible in
+   *  Forgehold's UI is unaffected — only the CLI-side resume pointer
+   *  is reset. `breakLink: true` also unlinks from the editor (used by
+   *  manual user actions like `pickCwd`). */
+  function applySessionCwd(
+    sessionId: string,
+    newCwd: string | null,
+    opts: { breakLink?: boolean } = {}
+  ) {
+    const sess = sessionsState.list.find((s) => s.id === sessionId);
+    if (!sess) return;
+    const oldCwd = sess.cwd ?? null;
+    const cwdChanged = (oldCwd ?? '') !== (newCwd ?? '');
+    const patch: Partial<ClaudeSession> = { cwd: newCwd };
+    if (cwdChanged) {
+      patch.claudeUuid = genUuid();
+      patch.claudeResumable = false;
+    }
+    if (opts.breakLink) {
+      patch.linkedToEditor = false;
+      patch.linkedToEditorInstanceId = null;
+    }
+    updateSession(sessionId, patch);
+  }
+
   // ---- Drag autoscroll for card DnD (Jira/GitHub → Claude column) ----
   // When the user grabs a card and drags it toward an off-screen column,
   // the workbench auto-scrolls so the drop target comes into view.
@@ -745,7 +775,7 @@
         title: 'Pick working directory for Claude'
       });
       if (typeof picked === 'string') {
-        updateSession(activeSession.id, { cwd: picked, linkedToEditor: false });
+        applySessionCwd(activeSession.id, picked, { breakLink: true });
       }
     } catch (e) {
       notifyError(e, { title: "Couldn't pick folder" });
@@ -754,7 +784,7 @@
 
   function clearCwd() {
     if (!activeSession) return;
-    updateSession(activeSession.id, { cwd: null, linkedToEditor: false });
+    applySessionCwd(activeSession.id, null, { breakLink: true });
   }
 
   /** Bidirectional link. When the AI side initiates and the session already
@@ -1504,13 +1534,14 @@
         if (!editor) return;
         view = 'workbench';
         setEditorRepoPath(repoPath, editor.id);
-        // Linked agents follow: any session pinned to this editor with
-        // `linkedToEditor` reads its cwd from the editor's repoPath via
-        // `effectiveCwd` already, so we just need to bump them so the
-        // change is visible in the UI right away.
+        // Linked agents follow. `applySessionCwd` rotates the agent's
+        // claudeUuid + resets `claudeResumable` when the new cwd actually
+        // differs — necessary because Claude CLI scopes conversations by
+        // project (cwd-derived); resuming an old uuid in a new project
+        // fails with "No conversation found".
         for (const s of sessionsState.list) {
           if (s.linkedToEditor && s.linkedToEditorInstanceId === editor.id) {
-            updateSession(s.id, { cwd: repoPath });
+            applySessionCwd(s.id, repoPath, { breakLink: false });
           }
         }
         void scrollInstanceIntoView(editor.id);
@@ -1536,14 +1567,7 @@
           }
         }
         if (!sessId) return;
-        // NEVER break the link automatically — it's a soft binding the
-        // user controls via the UI's unlink button. Even when the new cwd
-        // diverges from the linked editor's path, leaving the link
-        // intact is the right call: the agent uses its explicit `cwd`
-        // (it wins in `effectiveCwd`), and if the user later moves the
-        // editor, the linked agent auto-follows that move just like
-        // before. Manual unlink stays the only way to actually detach.
-        updateSession(sessId, { cwd: repoPath });
+        applySessionCwd(sessId, repoPath, { breakLink: false });
         return;
       }
       case 'mcp__app__list_instances': {
