@@ -305,6 +305,109 @@ pub fn apply(repo: &str, session_id: &str) -> Result<String, String> {
     Ok(format!("Merged {} into {}.\n\n{}", branch, current, merge_out.trim()))
 }
 
+/// Total bytes used by everything under `storage_root`. Walks the tree
+/// once so big worktrees with `target/` and `node_modules/` are honestly
+/// counted. Returns 0 if the dir doesn't exist yet.
+pub fn disk_usage_bytes() -> u64 {
+    let Some(root) = storage_root() else { return 0 };
+    fn walk(p: &Path) -> u64 {
+        let mut total = 0u64;
+        let Ok(entries) = std::fs::read_dir(p) else { return 0 };
+        for entry in entries.flatten() {
+            let Ok(meta) = entry.metadata() else { continue };
+            if meta.is_dir() {
+                total = total.saturating_add(walk(&entry.path()));
+            } else {
+                total = total.saturating_add(meta.len());
+            }
+        }
+        total
+    }
+    walk(&root)
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct CleanupSummary {
+    pub removed: u32,
+    pub bytes_freed: u64,
+    pub kept: u32,
+    pub failed: Vec<String>,
+}
+
+/// Remove worktree directories under `storage_root` that:
+///   1. Don't correspond to any session in `active_session_ids`, AND
+///   2. Were last modified more than `max_age_secs` ago.
+///
+/// Older orphans are typical when the user deleted a chat without first
+/// applying or removing its worktree. The 14-day default gives a safety
+/// window in case they want to recover.
+///
+/// We delete via `rm -rf` of the directory because the parent repo path
+/// is unknown to us at this point — `git worktree prune` in the parent
+/// repo will reap the stale refs the next time the user works there.
+pub fn cleanup_orphans(active_session_ids: &[String], max_age_secs: u64) -> CleanupSummary {
+    let mut summary = CleanupSummary {
+        removed: 0,
+        bytes_freed: 0,
+        kept: 0,
+        failed: Vec::new(),
+    };
+    let Some(root) = storage_root() else { return summary };
+    let Ok(entries) = std::fs::read_dir(&root) else { return summary };
+    let active: std::collections::HashSet<&str> =
+        active_session_ids.iter().map(|s| s.as_str()).collect();
+    let now = std::time::SystemTime::now();
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(meta) = entry.metadata() else { continue };
+        if !meta.is_dir() {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else { continue };
+        if active.contains(name) {
+            summary.kept += 1;
+            continue;
+        }
+        // Age check — use mtime as a proxy for "user touched this recently".
+        let age_secs = meta
+            .modified()
+            .ok()
+            .and_then(|m| now.duration_since(m).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        if age_secs < max_age_secs {
+            summary.kept += 1;
+            continue;
+        }
+        let size = walk_size(&path);
+        match std::fs::remove_dir_all(&path) {
+            Ok(()) => {
+                summary.removed += 1;
+                summary.bytes_freed = summary.bytes_freed.saturating_add(size);
+            }
+            Err(e) => {
+                summary.failed.push(format!("{}: {}", name, e));
+            }
+        }
+    }
+    summary
+}
+
+fn walk_size(p: &Path) -> u64 {
+    let mut total = 0u64;
+    let Ok(entries) = std::fs::read_dir(p) else { return 0 };
+    for entry in entries.flatten() {
+        let Ok(meta) = entry.metadata() else { continue };
+        if meta.is_dir() {
+            total = total.saturating_add(walk_size(&entry.path()));
+        } else {
+            total = total.saturating_add(meta.len());
+        }
+    }
+    total
+}
+
 fn forgehold_branch(session_id: &str) -> String {
     // Sanitize to a valid git ref. Git refs can't contain spaces, `..`, `~`,
     // `^`, `:`, `?`, `*`, `[`, `\`, or control chars.

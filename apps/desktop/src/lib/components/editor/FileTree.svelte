@@ -1,5 +1,7 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
+  import { setDragPayload } from '$lib/state/drag.svelte';
+  import { attachDragChip } from '$lib/dragImage';
 
   interface Entry { name: string; path: string; is_dir: boolean; size: number; }
   interface Item { name: string; path: string; is_dir: boolean; depth: number; expanded: boolean; ignored: boolean; }
@@ -133,10 +135,17 @@
       ondragstart={(e) => {
         if (!e.dataTransfer) return;
         const payload = { path: it.path, isDir: it.is_dir, name: it.name };
+        // Module state is the authoritative payload (WKWebView hides the
+        // custom application/x-* mime on `dataTransfer.types` during
+        // dragover, so drop targets can't rely on the mime to detect us).
+        // We still set the mime for non-WKWebView platforms / other apps.
+        setDragPayload({ source: 'file', ...payload });
         e.dataTransfer.setData('application/x-forgehold-file', JSON.stringify(payload));
         e.dataTransfer.setData('text/plain', it.path);
         e.dataTransfer.effectAllowed = 'copy';
+        attachDragChip(e, it.is_dir ? 'dir' : 'file', it.name);
       }}
+      ondragend={() => setDragPayload(null)}
     >
       <span class="tree-chevron">
         {#if it.is_dir}

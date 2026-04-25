@@ -14,9 +14,11 @@ use serde::Serialize;
 
 use crate::jira::{JiraCredentials, normalize_workspace};
 use crate::keychain;
+use crate::sentry::SentryCredentials;
 
 const JIRA_KEYCHAIN_KEY: &str = "jira";
 const GITHUB_KEYCHAIN_KEY: &str = "github";
+const SENTRY_KEYCHAIN_KEY: &str = "sentry";
 
 /// Session id → pid of the running `claude` process. Lets us kill it later.
 pub type Runners = Arc<Mutex<HashMap<String, u32>>>;
@@ -459,6 +461,13 @@ fn build_mcp_config(session_id: &str) -> Option<(PathBuf, Vec<String>)> {
         allowed.push("mcp__memory__memory_delete".into());
     }
 
+    if let Some(s) = build_sentry_server() {
+        servers.insert("sentry".into(), s);
+        allowed.push("mcp__sentry__get_issue".into());
+        allowed.push("mcp__sentry__search_issues".into());
+        allowed.push("mcp__sentry__get_event".into());
+    }
+
     if servers.is_empty() {
         return None;
     }
@@ -494,6 +503,20 @@ fn build_github_server() -> Option<serde_json::Value> {
         "command": sidecar.to_string_lossy(),
         "env": {
             "GITHUB_TOKEN": token,
+        }
+    }))
+}
+
+fn build_sentry_server() -> Option<serde_json::Value> {
+    let stored = keychain::get(SENTRY_KEYCHAIN_KEY).ok().flatten()?;
+    let creds: SentryCredentials = serde_json::from_str(&stored).ok()?;
+    let sidecar = find_sidecar("forgehold-sentry")?;
+    Some(serde_json::json!({
+        "command": sidecar.to_string_lossy(),
+        "env": {
+            "SENTRY_HOST": creds.host,
+            "SENTRY_ORG": creds.organization_slug,
+            "SENTRY_TOKEN": creds.token,
         }
     }))
 }

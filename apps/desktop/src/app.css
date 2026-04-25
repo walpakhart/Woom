@@ -1487,6 +1487,26 @@ img.chat-avatar { padding: 0; }
 }
 .slide-close:hover { background: var(--bg-3); color: var(--text-0); border-color: var(--border-hi2); }
 
+/* Top-right action chips inside a `.slide-panel`. Used for "Open on
+   GitHub" / "Open on Sentry" / "Open on Jira" so all three detail panes
+   put the external-handoff link in the exact same screen position. */
+.slide-corner-actions {
+  position: absolute;
+  top: 12px; right: 60px;
+  z-index: 5;
+  display: flex; gap: 6px;
+}
+.slide-corner-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 7px 12px; height: 32px; border-radius: 8px;
+  background: var(--bg-2); color: var(--text-1);
+  border: 1px solid var(--border-neutral-hi);
+  font-size: 12px; cursor: pointer;
+  transition: all 120ms;
+}
+.slide-corner-btn:hover { background: var(--bg-3); color: var(--text-0); border-color: var(--border-hi2); }
+.slide-corner-btn svg { width: 12px; height: 12px; }
+
 /* Shared animations */
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 @keyframes slideDown {

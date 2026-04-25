@@ -1,7 +1,7 @@
 <script lang="ts">
   import { slide } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
-  import Dropdown, { type DropdownOption } from '$lib/Dropdown.svelte';
+  import Dropdown, { type DropdownOption } from '$lib/components/ui/Dropdown.svelte';
   import {
     connectionsMeta,
     jiraStatusClass,
@@ -13,11 +13,10 @@
   const jiraMeta = connectionsMeta.find((c) => c.id === 'jira')!;
   import {
     layoutState,
-    movePanelById,
-    closePanelById,
     startResizeById,
     activeInstances
   } from '$lib/state/layout.svelte';
+  import ColumnControls from '$lib/components/workbench/ColumnControls.svelte';
   import {
     inboxState,
     invalidateJiraStatuses,
@@ -171,11 +170,7 @@
   transition:slide={{ duration: 240, axis: 'x', easing: cubicOut }}
   style="order: {order}; flex: 0 0 {inst?.width ?? 420}px"
 >
-  <div class="wb-col-controls">
-    <button class="wb-col-ctl" onclick={() => movePanelById(instanceId, -1)} aria-label="Move left" title="Move left"><svg class="i i-sm" viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6" /></svg></button>
-    <button class="wb-col-ctl" onclick={() => movePanelById(instanceId, 1)} aria-label="Move right" title="Move right"><svg class="i i-sm" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6" /></svg></button>
-    <button class="wb-col-ctl wb-col-ctl--close" onclick={() => closePanelById(instanceId)} aria-label="Hide column" title="Hide"><svg class="i i-sm" viewBox="0 0 24 24"><path d="M6 6l12 12M6 18L18 6" /></svg></button>
-  </div>
+  <ColumnControls {instanceId} kind="jira" />
   <div class="wb-col-resize" class:snap-flash={layoutState.snapFlashInstanceId === instanceId} role="separator" aria-orientation="vertical" onpointerdown={(e) => startResizeById(instanceId, e)}></div>
   <div class="inbox-brand">
     <span class="brand-icon {jiraMeta.iconClass}" class:conn-icon--svg={!!jiraMeta.iconSvg}>
@@ -387,17 +382,22 @@
   .filter-input:hover { border-color: var(--border-neutral-hi); }
   .filter-input:focus { outline: 1px solid var(--accent); outline-offset: 0; border-color: var(--accent); }
 
-  .inbox-list { flex: 1; overflow-y: auto; padding: 6px 8px 20px; }
+  .inbox-list {
+    flex: 1; overflow-y: auto; padding: 8px 12px 20px;
+    display: flex; flex-direction: column; gap: 8px;
+  }
   .inbox-state { padding: 40px 16px; text-align: center; font-size: 12.5px; color: var(--text-2); }
   .inbox-state--error { color: #fca5a5; }
 
   .inbox-item {
-    padding: 10px 12px; margin-bottom: 4px;
-    border-radius: 8px; cursor: pointer;
-    border: 1px solid transparent;
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: var(--bg-1); border: 1px solid var(--border-neutral);
+    cursor: pointer;
     transition: all 120ms;
+    display: flex; flex-direction: column; gap: 5px;
   }
-  .inbox-item:hover { background: var(--bg-1); }
+  .inbox-item:hover { background: var(--bg-2); border-color: var(--border-neutral-hi); }
   .inbox-item:active { cursor: grabbing; transform: scale(0.99); }
   .inbox-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
   .inbox-item-top { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }

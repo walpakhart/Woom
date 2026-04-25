@@ -1,8 +1,8 @@
 <script lang="ts">
   import { openUrl } from '@tauri-apps/plugin-opener';
-  import Sigil from '$lib/Sigil.svelte';
-  import JiraDetailPane from '$lib/JiraDetailPane.svelte';
-  import Dropdown, { type DropdownOption } from '$lib/Dropdown.svelte';
+  import Sigil from '$lib/components/ui/Sigil.svelte';
+  import JiraDetailPane from '$lib/components/inbox/JiraDetailPane.svelte';
+  import Dropdown, { type DropdownOption } from '$lib/components/ui/Dropdown.svelte';
   import {
     jiraStatusClass,
     jiraStatusColor,
@@ -359,7 +359,7 @@
 {/if}
 
 {#if inboxState.jiraFocusKey}
-  <div class="slide-over" onclick={(e) => { if (e.target === e.currentTarget) inboxState.jiraFocusKey = null; }} role="dialog" aria-modal="true" tabindex="-1">
+  <div class="slide-over" onclick={(e) => { if (e.target === e.currentTarget) inboxState.jiraFocusKey = null; }} onkeydown={(e) => { if (e.key === 'Escape') inboxState.jiraFocusKey = null; }} role="dialog" aria-modal="true" tabindex="-1">
     <div class="slide-panel">
       <JiraDetailPane
         issueKey={inboxState.jiraFocusKey}

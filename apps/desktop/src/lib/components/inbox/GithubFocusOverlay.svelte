@@ -1,5 +1,5 @@
 <script lang="ts">
-  import Markdown from '$lib/Markdown.svelte';
+  import Markdown from '$lib/components/ui/Markdown.svelte';
   import {
     externalId,
     kindLabel,
@@ -119,32 +119,32 @@
 {#if inboxState.focusItem}
   {@const item = inboxState.focusItem}
   {@const stag = stateTag(item)}
-  <div class="slide-over" onclick={(e) => { if (e.target === e.currentTarget) onCloseFocus(); }} role="dialog" aria-modal="true" tabindex="-1">
+  <div class="slide-over" onclick={(e) => { if (e.target === e.currentTarget) onCloseFocus(); }} onkeydown={(e) => { if (e.key === 'Escape') onCloseFocus(); }} role="dialog" aria-modal="true" tabindex="-1">
     <div class="slide-panel">
-      <button class="slide-close" onclick={onCloseFocus} aria-label="Close">
-        <svg class="i" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12" /></svg>
-      </button>
+      <!-- Unified header bar: close-left, metadata center, "Open on
+           GitHub" right. Mirrors `.jdp-head` (Jira) and `.sdp-head`
+           (Sentry) so all three detail panes share the same skeleton. -->
+      <header class="gfo-head">
+        <button class="gfo-back" onclick={onCloseFocus} aria-label="Close" title="Close">
+          <svg class="i i-sm" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12" /></svg>
+        </button>
+        <span class="gfo-key mono">{externalId(item)}</span>
+        <span class="chip-state {stag.className}">{stag.text}</span>
+        <span class="gfo-kind">{kindLabel(item).toLowerCase()}</span>
+        {#if item.repo}
+          <span class="gfo-repo mono" title={repoLabel(item)}>{repoLabel(item)}</span>
+        {/if}
+        {#if item.is_pull_request && inboxState.prDetail}
+          <span class="gfo-branches mono">{inboxState.prDetail.base_ref} ← {inboxState.prDetail.head_ref}</span>
+        {/if}
+        <div style="flex:1"></div>
+        <button class="gfo-btn" onclick={() => onOpenBrowser(item.url)} title="Open on GitHub">
+          <svg class="i i-sm" viewBox="0 0 24 24"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><path d="M15 3h6v6M10 14 21 3"/></svg>
+          Open on GitHub
+        </button>
+      </header>
       <div class="focus-scroll">
         <div class="focus-shell">
-          <div class="focus-breadcrumb">
-            {#if item.repo}<span class="mono" style="color: var(--text-1)">{repoLabel(item)}</span><span class="dot"></span>{/if}
-            <span class="mono">{externalId(item)}</span>
-            <span class="dot"></span>
-            <span class="chip-state {stag.className}">{stag.text}</span>
-            <span style="margin-left: auto; font-size: 11.5px; color: var(--text-mute)">updated {relativeTime(item.updated_at, now)} ago</span>
-          </div>
-
-          <div class="focus-head">
-            <span class="source-mark" style="width:18px; height:18px; font-size:10px;">GH</span>
-            <span class="focus-id">{kindLabel(item)}</span>
-            <span class="dot"></span>
-            <span class="focus-source-name">GitHub</span>
-            {#if item.is_pull_request && inboxState.prDetail}
-              <span class="dot"></span>
-              <span class="focus-branches mono">{inboxState.prDetail.base_ref} ← {inboxState.prDetail.head_ref}</span>
-            {/if}
-          </div>
-
           <h1 class="focus-title">{item.title}</h1>
 
           {#if item.labels.length}
@@ -480,10 +480,6 @@
           </button>
         {/if}
         <div style="flex:1"></div>
-        <button class="btn btn--ghost" onclick={() => onOpenBrowser(item.url)}>
-          <svg class="i i-sm" viewBox="0 0 24 24"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /><path d="M15 3h6v6M10 14 21 3" /></svg>
-          Open on GitHub
-        </button>
         {#if item.is_pull_request}
           <button class="btn btn--primary" onclick={onOpenMerge} disabled={mergeDisabled()}>
             <svg class="i i-sm" viewBox="0 0 24 24"><circle cx="18" cy="18" r="3" /><circle cx="6" cy="6" r="3" /><path d="M6 9v6a6 6 0 0 0 6 6h2" /></svg>
@@ -500,17 +496,38 @@
      defined globally in app.css. Kept scoped so the Workbench GitHub column
      and the Repositories view render identically. */
 
+  /* Unified header bar — close on the left, metadata in the middle,
+     "Open on GitHub" on the right. Same shape as `.jdp-head` (Jira) and
+     `.sdp-head` (Sentry). */
+  .gfo-head {
+    display: flex; align-items: center; gap: 10px;
+    padding: 12px 20px;
+    border-bottom: 1px solid var(--border-neutral);
+    background: var(--bg-1);
+    flex-shrink: 0;
+  }
+  .gfo-back {
+    width: 28px; height: 28px; border-radius: 5px;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: transparent; color: var(--text-1); border: none; cursor: pointer;
+  }
+  .gfo-back:hover { background: var(--bg-2); color: var(--text-0); }
+  .gfo-key { font-size: 13px; color: var(--accent-bright); font-weight: 600; }
+  .gfo-kind { font-size: 11px; color: var(--text-2); }
+  .gfo-repo { font-size: 11.5px; color: var(--text-1); padding: 2px 8px; border-radius: 5px; background: var(--bg-2); border: 1px solid var(--border-neutral); max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .gfo-branches { font-size: 11.5px; color: var(--text-2); padding: 2px 8px; border-radius: 5px; background: var(--bg-2); border: 1px solid var(--border-neutral); }
+  .gfo-btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 6px 12px; border-radius: 6px;
+    background: var(--bg-2); color: var(--text-1);
+    font-size: 12px; border: 1px solid var(--border-neutral-hi); cursor: pointer;
+  }
+  .gfo-btn:hover:not(:disabled) { background: var(--bg-3); color: var(--text-0); }
+
   .focus-scroll { flex: 1; overflow-y: auto; }
   .focus-shell { max-width: 920px; margin: 0 auto; padding: 32px 40px 80px; }
 
-  .focus-breadcrumb { display: flex; align-items: center; gap: 10px; font-size: 12px; margin-bottom: 24px; color: var(--text-2); }
-
   .chip-state { padding: 2px 9px; border-radius: 5px; font-size: 10.5px; font-weight: 500; }
-
-  .focus-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
-  .focus-id { font-size: 12px; color: var(--text-2); font-weight: 500; text-transform: uppercase; letter-spacing: 0.06em; }
-  .focus-source-name { font-size: 12px; color: var(--text-2); }
-  .focus-branches { font-size: 11.5px; color: var(--text-2); background: var(--bg-1); padding: 2px 8px; border-radius: 5px; border: 1px solid var(--border-neutral); }
 
   .focus-title { font-size: 26px; line-height: 1.2; letter-spacing: -0.02em; font-weight: 600; margin-bottom: 16px; max-width: 720px; color: var(--text-0); }
   .focus-labels { display: flex; gap: 6px; margin-bottom: 16px; flex-wrap: wrap; }

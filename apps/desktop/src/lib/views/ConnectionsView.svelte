@@ -5,7 +5,8 @@
     ConnectionMeta,
     ConnectionStatus,
     CursorStatus,
-    JiraStatus
+    JiraStatus,
+    SentryStatus
   } from '../data';
 
   interface Props {
@@ -14,10 +15,12 @@
     connectedIds: Set<string>;
     githubStatus: ConnectionStatus;
     jiraStatus: JiraStatus;
+    sentryStatus: SentryStatus;
     claudeStatus: ClaudeStatus | null;
     cursorStatus: CursorStatus | null;
     onDisconnectGithub: () => void;
     onDisconnectJira: () => void;
+    onDisconnectSentry: () => void;
     onOpenConnectModal: (conn: ConnectionMeta) => void;
   }
 
@@ -27,10 +30,12 @@
     connectedIds,
     githubStatus,
     jiraStatus,
+    sentryStatus,
     claudeStatus,
     cursorStatus,
     onDisconnectGithub,
     onDisconnectJira,
+    onDisconnectSentry,
     onOpenConnectModal
   }: Props = $props();
 </script>
@@ -72,6 +77,8 @@
                   <button class="conn-btn conn-btn--configure" onclick={onDisconnectGithub}>Disconnect</button>
                 {:else if connected && conn.id === 'jira'}
                   <button class="conn-btn conn-btn--configure" onclick={onDisconnectJira}>Disconnect</button>
+                {:else if connected && conn.id === 'sentry'}
+                  <button class="conn-btn conn-btn--configure" onclick={onDisconnectSentry}>Disconnect</button>
                 {:else if connected && conn.id === 'claude'}
                   <button class="conn-btn conn-btn--configure" onclick={() => onOpenConnectModal(conn)}>Manage</button>
                 {:else if connected && conn.id === 'cursor'}
@@ -103,6 +110,13 @@
         <img src={jiraStatus.user.avatar_url} alt="" class="you-avatar" />
         <span>{jiraStatus.user.display_name}</span>
         <span class="you-name mono">· {jiraStatus.user.workspace}</span>
+      </div>
+    {/if}
+    {#if sentryStatus.kind === 'connected'}
+      <div class="you-are">
+        Sentry as
+        <span>{sentryStatus.user.name ?? sentryStatus.user.username ?? sentryStatus.user.email ?? sentryStatus.user.id}</span>
+        <span class="you-name mono">· {sentryStatus.user.organization_slug} on {sentryStatus.user.host.replace(/^https?:\/\//, '')}</span>
       </div>
     {/if}
     {#if claudeStatus?.ready}

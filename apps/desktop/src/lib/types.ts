@@ -4,7 +4,7 @@
 // models. Re-exporting these from the columns (plus +page.svelte) keeps
 // the import graph flat.
 
-export type PanelKind = 'github' | 'jira' | 'claude' | 'cursor' | 'editor';
+export type PanelKind = 'github' | 'jira' | 'sentry' | 'claude' | 'cursor' | 'editor';
 
 /** One live instance of a column in a workbench. Editors and chat columns can
  *  have multiple instances side-by-side; github/jira are effectively singletons
@@ -35,7 +35,7 @@ export type ClaudeMessage = {
 };
 
 export type Mention = {
-  source: 'github' | 'jira' | 'file';
+  source: 'github' | 'jira' | 'sentry' | 'file';
   externalId: string;
   title: string;
   body: string | null;

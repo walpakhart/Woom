@@ -27,8 +27,12 @@ import type {
   JiraWorkflowStatus,
   PrDetail,
   Review,
-  ReviewComment
+  ReviewComment,
+  SentryEnvironment,
+  SentryIssue,
+  SentryProject
 } from '$lib/data';
+import { closeModal, modalsState, openModal, patchModal } from '$lib/state/modals.svelte';
 
 // ---- GitHub filter state ----
 //
@@ -210,15 +214,28 @@ export const inboxState = $state<{
   // issue key, not by InboxItem shape).
   jiraFocusKey: string | null;
 
-  // Jira user-picker modal (searching workspace members to change the
-  // assignee filter). Lives here because `selectAssignee` is owned by this
-  // store and closes the picker on pick.
-  userPickerModal: {
-    query: string;
-    results: JiraUserSummary[];
-    loading: boolean;
-    error: string | null;
-  } | null;
+  // Sentry inbox — issue list + filter dimensions. The filter state mirrors
+  // Sentry's own UI: status (is:unresolved | is:resolved | is:ignored),
+  // level (error/warning/info/debug/fatal), per-project scope (multi),
+  // environment, sort key, free-text search. Filters compose into a single
+  // `query` plus `project` + `environment` URL params on each refresh.
+  sentryItems: SentryIssue[];
+  sentryItemsLoading: boolean;
+  sentryItemsError: string | null;
+  /** Free-text search bar value (joined with structured filters at refresh). */
+  sentrySearch: string;
+  sentryStatus: 'unresolved' | 'resolved' | 'ignored' | 'all';
+  sentryLevel: 'all' | 'fatal' | 'error' | 'warning' | 'info' | 'debug';
+  sentryProjects: string[];
+  sentryEnvironment: string | null;
+  sentrySort: 'date' | 'new' | 'priority' | 'freq' | 'user';
+  /** Project / env dropdown source data. */
+  sentryProjectOptions: SentryProject[];
+  sentryProjectOptionsLoading: boolean;
+  sentryEnvironmentOptions: SentryEnvironment[];
+  sentryEnvironmentOptionsLoading: boolean;
+  /** Slide-over pane key — issue id of the currently focused issue. */
+  sentryFocusId: string | null;
 }>({
   items: [],
   loading: false,
@@ -254,7 +271,20 @@ export const inboxState = $state<{
   jiraStatusOptionsLoading: false,
   jiraStatusOptionsProjectKey: undefined,
   jiraFocusKey: null,
-  userPickerModal: null
+  sentryItems: [],
+  sentryItemsLoading: false,
+  sentryItemsError: null,
+  sentrySearch: '',
+  sentryStatus: 'unresolved',
+  sentryLevel: 'all',
+  sentryProjects: [],
+  sentryEnvironment: null,
+  sentrySort: 'date',
+  sentryProjectOptions: [],
+  sentryProjectOptionsLoading: false,
+  sentryEnvironmentOptions: [],
+  sentryEnvironmentOptionsLoading: false,
+  sentryFocusId: null
 });
 
 let userPickerDebounce: ReturnType<typeof setTimeout> | null = null;
@@ -654,40 +684,32 @@ export function invalidateJiraStatuses() {
 }
 
 export function openUserPicker() {
-  inboxState.userPickerModal = { query: '', results: [], loading: true, error: null };
+  openModal('userPicker', { query: '', results: [], loading: true, error: null });
   void searchJiraUsers('');
 }
 
 export function onUserPickerInput(q: string) {
-  if (!inboxState.userPickerModal) return;
-  inboxState.userPickerModal = { ...inboxState.userPickerModal, query: q };
+  if (!modalsState.userPicker) return;
+  patchModal('userPicker', { query: q });
   if (userPickerDebounce) clearTimeout(userPickerDebounce);
   userPickerDebounce = setTimeout(() => void searchJiraUsers(q), 250);
 }
 
 async function searchJiraUsers(q: string) {
-  if (!inboxState.userPickerModal) return;
-  inboxState.userPickerModal = { ...inboxState.userPickerModal, loading: true, error: null };
+  if (!modalsState.userPicker) return;
+  patchModal('userPicker', { loading: true, error: null });
   try {
     const results = await invoke<JiraUserSummary[]>('jira_search_users', { query: q });
-    if (inboxState.userPickerModal) {
-      inboxState.userPickerModal = { ...inboxState.userPickerModal, results, loading: false };
-    }
+    patchModal('userPicker', { results, loading: false });
   } catch (e) {
-    if (inboxState.userPickerModal) {
-      inboxState.userPickerModal = {
-        ...inboxState.userPickerModal,
-        loading: false,
-        error: typeof e === 'string' ? e : String(e)
-      };
-    }
+    patchModal('userPicker', { loading: false, error: typeof e === 'string' ? e : String(e) });
   }
 }
 
 export async function selectAssignee(u: JiraUserSummary | null) {
   inboxState.jiraAssignee = u;
   inboxState.jiraAssigneeAny = false;
-  inboxState.userPickerModal = null;
+  closeModal('userPicker');
   await refreshJiraInbox();
 }
 
@@ -696,7 +718,7 @@ export async function selectAssignee(u: JiraUserSummary | null) {
 export async function selectAnyAssignee() {
   inboxState.jiraAssignee = null;
   inboxState.jiraAssigneeAny = true;
-  inboxState.userPickerModal = null;
+  closeModal('userPicker');
   await refreshJiraInbox();
 }
 
@@ -717,4 +739,92 @@ export function resetJiraInbox() {
   inboxState.jiraAssigneeAny = false;
   inboxState.jiraStatusOptions = [];
   inboxState.jiraStatusOptionsProjectKey = undefined;
+}
+
+// ---- Sentry inbox ----
+
+/** Compose the `query=` string from the current structured filter state.
+ *  Empty status/level slots translate to "no qualifier" (Sentry default
+ *  matches everything when no `is:` is present). Free-text search is
+ *  appended last so terms like `User-Agent` aren't parsed as a column. */
+export function buildSentryQuery(): string {
+  const parts: string[] = [];
+  const { sentryStatus, sentryLevel, sentrySearch } = inboxState;
+  if (sentryStatus !== 'all') parts.push(`is:${sentryStatus}`);
+  if (sentryLevel !== 'all') parts.push(`level:${sentryLevel}`);
+  const search = sentrySearch.trim();
+  if (search) parts.push(search);
+  return parts.join(' ');
+}
+
+let sentryFilterDebounce: ReturnType<typeof setTimeout> | null = null;
+
+export async function refreshSentryInbox({ silent = false }: { silent?: boolean } = {}) {
+  if (!silent) inboxState.sentryItemsLoading = true;
+  inboxState.sentryItemsError = null;
+  try {
+    const items = await invoke<SentryIssue[]>('sentry_list_issues', {
+      query: buildSentryQuery() || null,
+      projectSlugs: inboxState.sentryProjects,
+      environment: inboxState.sentryEnvironment,
+      sort: inboxState.sentrySort,
+      limit: 50
+    });
+    inboxState.sentryItems = items;
+  } catch (e) {
+    inboxState.sentryItemsError = typeof e === 'string' ? e : String(e);
+  } finally {
+    inboxState.sentryItemsLoading = false;
+  }
+}
+
+/** Schedule a debounced refresh after a filter change (250ms). Avoids
+ *  hammering the API while the user types in the search box. */
+export function scheduleSentryFilterRefresh() {
+  if (sentryFilterDebounce) clearTimeout(sentryFilterDebounce);
+  sentryFilterDebounce = setTimeout(() => void refreshSentryInbox({ silent: true }), 250);
+}
+
+export async function loadSentryProjects() {
+  if (inboxState.sentryProjectOptionsLoading) return;
+  inboxState.sentryProjectOptionsLoading = true;
+  try {
+    inboxState.sentryProjectOptions = await invoke<SentryProject[]>('sentry_list_projects');
+  } catch {
+    // Silent — the project picker just shows "no projects" until refreshed.
+  } finally {
+    inboxState.sentryProjectOptionsLoading = false;
+  }
+}
+
+/** Pull environments for whatever projects are currently selected. With
+ *  no project picked we fall back to the first member-project so the
+ *  dropdown isn't empty. */
+export async function loadSentryEnvironments() {
+  const slug =
+    inboxState.sentryProjects[0] ??
+    inboxState.sentryProjectOptions.find((p) => p.is_member)?.slug ??
+    inboxState.sentryProjectOptions[0]?.slug ??
+    null;
+  if (!slug) {
+    inboxState.sentryEnvironmentOptions = [];
+    return;
+  }
+  inboxState.sentryEnvironmentOptionsLoading = true;
+  try {
+    inboxState.sentryEnvironmentOptions = await invoke<SentryEnvironment[]>(
+      'sentry_list_environments',
+      { projectSlug: slug }
+    );
+  } catch {
+    inboxState.sentryEnvironmentOptions = [];
+  } finally {
+    inboxState.sentryEnvironmentOptionsLoading = false;
+  }
+}
+
+export function resetSentryInbox() {
+  inboxState.sentryItems = [];
+  inboxState.sentryItemsError = null;
+  inboxState.sentryFocusId = null;
 }

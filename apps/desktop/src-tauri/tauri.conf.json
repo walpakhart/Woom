@@ -23,14 +23,18 @@
         "titleBarStyle": "Transparent",
         "hiddenTitle": true,
         "backgroundColor": "#0C1117",
-        "dragDropEnabled": true
+        "dragDropEnabled": false
       }
     ],
     "security": {
-      "csp": null,
+      "csp": "default-src 'self' ipc: http://ipc.localhost; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: asset: http://asset.localhost; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost https: wss:; frame-ancestors 'none'; base-uri 'self'; object-src 'none'",
       "assetProtocol": {
         "enable": true,
-        "scope": ["**"]
+        "scope": [
+          "$HOME/**",
+          "$APPDATA/**",
+          "$RESOURCE/**"
+        ]
       }
     }
   },
@@ -40,7 +44,8 @@
     "externalBin": [
       "binaries/forgehold-github",
       "binaries/forgehold-jira",
-      "binaries/forgehold-memory"
+      "binaries/forgehold-memory",
+      "binaries/forgehold-sentry"
     ],
     "icon": [
       "icons/32x32.png",

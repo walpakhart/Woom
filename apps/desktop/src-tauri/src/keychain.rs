@@ -1,10 +1,22 @@
-//! macOS Keychain storage for source credentials — Touch ID gated.
+//! macOS Keychain storage for source credentials.
 //!
-//! Items are stored under the `com.forgehold.desktop` service with an
-//! access control that requires `UserPresence` (Touch ID with Mac passcode
-//! fallback). Tagged `AccessibleWhenUnlockedThisDeviceOnly` so they don't
-//! sync to iCloud Keychain and stay bound to this Mac. Each read invokes
-//! the native Touch ID UI via LocalAuthentication.
+//! Items are stored under the `com.forgehold.desktop` service with
+//! `kSecAttrAccessibleWhenUnlockedThisDeviceOnly` — the keychain is only
+//! readable while the user is logged in, items are bound to this Mac (no
+//! iCloud Keychain sync), and they don't survive a wipe. The app-level
+//! Touch ID gate (`biometric_unlock` at startup, see `biometry.rs`) is
+//! what actually keeps a thief who steals the unlocked Mac out of the
+//! tokens during the session.
+//!
+//! We previously layered `kSecAccessControlUserPresence` on every item to
+//! force a Touch ID prompt on each read. That works on Developer-ID
+//! signed builds, but ad-hoc signed builds (signingIdentity "-") fail
+//! `SecItemAdd` with `errSecMissingEntitlement (-34018)` because the
+//! biometric ACL requires keychain-access-groups entitlement that
+//! ad-hoc bundles don't have. Dropping the per-item ACL fixes that and
+//! also stops the Touch ID prompt from firing dozens of times per session
+//! while the inbox refreshes — a bad UX trade for security gain we don't
+//! actually realize (the app-level gate already covers this).
 
 use core_foundation::{
     base::{CFType, CFTypeRef, TCFType},
@@ -12,27 +24,28 @@ use core_foundation::{
     data::CFData,
     dictionary::CFDictionary,
     number::CFNumber,
-    string::CFString,
+    string::{CFString, CFStringRef},
 };
-use security_framework::access_control::{ProtectionMode, SecAccessControl};
 use security_framework_sys::{
     base::errSecItemNotFound,
     item::{
-        kSecAttrAccessControl, kSecAttrAccount, kSecAttrService, kSecClass,
-        kSecClassGenericPassword, kSecMatchLimit, kSecReturnData, kSecValueData,
+        kSecAttrAccount, kSecAttrService, kSecClass, kSecClassGenericPassword, kSecMatchLimit,
+        kSecReturnData, kSecValueData,
     },
     keychain_item::{SecItemAdd, SecItemCopyMatching, SecItemDelete},
 };
 use std::ptr;
 
-const SERVICE: &str = "com.forgehold.desktop";
+// `kSecAttrAccessible` and the accessibility-tier constants live in
+// Security.framework but aren't re-exported by the `security-framework-sys`
+// version we depend on. Declare them as `extern "C"` statics — they're
+// CFStringRef constants, stable since macOS 10.10.
+extern "C" {
+    static kSecAttrAccessible: CFStringRef;
+    static kSecAttrAccessibleWhenUnlockedThisDeviceOnly: CFStringRef;
+}
 
-/// `kSecAccessControlUserPresence` — bit 0. Lets macOS pick the best
-/// authentication UI: Touch ID first, Mac passcode if biometry is
-/// unavailable. We don't track enrolled finger set (that would be
-/// `BiometryCurrentSet` = bit 3), so re-enrolling fingers keeps the item
-/// accessible. `CFOptionFlags` is a `usize` on Apple platforms.
-const USER_PRESENCE: usize = 1;
+const SERVICE: &str = "com.forgehold.desktop";
 
 #[derive(Debug, thiserror::Error)]
 pub enum KeychainError {
@@ -40,12 +53,6 @@ pub enum KeychainError {
     Sf(String),
     #[error("stored value is not valid UTF-8")]
     Utf8,
-}
-
-impl From<security_framework::base::Error> for KeychainError {
-    fn from(e: security_framework::base::Error) -> Self {
-        KeychainError::Sf(format!("code {} — {}", e.code(), e))
-    }
 }
 
 fn check(status: i32) -> Result<(), KeychainError> {
@@ -60,25 +67,20 @@ fn cf_string_from_ref(r: core_foundation::string::CFStringRef) -> CFString {
     unsafe { CFString::wrap_under_get_rule(r) }
 }
 
-fn access_control() -> Result<SecAccessControl, KeychainError> {
-    SecAccessControl::create_with_protection(
-        Some(ProtectionMode::AccessibleWhenUnlockedThisDeviceOnly),
-        USER_PRESENCE,
-    )
-    .map_err(KeychainError::from)
-}
-
 pub fn set(key: &str, value: &str) -> Result<(), KeychainError> {
     // SecItemAdd returns errSecDuplicateItem if (service, account) exists.
-    // Delete first to make writes idempotent.
+    // Delete first so writes are idempotent and so we always pick up the
+    // current accessibility attribute (handy when migrating ACLs).
     let _ = delete(key);
-    let ac = access_control()?;
     let pairs: Vec<(CFString, CFType)> = vec![
         (cf_string_from_ref(unsafe { kSecClass }), cf_string_from_ref(unsafe { kSecClassGenericPassword }).as_CFType()),
         (cf_string_from_ref(unsafe { kSecAttrService }), CFString::new(SERVICE).as_CFType()),
         (cf_string_from_ref(unsafe { kSecAttrAccount }), CFString::new(key).as_CFType()),
         (cf_string_from_ref(unsafe { kSecValueData }), CFData::from_buffer(value.as_bytes()).as_CFType()),
-        (cf_string_from_ref(unsafe { kSecAttrAccessControl }), ac.as_CFType()),
+        (
+            cf_string_from_ref(unsafe { kSecAttrAccessible }),
+            cf_string_from_ref(unsafe { kSecAttrAccessibleWhenUnlockedThisDeviceOnly }).as_CFType(),
+        ),
     ];
     let dict = CFDictionary::from_CFType_pairs(&pairs);
     let status = unsafe { SecItemAdd(dict.as_concrete_TypeRef(), ptr::null_mut()) };

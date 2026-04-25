@@ -1,9 +1,11 @@
 # Forgehold
 
-> A team-scale operating layer for developers. One interface where your
-> tickets, PRs, messages, and AI agent live — everything a drag away.
+> A single-player desktop workbench for developers. Your Jira tickets,
+> GitHub PRs, code editor, and Claude/Cursor agents in one window —
+> everything a drag away.
 
-**Status:** pre-alpha, M0 (skeleton in progress).
+**Status:** alpha. Workbench, agents (Claude + Cursor), and editor work
+end-to-end; team / cloud sync features are explicitly post-v1.
 
 **Platform:** macOS 13+ only. Ships as a signed & notarized `.app`
 bundle (Universal binary: Apple Silicon + Intel). Windows and Linux
@@ -32,35 +34,46 @@ forgehold/
 ├── apps/
 │   └── desktop/           # Tauri 2 + SvelteKit app
 │       ├── src/           # Svelte UI
-│       └── src-tauri/     # Rust shell + macOS bundle config
-├── mockup/                # HTML design prototypes (v1–v4)
+│       └── src-tauri/     # Rust shell + macOS bundle config + sidecars
+│           └── sidecars/  # forgehold-jira, forgehold-github, forgehold-memory
+│                          # (MCP servers wired into Claude via --mcp-config)
+├── mockup/                # HTML design prototypes (v1–v4) — reference only
 ├── docs/                  # architecture + design specs
 └── pnpm-workspace.yaml    # monorepo root
 ```
 
 ## Documents
 
-- [docs/SPEC.md](docs/SPEC.md) — architecture, stack, data model, auth, team layer, macOS packaging
+- [docs/SPEC.md](docs/SPEC.md) — architecture, stack, auth model, macOS packaging
 - [docs/UI.md](docs/UI.md) — visual language, wireframes, interactions
 - [docs/REPOS.md](docs/REPOS.md) — local repo management (GitHub Desktop-style)
-- [docs/RULES.md](docs/RULES.md) — per-scope rules for Claude runs
-- [docs/MVP.md](docs/MVP.md) — exact MVP scope and post-MVP roadmap
+- [docs/RULES.md](docs/RULES.md) — rules for Claude runs (current scope: single global ruleset)
+- [docs/MVP.md](docs/MVP.md) — milestones, scope cuts, post-MVP roadmap
 
-## MVP scope
+## v0.1 scope (single-player)
 
-| Feature       | What we support                                          |
-|---------------|----------------------------------------------------------|
-| Jira          | Tickets, read/post comments, transitions                 |
-| GitHub        | PRs, issues, review comments, draft PR from diff         |
-| Slack         | Read channels, send messages, threads, reminders         |
-| Claude Code   | Headless execution via the Agent SDK + MCP host          |
-| Repositories  | Clone, fetch, branches, worktrees (GitHub Desktop-style) |
-| Rules         | Per-scope rules (global/repo/folder/run) for Claude runs |
-| Connections   | One-click OAuth from within the app, tokens in Keychain  |
+| Feature       | What we support                                                       |
+|---------------|-----------------------------------------------------------------------|
+| Jira          | Tickets, comments, transitions, worklogs (live API; no offline cache) |
+| GitHub        | PRs, issues, reviews, comments, merge, draft PR creation              |
+| Claude Code   | Headless `claude -p` with MCP sidecars + streaming + worktree-isolated runs |
+| Cursor        | Headless `cursor-agent` with session resume + model picker            |
+| Repositories  | Clone, fetch, branches, worktrees, commit, push, PR creation          |
+| Editor        | Built-in CodeMirror 6 editor with file tree, git panel, diff viewer   |
+| Rules         | Single global ruleset injected into every run via `--append-system-prompt` |
+| Connections   | Personal access tokens (GitHub PAT, Jira API token), stored in macOS Keychain with Touch ID gate |
+| Notifications | macOS Notification Center on Claude/Cursor run completion             |
 
-The team layer (workspace, members, shared connections) is baked into
-the foundation from day one, but cloud sync is post-MVP.
+## Cut from v0.1 (originally in spec)
+
+- **Slack source** — not implemented; revisit post-v1 once core flow is solid.
+- **OAuth PKCE** — manual PAT is a deliberate choice; each user enters their own token, no app-wide OAuth client to register or rotate.
+- **Per-scope `.forge/rules.md` parser** — current model is one global ruleset; per-scope composition is post-v1.
+- **SQLite-backed object cache & event log** — everything is live API + localStorage in v0.1.
+- **Workspace / member / shared sources** — team layer is post-v0.3.
+- **Output drop zones** (Slack/Jira-comment/GitHub-PR-draft) and saveable workflows — post-v1.
+- **Linear, Teams, Notion** — never in v0.1.
 
 ## License
 
-TBD. Likely source-available with commercial licensing for team features.
+TBD. Source-available planned.

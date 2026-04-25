@@ -1,9 +1,9 @@
 <script lang="ts">
   import { slide } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
-  import Markdown from '$lib/Markdown.svelte';
-  import ClaudeActionCard from '$lib/ClaudeActionCard.svelte';
-  import Dropdown, { type DropdownOption } from '$lib/Dropdown.svelte';
+  import Markdown from '$lib/components/ui/Markdown.svelte';
+  import ClaudeActionCard from '$lib/components/workbench/ClaudeActionCard.svelte';
+  import Dropdown, { type DropdownOption } from '$lib/components/ui/Dropdown.svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { open as openDialog } from '@tauri-apps/plugin-dialog';
   import { inboxState } from '$lib/state/inbox.svelte';
@@ -25,11 +25,11 @@
   } from '$lib/state/sessions.svelte';
   import {
     layoutState,
-    movePanelById,
-    closePanelById,
     startResizeById,
-    activeInstances
+    activeInstances,
+    findInstanceAnywhere
   } from '$lib/state/layout.svelte';
+  import ColumnControls from '$lib/components/workbench/ColumnControls.svelte';
   import type { ClaudeAction, RepoInfo } from '$lib/types';
 
   type Kind = 'claude' | 'cursor';
@@ -50,6 +50,7 @@
     thinkingTick: number;
     now: number;
     // Callbacks
+    onAgentDragEnter: (instanceId: string, kind: Kind, e: DragEvent) => void;
     onAgentDragOver: (instanceId: string, kind: Kind, e: DragEvent) => void;
     onAgentDragLeave: (instanceId: string) => void;
     onAgentDrop: (instanceId: string, kind: Kind, e: DragEvent) => void;
@@ -101,6 +102,7 @@
     thinkingStartedAt,
     thinkingTick,
     now,
+    onAgentDragEnter,
     onAgentDragOver,
     onAgentDragLeave,
     onAgentDrop,
@@ -149,11 +151,14 @@
   const order = $derived(activeInstances().findIndex((i) => i.id === instanceId));
 
   /** Editor instance this session is linked to (for the linked pill label).
-      Null when the link target was closed or never set. */
+      Null only when the link target was actually closed; surviving across
+      workbench moves via `findInstanceAnywhere`. */
   const linkedEditor = $derived.by(() => {
     const boundId = activeSess?.linkedToEditorInstanceId;
     if (!boundId) return null;
-    return activeInstances().find((i) => i.id === boundId && i.kind === 'editor') ?? null;
+    const found = findInstanceAnywhere(boundId);
+    if (!found || found.inst.kind !== 'editor') return null;
+    return found.inst;
   });
   /** All Editor instances in the current workbench — used by the link dropdown
       when user wants to pick a specific one. */
@@ -542,21 +547,17 @@
   class="wb-column claude-col"
   class:wb-column--cursor={kind === 'cursor'}
   class:drag-over={dragOver}
+  ondragenter={(e) => onAgentDragEnter(instanceId, kind, e)}
   ondragover={(e) => onAgentDragOver(instanceId, kind, e)}
   ondragleave={() => onAgentDragLeave(instanceId)}
   ondrop={(e) => onAgentDrop(instanceId, kind, e)}
-  role="region"
   aria-label={brandLabel}
   data-instance-id={instanceId}
   data-kind={kind}
   style="order: {order}; flex: 0 0 {inst?.width ?? 520}px"
   transition:slide={{ duration: 240, axis: 'x', easing: cubicOut }}
 >
-  <div class="wb-col-controls">
-    <button class="wb-col-ctl" onclick={() => movePanelById(instanceId, -1)} aria-label="Move left" title="Move left"><svg class="i i-sm" viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6" /></svg></button>
-    <button class="wb-col-ctl" onclick={() => movePanelById(instanceId, 1)} aria-label="Move right" title="Move right"><svg class="i i-sm" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6" /></svg></button>
-    <button class="wb-col-ctl wb-col-ctl--close" onclick={() => closePanelById(instanceId)} aria-label="Hide column" title="Hide"><svg class="i i-sm" viewBox="0 0 24 24"><path d="M6 6l12 12M6 18L18 6" /></svg></button>
-  </div>
+  <ColumnControls {instanceId} {kind} />
   <div class="wb-col-resize" class:snap-flash={layoutState.snapFlashInstanceId === instanceId} role="separator" aria-orientation="vertical" onpointerdown={(e) => startResizeById(instanceId, e)}></div>
   <div class="inbox-brand">
     {#if kind === 'claude'}

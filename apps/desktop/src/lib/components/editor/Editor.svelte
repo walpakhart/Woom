@@ -5,7 +5,7 @@
   import { keymap } from '@codemirror/view';
   import { oneDark } from '@codemirror/theme-one-dark';
   import { invoke } from '@tauri-apps/api/core';
-  import { languageFor } from './codemirrorLang';
+  import { languageFor } from '$lib/components/editor/codemirrorLang';
 
   interface Props {
     path: string;

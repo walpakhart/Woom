@@ -1,13 +1,13 @@
 <script lang="ts">
   import { slide } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
-  import EditorView from '$lib/EditorView.svelte';
+  import EditorView from '$lib/components/editor/EditorView.svelte';
+  import ColumnControls from '$lib/components/workbench/ColumnControls.svelte';
   import {
     layoutState,
-    movePanelById,
-    closePanelById,
     startResizeById,
-    activeInstances
+    activeInstances,
+    findInstanceAnywhere
   } from '$lib/state/layout.svelte';
   import { sessionsState, updateSession } from '$lib/state/sessions.svelte';
 
@@ -20,16 +20,20 @@
 
   // Sessions currently linked to THIS editor instance. Drives the
   // "Linked to <agent>" pills in the Editor header so the bidirectional
-  // connection is visible from both sides.
+  // connection is visible from both sides. Resolves the agent's column
+  // via `findInstanceAnywhere` so the link survives moving the editor or
+  // the agent column to a different workbench — the link is between
+  // identities, not workbench-bound.
   const linkedAgents = $derived.by(() => {
     const out: { sessionId: string; agentInstanceId: string; kind: 'claude' | 'cursor'; name: string }[] = [];
     for (const s of sessionsState.list) {
       if (!s.linkedToEditor) continue;
       if (s.linkedToEditorInstanceId !== instanceId) continue;
-      const col = s.columnInstanceId
-        ? activeInstances().find((i) => i.id === s.columnInstanceId)
-        : null;
-      if (!col || (col.kind !== 'claude' && col.kind !== 'cursor')) continue;
+      if (!s.columnInstanceId) continue;
+      const found = findInstanceAnywhere(s.columnInstanceId);
+      if (!found) continue;
+      const col = found.inst;
+      if (col.kind !== 'claude' && col.kind !== 'cursor') continue;
       out.push({
         sessionId: s.id,
         agentInstanceId: col.id,
@@ -56,24 +60,43 @@
   // Per-instance editor state. Lazily initialized so the Editor's own
   // `bind:repoPath` has a stable slot to mutate. Two Editor columns can
   // open different folders simultaneously.
+  //
+  // Sync model: local `repoPath` is the write side. The store
+  // (`sessionsState.editorInstanceState[instanceId].repoPath`) is a
+  // persistence mirror — a one-way effect copies local → store on every
+  // change. We previously also synced store → local, but that created a
+  // race: a new path coming in via `bind:repoPath` from the EditorView
+  // child would land on local first; the store-sync effect read the stale
+  // store value and overwrote local back to '' before the local→store
+  // effect could persist it. End result: clicking "Open folder" appeared
+  // to do nothing. Initial hydration is now done once at mount via the
+  // `$state(...)` initializer below.
+  let repoPath = $state('');
+  // Hydrate once on mount from whatever we last persisted for this column
+  // instance. `instanceId` is stable per-mount (different ids produce a
+  // fresh Svelte component via the `{#each}` keyed block), so a one-shot
+  // pre-effect is the right shape — using a `$state(...)` initializer
+  // would trip Svelte's `state_referenced_locally` warning since the
+  // initializer captures the prop at construction time.
+  let hydrated = false;
   $effect.pre(() => {
+    if (hydrated) return;
+    hydrated = true;
     if (!sessionsState.editorInstanceState[instanceId]) {
       sessionsState.editorInstanceState[instanceId] = { repoPath: '' };
+    } else if (sessionsState.editorInstanceState[instanceId].repoPath) {
+      repoPath = sessionsState.editorInstanceState[instanceId].repoPath;
     }
   });
 
-  // A writable proxy for `bind:repoPath` on EditorView — mutating this reflects
-  // into sessionsState synchronously.
-  let repoPath = $state('');
+  // One-way mirror: local → store. The local var is the authoritative
+  // write side (mutated by `bind:repoPath` from EditorView when the user
+  // picks a folder); the store is just a persistence layer so the panel
+  // remembers the path across reloads / column re-mounts.
   $effect(() => {
-    const live = sessionsState.editorInstanceState[instanceId]?.repoPath ?? '';
-    if (live !== repoPath) repoPath = live;
-  });
-  $effect(() => {
-    if (!sessionsState.editorInstanceState[instanceId]) {
-      sessionsState.editorInstanceState[instanceId] = { repoPath };
-    } else if (sessionsState.editorInstanceState[instanceId].repoPath !== repoPath) {
-      sessionsState.editorInstanceState[instanceId].repoPath = repoPath;
+    const slot = sessionsState.editorInstanceState[instanceId];
+    if (slot && slot.repoPath !== repoPath) {
+      slot.repoPath = repoPath;
     }
   });
 
@@ -88,11 +111,7 @@
   transition:slide={{ duration: 240, axis: 'x', easing: cubicOut }}
   style="order: {order}; flex: 0 0 {inst?.width ?? 720}px"
 >
-  <div class="wb-col-controls">
-    <button class="wb-col-ctl" onclick={() => movePanelById(instanceId, -1)} aria-label="Move left" title="Move left"><svg class="i i-sm" viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6" /></svg></button>
-    <button class="wb-col-ctl" onclick={() => movePanelById(instanceId, 1)} aria-label="Move right" title="Move right"><svg class="i i-sm" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6" /></svg></button>
-    <button class="wb-col-ctl wb-col-ctl--close" onclick={() => closePanelById(instanceId)} aria-label="Hide column" title="Hide"><svg class="i i-sm" viewBox="0 0 24 24"><path d="M6 6l12 12M6 18L18 6" /></svg></button>
-  </div>
+  <ColumnControls {instanceId} kind="editor" />
   <div class="wb-col-resize" class:snap-flash={layoutState.snapFlashInstanceId === instanceId} role="separator" aria-orientation="vertical" onpointerdown={(e) => startResizeById(instanceId, e)}></div>
   <div class="editor-bench-head">
     <span class="source-mark" aria-hidden="true">

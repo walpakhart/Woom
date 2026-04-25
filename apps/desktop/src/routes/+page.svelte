@@ -1,23 +1,25 @@
 <script lang="ts">
   import { onMount, onDestroy, tick } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
-  import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import { openUrl } from '@tauri-apps/plugin-opener';
   import { open as openDialog } from '@tauri-apps/plugin-dialog';
-  import Sigil from '$lib/Sigil.svelte';
-  import WorktreeDiffModal from '$lib/WorktreeDiffModal.svelte';
-  import JiraDetailPane from '$lib/JiraDetailPane.svelte';
-  import Rail from '$lib/Rail.svelte';
+  import Sigil from '$lib/components/ui/Sigil.svelte';
+  import WorktreeDiffModal from '$lib/components/editor/WorktreeDiffModal.svelte';
+  import JiraDetailPane from '$lib/components/inbox/JiraDetailPane.svelte';
+  import SentryDetailPane from '$lib/components/inbox/SentryDetailPane.svelte';
+  import Rail from '$lib/components/ui/Rail.svelte';
   import RulesView from '$lib/views/RulesView.svelte';
   import ConnectionsView from '$lib/views/ConnectionsView.svelte';
+  import SettingsView from '$lib/views/SettingsView.svelte';
   import RepositoriesView from '$lib/views/RepositoriesView.svelte';
   import TasksView from '$lib/views/TasksView.svelte';
-  import CommandPalette from '$lib/CommandPalette.svelte';
-  import Modals from '$lib/modals/Modals.svelte';
-  import GithubColumn from '$lib/workbench/GithubColumn.svelte';
-  import JiraColumn from '$lib/workbench/JiraColumn.svelte';
-  import AgentColumn from '$lib/workbench/AgentColumn.svelte';
-  import EditorColumn from '$lib/workbench/EditorColumn.svelte';
+  import CommandPalette from '$lib/components/ui/CommandPalette.svelte';
+  import ModalsRoot from '$lib/components/modals/ModalsRoot.svelte';
+  import GithubColumn from '$lib/components/workbench/GithubColumn.svelte';
+  import JiraColumn from '$lib/components/workbench/JiraColumn.svelte';
+  import SentryColumn from '$lib/components/workbench/SentryColumn.svelte';
+  import AgentColumn from '$lib/components/workbench/AgentColumn.svelte';
+  import EditorColumn from '$lib/components/workbench/EditorColumn.svelte';
   import {
     layoutState,
     persistPanelState,
@@ -34,6 +36,7 @@
     firstInstanceOfKind,
     listInstancesOfKind,
     goToInstance,
+    moveInstanceToWorkbench,
     registerInstanceRemovedHook
   } from '$lib/state/layout.svelte';
   import {
@@ -64,6 +67,7 @@
     agentConns,
     refreshGithubStatus,
     refreshJiraStatus,
+    refreshSentryStatus,
     refreshClaudeStatus,
     refreshAllStatus
   } from '$lib/state/connections.svelte';
@@ -71,6 +75,8 @@
     inboxState,
     refreshInbox,
     refreshJiraInbox,
+    refreshSentryInbox,
+    resetSentryInbox,
     loadDetail,
     reloadDetailAndLists as reloadDetailAndListsCore,
     selectInboxItem,
@@ -86,6 +92,20 @@
     resetJiraInbox,
     setGithubMeLogin
   } from '$lib/state/inbox.svelte';
+  import { dragState, setDragPayload, type DragPayload } from '$lib/state/drag.svelte';
+  import { attachDragChip } from '$lib/dragImage';
+  import { notify, notifyError } from '$lib/state/toaster.svelte';
+  import {
+    modalsState,
+    openModal,
+    closeModal,
+    patchModal,
+    type ReviewEvent,
+    type MergeMethod
+  } from '$lib/state/modals.svelte';
+  import { appHasFocus, notifyClaudeRunComplete } from '$lib/notifications';
+  import { effectiveCwd, dispatchAction } from '$lib/exec/actions';
+  import { runAgentRequest, stopAgentRequest } from '$lib/exec/claude';
   import type { ClaudeAction, ClaudeSession, Mention, PanelInstance, PanelKind, RepoInfo } from '$lib/types';
   import {
     connectionsMeta,
@@ -103,6 +123,7 @@
     type JiraSprint,
     type JiraUser,
     type JiraUserSummary,
+    type SentryUser,
     type RepoBranch,
     type Repository
   } from '$lib/data';
@@ -110,8 +131,6 @@
 
   type View = 'workbench' | 'repositories' | 'tasks' | 'rules' | 'connections' | 'settings';
   type DetailTab = 'conversation' | 'commits' | 'files' | 'reviews' | 'checks';
-  type ReviewEvent = 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT';
-  type MergeMethod = 'merge' | 'squash' | 'rebase';
 
   // View & layout state
   let view = $state<View>('workbench');
@@ -137,6 +156,7 @@
       await refreshAllStatus();
       if (connectedGithub) void refreshInbox();
       if (connectedJira) void refreshJiraInbox();
+      if (connectedSentry) void refreshSentryInbox();
     } catch (e) {
       biometryError = typeof e === 'string' ? e : String(e);
     } finally {
@@ -184,13 +204,13 @@
 
   function trackDragPointer(e: DragEvent) {
     dragPointerX = e.clientX;
-    if (dragAutoscrollRaf === null && dragPayload) {
+    if (dragAutoscrollRaf === null && dragState.payload) {
       dragAutoscrollRaf = requestAnimationFrame(dragAutoscrollStep);
     }
   }
 
   function dragAutoscrollStep() {
-    if (!dragPayload) { dragAutoscrollRaf = null; return; }
+    if (!dragState.payload) { dragAutoscrollRaf = null; return; }
     const wb = document.querySelector('.wb-columns') as HTMLElement | null;
     if (!wb) { dragAutoscrollRaf = null; return; }
     const rect = wb.getBoundingClientRect();
@@ -217,11 +237,10 @@
   }
 
 
-  // Drag state
-  type DragPayload =
-    | { source: 'github'; item: InboxItem }
-    | { source: 'jira'; item: JiraItem };
-  let dragPayload = $state<DragPayload | null>(null);
+  // Drag state lives in `$lib/state/drag.svelte` so other components
+  // (FileTree, etc.) can write into the same payload without prop-drilling.
+  // Event handlers below read `dragState.payload` directly (not a $derived
+  // alias) so the read is always against the live module state.
   // Per-instance drop highlight. Only one column at a time gets highlighted
   // while a card is hovered — two Claude columns could both accept the drop
   // but we track the *current* target, not "any Claude column".
@@ -244,20 +263,6 @@
     }
     return true;
   }
-
-  // Claude column state (stubbed agent flow)
-  type ClaudeStaged = {
-    source: 'github' | 'jira';
-    title: string;
-    externalId: string;
-    body: string | null;
-    repoLabel: string;
-    status: 'idle' | 'thinking' | 'ready' | 'committing' | 'committed' | 'pr_opening';
-    commitName: string | null;
-    summary: string | null;
-    error: string | null;
-  };
-  let claudeStaged = $state<ClaudeStaged | null>(null);
 
   // ClaudeMessage, Mention, ClaudeSession, ClaudeAction and RepoInfo
   // are imported from $lib/types so the workbench column components can
@@ -299,98 +304,47 @@
   $effect(() => {
     const inst = activeInstances();
     if (inst.length > 0) return;
-    if (!connectedGithub && !connectedJira && !connectedClaude) return;
+    if (!connectedGithub && !connectedJira && !connectedSentry && !connectedClaude) return;
     if (connectedGithub) addPanelInstance('github');
     if (connectedJira) addPanelInstance('jira');
+    if (connectedSentry) addPanelInstance('sentry');
     if (connectedClaude) addPanelInstance('claude');
   });
 
-  // Modals
-  let patModal = $state<{ conn: ConnectionMeta; token: string; error: string | null; busy: boolean } | null>(null);
-  let jiraModal = $state<{
-    workspace: string;
-    email: string;
-    token: string;
-    error: string | null;
-    busy: boolean;
-  } | null>(null);
-  let claudeModal = $state<{ status: ClaudeStatus | null; loading: boolean } | null>(null);
-  let commentModal = $state<{ body: string; busy: boolean; error: string | null } | null>(null);
-  let reviewModal = $state<{ event: ReviewEvent; body: string; busy: boolean; error: string | null } | null>(null);
-  let mergeModal = $state<{ method: MergeMethod; busy: boolean; error: string | null } | null>(null);
-  let commitModal = $state<{ commit: CommitEntry; detail: CommitDetail | null; loading: boolean; error: string | null; expanded: Set<string> } | null>(null);
-  let confirmModal = $state<{
-    title: string;
-    body: string;
-    confirmText: string;
-    danger?: boolean;
-    busy: boolean;
-    onConfirm: () => Promise<void>;
-  } | null>(null);
+  // Modal payloads live in the registry — see `$lib/state/modals.svelte`.
+  // Local aliases keep the template + handler code readable; mutations go
+  // through `openModal` / `closeModal` / `patchModal`.
+  const patModal = $derived(modalsState.pat);
+  const jiraModal = $derived(modalsState.jiraConnect);
+  const claudeModal = $derived(modalsState.claudeStatus);
+  const commentModal = $derived(modalsState.comment);
+  const reviewModal = $derived(modalsState.review);
+  const mergeModal = $derived(modalsState.merge);
+  const commitModal = $derived(modalsState.commit);
+  const confirmModal = $derived(modalsState.confirm);
+  const jiraCreateModal = $derived(modalsState.jiraCreate);
+  const githubCreatePrModal = $derived(modalsState.githubCreatePr);
   let actionBusy = $state<string | null>(null);
-
-  // Jira Create Issue modal
-  type JiraCreateModalState = {
-    projectKey: string;
-    projects: JiraProject[];
-    projectsLoading: boolean;
-    issueTypes: JiraIssueType[];
-    issueTypeName: string;
-    summary: string;
-    description: string;
-    assigneeAccountId: string;
-    sprints: JiraSprint[];
-    sprintId: number | null;
-    busy: boolean;
-    error: string | null;
-  };
-  let jiraCreateModal = $state<JiraCreateModalState | null>(null);
-
-  // GitHub Create PR modal
-  type GithubCreatePrModalState = {
-    repo: string;
-    repos: { owner: string; name: string; full_name: string; default_branch?: string | null }[];
-    reposLoading: boolean;
-    branches: RepoBranch[];
-    branchesLoading: boolean;
-    base: string;
-    head: string;
-    title: string;
-    body: string;
-    draft: boolean;
-    compare: {
-      loading: boolean;
-      error: string | null;
-      total_commits: number;
-      ahead_by: number;
-      behind_by: number;
-      additions: number;
-      deletions: number;
-      commits: CommitEntry[];
-      files: import('$lib/data').ChangedFile[];
-    } | null;
-    filesExpanded: boolean;
-    busy: boolean;
-    error: string | null;
-  };
-  let githubCreatePrModal = $state<GithubCreatePrModalState | null>(null);
 
   // Derived — reading from the connections store. `$derived` re-runs when
   // reactive state inside its expression changes, so touching `connectionsState`
   // is enough to re-compute. Short aliases keep the template readable.
   const githubStatus = $derived(connectionsState.github);
   const jiraStatus = $derived(connectionsState.jira);
+  const sentryStatus = $derived(connectionsState.sentry);
   const claudeStatus = $derived(connectionsState.claude);
   const cursorStatus = $derived(connectionsState.cursor);
   const statusLoading = $derived(connectionsState.statusLoading);
   const connectedGithub = $derived(githubStatus.kind === 'connected');
   const connectedJira = $derived(jiraStatus.kind === 'connected');
+  const connectedSentry = $derived(sentryStatus.kind === 'connected');
   const connectedClaude = $derived(claudeStatus?.ready ?? false);
   const connectedCursor = $derived(cursorStatus?.ready ?? false);
   const connectedIds = $derived.by(() => {
     const set = new Set<string>();
     if (connectedGithub) set.add('github');
     if (connectedJira) set.add('jira');
+    if (connectedSentry) set.add('sentry');
     if (connectedClaude) set.add('claude');
     if (connectedCursor) set.add('cursor');
     return set;
@@ -399,7 +353,6 @@
 
   let refreshInterval: ReturnType<typeof setInterval> | null = null;
   let tickInterval: ReturnType<typeof setInterval> | null = null;
-  let tauriDropUnlisten: UnlistenFn | null = null;
 
   // Wire the layout→sessions hook once. Any closed panel instance (via the X
   // button or workbench deletion) orphans its pinned sessions back to the
@@ -421,49 +374,43 @@
     // inside `biometricUnlock` so nothing hits the keychain before the
     // user authenticates.
     void biometricUnlock();
+    // OS-level file drops (Finder → app) come in as standard DOM `drop`
+    // events because `dragDropEnabled: false` in tauri.conf.json — Tauri's
+    // native drag handler is disabled so HTML5 drag-and-drop works
+    // properly in WKWebView for both internal drags and external files.
+    // `onAgentDrop` parses the `text/uri-list` mime for the OS path case.
 
-    // Tauri's native drag-drop channel — delivers Finder drops as native
-    // absolute paths, bypassing the WebKit sandbox that sometimes hides
-    // `text/uri-list` from DOM drop handlers. DOM handlers stay wired for
-    // internal drags (tickets / file tree); this listener is the robust
-    // path for OS files.
-    tauriDropUnlisten = await listen<{ paths?: string[]; position?: { x: number; y: number } }>(
-      'tauri://drag-drop',
-      (e) => {
-        const paths = Array.isArray(e.payload.paths) ? e.payload.paths : [];
-        if (paths.length === 0) return;
-        const pos = e.payload.position;
-        if (!pos) return;
-        // Hit-test the pointer: walk up from elementFromPoint to find a
-        // `.wb-column`, then route only claude/cursor columns onward.
-        const el = document.elementFromPoint(pos.x, pos.y) as HTMLElement | null;
-        const col = el?.closest('.wb-column') as HTMLElement | null;
-        const colKind = col?.dataset.kind;
-        const colInstanceId = col?.dataset.instanceId;
-        if (!colInstanceId || (colKind !== 'claude' && colKind !== 'cursor')) return;
-        const kind = colKind as 'claude' | 'cursor';
-        const activeId = sessionsState.activeByInstance[colInstanceId];
-        let target = activeId
-          ? sessionsState.list.find((s) => s.id === activeId) ?? null
-          : null;
-        if (!target) {
-          target = sessionsState.list.find((s) => s.columnInstanceId === colInstanceId) ?? null;
+    // Auto-clean orphan worktrees > 14 days old. Fire-and-forget — the
+    // user sees results in Settings → Storage. We pass the live session
+    // ID list so worktrees still attached to a chat are kept regardless
+    // of age. Runs once per app launch, on a small delay so the more
+    // important UI work (auth, inbox) gets the main-thread first.
+    setTimeout(() => {
+      const ids = sessionsState.list.map((s) => s.id);
+      void invoke<{ removed: number; bytes_freed: number }>(
+        'worktree_cleanup_orphans',
+        { activeSessionIds: ids, maxAgeSecs: 14 * 24 * 60 * 60 }
+      ).then((s) => {
+        if (s.removed > 0) {
+          notify({
+            kind: 'info',
+            title: `Cleaned ${s.removed} orphan worktree${s.removed === 1 ? '' : 's'}`,
+            body: `Freed ${formatBytesShort(s.bytes_freed)} of disk · older than 14 days, no live chat.`
+          });
         }
-        if (!target) {
-          const id = newClaudeSession({ agentKind: kind, columnInstanceId: colInstanceId });
-          target = sessionsState.list.find((s) => s.id === id) ?? null;
-        }
-        if (!target) return;
-        const n = attachPathsToSession(target.id, paths);
-        if (n > 0) setActiveSessionInColumn(colInstanceId, target.id);
-      }
-    );
+      }).catch(() => {/* silent — Settings has manual button */});
+    }, 8000);
   });
+
+  function formatBytesShort(b: number): string {
+    if (b < 1024 * 1024) return `${(b / 1024).toFixed(0)} KB`;
+    if (b < 1024 * 1024 * 1024) return `${(b / 1024 / 1024).toFixed(1)} MB`;
+    return `${(b / 1024 / 1024 / 1024).toFixed(2)} GB`;
+  }
 
   onDestroy(() => {
     if (refreshInterval) clearInterval(refreshInterval);
     if (tickInterval) clearInterval(tickInterval);
-    tauriDropUnlisten?.();
   });
 
   $effect(() => {
@@ -521,13 +468,26 @@
   // ---- Drag handlers ----
 
   function onDragStart(payload: DragPayload, e: DragEvent) {
-    dragPayload = payload;
+    setDragPayload(payload);
     if (e.dataTransfer) {
       e.dataTransfer.effectAllowed = 'copy';
-      e.dataTransfer.setData(
-        'text/plain',
-        payload.source === 'github' ? `#${payload.item.number}` : payload.item.key
-      );
+      // text/plain is one of the few mime types WKWebView reliably exposes
+      // on `dataTransfer.types` during dragover, so it doubles as the "yes
+      // there is something here" signal for non-internal drop targets.
+      if (payload.source === 'github') {
+        e.dataTransfer.setData('text/plain', `#${payload.item.number}`);
+        attachDragChip(e, 'github', `#${payload.item.number} · ${payload.item.title}`);
+      } else if (payload.source === 'jira') {
+        e.dataTransfer.setData('text/plain', payload.item.key);
+        attachDragChip(e, 'jira', `${payload.item.key} · ${payload.item.summary}`);
+      } else if (payload.source === 'sentry') {
+        const ref = payload.item.short_id || payload.item.id;
+        e.dataTransfer.setData('text/plain', ref);
+        attachDragChip(e, 'sentry', `${ref} · ${payload.item.title}`);
+      } else {
+        e.dataTransfer.setData('text/plain', payload.path);
+        attachDragChip(e, payload.isDir ? 'dir' : 'file', payload.name);
+      }
     }
     // Track pointer globally so we can auto-scroll .wb-columns when the
     // user drags a card near either edge.
@@ -535,29 +495,71 @@
   }
 
   function onDragEnd() {
-    dragPayload = null;
-    dragOverInstanceId = null;
+    setDragPayload(null);
+    clearAgentDragState();
+    pillDragOverKind = null;
+    pillDragOverInstance = null;
+    if (pillDragLeaveTimer) {
+      clearTimeout(pillDragLeaveTimer);
+      pillDragLeaveTimer = null;
+    }
     justDragged = true;
     setTimeout(() => (justDragged = false), 120);
     document.removeEventListener('dragover', trackDragPointer);
     stopDragAutoscroll();
   }
 
-  function onAgentDragOver(instanceId: string, _kind: 'claude' | 'cursor', e: DragEvent) {
+  /** Returns true if `e` carries a payload an agent column can accept —
+   *  internal drag (ticket / file-tree row) or OS file drop. Used by
+   *  dragenter, dragover, and drop alike so all three agree on accept. */
+  function agentCanAccept(e: DragEvent): boolean {
     const types = e.dataTransfer?.types;
-    const hasTicket = !!dragPayload;
-    const hasInternalFile = types?.includes('application/x-forgehold-file') ?? false;
-    // OS drag-drops from Finder set "Files" and "text/uri-list" on macOS.
-    // We accept both so users can drop images/docs straight into the chat.
-    const hasOsFile = (types?.includes('Files') || types?.includes('text/uri-list')) ?? false;
-    if (!hasTicket && !hasInternalFile && !hasOsFile) return;
+    if (dragState.payload) return true;
+    if (types?.includes('application/x-forgehold-file')) return true;
+    if (types?.includes('Files')) return true;
+    if (types?.includes('text/uri-list')) return true;
+    return false;
+  }
+
+  // Counter-per-instance for dragenter / dragleave. Without this, dragleave
+  // fires every time the cursor crosses a child element (textarea, message
+  // bubble, etc.) and the highlight flickers. The counter increments on
+  // every dragenter and decrements on every dragleave; the column is
+  // "drag-over" while the count is > 0.
+  const agentDragCounts = new Map<string, number>();
+
+  function onAgentDragEnter(instanceId: string, _kind: 'claude' | 'cursor', e: DragEvent) {
+    if (!agentCanAccept(e)) return;
+    e.preventDefault();
+    const cur = agentDragCounts.get(instanceId) ?? 0;
+    agentDragCounts.set(instanceId, cur + 1);
+    if (cur === 0) dragOverInstanceId = instanceId;
+  }
+
+  function onAgentDragOver(instanceId: string, _kind: 'claude' | 'cursor', e: DragEvent) {
+    if (!agentCanAccept(e)) return;
+    // preventDefault on dragover is what *enables* the drop. Without it the
+    // OS thinks the target rejected the drag and the cursor reads "no-drop".
     e.preventDefault();
     if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
-    dragOverInstanceId = instanceId;
+    // dragenter already set dragOverInstanceId; keep it sticky in case
+    // dragenter didn't fire (first drag of session, recovered state).
+    if (dragOverInstanceId !== instanceId) dragOverInstanceId = instanceId;
   }
 
   function onAgentDragLeave(instanceId: string) {
-    if (dragOverInstanceId === instanceId) dragOverInstanceId = null;
+    const cur = agentDragCounts.get(instanceId) ?? 0;
+    if (cur <= 1) {
+      agentDragCounts.delete(instanceId);
+      if (dragOverInstanceId === instanceId) dragOverInstanceId = null;
+    } else {
+      agentDragCounts.set(instanceId, cur - 1);
+    }
+  }
+
+  function clearAgentDragState() {
+    agentDragCounts.clear();
+    dragOverInstanceId = null;
   }
 
   function onAgentDrop(instanceId: string, kind: 'claude' | 'cursor', e: DragEvent) {
@@ -584,42 +586,52 @@
       return t;
     };
 
-    // 1) File / directory drop from the Editor tree.
-    const fileRaw = e.dataTransfer?.getData('application/x-forgehold-file');
-    if (fileRaw) {
-      try {
-        const { path, isDir, name } = JSON.parse(fileRaw) as {
-          path: string; isDir: boolean; name: string;
-        };
-        const target = pickTarget();
-        if (target) {
-          // Prefer the session's cwd (set by user or the tree root) for a clean
-          // relative path; fall back to absolute if the file isn't inside cwd.
-          const cwd = target.cwd ?? '';
-          const rel = cwd && path.startsWith(cwd + '/') ? path.slice(cwd.length + 1) : path;
-          const display = '@' + rel + (isDir ? '/' : '');
-          const mention: Mention = {
-            source: 'file',
-            externalId: rel + (isDir ? '/' : ''),
-            title: name,
-            body: path,
-            isDir
-          };
-          const sep = target.input && !target.input.endsWith(' ') ? ' ' : '';
-          updateSession(target.id, {
-            input: target.input + sep + display + ' ',
-            mentions: [...target.mentions, mention],
-            // Auto-bind cwd to the repo that file lives in, if not already set.
-            cwd: target.cwd ?? deriveCwd(path, isDir)
-          });
-          setActiveSessionInColumn(instanceId, target.id);
-        }
-        dragOverInstanceId = null;
-        justDragged = true;
-        setTimeout(() => (justDragged = false), 200);
-      } catch {
-        dragOverInstanceId = null;
+    // 1) Internal drag (file from Editor tree, or ticket from inbox). The
+    //    module-state payload is the primary signal; we also read the
+    //    custom mime as a fallback in case the dragend handler raced ahead
+    //    of this drop in some WKWebView edge cases.
+    const internal = dragState.payload;
+    let filePayload: { path: string; isDir: boolean; name: string } | null = null;
+    if (internal && internal.source === 'file') {
+      filePayload = { path: internal.path, isDir: internal.isDir, name: internal.name };
+    } else {
+      const raw = e.dataTransfer?.getData('application/x-forgehold-file');
+      if (raw) {
+        try {
+          const p = JSON.parse(raw) as { path: string; isDir: boolean; name: string };
+          if (p && typeof p.path === 'string') filePayload = p;
+        } catch { /* malformed mime payload — ignore */ }
       }
+    }
+    if (filePayload) {
+      const { path, isDir, name } = filePayload;
+      const target = pickTarget();
+      if (target) {
+        // Prefer the session's cwd (set by user or the tree root) for a clean
+        // relative path; fall back to absolute if the file isn't inside cwd.
+        const cwd = target.cwd ?? '';
+        const rel = cwd && path.startsWith(cwd + '/') ? path.slice(cwd.length + 1) : path;
+        const display = '@' + rel + (isDir ? '/' : '');
+        const mention: Mention = {
+          source: 'file',
+          externalId: rel + (isDir ? '/' : ''),
+          title: name,
+          body: path,
+          isDir
+        };
+        const sep = target.input && !target.input.endsWith(' ') ? ' ' : '';
+        updateSession(target.id, {
+          input: target.input + sep + display + ' ',
+          mentions: [...target.mentions, mention],
+          // Auto-bind cwd to the repo that file lives in, if not already set.
+          cwd: target.cwd ?? deriveCwd(path, isDir)
+        });
+        setActiveSessionInColumn(instanceId, target.id);
+      }
+      clearAgentDragState();
+      setDragPayload(null);
+      justDragged = true;
+      setTimeout(() => (justDragged = false), 200);
       return;
     }
 
@@ -647,33 +659,57 @@
           const n = attachPathsToSession(target.id, paths);
           if (n > 0) setActiveSessionInColumn(instanceId, target.id);
         }
-        dragOverInstanceId = null;
+        clearAgentDragState();
         justDragged = true;
         setTimeout(() => (justDragged = false), 200);
         return;
       }
     }
 
-    // 3) Ticket drop from Jira / GitHub inbox.
-    if (!dragPayload) {
-      dragOverInstanceId = null;
+    // 3) Ticket / Sentry drop from inbox. The file branch above already
+    //    returned, so `internal` is one of the issue-shaped variants here.
+    if (!internal || internal.source === 'file') {
+      clearAgentDragState();
       return;
     }
-    const p = dragPayload;
-    const mention: Mention =
-      p.source === 'github'
-        ? {
-            source: 'github',
-            externalId: externalId(p.item),
-            title: p.item.title,
-            body: p.item.body
-          }
-        : {
-            source: 'jira',
-            externalId: p.item.key,
-            title: p.item.summary,
-            body: p.item.description
-          };
+    let mention: Mention;
+    if (internal.source === 'github') {
+      mention = {
+        source: 'github',
+        externalId: externalId(internal.item),
+        title: internal.item.title,
+        body: internal.item.body
+      };
+    } else if (internal.source === 'jira') {
+      mention = {
+        source: 'jira',
+        externalId: internal.item.key,
+        title: internal.item.summary,
+        body: internal.item.description
+      };
+    } else {
+      // Sentry — encode the short_id (or numeric id fallback) so Claude
+      // can hand it to `mcp__sentry__get_issue` without further parsing.
+      const issue = internal.item;
+      const ref = issue.short_id || issue.id;
+      const summary = [
+        issue.metadata_type && issue.metadata_value
+          ? `${issue.metadata_type}: ${issue.metadata_value}`
+          : issue.title,
+        issue.culprit ? `culprit: ${issue.culprit}` : null,
+        `level: ${issue.level} · status: ${issue.status}`,
+        `project: ${issue.project_slug} · last seen: ${issue.last_seen}`,
+        issue.permalink ? `url: ${issue.permalink}` : null
+      ]
+        .filter(Boolean)
+        .join('\n');
+      mention = {
+        source: 'sentry',
+        externalId: ref,
+        title: issue.title,
+        body: summary
+      };
+    }
 
     const target = pickTarget();
     if (target) {
@@ -685,8 +721,8 @@
       setActiveSessionInColumn(instanceId, target.id);
     }
 
-    dragOverInstanceId = null;
-    dragPayload = null;
+    clearAgentDragState();
+    setDragPayload(null);
     justDragged = true;
     setTimeout(() => (justDragged = false), 200);
   }
@@ -710,7 +746,7 @@
         updateSession(activeSession.id, { cwd: picked, linkedToEditor: false });
       }
     } catch (e) {
-      console.error('pickCwd', e);
+      notifyError(e, { title: "Couldn't pick folder" });
     }
   }
 
@@ -812,7 +848,11 @@
     if (!activeSession) return;
     const repo = activeSession.cwd || editorRepoPath;
     if (!repo) {
-      alert('Pick a repository folder first — worktrees need a git repo to branch off.');
+      notify({
+        kind: 'warning',
+        title: 'No repository picked',
+        body: 'Worktrees need a git repo to branch off — open a folder in the Editor or pick one as cwd.'
+      });
       return;
     }
     const ok = confirm(
@@ -835,7 +875,7 @@
         worktreeRepo: repo
       });
     } catch (e) {
-      alert(`Failed to create worktree: ${typeof e === 'string' ? e : String(e)}`);
+      notifyError(e, { title: 'Failed to create worktree' });
     } finally {
       worktreeBusy = null;
     }
@@ -864,7 +904,7 @@
         worktreeRepo: null
       });
     } catch (e) {
-      alert(`Failed to remove worktree: ${typeof e === 'string' ? e : String(e)}`);
+      notifyError(e, { title: 'Failed to remove worktree' });
     } finally {
       worktreeBusy = null;
     }
@@ -1033,9 +1073,12 @@
         worktreeBranch: null,
         worktreeRepo: null
       });
-      alert(msg);
+      notify({ kind: 'success', title: 'Worktree applied', body: msg });
     } catch (e) {
-      alert(`Apply failed: ${typeof e === 'string' ? e : String(e)}\n\nThe worktree is preserved — fix conflicts in the main repo (or via Editor), then try again.`);
+      notifyError(e, {
+        title: 'Apply failed',
+        body: 'Worktree is preserved — resolve conflicts in the main repo, then retry.'
+      });
     } finally {
       worktreeBusy = null;
     }
@@ -1102,6 +1145,7 @@
       at: new Date().toISOString()
     });
     startThinkingTimer();
+    const runStartedAt = Date.now();
     void scrollChatBottom();
 
     // Build prompt: include full context for each @mention. Uses the
@@ -1127,35 +1171,21 @@
       prompt = `Referenced items:\n\n${ctx}\n\n----\n\nUser message:\n${text}`;
     }
 
-    // Subscribe to streaming events for this session.
-    let unlisten: UnlistenFn | null = null;
-    try {
-      unlisten = await listen<string>(`claude:stream:${id}`, (event) => {
-        try {
-          const parsed = JSON.parse(event.payload);
-          handleStreamEvent(id, parsed);
-        } catch {
-          // ignore malformed lines
-        }
-      });
-    } catch (e) {
-      console.error('listen', e);
-    }
+    // Priority of working dir:
+    //   1. Session has an isolated worktree → use it (SPEC: "every Claude run
+    //      in a worktree, never touches main working tree").
+    //   2. Explicit cwd set by user via pickCwd.
+    //   3. Editor column's open repo (shared state).
+    //   4. None → agent inherits Forgehold's cwd (last-resort fallback).
+    const cwd = sess?.worktreePath || sess?.cwd || editorRepoPath || null;
+    const claudeUuid = sess?.claudeUuid ?? genUuid();
+    const resume = Boolean(sess?.claudeResumable);
+    const rules = sessionsState.userRules.trim();
+    const agentKind = sess?.agentKind ?? 'claude';
+    const cursorModel = agentKind === 'cursor' ? (sess?.cursorModel ?? null) : null;
 
     try {
-      // Priority of working dir:
-      //   1. Session has an isolated worktree → use it (SPEC: "every Claude run
-      //      in a worktree, never touches main working tree").
-      //   2. Explicit cwd set by user via pickCwd.
-      //   3. Editor column's open repo (shared state).
-      //   4. None → Claude inherits Forgehold's cwd (last-resort fallback).
-      const cwd = sess?.worktreePath || sess?.cwd || editorRepoPath || null;
-      const claudeUuid = sess?.claudeUuid ?? genUuid();
-      const resume = Boolean(sess?.claudeResumable);
-      const rules = sessionsState.userRules.trim();
-      const agentKind = sess?.agentKind ?? 'claude';
-      const cursorModel = agentKind === 'cursor' ? (sess?.cursorModel ?? null) : null;
-      const result = await invoke<{ reply: string; session_uuid: string }>('claude_ask', {
+      const result = await runAgentRequest({
         sessionId: id,
         prompt,
         cwd,
@@ -1163,7 +1193,8 @@
         resume,
         rules: rules || null,
         agentKind,
-        cursorModel
+        cursorModel,
+        onAssistantDelta: appendAssistantDelta
       });
       // Replace the streaming-accumulated body with the clean final text.
       replaceLastAssistant(id, result.reply.trim() || '(empty response)');
@@ -1171,13 +1202,14 @@
       // what we sent (CLI mints its own `chat_id` via `create-chat` on the
       // first turn); for Claude it round-trips unchanged.
       const patch: Partial<ClaudeSession> = { claudeResumable: true };
-      if (result.session_uuid && result.session_uuid !== claudeUuid) {
-        patch.claudeUuid = result.session_uuid;
+      if (result.sessionUuid && result.sessionUuid !== claudeUuid) {
+        patch.claudeUuid = result.sessionUuid;
       }
       updateSession(id, patch);
     } catch (e) {
       const msg = typeof e === 'string' ? e : String(e);
-      if (msg.toLowerCase().includes('cancelled')) {
+      const cancelled = msg.toLowerCase().includes('cancelled');
+      if (cancelled) {
         // Keep the partial content; add a system note.
         appendSessionMessage(id, {
           role: 'system',
@@ -1185,98 +1217,50 @@
           at: new Date().toISOString()
         });
       } else {
-        replaceLastAssistant(id, `**Claude failed:** ${msg}`);
+        replaceLastAssistant(id, `**${s.agentKind === 'cursor' ? 'Cursor' : 'Claude'} failed:** ${msg}`);
+        // In-app toast — sticky, with full error text. Only when the user is
+        // looking at the app (otherwise the macOS notification below covers
+        // the off-app case).
+        if (appHasFocus()) {
+          notifyError(e, { title: `${s.agentKind === 'cursor' ? 'Cursor' : 'Claude'} run failed` });
+        }
+      }
+      // macOS Notification Center: only when user has tabbed away. The
+      // chat bubble + toast are enough when the app is in focus.
+      if (!appHasFocus() && !cancelled) {
+        notifyClaudeRunComplete({
+          agentLabel: s.agentKind === 'cursor' ? 'Cursor' : 'Claude',
+          sessionTitle: s.title || 'Untitled chat',
+          ok: false,
+          durationMs: Date.now() - runStartedAt
+        });
       }
     }
-    if (unlisten) unlisten();
     stopThinkingTimer();
+    const finalSess = sessionsState.list.find((x) => x.id === id);
+    const erroredOut = finalSess?.messages.some(
+      (m, i) => i === finalSess.messages.length - 1 && m.role === 'assistant' && m.content.startsWith('**Claude failed:')
+    );
     updateSession(id, { sending: false });
+    // Native notification on success, but only if the user has tabbed away —
+    // the streaming reply is its own feedback when they're watching.
+    if (!appHasFocus() && !erroredOut) {
+      notifyClaudeRunComplete({
+        agentLabel: s.agentKind === 'cursor' ? 'Cursor' : 'Claude',
+        sessionTitle: finalSess?.title || s.title || 'Untitled chat',
+        ok: true,
+        durationMs: Date.now() - runStartedAt
+      });
+    }
     void scrollChatBottom();
   }
 
-  // Append a streaming delta to the last assistant message, then scroll —
-  // session mutation lives in the sessions store; the scroll lives here
-  // because it reads DOM refs owned by the agent column.
+  // Streaming-event dispatch lives in `$lib/stream/claudeStream.ts`. The
+  // caller here just forwards assistant text deltas to the chat (session
+  // store + scroll-to-bottom is the only DOM-coupled bit).
   function appendAssistantDelta(sessionId: string, delta: string) {
     appendToLastAssistant(sessionId, delta);
     void scrollChatBottom();
-  }
-
-  function handleStreamEvent(sessionId: string, parsed: unknown) {
-    if (!parsed || typeof parsed !== 'object') return;
-    const msg = parsed as Record<string, unknown>;
-    const type = msg.type;
-    if (type === 'assistant') {
-      const inner = msg.message as { content?: Array<Record<string, unknown>> } | undefined;
-      if (inner?.content && Array.isArray(inner.content)) {
-        for (const block of inner.content) {
-          if (block.type === 'text' && typeof block.text === 'string') {
-            appendAssistantDelta(sessionId, block.text);
-          } else if (block.type === 'tool_use') {
-            const name = typeof block.name === 'string' ? block.name : 'tool';
-            const input = (block.input ?? {}) as Record<string, unknown>;
-            // Intercept propose_commit / propose_pr: they don't execute, they
-            // surface action cards in the chat. Suppress the generic tool-use
-            // line so the card does the talking.
-            if (name === 'mcp__github__propose_commit') {
-              const id = typeof block.id === 'string' ? block.id : genId();
-              addAction(sessionId, {
-                id,
-                kind: 'commit',
-                message: String(input.message ?? ''),
-                body: typeof input.body === 'string' ? input.body : '',
-                push: input.push !== false,
-                note: typeof input.note === 'string' ? input.note : '',
-                status: 'pending'
-              });
-              continue;
-            }
-            if (name === 'mcp__github__propose_pr') {
-              const id = typeof block.id === 'string' ? block.id : genId();
-              addAction(sessionId, {
-                id,
-                kind: 'pr',
-                title: String(input.title ?? ''),
-                body: typeof input.body === 'string' ? input.body : '',
-                base: typeof input.base === 'string' ? input.base : '',
-                draft: input.draft === true,
-                note: typeof input.note === 'string' ? input.note : '',
-                status: 'pending'
-              });
-              continue;
-            }
-            if (name === 'mcp__github__propose_switch_cwd') {
-              const id = typeof block.id === 'string' ? block.id : genId();
-              addAction(sessionId, {
-                id,
-                kind: 'switch_cwd',
-                path: String(input.path ?? ''),
-                reason: typeof input.reason === 'string' ? input.reason : '',
-                status: 'pending'
-              });
-              continue;
-            }
-            if (name === 'mcp__github__propose_bash') {
-              const id = typeof block.id === 'string' ? block.id : genId();
-              addAction(sessionId, {
-                id,
-                kind: 'bash',
-                command: String(input.command ?? ''),
-                reason: typeof input.reason === 'string' ? input.reason : '',
-                status: 'pending'
-              });
-              continue;
-            }
-            const formatted = formatToolUse(name, input);
-            if (formatted) appendAssistantDelta(sessionId, `\n\n${formatted}\n\n`);
-          }
-        }
-      }
-    }
-  }
-
-  function effectiveCwd(s: ClaudeSession): string | null {
-    return s.worktreePath || s.cwd || editorRepoPath || null;
   }
 
   // ---- Message replay / edit ----
@@ -1323,6 +1307,10 @@
   // workbench. Cross-workbench "attach this to that chat" shortcut.
   let pillDragOverKind = $state<PanelKind | null>(null);
   let pillDragOverInstance = $state<string | null>(null);
+  // Delay clearing the drag-over highlight by 140ms so the cursor can travel
+  // from the pill body into the menu (or between sibling menu items) without
+  // the menu snapping shut mid-transit. Mirrors the hover-leave behavior.
+  let pillDragLeaveTimer: ReturnType<typeof setTimeout> | null = null;
 
   /** Only agent pills accept drops — github/jira/editor don't host
       sessions that can take @mentions. Require something droppable:
@@ -1331,10 +1319,49 @@
   function pillCanAccept(e: DragEvent, kind: PanelKind): boolean {
     if (kind !== 'claude' && kind !== 'cursor') return false;
     const types = e.dataTransfer?.types;
-    if (dragPayload) return true;
+    if (dragState.payload) return true;
     if (types?.includes('application/x-forgehold-file')) return true;
     if (types && types.length > 0) return true;
     return false;
+  }
+
+  // Spring-loaded pill menu, macOS Finder-style. Hovering a pill mid-drag
+  // opens its menu after a short delay (`PILL_OPEN_DELAY`); leaving keeps it
+  // open for `PILL_CLOSE_DELAY` so the cursor can travel from pill body to
+  // a menu-item or between sibling items without snapping shut.
+  //
+  // The counter (`pillDragCount`) collapses dragenter/dragleave from child
+  // nodes — without it every dragenter on a menu item would count as a new
+  // entry and dragleave on the previous would force-close the menu.
+  const PILL_OPEN_DELAY = 220;
+  const PILL_CLOSE_DELAY = 160;
+  const pillDragCounts = new Map<PanelKind, number>();
+  let pillOpenTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function clearPillTimers() {
+    if (pillOpenTimer) { clearTimeout(pillOpenTimer); pillOpenTimer = null; }
+    if (pillDragLeaveTimer) { clearTimeout(pillDragLeaveTimer); pillDragLeaveTimer = null; }
+  }
+
+  function onPillDragEnter(e: DragEvent, kind: PanelKind, instanceId: string | null) {
+    if (!pillCanAccept(e, kind)) return;
+    e.preventDefault();
+    const cur = pillDragCounts.get(kind) ?? 0;
+    pillDragCounts.set(kind, cur + 1);
+    // Cancel any pending close — cursor came back.
+    if (pillDragLeaveTimer) { clearTimeout(pillDragLeaveTimer); pillDragLeaveTimer = null; }
+    if (pillDragOverKind === kind) {
+      // Already over this pill — instance change is instant (no flash).
+      if (instanceId !== null) pillDragOverInstance = instanceId;
+      return;
+    }
+    // Spring-load: open after a short delay. Cancels if cursor leaves before.
+    if (pillOpenTimer) clearTimeout(pillOpenTimer);
+    pillOpenTimer = setTimeout(() => {
+      pillDragOverKind = kind;
+      pillDragOverInstance = instanceId;
+      pillOpenTimer = null;
+    }, PILL_OPEN_DELAY);
   }
 
   function onPillDragOver(e: DragEvent, kind: PanelKind, instanceId: string | null) {
@@ -1342,14 +1369,84 @@
     e.preventDefault();
     e.stopPropagation();
     if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
-    pillDragOverKind = kind;
-    pillDragOverInstance = instanceId;
+    // If the menu is already open and the cursor is over a specific
+    // instance row, surface that instance immediately for the drop-target
+    // accent — no debouncing here, just track the live target.
+    if (pillDragOverKind === kind && instanceId !== null) {
+      pillDragOverInstance = instanceId;
+    }
   }
 
   function onPillDragLeave(kind: PanelKind, instanceId: string | null) {
-    if (pillDragOverKind === kind && pillDragOverInstance === instanceId) {
+    const cur = pillDragCounts.get(kind) ?? 0;
+    if (cur > 1) {
+      pillDragCounts.set(kind, cur - 1);
+      return;
+    }
+    // Last leave for this pill — schedule close.
+    pillDragCounts.delete(kind);
+    if (pillOpenTimer) { clearTimeout(pillOpenTimer); pillOpenTimer = null; }
+    if (pillDragOverKind !== kind) return;
+    if (instanceId !== null && pillDragOverInstance !== instanceId) {
+      // Just left the specific menu-item but still inside the pill area —
+      // counter > 0 case is handled above; if we got here, fall through.
+    }
+    if (pillDragLeaveTimer) clearTimeout(pillDragLeaveTimer);
+    pillDragLeaveTimer = setTimeout(() => {
       pillDragOverKind = null;
       pillDragOverInstance = null;
+      pillDragLeaveTimer = null;
+    }, PILL_CLOSE_DELAY);
+  }
+
+  // ---- Workbench-tab drop targets (move a column to another workbench) ----
+  // The column header's "move" button (ColumnControls.svelte) sets a custom
+  // mime `application/x-forgehold-column` with the instanceId. Workbench
+  // tabs accept that mime and call `moveInstanceToWorkbench`. Same UX as
+  // dragging tabs in iTerm/Chrome — drop the column onto a workbench name
+  // and it relocates there.
+  let tabDragOverId = $state<string | null>(null);
+
+  function tabAcceptsDrop(e: DragEvent): boolean {
+    return !!e.dataTransfer?.types.includes('application/x-forgehold-column');
+  }
+
+  function onTabDragEnter(e: DragEvent, wbId: string) {
+    if (!tabAcceptsDrop(e)) return;
+    e.preventDefault();
+    tabDragOverId = wbId;
+  }
+
+  function onTabDragOver(e: DragEvent, wbId: string) {
+    if (!tabAcceptsDrop(e)) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+    tabDragOverId = wbId;
+  }
+
+  function onTabDragLeave(wbId: string) {
+    if (tabDragOverId === wbId) tabDragOverId = null;
+  }
+
+  function onTabDrop(e: DragEvent, wbId: string) {
+    if (!tabAcceptsDrop(e)) return;
+    e.preventDefault();
+    tabDragOverId = null;
+    const instanceId = e.dataTransfer?.getData('application/x-forgehold-column');
+    if (!instanceId) return;
+    const target = layoutState.workbenches.find((w) => w.id === wbId);
+    if (!target) return;
+    const ok = moveInstanceToWorkbench(instanceId, wbId);
+    if (ok) {
+      // Switch to the destination so the user sees the result of their drag.
+      setActiveWorkbench(wbId);
+      notify({ kind: 'success', title: `Moved to ${target.name}`, ttlMs: 2000 });
+    } else {
+      notify({
+        kind: 'warning',
+        title: "Couldn't move column",
+        body: `${target.name} already has a column of that kind, or the source disappeared.`
+      });
     }
   }
 
@@ -1357,6 +1454,8 @@
     if (!pillCanAccept(e, kind)) return;
     e.preventDefault();
     e.stopPropagation();
+    clearPillTimers();
+    pillDragCounts.clear();
     pillDragOverKind = null;
     pillDragOverInstance = null;
 
@@ -1456,163 +1555,23 @@
     scheduleRepoInfoRefresh();
   });
 
-  async function executeCommit(sessionId: string, actionId: string) {
-    const sess = sessionsState.list.find((x) => x.id === sessionId);
-    const action = sess?.actions.find((a) => a.id === actionId && a.kind === 'commit');
-    if (!sess || !action || action.kind !== 'commit') return;
-    const cwd = effectiveCwd(sess);
-    if (!cwd) {
-      updateAction(sessionId, actionId, { status: 'error', result: 'No working directory — pick a folder or enable worktree first.' });
-      return;
-    }
-    updateAction(sessionId, actionId, { status: 'executing' });
-    try {
-      // Stage all dirty files first. Forgehold-style: full-stage before commit.
-      const status = await invoke<{ files: { path: string; unstaged: boolean; staged: boolean }[] }>(
-        'git_status', { repo: cwd }
-      );
-      const toStage = status.files.filter((f) => f.unstaged).map((f) => f.path);
-      if (toStage.length) {
-        await invoke('git_stage', { repo: cwd, paths: toStage });
-      }
-      const fullMsg = action.body ? `${action.message}\n\n${action.body}` : action.message;
-      let res: string;
-      if (action.push) {
-        res = await invoke<string>('git_commit_and_push', { repo: cwd, message: fullMsg });
-      } else {
-        res = await invoke<string>('git_commit', { repo: cwd, message: fullMsg });
-      }
-      updateAction(sessionId, actionId, { status: 'done', result: res });
-      // Auto-dismiss successful commits after a short delay so the chat stays tidy.
-      setTimeout(() => removeAction(sessionId, actionId), 4000);
-    } catch (e) {
-      updateAction(sessionId, actionId, {
-        status: 'error',
-        result: typeof e === 'string' ? e : String(e)
-      });
-    }
-  }
-
-  async function executeBash(sessionId: string, actionId: string) {
-    const sess = sessionsState.list.find((x) => x.id === sessionId);
-    const action = sess?.actions.find((a) => a.id === actionId && a.kind === 'bash');
-    if (!sess || !action || action.kind !== 'bash') return;
-    const cwd = effectiveCwd(sess);
-    if (!cwd) {
-      updateAction(sessionId, actionId, { status: 'error', result: 'No working directory — pick a folder first.' });
-      return;
-    }
-    updateAction(sessionId, actionId, { status: 'executing' });
-    try {
-      const res = await invoke<{ stdout: string; stderr: string; code: number; ok: boolean }>(
-        'fs_bash_run',
-        { cwd, command: action.command }
-      );
-      const combined = [res.stdout, res.stderr].filter(Boolean).join('\n').trim();
-      updateAction(sessionId, actionId, {
-        status: res.ok ? 'done' : 'error',
-        result: combined || '(no output)',
-        exitCode: res.code
-      });
-
-      // Render `$ command` + output inline in Claude's last assistant turn so
-      // the transcript reads as a continuous flow — same shape as direct Bash
-      // tool calls (see formatToolUse → appendAssistantDelta path above).
-      const output = combined || '(no output)';
-      const exitNote = res.ok ? '' : ` _(exit ${res.code})_`;
-      appendAssistantDelta(
-        sessionId,
-        `\n\n\`$ ${truncInline(action.command, 400)}\`${exitNote}\n\n\`\`\`\n${truncInline(output, 4000)}\n\`\`\`\n\n`
-      );
-
-      // Auto-dismiss on success so the transcript block is the primary record.
-      if (res.ok) {
-        setTimeout(() => removeAction(sessionId, actionId), 4000);
-      }
-    } catch (e) {
-      updateAction(sessionId, actionId, {
-        status: 'error',
-        result: typeof e === 'string' ? e : String(e)
-      });
-    }
-  }
-
-  async function executeSwitchCwd(sessionId: string, actionId: string) {
-    const sess = sessionsState.list.find((x) => x.id === sessionId);
-    const action = sess?.actions.find((a) => a.id === actionId && a.kind === 'switch_cwd');
-    if (!sess || !action || action.kind !== 'switch_cwd') return;
-    updateAction(sessionId, actionId, { status: 'executing' });
-    try {
-      const exists = await invoke<boolean>('fs_path_exists', { path: action.path });
-      if (!exists) {
-        updateAction(sessionId, actionId, { status: 'error', result: `Path does not exist: ${action.path}` });
-        return;
-      }
-      // Drop any worktree override — user is switching to a new location.
-      updateSession(sessionId, {
-        cwd: action.path,
-        worktreePath: null,
-        worktreeBranch: null,
-        worktreeRepo: null
-      });
-      updateAction(sessionId, actionId, { status: 'done', result: `Switched to ${action.path}` });
-      setTimeout(() => removeAction(sessionId, actionId), 3000);
-    } catch (e) {
-      updateAction(sessionId, actionId, {
-        status: 'error',
-        result: typeof e === 'string' ? e : String(e)
-      });
-    }
-  }
-
-  async function executePr(sessionId: string, actionId: string) {
-    const sess = sessionsState.list.find((x) => x.id === sessionId);
-    const action = sess?.actions.find((a) => a.id === actionId && a.kind === 'pr');
-    if (!sess || !action || action.kind !== 'pr') return;
-    const cwd = effectiveCwd(sess);
-    if (!cwd) {
-      updateAction(sessionId, actionId, { status: 'error', result: 'No working directory — pick a folder first.' });
-      return;
-    }
-    updateAction(sessionId, actionId, { status: 'executing' });
-    try {
-      const url = await invoke<string>('git_create_pr', {
-        repo: cwd,
-        title: action.title,
-        body: action.body,
-        draft: action.draft,
-        base: action.base.trim() || null
-      });
-      updateAction(sessionId, actionId, { status: 'done', result: url });
-    } catch (e) {
-      updateAction(sessionId, actionId, {
-        status: 'error',
-        result: typeof e === 'string' ? e : String(e)
-      });
-    }
-  }
-
-  // Dispatch helper — each ClaudeActionCard's approve button funnels through
-  // here so the column component doesn't have to know which backend function
-  // runs for each action kind.
+  // Action execution is in `$lib/exec/actions.ts`. The bash executor needs
+  // `appendAssistantDelta` (DOM-coupled scroll) injected from here.
   function executeAction(sessionId: string, action: ClaudeAction) {
-    if (action.kind === 'commit') void executeCommit(sessionId, action.id);
-    else if (action.kind === 'pr') void executePr(sessionId, action.id);
-    else if (action.kind === 'switch_cwd') void executeSwitchCwd(sessionId, action.id);
-    else if (action.kind === 'bash') void executeBash(sessionId, action.id);
+    dispatchAction(sessionId, action, appendAssistantDelta);
   }
 
   // ---- Claude stub flow ----
   // Real agent execution is the next milestone. For now we simulate the
   // drop → run → commit → open-PR pipeline so the UX is testable.
 
-  async function stopClaude() {
+  async function stopActiveAgent() {
     const s = activeSession;
     if (!s) return;
     try {
-      await invoke('claude_stop', { sessionId: s.id });
+      await stopAgentRequest(s.id);
     } catch (e) {
-      console.error('claude_stop', e);
+      notifyError(e, { title: 'Stop failed' });
     }
   }
 
@@ -1668,29 +1627,21 @@
     view = 'workbench';
   }
 
-  function toggleCommitFile(filename: string) {
-    if (!commitModal) return;
-    const next = new Set(commitModal.expanded);
-    if (next.has(filename)) next.delete(filename);
-    else next.add(filename);
-    commitModal = { ...commitModal, expanded: next };
-  }
-
   async function openCommit(c: CommitEntry) {
     if (!inboxState.focusItem?.repo) return;
-    commitModal = { commit: c, detail: null, loading: true, error: null, expanded: new Set() };
+    openModal('commit', { commit: c, detail: null, loading: true, error: null, expanded: new Set() });
     try {
       const detail = await invoke<CommitDetail>('github_get_commit', {
         owner: inboxState.focusItem.repo.owner,
         repo: inboxState.focusItem.repo.name,
         sha: c.sha
       });
-      if (commitModal && commitModal.commit.sha === c.sha) {
-        commitModal = { ...commitModal, detail, loading: false };
+      if (modalsState.commit && modalsState.commit.commit.sha === c.sha) {
+        patchModal('commit', { detail, loading: false });
       }
     } catch (e) {
-      if (commitModal && commitModal.commit.sha === c.sha) {
-        commitModal = { ...commitModal, loading: false, error: typeof e === 'string' ? e : String(e) };
+      if (modalsState.commit && modalsState.commit.commit.sha === c.sha) {
+        patchModal('commit', { loading: false, error: typeof e === 'string' ? e : String(e) });
       }
     }
   }
@@ -1699,57 +1650,57 @@
 
   async function submitComment() {
     if (!commentModal || !inboxState.focusItem?.repo) return;
-    const snap = commentModal;
-    if (!snap.body.trim()) return;
-    commentModal = { ...snap, busy: true, error: null };
+    const body = commentModal.body;
+    if (!body.trim()) return;
+    patchModal('comment', { busy: true, error: null });
     try {
       await invoke('github_add_comment', {
         owner: inboxState.focusItem.repo.owner,
         repo: inboxState.focusItem.repo.name,
         number: inboxState.focusItem.number,
-        body: snap.body
+        body
       });
-      commentModal = null;
+      closeModal('comment');
       await reloadDetailAndLists();
     } catch (e) {
-      commentModal = { ...snap, busy: false, error: typeof e === 'string' ? e : String(e) };
+      patchModal('comment', { busy: false, error: typeof e === 'string' ? e : String(e) });
     }
   }
 
   async function submitReview() {
     if (!reviewModal || !inboxState.focusItem?.repo || !inboxState.focusItem.is_pull_request) return;
-    const snap = reviewModal;
-    reviewModal = { ...snap, busy: true, error: null };
+    const { event, body } = reviewModal;
+    patchModal('review', { busy: true, error: null });
     try {
       await invoke('github_submit_review', {
         owner: inboxState.focusItem.repo.owner,
         repo: inboxState.focusItem.repo.name,
         number: inboxState.focusItem.number,
-        event: snap.event,
-        body: snap.body
+        event,
+        body
       });
-      reviewModal = null;
+      closeModal('review');
       await reloadDetailAndLists();
     } catch (e) {
-      reviewModal = { ...snap, busy: false, error: typeof e === 'string' ? e : String(e) };
+      patchModal('review', { busy: false, error: typeof e === 'string' ? e : String(e) });
     }
   }
 
   async function submitMerge() {
     if (!mergeModal || !inboxState.focusItem?.repo || !inboxState.focusItem.is_pull_request) return;
-    const snap = mergeModal;
-    mergeModal = { ...snap, busy: true, error: null };
+    const method = mergeModal.method;
+    patchModal('merge', { busy: true, error: null });
     try {
       await invoke('github_merge_pr', {
         owner: inboxState.focusItem.repo.owner,
         repo: inboxState.focusItem.repo.name,
         number: inboxState.focusItem.number,
-        method: snap.method
+        method
       });
-      mergeModal = null;
+      closeModal('merge');
       await reloadDetailAndLists();
     } catch (e) {
-      mergeModal = { ...snap, busy: false, error: typeof e === 'string' ? e : String(e) };
+      patchModal('merge', { busy: false, error: typeof e === 'string' ? e : String(e) });
     }
   }
 
@@ -1779,7 +1730,7 @@
   function askClose() {
     if (!inboxState.focusItem) return;
     const kind = inboxState.focusItem.is_pull_request ? 'pull request' : 'issue';
-    confirmModal = {
+    openModal('confirm', {
       title: `Close this ${kind}?`,
       body: `${externalId(inboxState.focusItem)} — ${inboxState.focusItem.title}`,
       confirmText: 'Close',
@@ -1788,53 +1739,46 @@
       onConfirm: async () => {
         await setState('closed');
       }
-    };
-  }
-
-  async function runConfirm() {
-    if (!confirmModal) return;
-    const snap = confirmModal;
-    confirmModal = { ...snap, busy: true };
-    try {
-      await snap.onConfirm();
-    } finally {
-      confirmModal = null;
-    }
+    });
   }
 
   function openConnectModal(conn: ConnectionMeta) {
     if (!conn.implemented) return;
     if (conn.id === 'github') {
-      patModal = { conn, token: '', error: null, busy: false };
+      openModal('pat', { conn, token: '', error: null, busy: false });
     } else if (conn.id === 'jira') {
-      jiraModal = { workspace: '', email: '', token: '', error: null, busy: false };
+      openModal('jiraConnect', { workspace: '', email: '', token: '', error: null, busy: false });
+    } else if (conn.id === 'sentry') {
+      openModal('sentryConnect', {
+        host: 'https://sentry.io',
+        organization_slug: '',
+        token: '',
+        error: null,
+        busy: false
+      });
     } else if (conn.id === 'claude') {
-      claudeModal = { status: claudeStatus, loading: false };
+      openModal('claudeStatus', { status: claudeStatus, loading: false });
       void refreshClaudeModal();
     }
   }
 
   async function refreshClaudeModal() {
-    if (!claudeModal) return;
-    claudeModal = { ...claudeModal, loading: true };
+    if (!modalsState.claudeStatus) return;
+    patchModal('claudeStatus', { loading: true });
     await refreshClaudeStatus();
-    if (claudeModal) claudeModal = { status: claudeStatus, loading: false };
+    if (modalsState.claudeStatus) patchModal('claudeStatus', { status: claudeStatus, loading: false });
   }
 
   async function submitJira() {
     if (!jiraModal) return;
-    const snap = jiraModal;
-    jiraModal = { ...snap, busy: true, error: null };
+    const { workspace, email, token } = jiraModal;
+    patchModal('jiraConnect', { busy: true, error: null });
     try {
-      await invoke<JiraUser>('jira_connect', {
-        workspace: snap.workspace,
-        email: snap.email,
-        token: snap.token
-      });
-      jiraModal = null;
+      await invoke<JiraUser>('jira_connect', { workspace, email, token });
+      closeModal('jiraConnect');
       await refreshJiraStatus();
     } catch (e) {
-      jiraModal = { ...snap, busy: false, error: typeof e === 'string' ? e : String(e) };
+      patchModal('jiraConnect', { busy: false, error: typeof e === 'string' ? e : String(e) });
     }
   }
 
@@ -1847,41 +1791,86 @@
     return 'https://id.atlassian.com/manage-profile/security/api-tokens';
   }
 
+  function sentryTokenUrl(): string {
+    const host = modalsState.sentryConnect?.host?.trim() || 'https://sentry.io';
+    return `${host.replace(/\/+$/, '')}/settings/account/api/auth-tokens/`;
+  }
+
+  async function submitSentry() {
+    if (!modalsState.sentryConnect) return;
+    const { host, organization_slug, token } = modalsState.sentryConnect;
+    patchModal('sentryConnect', { busy: true, error: null });
+    try {
+      await invoke<SentryUser>('sentry_connect', {
+        host,
+        organizationSlug: organization_slug,
+        token
+      });
+      closeModal('sentryConnect');
+      await refreshSentryStatus();
+      void refreshSentryInbox();
+    } catch (e) {
+      patchModal('sentryConnect', { busy: false, error: typeof e === 'string' ? e : String(e) });
+    }
+  }
+
+  async function disconnectSentryAll() {
+    try {
+      await invoke('sentry_disconnect');
+      await refreshSentryStatus();
+      resetSentryInbox();
+      notify({ kind: 'success', title: 'Disconnected from Sentry' });
+    } catch (e) {
+      notifyError(e, { title: 'Sentry disconnect failed' });
+    }
+  }
+
   function claudeInstallUrl() {
     return 'https://docs.claude.com/en/docs/claude-code/overview';
   }
 
   async function submitPat() {
     if (!patModal) return;
-    const snap = patModal;
-    patModal = { ...snap, busy: true, error: null };
+    const token = patModal.token;
+    patchModal('pat', { busy: true, error: null });
     try {
-      const user = await invoke<GithubUser>('github_connect_pat', { token: snap.token });
+      const user = await invoke<GithubUser>('github_connect_pat', { token });
       connectionsState.github = { kind: 'connected', user };
-      patModal = null;
+      closeModal('pat');
       await refreshInbox();
       view = 'workbench';
     } catch (e) {
-      patModal = { ...snap, busy: false, error: typeof e === 'string' ? e : String(e) };
+      patchModal('pat', { busy: false, error: typeof e === 'string' ? e : String(e) });
     }
   }
 
   async function disconnectGithub() {
-    await invoke('github_disconnect');
-    await refreshGithubStatus();
-    resetGithubInbox();
+    try {
+      await invoke('github_disconnect');
+      await refreshGithubStatus();
+      resetGithubInbox();
+      notify({ kind: 'success', title: 'Disconnected from GitHub' });
+    } catch (e) {
+      notifyError(e, { title: 'GitHub disconnect failed' });
+    }
     // Repo state is owned by RepositoriesView — it wipes itself via its
     // `$effect` on `connectedGithub` becoming false.
   }
 
   async function disconnectJiraAll() {
-    await invoke('jira_disconnect');
-    await refreshJiraStatus();
-    resetJiraInbox();
+    try {
+      await invoke('jira_disconnect');
+      await refreshJiraStatus();
+      resetJiraInbox();
+      notify({ kind: 'success', title: 'Disconnected from Jira' });
+    } catch (e) {
+      notifyError(e, { title: 'Jira disconnect failed' });
+      return;
+    }
   }
 
   async function openBrowser(url: string) {
-    try { await openUrl(url); } catch (e) { console.error(e); }
+    try { await openUrl(url); } catch (e) { notifyError(e, { title: 'Could not open browser' }); }
   }
 
   function onKey(e: KeyboardEvent) {
@@ -1890,18 +1879,20 @@
       paletteOpen = !paletteOpen;
     } else if (e.key === 'Escape') {
       paletteOpen = false;
-      if (patModal && !patModal.busy) patModal = null;
-      if (jiraModal && !jiraModal.busy) jiraModal = null;
-      if (claudeModal && !claudeModal.loading) claudeModal = null;
-      if (inboxState.userPickerModal) inboxState.userPickerModal = null;
-      if (commentModal && !commentModal.busy) commentModal = null;
-      if (reviewModal && !reviewModal.busy) reviewModal = null;
-      if (mergeModal && !mergeModal.busy) mergeModal = null;
-      if (commitModal) commitModal = null;
-      if (confirmModal && !confirmModal.busy) confirmModal = null;
-      if (jiraCreateModal && !jiraCreateModal.busy) jiraCreateModal = null;
-      if (githubCreatePrModal && !githubCreatePrModal.busy) githubCreatePrModal = null;
+      if (patModal && !patModal.busy) closeModal('pat');
+      if (jiraModal && !jiraModal.busy) closeModal('jiraConnect');
+      if (claudeModal && !claudeModal.loading) closeModal('claudeStatus');
+      if (modalsState.userPicker) closeModal('userPicker');
+      if (commentModal && !commentModal.busy) closeModal('comment');
+      if (reviewModal && !reviewModal.busy) closeModal('review');
+      if (mergeModal && !mergeModal.busy) closeModal('merge');
+      if (commitModal) closeModal('commit');
+      if (confirmModal && !confirmModal.busy) closeModal('confirm');
+      if (jiraCreateModal && !jiraCreateModal.busy) closeModal('jiraCreate');
+      if (githubCreatePrModal && !githubCreatePrModal.busy) closeModal('githubCreatePr');
       if (inboxState.focusItem) closeFocusItem();
+      if (inboxState.jiraFocusKey) inboxState.jiraFocusKey = null;
+      if (inboxState.sentryFocusId) inboxState.sentryFocusId = null;
     } else if (e.key === 'j' && view === 'workbench' && !anyModalOpen()) {
       moveSelection(1);
     } else if (e.key === 'k' && view === 'workbench' && !(e.metaKey || e.ctrlKey) && !anyModalOpen()) {
@@ -1914,7 +1905,7 @@
       patModal ||
       jiraModal ||
       claudeModal ||
-      inboxState.userPickerModal ||
+      modalsState.userPicker ||
       commentModal ||
       reviewModal ||
       mergeModal ||
@@ -1923,6 +1914,8 @@
       jiraCreateModal ||
       githubCreatePrModal ||
       inboxState.focusItem ||
+      inboxState.jiraFocusKey ||
+      inboxState.sentryFocusId ||
       paletteOpen
     );
   }
@@ -1945,7 +1938,7 @@
 
   async function openJiraCreateIssue() {
     const active = inboxState.jiraFilters;
-    jiraCreateModal = {
+    openModal('jiraCreate', {
       projectKey: active.projectKey ?? '',
       projects: inboxState.jiraProjectOptions,
       projectsLoading: false,
@@ -1955,49 +1948,41 @@
       description: '',
       assigneeAccountId: '',
       sprints: inboxState.jiraSprintOptions,
-      sprintId:
-        typeof active.sprintId === 'number' ? active.sprintId : null,
+      sprintId: typeof active.sprintId === 'number' ? active.sprintId : null,
       busy: false,
       error: null
-    };
+    });
     // Always refresh projects list (lazy — skips if already cached).
     if (!inboxState.jiraProjectOptions.length) {
-      jiraCreateModal = { ...jiraCreateModal, projectsLoading: true };
+      patchModal('jiraCreate', { projectsLoading: true });
       try {
         const projects = await invoke<JiraProject[]>('jira_list_projects');
         inboxState.jiraProjectOptions = projects;
-        if (jiraCreateModal) {
-          jiraCreateModal = { ...jiraCreateModal, projects, projectsLoading: false };
-        }
+        patchModal('jiraCreate', { projects, projectsLoading: false });
       } catch {
-        if (jiraCreateModal) {
-          jiraCreateModal = { ...jiraCreateModal, projectsLoading: false };
-        }
+        patchModal('jiraCreate', { projectsLoading: false });
       }
     }
     // If a project is pre-selected, pull its issue types immediately.
-    if (jiraCreateModal && jiraCreateModal.projectKey) {
-      void onJiraCreateProjectChange(jiraCreateModal.projectKey);
+    if (modalsState.jiraCreate?.projectKey) {
+      void onJiraCreateProjectChange(modalsState.jiraCreate.projectKey);
     }
   }
 
   async function onJiraCreateProjectChange(key: string) {
-    if (!jiraCreateModal) return;
-    jiraCreateModal = { ...jiraCreateModal, projectKey: key, issueTypes: [] };
+    if (!modalsState.jiraCreate) return;
+    patchModal('jiraCreate', { projectKey: key, issueTypes: [] });
     if (!key) return;
     try {
-      const types = await invoke<JiraIssueType[]>('jira_list_issue_types', {
-        projectKey: key
-      });
-      if (jiraCreateModal) {
-        // Keep a sensible default issue type name — prefer whatever the user
-        // already had picked if it's still valid, otherwise first type from
-        // the API, otherwise hard-coded "Task".
-        const currentName = jiraCreateModal.issueTypeName;
-        const preserved = types.find((t) => t.name === currentName);
-        const nextName = preserved ? preserved.name : types[0]?.name ?? 'Task';
-        jiraCreateModal = { ...jiraCreateModal, issueTypes: types, issueTypeName: nextName };
-      }
+      const types = await invoke<JiraIssueType[]>('jira_list_issue_types', { projectKey: key });
+      const m = modalsState.jiraCreate;
+      if (!m) return;
+      // Keep a sensible default issue type name — prefer whatever the user
+      // already had picked if it's still valid, otherwise first type from
+      // the API, otherwise hard-coded "Task".
+      const preserved = types.find((t) => t.name === m.issueTypeName);
+      const nextName = preserved ? preserved.name : types[0]?.name ?? 'Task';
+      patchModal('jiraCreate', { issueTypes: types, issueTypeName: nextName });
     } catch {
       // ignore — modal falls back to hardcoded Task/Bug/Story
     }
@@ -2005,31 +1990,25 @@
 
   async function submitJiraCreate() {
     if (!jiraCreateModal) return;
-    const snap = jiraCreateModal;
-    if (!snap.projectKey.trim() || !snap.summary.trim() || !snap.issueTypeName.trim()) {
-      return;
-    }
-    jiraCreateModal = { ...snap, busy: true, error: null };
+    const { projectKey, summary, description, issueTypeName, assigneeAccountId, sprintId } = jiraCreateModal;
+    if (!projectKey.trim() || !summary.trim() || !issueTypeName.trim()) return;
+    patchModal('jiraCreate', { busy: true, error: null });
     try {
       const created = await invoke<JiraItem>('jira_create_issue', {
-        projectKey: snap.projectKey.trim(),
-        issueType: snap.issueTypeName,
-        summary: snap.summary.trim(),
-        description: snap.description,
-        assigneeAccountId: snap.assigneeAccountId.trim() || null,
-        sprintId: snap.sprintId
+        projectKey: projectKey.trim(),
+        issueType: issueTypeName,
+        summary: summary.trim(),
+        description,
+        assigneeAccountId: assigneeAccountId.trim() || null,
+        sprintId
       });
       // Optimistically push the new issue onto the current list, then refresh
       // to pick up server-side ordering.
       inboxState.jiraItems = [created, ...inboxState.jiraItems];
-      jiraCreateModal = null;
+      closeModal('jiraCreate');
       void refreshJiraInbox({ silent: true });
     } catch (e) {
-      jiraCreateModal = {
-        ...snap,
-        busy: false,
-        error: typeof e === 'string' ? e : String(e)
-      };
+      patchModal('jiraCreate', { busy: false, error: typeof e === 'string' ? e : String(e) });
     }
   }
 
@@ -2037,7 +2016,7 @@
 
   async function openGithubCreatePr() {
     const activeRepo = inboxState.githubFilters.repo;
-    githubCreatePrModal = {
+    openModal('githubCreatePr', {
       repo: activeRepo ?? '',
       repos: inboxState.githubRepoOptions.map((r) => ({
         owner: r.owner,
@@ -2057,9 +2036,9 @@
       filesExpanded: false,
       busy: false,
       error: null
-    };
+    });
     if (!inboxState.githubRepoOptions.length) {
-      githubCreatePrModal = { ...githubCreatePrModal, reposLoading: true };
+      patchModal('githubCreatePr', { reposLoading: true });
       try {
         const repos = await invoke<Repository[]>('github_list_repos');
         inboxState.githubRepoOptions = repos.map((r) => ({
@@ -2067,80 +2046,65 @@
           name: r.name,
           full_name: r.full_name
         }));
-        if (githubCreatePrModal) {
-          githubCreatePrModal = {
-            ...githubCreatePrModal,
-            repos: repos.map((r) => ({
-              owner: r.owner,
-              name: r.name,
-              full_name: r.full_name,
-              default_branch: r.default_branch
-            })),
-            reposLoading: false
-          };
-        }
+        patchModal('githubCreatePr', {
+          repos: repos.map((r) => ({
+            owner: r.owner,
+            name: r.name,
+            full_name: r.full_name,
+            default_branch: r.default_branch
+          })),
+          reposLoading: false
+        });
       } catch {
-        if (githubCreatePrModal) {
-          githubCreatePrModal = { ...githubCreatePrModal, reposLoading: false };
-        }
+        patchModal('githubCreatePr', { reposLoading: false });
       }
     }
-    if (githubCreatePrModal && githubCreatePrModal.repo) {
-      void onGithubPrRepoChange(githubCreatePrModal.repo);
+    if (modalsState.githubCreatePr?.repo) {
+      void onGithubPrRepoChange(modalsState.githubCreatePr.repo);
     }
   }
 
   async function onGithubPrRepoChange(full: string) {
-    if (!githubCreatePrModal) return;
-    githubCreatePrModal = {
-      ...githubCreatePrModal,
+    if (!modalsState.githubCreatePr) return;
+    patchModal('githubCreatePr', {
       repo: full,
       branches: [],
       base: '',
       head: '',
       compare: null,
       branchesLoading: !!full
-    };
+    });
     if (!full) return;
     const [owner, name] = full.split('/');
     if (!owner || !name) return;
     try {
-      const branches = await invoke<RepoBranch[]>('github_list_repo_branches', {
-        owner,
-        repo: name
-      });
+      const branches = await invoke<RepoBranch[]>('github_list_repo_branches', { owner, repo: name });
       // Look up the default branch — either from the cached repo list, or via
       // github_list_repos if we don't have it yet.
       let defaultBranch =
-        githubCreatePrModal.repos.find((r) => r.full_name === full)?.default_branch ?? null;
+        modalsState.githubCreatePr?.repos.find((r) => r.full_name === full)?.default_branch ?? null;
       if (!defaultBranch) {
         try {
           const repos = await invoke<Repository[]>('github_list_repos');
           defaultBranch = repos.find((r) => r.full_name === full)?.default_branch ?? null;
         } catch { /* ignore */ }
       }
-      if (githubCreatePrModal) {
-        githubCreatePrModal = {
-          ...githubCreatePrModal,
-          branches,
-          branchesLoading: false,
-          base: defaultBranch ?? branches[0]?.name ?? ''
-        };
-      }
+      patchModal('githubCreatePr', {
+        branches,
+        branchesLoading: false,
+        base: defaultBranch ?? branches[0]?.name ?? ''
+      });
     } catch (e) {
-      if (githubCreatePrModal) {
-        githubCreatePrModal = {
-          ...githubCreatePrModal,
-          branchesLoading: false,
-          error: typeof e === 'string' ? e : String(e)
-        };
-      }
+      patchModal('githubCreatePr', {
+        branchesLoading: false,
+        error: typeof e === 'string' ? e : String(e)
+      });
     }
   }
 
   async function onGithubPrBranchesChange() {
-    if (!githubCreatePrModal) return;
-    const m = githubCreatePrModal;
+    const m = modalsState.githubCreatePr;
+    if (!m) return;
     // Autofill title from head branch name — Title Case sans separators —
     // only if the user hasn't typed a custom title yet.
     if (m.head && !m.title.trim()) {
@@ -2152,18 +2116,15 @@
         .filter(Boolean)
         .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
         .join(' ');
-      if (pretty) {
-        githubCreatePrModal = { ...m, title: pretty };
-      }
+      if (pretty) patchModal('githubCreatePr', { title: pretty });
     }
     if (!m.repo || !m.base || !m.head || m.base === m.head) {
-      if (m.compare) githubCreatePrModal = { ...githubCreatePrModal!, compare: null };
+      if (m.compare) patchModal('githubCreatePr', { compare: null });
       return;
     }
     const [owner, name] = m.repo.split('/');
     if (!owner || !name) return;
-    githubCreatePrModal = {
-      ...githubCreatePrModal!,
+    patchModal('githubCreatePr', {
       compare: {
         loading: true,
         error: null,
@@ -2175,7 +2136,7 @@
         commits: [],
         files: []
       }
-    };
+    });
     try {
       const result = await invoke<CompareResult>('github_compare', {
         owner,
@@ -2183,63 +2144,49 @@
         base: m.base,
         head: m.head
       });
-      if (githubCreatePrModal) {
-        githubCreatePrModal = {
-          ...githubCreatePrModal,
-          compare: { loading: false, error: null, ...result }
-        };
-      }
+      patchModal('githubCreatePr', { compare: { loading: false, error: null, ...result } });
     } catch (e) {
-      if (githubCreatePrModal) {
-        githubCreatePrModal = {
-          ...githubCreatePrModal,
-          compare: {
-            loading: false,
-            error: typeof e === 'string' ? e : String(e),
-            total_commits: 0,
-            ahead_by: 0,
-            behind_by: 0,
-            additions: 0,
-            deletions: 0,
-            commits: [],
-            files: []
-          }
-        };
-      }
+      patchModal('githubCreatePr', {
+        compare: {
+          loading: false,
+          error: typeof e === 'string' ? e : String(e),
+          total_commits: 0,
+          ahead_by: 0,
+          behind_by: 0,
+          additions: 0,
+          deletions: 0,
+          commits: [],
+          files: []
+        }
+      });
     }
   }
 
   async function submitGithubPr() {
     if (!githubCreatePrModal) return;
-    const snap = githubCreatePrModal;
-    if (!snap.repo || !snap.base || !snap.head || snap.base === snap.head || !snap.title.trim()) {
-      return;
-    }
-    const [owner, name] = snap.repo.split('/');
+    const { repo, base, head, title, body, draft } = githubCreatePrModal;
+    if (!repo || !base || !head || base === head || !title.trim()) return;
+    const [owner, name] = repo.split('/');
     if (!owner || !name) return;
-    githubCreatePrModal = { ...snap, busy: true, error: null };
+    patchModal('githubCreatePr', { busy: true, error: null });
     try {
       const created = await invoke<InboxItem>('github_create_pr', {
         owner,
         repo: name,
-        title: snap.title.trim(),
-        body: snap.body,
-        base: snap.base,
-        head: snap.head,
-        draft: snap.draft
+        title: title.trim(),
+        body,
+        base,
+        head,
+        draft
       });
-      githubCreatePrModal = null;
+      closeModal('githubCreatePr');
       // Optimistically push onto inbox and open focus pane.
       inboxState.items = [created, ...inboxState.items];
       openFocusItem(created);
       view = 'workbench';
       void refreshInbox({ silent: true });
     } catch (e) {
-      githubCreatePrModal = {
-        ...snap,
-        busy: false,
-        error: typeof e === 'string' ? e : String(e)
-      };
+      patchModal('githubCreatePr', { busy: false, error: typeof e === 'string' ? e : String(e) });
     }
   }
 </script>
@@ -2272,7 +2219,7 @@
   </div>
 {/if}
 
-<div id="app" class:is-dragging={dragPayload !== null}>
+<div id="app" class:is-dragging={dragState.payload !== null}>
   <Rail
     bind:view
     inboxCount={inboxState.items.length}
@@ -2304,12 +2251,17 @@
             <div
               class="wb-tab"
               class:active={wb.id === layoutState.activeWorkbenchId}
+              class:drag-over={tabDragOverId === wb.id}
               role="button"
               tabindex="0"
               ondblclick={() => startWorkbenchRename(wb.id, wb.name)}
               onclick={() => setActiveWorkbench(wb.id)}
               onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setActiveWorkbench(wb.id); } }}
-              title="Click to switch · double-click to rename"
+              ondragenter={(e) => onTabDragEnter(e, wb.id)}
+              ondragover={(e) => onTabDragOver(e, wb.id)}
+              ondragleave={() => onTabDragLeave(wb.id)}
+              ondrop={(e) => onTabDrop(e, wb.id)}
+              title="Click to switch · double-click to rename · drop a column here to move it"
             >
               {#if editingWorkbench && editingWorkbench.id === wb.id}
                 <input
@@ -2357,6 +2309,8 @@
               class:dim={count === 0}
               class:has-menu={count > 0}
               class:drag-over={pillDragOverKind === kind && pillDragOverInstance === null}
+              class:drag-armed={pillDragOverKind === kind}
+              ondragenter={(e) => onPillDragEnter(e, kind, null)}
               ondragover={(e) => onPillDragOver(e, kind, null)}
               ondragleave={() => onPillDragLeave(kind, null)}
               ondrop={(e) => onPillDrop(e, kind, null)}
@@ -2396,6 +2350,7 @@
                       class:is-current={isCurrent}
                       class:drag-over={pillDragOverKind === kind && pillDragOverInstance === inst.id}
                       role="menuitem"
+                      ondragenter={(e) => onPillDragEnter(e, kind, inst.id)}
                       ondragover={(e) => onPillDragOver(e, kind, inst.id)}
                       ondragleave={() => onPillDragLeave(kind, inst.id)}
                       ondrop={(e) => onPillDrop(e, kind, inst.id)}
@@ -2416,6 +2371,9 @@
           {/if}
           {#if connectedJira}
             {@render pill('jira', 'Jira', connectionsMeta.find((c) => c.id === 'jira'))}
+          {/if}
+          {#if connectedSentry}
+            {@render pill('sentry', 'Sentry', connectionsMeta.find((c) => c.id === 'sentry'))}
           {/if}
           {#if connectedClaude}
             {@render pill('claude', 'Claude', connectionsMeta.find((c) => c.id === 'claude'))}
@@ -2450,9 +2408,9 @@
                 onToggleFile={toggleFile}
                 onRetryLoadDetail={() => loadDetail()}
                 onOpenCommit={openCommit}
-                onOpenComment={() => (commentModal = { body: '', busy: false, error: null })}
-                onOpenReview={() => (reviewModal = { event: 'APPROVE', body: '', busy: false, error: null })}
-                onOpenMerge={() => (mergeModal = { method: 'squash', busy: false, error: null })}
+                onOpenComment={() => openModal('comment', { body: '', busy: false, error: null })}
+                onOpenReview={() => openModal('review', { event: 'APPROVE', body: '', busy: false, error: null })}
+                onOpenMerge={() => openModal('merge', { method: 'squash', busy: false, error: null })}
                 onAskClose={askClose}
                 onReopen={() => setState('open')}
                 onOpenBrowser={openBrowser}
@@ -2475,6 +2433,17 @@
                 onOpenBrowser={openBrowser}
                 onOpenCreateIssue={openJiraCreateIssue}
               />
+            {:else if inst.kind === 'sentry' && connectedSentry}
+              <SentryColumn
+                instanceId={inst.id}
+                {sentryStatus}
+                {now}
+                {onDragStart}
+                {onDragEnd}
+                {onCardMouseDown}
+                {isClickNotDrag}
+                onOpenBrowser={openBrowser}
+              />
             {:else if inst.kind === 'claude' && connectedClaude}
               <AgentColumn
                 kind="claude"
@@ -2491,6 +2460,7 @@
                 {thinkingStartedAt}
                 {thinkingTick}
                 {now}
+                {onAgentDragEnter}
                 {onAgentDragOver}
                 {onAgentDragLeave}
                 {onAgentDrop}
@@ -2520,7 +2490,7 @@
                 onOpenPrInForgehold={openPrUrlInForgehold}
                 onSetSessionInput={setSessionInput}
                 onSendClaudeMessage={() => void sendClaudeMessage()}
-                onStopClaude={() => void stopClaude()}
+                onStopClaude={() => void stopActiveAgent()}
                 onOpenMentionPath={(p) => void openMentionPath(p)}
               />
             {:else if inst.kind === 'cursor' && connectedCursor}
@@ -2539,6 +2509,7 @@
                 {thinkingStartedAt}
                 {thinkingTick}
                 {now}
+                {onAgentDragEnter}
                 {onAgentDragOver}
                 {onAgentDragLeave}
                 {onAgentDrop}
@@ -2568,7 +2539,7 @@
                 onOpenPrInForgehold={openPrUrlInForgehold}
                 onSetSessionInput={setSessionInput}
                 onSendClaudeMessage={() => void sendClaudeMessage()}
-                onStopClaude={() => void stopClaude()}
+                onStopClaude={() => void stopActiveAgent()}
                 onOpenMentionPath={(p) => void openMentionPath(p)}
               />
             {:else if inst.kind === 'editor'}
@@ -2580,13 +2551,26 @@
           {/each}
 
           {#if inboxState.jiraFocusKey}
-            <div class="slide-over" onclick={(e) => { if (e.target === e.currentTarget) inboxState.jiraFocusKey = null; }} role="dialog" aria-modal="true" tabindex="-1">
+            <div class="slide-over" onclick={(e) => { if (e.target === e.currentTarget) inboxState.jiraFocusKey = null; }} onkeydown={(e) => { if (e.key === 'Escape') inboxState.jiraFocusKey = null; }} role="dialog" aria-modal="true" tabindex="-1">
               <div class="slide-panel">
                 <JiraDetailPane
                   issueKey={inboxState.jiraFocusKey}
                   {now}
                   onClose={() => (inboxState.jiraFocusKey = null)}
                   onStatusChange={() => void refreshJiraInbox({ silent: true })}
+                />
+              </div>
+            </div>
+          {/if}
+
+          {#if inboxState.sentryFocusId}
+            <div class="slide-over" onclick={(e) => { if (e.target === e.currentTarget) inboxState.sentryFocusId = null; }} onkeydown={(e) => { if (e.key === 'Escape') inboxState.sentryFocusId = null; }} role="dialog" aria-modal="true" tabindex="-1">
+              <div class="slide-panel">
+                <SentryDetailPane
+                  issueId={inboxState.sentryFocusId}
+                  {now}
+                  onClose={() => (inboxState.sentryFocusId = null)}
+                  onOpenBrowser={openBrowser}
                 />
               </div>
             </div>
@@ -2617,9 +2601,9 @@
         onTabChange={(t) => (tab = t)}
         onToggleFile={toggleFile}
         onOpenCommit={openCommit}
-        onOpenComment={() => (commentModal = { body: '', busy: false, error: null })}
-        onOpenReview={() => (reviewModal = { event: 'APPROVE', body: '', busy: false, error: null })}
-        onOpenMerge={() => (mergeModal = { method: 'squash', busy: false, error: null })}
+        onOpenComment={() => openModal('comment', { body: '', busy: false, error: null })}
+        onOpenReview={() => openModal('review', { event: 'APPROVE', body: '', busy: false, error: null })}
+        onOpenMerge={() => openModal('merge', { method: 'squash', busy: false, error: null })}
         onAskClose={askClose}
         onReopen={() => setState('open')}
         onOpenBrowser={openBrowser}
@@ -2645,12 +2629,16 @@
         {connectedIds}
         {githubStatus}
         {jiraStatus}
+        {sentryStatus}
         {claudeStatus}
         {cursorStatus}
         onDisconnectGithub={disconnectGithub}
         onDisconnectJira={disconnectJiraAll}
+        onDisconnectSentry={disconnectSentryAll}
         onOpenConnectModal={openConnectModal}
       />
+    {:else if view === 'settings'}
+      <SettingsView />
     {:else}
       <section class="full-center">
         <div class="empty"><Sigil size={56} />
@@ -2662,36 +2650,23 @@
   </div>
 </div>
 
-<Modals
-  bind:commitModal
-  bind:userPickerModal={inboxState.userPickerModal}
-  bind:jiraModal
-  bind:claudeModal
-  bind:patModal
-  bind:commentModal
-  bind:reviewModal
-  bind:mergeModal
-  bind:confirmModal
-  bind:jiraCreateModal
-  bind:githubCreatePrModal
+<ModalsRoot
   {now}
-  {githubStatus}
-  {jiraStatus}
-  {toggleCommitFile}
   {openBrowser}
   {onUserPickerInput}
   selectJiraUser={selectAssignee}
   selectAnyJiraUser={selectAnyAssignee}
-  {submitJira}
+  submitJiraConnect={submitJira}
   {jiraTokenUrl}
-  {refreshClaudeModal}
+  submitSentryConnect={submitSentry}
+  {sentryTokenUrl}
+  refreshClaudeStatus={refreshClaudeModal}
   {claudeInstallUrl}
   {submitPat}
   {githubTokenUrl}
   {submitComment}
   {submitReview}
   {submitMerge}
-  {runConfirm}
   {onJiraCreateProjectChange}
   {submitJiraCreate}
   {onGithubPrRepoChange}
@@ -2797,6 +2772,14 @@
     background: rgba(15, 24, 40, 0.35);
     border-color: var(--border-neutral);
   }
+  /* Drag-over highlight when the user is moving a column onto this tab. */
+  .wb-tab.drag-over {
+    color: #1a0a04;
+    background: var(--accent);
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent), 0 0 12px var(--accent-glow);
+  }
+  .wb-tab.drag-over .wb-tab-count { background: rgba(26, 10, 4, 0.18); color: #1a0a04; }
   .wb-tab-name {
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     letter-spacing: -0.005em;
@@ -2856,44 +2839,6 @@
     border-bottom: 1px solid var(--border-neutral);
     background: rgba(15, 24, 40, 0.35);
   }
-  .col-toggle {
-    display: inline-flex; align-items: center; gap: 8px;
-    padding: 6px 10px;
-    border-radius: 8px;
-    background: var(--bg-1);
-    border: 1px solid var(--border-neutral);
-    color: var(--text-2);
-    font-size: 12.5px; font-weight: 500;
-    transition: all 140ms;
-  }
-  .col-toggle:hover { color: var(--text-0); border-color: var(--border-neutral-hi); }
-  .col-toggle.active {
-    background: var(--bg-2);
-    color: var(--text-0);
-    border-color: var(--border-hi);
-    box-shadow: inset 0 0 0 1px var(--border-hi);
-  }
-  .col-toggle-dot {
-    width: 6px; height: 6px; border-radius: 50%;
-    background: var(--text-mute);
-  }
-  .col-toggle.active .dot--github { background: #b199f6; box-shadow: 0 0 6px rgba(139, 92, 246, 0.5); }
-  .col-toggle.active .dot--jira { background: #60a5fa; box-shadow: 0 0 6px rgba(59, 130, 246, 0.5); }
-  .col-toggle.active .dot--claude { background: var(--accent-bright); box-shadow: 0 0 6px var(--accent-glow); }
-  .col-toggle.active .dot--cursor { background: #b099f6; box-shadow: 0 0 6px rgba(176, 153, 246, 0.55); }
-  .col-toggle.active .dot--editor { background: var(--warning); box-shadow: 0 0 6px rgba(229, 162, 42, 0.5); }
-  .dot--cursor { background: rgba(176, 153, 246, 0.55); }
-  .dot--editor { background: var(--warning); }
-  .col-toggle-count {
-    padding: 0 6px;
-    min-width: 16px; height: 16px;
-    border-radius: 8px;
-    background: var(--bg-3);
-    font-size: 10.5px; font-weight: 600;
-    display: inline-flex; align-items: center; justify-content: center;
-    color: var(--text-1);
-  }
-  .col-toggle.active .col-toggle-count { background: var(--accent-soft); color: var(--accent-bright); }
 
   /* Pill-group — a single pill or a pill + plus-button compound. The whole
      group shares one border, so the icon + label + "+" read as one unit. */
@@ -2998,17 +2943,16 @@
     content: '';
     position: absolute; top: -6px; left: 0; right: 0; height: 6px;
   }
+  /* Menu open triggers:
+     - `:hover` for normal mouse use,
+     - `.drag-armed` while a drag is currently springing this pill open
+       (set by `onPillDragEnter`, persists while cursor is anywhere over
+       pill body OR any menu item, with a small close-delay so cursor
+       can travel between them). */
   .pill-group.has-menu:hover .pill-menu,
-  .pill-group.has-menu.drag-over .pill-menu {
+  .pill-group.has-menu.drag-armed .pill-menu {
     display: flex;
     animation: fadeIn 120ms ease-out;
-  }
-  /* During any drag (ticket card, file, OS file), force-open every pill's
-     menu so the user can aim at a specific column without having to first
-     hover the pill without the menu. WebKit sometimes suppresses `:hover`
-     mid-drag; the explicit class is the robust trigger. */
-  #app.is-dragging .pill-group.has-menu .pill-menu {
-    display: flex;
   }
   /* Drag-hover — accent outline so "here's the drop target" reads clearly,
      distinct from plain `:hover`. */

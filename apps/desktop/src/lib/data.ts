@@ -31,11 +31,13 @@ const SVG_CLAUDE = '<path d="M6.935 14.72l2.065-5.44h.008l2.061 5.44H6.935zM7.28
 const SVG_CURSOR = '<path d="M11.925 24l10.425-6-10.425-6L1.5 18zm0-24L1.5 6 11.925 12 22.35 6Zm0 0l10.425 6V6.001L11.925 0Zm-10.425 6v12L11.925 12Zm20.85 0v12l-10.425-6Z"/>';
 const SVG_OPENAI = '<path d="M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.872zm16.5963 3.8558L13.1038 8.364 15.1192 7.2a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.4069-.667zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654l2.602-1.4998 2.6069 1.4998v2.9994l-2.5974 1.4997-2.6067-1.4997Z"/>';
 const SVG_AIDER = '<path d="M12 2 3 7v10l9 5 9-5V7l-9-5zm0 2.311 6.5 3.611v3.189l-3.75-2.083L12 10.578 9.25 9.028 5.5 11.111V7.922L12 4.311zm0 4.889 3 1.667-3 1.667-3-1.667 3-1.667zM5.5 13.355l3.25 1.805v3.723L5.5 17.078v-3.723zm13 0v3.723l-3.25 1.805V15.16L18.5 13.355zm-7.75 1.805v3.723L12 19.689l1.25-.806V15.16L12 14.456l-1.25.704z"/>';
+const SVG_SENTRY = '<path d="M12.74.48a1.74 1.74 0 0 0-2.43.62L7.83 5.36a13.83 13.83 0 0 1 8.38 11.59h-2.36a11.5 11.5 0 0 0-7.21-9.59L4 12.09a6.07 6.07 0 0 1 4.27 4.86H1.78a.43.43 0 0 1-.37-.65l1.55-2.66a5.4 5.4 0 0 0-1.7-1L0 15.31a2.27 2.27 0 0 0 1.95 3.41h8.56a8.34 8.34 0 0 0-3.32-7.71l1.18-2a10.51 10.51 0 0 1 4.31 9.74h5.82a12.62 12.62 0 0 0-6.05-11.07l2.43-4.16a.42.42 0 0 1 .58-.14.43.43 0 0 1 .15.16l9.56 16.45a.42.42 0 0 1-.37.65h-2.32q.06 1.13 0 2.26h2.36a2.78 2.78 0 0 0 2.41-4.17z"/>';
 const SVG_COPILOT = '<path d="M23.22 11.55c-.017-.109-.036-.217-.058-.325a7.17 7.17 0 0 0-.276-.992 5.66 5.66 0 0 0-.47-.992 4.16 4.16 0 0 0-.704-.854 3.48 3.48 0 0 0-.993-.634 3.87 3.87 0 0 0-1.322-.253c-.46-.01-.91.033-1.339.13-.422.096-.83.234-1.218.416.011-.19.011-.379 0-.567a6.08 6.08 0 0 0-.18-1.04 5.25 5.25 0 0 0-.402-1.04 4.01 4.01 0 0 0-.693-.93 3.29 3.29 0 0 0-1.02-.676 3.51 3.51 0 0 0-1.386-.245c-.44 0-.865.06-1.273.18a6.3 6.3 0 0 0-1.131.47c-.36.195-.702.42-1.025.672-.323.252-.623.53-.897.833a5.05 5.05 0 0 0-.676.938 3.35 3.35 0 0 0-.393.91l-.094-.038a4.42 4.42 0 0 0-1.386-.324 3.47 3.47 0 0 0-1.446.21 3.29 3.29 0 0 0-1.16.768 3.45 3.45 0 0 0-.735 1.17c-.168.438-.257.9-.264 1.37-.007.47.059.937.195 1.381.13.437.329.85.588 1.226a4.76 4.76 0 0 0 .925.98c-.176.336-.314.689-.411 1.055a3.94 3.94 0 0 0-.141 1.142c.018.388.088.77.209 1.14.124.365.301.712.527 1.028.225.317.502.593.819.81.32.218.674.375 1.05.466.38.09.772.11 1.16.059.391-.05.775-.168 1.137-.35a4.98 4.98 0 0 0 1.022-.697c.313-.279.589-.596.82-.945.38.187.783.322 1.2.402.418.078.845.099 1.267.062.42-.036.836-.13 1.237-.278.401-.152.78-.362 1.126-.624.345-.263.645-.58.891-.942.249-.366.438-.77.56-1.195a4.99 4.99 0 0 0 .192-1.314c-.002-.451-.082-.897-.236-1.319a4.26 4.26 0 0 0-.684-1.196c.377-.138.74-.316 1.082-.532.35-.223.67-.49.953-.797.283-.304.529-.646.73-1.014.206-.38.352-.795.435-1.225.086-.45.1-.914.041-1.369zm-14.373 8.196a2.07 2.07 0 0 1-.852-.178 2.1 2.1 0 0 1-.67-.487 2.23 2.23 0 0 1-.432-.729 2.39 2.39 0 0 1-.134-.88c.014-.307.083-.607.204-.892.127-.287.304-.548.52-.77a2.75 2.75 0 0 1 1.75-.79c.328-.018.655.02.968.112.314.094.613.245.88.446.265.198.495.445.68.728.188.284.328.6.415.934.085.33.119.672.1 1.01a2.83 2.83 0 0 1-.248.961 2.84 2.84 0 0 1-.56.824 2.51 2.51 0 0 1-1.72.711zm7.24-.35a2.5 2.5 0 0 1-1.135.262 2.48 2.48 0 0 1-1.133-.272 2.43 2.43 0 0 1-.892-.731 2.45 2.45 0 0 1-.47-1.104 2.47 2.47 0 0 1 .123-1.204 2.51 2.51 0 0 1 .646-1.02 2.56 2.56 0 0 1 1.064-.619c.398-.118.82-.132 1.224-.041.405.092.785.279 1.1.541.316.262.559.605.704.99.145.387.19.806.13 1.218a2.48 2.48 0 0 1-.406 1.073 2.49 2.49 0 0 1-.955.907zm4.148-3.794c-.204.198-.43.37-.677.512a3.19 3.19 0 0 1-.77.316 3.07 3.07 0 0 1-.817.098 3.17 3.17 0 0 1-.824-.118 3.86 3.86 0 0 1-.812-.335 5.09 5.09 0 0 1-.75-.529 6.96 6.96 0 0 1-.71-.7 4.08 4.08 0 0 1-.549-.862 4.13 4.13 0 0 1-.329-.995 3.75 3.75 0 0 1-.075-1.036 3.5 3.5 0 0 1 .207-1.016c.134-.32.314-.617.535-.883a3.27 3.27 0 0 1 .815-.693 3.1 3.1 0 0 1 1.03-.401 3.61 3.61 0 0 1 1.12-.042 3.33 3.33 0 0 1 1.072.326c.325.16.619.372.867.626.252.254.454.547.601.864.15.32.25.659.298.999.046.34.038.683-.027 1.02-.063.339-.18.664-.35.96-.167.297-.376.566-.624.799z"/>';
 
 export const connectionsMeta: ConnectionMeta[] = [
   { id: 'github', name: 'GitHub', desc: 'Pull requests, issues, review comments.', iconSvg: SVG_GITHUB, iconLetters: 'GH', iconClass: 'conn-icon--github', category: 'sources', kind: 'personal access token', implemented: true },
   { id: 'jira', name: 'Jira', desc: 'Tickets, comments, workflow transitions.', iconSvg: SVG_JIRA, iconLetters: 'J', iconClass: 'conn-icon--jira', category: 'sources', kind: 'atlassian api token', implemented: true },
+  { id: 'sentry', name: 'Sentry', desc: 'Errors, issues, events — drop onto Claude to debug.', iconSvg: SVG_SENTRY, iconLetters: 'St', iconClass: 'conn-icon--sentry', category: 'sources', kind: 'auth token', implemented: true },
   { id: 'slack', name: 'Slack', desc: 'Channels, threads, reminders.', iconSvg: SVG_SLACK, iconLetters: 'S', iconClass: 'conn-icon--slack', category: 'sources', kind: 'oauth', implemented: false },
   { id: 'linear', name: 'Linear', desc: 'Issues, projects, cycles.', iconSvg: SVG_LINEAR, iconLetters: 'L', iconClass: 'conn-icon--linear', category: 'sources', kind: 'oauth', implemented: false },
   { id: 'notion', name: 'Notion', desc: 'Pages and databases as work objects.', iconSvg: SVG_NOTION, iconLetters: 'N', iconClass: 'conn-icon--notion', category: 'sources', kind: 'oauth', implemented: false },
@@ -122,6 +124,113 @@ export interface JiraItem {
   updated: string;
   created: string;
   url: string;
+}
+
+// ---------- Sentry ----------
+
+export interface SentryUser {
+  id: string;
+  email: string | null;
+  username: string | null;
+  name: string | null;
+  organization_slug: string;
+  organization_name: string;
+  /** Base URL of the Sentry instance — `https://sentry.io` for cloud,
+   *  custom URL for self-hosted. Stored alongside the token so we can
+   *  reach the same install on every API call. */
+  host: string;
+}
+
+export type SentryStatus =
+  | { kind: 'disconnected' }
+  | { kind: 'connected'; user: SentryUser };
+
+/** A single Sentry issue (a group of similar events). The shape mirrors
+ *  what `/api/0/organizations/{org}/issues/` returns, simplified. */
+export interface SentryIssue {
+  id: string;
+  /** "PROJ-123" — short stable ref the user copies into commit messages. */
+  short_id: string;
+  title: string;
+  culprit: string | null;
+  /** "error" | "warning" | "info" | "debug" | "fatal" */
+  level: string;
+  /** "unresolved" | "resolved" | "ignored" */
+  status: string;
+  platform: string | null;
+  project_slug: string;
+  project_name: string;
+  /** Total occurrence count as a stringified number from the API. */
+  count: string;
+  user_count: number;
+  first_seen: string;
+  last_seen: string;
+  permalink: string;
+  /** Type + message — mirrors the bold/secondary line in Sentry's UI. */
+  metadata_type: string | null;
+  metadata_value: string | null;
+}
+
+export interface SentryProject {
+  id: string;
+  slug: string;
+  name: string;
+  platform: string | null;
+  is_member: boolean;
+}
+
+export interface SentryEnvironment {
+  id: string;
+  name: string;
+}
+
+export interface SentryStackFrame {
+  function: string | null;
+  filename: string | null;
+  abs_path: string | null;
+  lineno: number | null;
+  colno: number | null;
+  in_app: boolean;
+  context: { line: number; source: string }[];
+}
+
+export interface SentryException {
+  type: string | null;
+  value: string | null;
+  module: string | null;
+  frames: SentryStackFrame[];
+}
+
+export interface SentryEventDetail {
+  event_id: string;
+  date_created: string;
+  platform: string | null;
+  message: string | null;
+  culprit: string | null;
+  user_email: string | null;
+  user_id: string | null;
+  user_ip: string | null;
+  release: string | null;
+  environment: string | null;
+  tags: [string, string][];
+  exceptions: SentryException[];
+  breadcrumbs_summary: string | null;
+  permalink: string | null;
+}
+
+/** Sentry level → which mini-tag style to use. */
+export function sentryLevelClass(level: string): string {
+  switch (level) {
+    case 'fatal':
+    case 'error':
+      return 'tag--closed';
+    case 'warning':
+      return 'tag--draft';
+    case 'info':
+    case 'debug':
+    default:
+      return 'tag--open';
+  }
 }
 
 export function jiraStatusClass(cat: string): string {

@@ -4,6 +4,7 @@
 // and rules to localStorage via $effect.
 
 import type { ClaudeAction, ClaudeMessage, ClaudeSession, Mention } from '$lib/types';
+import { notify } from '$lib/state/toaster.svelte';
 
 export const SESSIONS_STORAGE_KEY = 'forgehold:claude-sessions:v1';
 export const RULES_STORAGE_KEY = 'forgehold:claude-rules:v1';
@@ -134,6 +135,27 @@ export function getActiveSession(): ClaudeSession | null {
 // Call once from a +page root $effect (Svelte 5 requires $effect to run
 // inside a component / .svelte.ts effect root). We expose as a function so
 // the page can wire both effects in one place.
+//
+// Failure mode: localStorage has a ~5–10MB quota. When it fills (long
+// chats, many sessions) `setItem` throws QuotaExceededError. We surface
+// this once per session via a sticky toast and also expose `persistError`
+// so the Settings view can show a permanent banner. Subsequent failures
+// in the same session are silent (no spam) but the flag stays set so the
+// Settings storage panel keeps the warning visible.
+
+export const persistError = $state<{ sessions: string | null; rules: string | null }>({
+  sessions: null,
+  rules: null
+});
+
+let sessionsToastFired = false;
+let rulesToastFired = false;
+
+function asMessage(e: unknown): string {
+  if (e instanceof Error) return e.message || e.name;
+  if (typeof e === 'string') return e;
+  return String(e);
+}
 
 export function persistSessionsEffect() {
   $effect(() => {
@@ -162,8 +184,20 @@ export function persistSessionsEffect() {
         activeId: sessionsState.activeClaudeId
       };
       localStorage.setItem(SESSIONS_STORAGE_KEY, JSON.stringify(payload));
+      // Recovered after a previous failure — clear the flag.
+      if (persistError.sessions) persistError.sessions = null;
     } catch (e) {
-      console.error('persist sessions', e);
+      const msg = asMessage(e);
+      persistError.sessions = msg;
+      if (!sessionsToastFired) {
+        sessionsToastFired = true;
+        notify({
+          kind: 'error',
+          title: "Couldn't save chats",
+          body: `${msg}. New messages stay in memory but won't survive a restart. See Settings → Storage.`,
+          ttlMs: null
+        });
+      }
     }
   });
 }
@@ -173,8 +207,14 @@ export function persistRulesEffect() {
     if (typeof localStorage === 'undefined') return;
     try {
       localStorage.setItem(RULES_STORAGE_KEY, sessionsState.userRules);
+      if (persistError.rules) persistError.rules = null;
     } catch (e) {
-      console.error('persist rules', e);
+      const msg = asMessage(e);
+      persistError.rules = msg;
+      if (!rulesToastFired) {
+        rulesToastFired = true;
+        notify({ kind: 'warning', title: "Couldn't save rules", body: msg, ttlMs: null });
+      }
     }
   });
 }
@@ -225,54 +265,47 @@ export function deleteClaudeSession(id: string) {
   const rest = sessionsState.list.filter((s) => s.id !== id);
   sessionsState.list = rest;
   const kind = doomed?.agentKind ?? 'claude';
-  const columnId = doomed?.columnInstanceId ?? null;
-  // Per-column-instance active pointer: jump to next session bound to the
-  // same instance (or floating of the same kind), or null if none.
-  if (columnId && sessionsState.activeByInstance[columnId] === id) {
-    const nextInInst = rest.find((s) => s.columnInstanceId === columnId) ?? null;
-    sessionsState.activeByInstance[columnId] = nextInInst?.id ?? null;
+  // Every per-column pointer that was on this session jumps to the next
+  // visible session of the same kind (or null if none remain).
+  const fallback = rest.find((s) => s.agentKind === kind)?.id ?? null;
+  for (const k of Object.keys(sessionsState.activeByInstance)) {
+    if (sessionsState.activeByInstance[k] === id) {
+      sessionsState.activeByInstance[k] = fallback;
+    }
   }
-  // Legacy per-kind pointer — still used as a fallback for floating sessions.
-  if (sessionsState.activeIds[kind] === id) {
-    sessionsState.activeIds[kind] =
-      rest.find((s) => s.agentKind === kind && !s.columnInstanceId)?.id ??
-      rest.find((s) => s.agentKind === kind)?.id ??
-      null;
-  }
+  if (sessionsState.activeIds[kind] === id) sessionsState.activeIds[kind] = fallback;
   if (sessionsState.activeClaudeId === id) {
     sessionsState.activeClaudeId =
-      (columnId ? sessionsState.activeByInstance[columnId] : null) ??
-      sessionsState.activeIds[kind] ??
-      sessionsState.activeIds[kind === 'claude' ? 'cursor' : 'claude'];
+      fallback ?? sessionsState.activeIds[kind === 'claude' ? 'cursor' : 'claude'];
   }
-  // Only auto-create a chat for the Claude agent kind (keeps Cursor column
-  // empty until the user asks for it) and only if no Claude chats remain.
+  // Auto-create a fresh Claude chat if the user emptied the list — keeps
+  // the chat column from sitting on a permanent empty state.
   if (rest.filter((s) => s.agentKind === 'claude').length === 0) {
-    newClaudeSession({ agentKind: 'claude', columnInstanceId: columnId });
+    newClaudeSession({ agentKind: 'claude' });
   }
 }
 
-/** Remove a column's binding from every session it owned, so the sessions
- *  float back to the global pool. Called by the layout store when closing a
- *  column instance. */
+/** Clean up per-column pointers when a column instance is removed. The
+ *  session list is global per-kind so nothing in `list` needs touching —
+ *  only the per-instance bookkeeping. */
 export function orphanSessionsForInstance(instanceId: string) {
-  sessionsState.list = sessionsState.list.map((s) =>
-    s.columnInstanceId === instanceId ? { ...s, columnInstanceId: null } : s
-  );
   delete sessionsState.activeByInstance[instanceId];
   delete sessionsState.scrollEls[instanceId];
 }
 
-/** Set the active session pointer for one specific column instance. */
+/** Set the active session pointer for one specific column instance. The
+ *  session list is global per-kind, so this only affects which chat is
+ *  shown when the user looks at this column — it doesn't move the chat
+ *  out of any other column. */
 export function setActiveSessionInColumn(columnId: string, sessionId: string) {
   sessionsState.activeByInstance[columnId] = sessionId;
   const sess = sessionsState.list.find((s) => s.id === sessionId);
   if (sess) {
     sessionsState.activeIds[sess.agentKind] = sessionId;
     sessionsState.activeClaudeId = sessionId;
-    // Pin the session to this column if it was floating, so next time it's
-    // only visible in this one.
-    if (!sess.columnInstanceId || sess.columnInstanceId !== columnId) {
+    // Track "last shown in" for telemetry/UX-niceties only — does NOT
+    // affect what's visible in other columns.
+    if (sess.columnInstanceId !== columnId) {
       updateSession(sessionId, { columnInstanceId: columnId });
     }
   }
@@ -334,39 +367,37 @@ export function focusSession(id: string) {
   }
 }
 
-/** Sessions that should render in a given column instance. First instance of
- *  its kind in a workbench also adopts floating (unbound) sessions so
- *  pre-v2 persisted sessions don't disappear on upgrade. */
+/** Sessions that should render in a given column instance. As of 2026-04-25
+ *  the chat list is **global per agent-kind** — every Claude column sees
+ *  every Claude chat, every Cursor column sees every Cursor chat. The
+ *  column is just a viewing window with its own "currently open" pointer.
+ *  `columnInstanceId` on a session is now informational ("last shown here").
+ *
+ *  `_isFirstOfKind` is kept for prop-shape compatibility with the column
+ *  components but is unused — left in so we don't have to ripple a prop
+ *  removal through three files for a refactor that's already this large. */
 export function sessionsForInstance(
-  instanceId: string,
+  _instanceId: string,
   kind: 'claude' | 'cursor',
-  isFirstOfKind: boolean
+  _isFirstOfKind: boolean
 ): ClaudeSession[] {
-  return sessionsState.list.filter((s) => {
-    if (s.agentKind !== kind) return false;
-    if (s.columnInstanceId === instanceId) return true;
-    if (isFirstOfKind && s.columnInstanceId === null) return true;
-    return false;
-  });
+  return sessionsState.list.filter((s) => s.agentKind === kind);
 }
 
-/** Return the session active in a given column instance, falling back to the
- *  first session visible in that column. */
+/** Return the session active in a given column instance. Each column owns
+ *  its own active pointer so two columns can show different chats; the
+ *  list itself is shared. Falls back to the most-recent session of the
+ *  same kind when the column hasn't picked one yet (fresh column = shows
+ *  newest chat instead of an empty pane). */
 export function activeSessionInInstance(
   instanceId: string,
   kind: 'claude' | 'cursor',
-  isFirstOfKind: boolean
+  _isFirstOfKind: boolean
 ): ClaudeSession | null {
-  const id = sessionsState.activeByInstance[instanceId];
-  const visible = sessionsForInstance(instanceId, kind, isFirstOfKind);
-  if (id) {
-    const found = visible.find((s) => s.id === id);
-    if (found) return found;
-  }
-  // Legacy per-kind pointer, for unbound sessions that drifted in.
-  const legacy = sessionsState.activeIds[kind];
-  if (legacy) {
-    const found = visible.find((s) => s.id === legacy);
+  const visible = sessionsState.list.filter((s) => s.agentKind === kind);
+  const pinned = sessionsState.activeByInstance[instanceId];
+  if (pinned) {
+    const found = visible.find((s) => s.id === pinned);
     if (found) return found;
   }
   return visible[0] ?? null;

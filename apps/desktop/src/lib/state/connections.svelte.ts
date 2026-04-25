@@ -10,18 +10,21 @@ import {
   type ClaudeStatus,
   type ConnectionStatus,
   type CursorStatus,
-  type JiraStatus
+  type JiraStatus,
+  type SentryStatus
 } from '$lib/data';
 
 export const connectionsState = $state<{
   github: ConnectionStatus;
   jira: JiraStatus;
+  sentry: SentryStatus;
   claude: ClaudeStatus | null;
   cursor: CursorStatus | null;
   statusLoading: boolean;
 }>({
   github: { kind: 'disconnected' },
   jira: { kind: 'disconnected' },
+  sentry: { kind: 'disconnected' },
   claude: null,
   cursor: null,
   statusLoading: true
@@ -51,6 +54,15 @@ export async function refreshJiraStatus() {
   }
 }
 
+export async function refreshSentryStatus() {
+  try {
+    connectionsState.sentry = await invoke<SentryStatus>('sentry_status');
+  } catch (e) {
+    console.error('sentry_status', e);
+    connectionsState.sentry = { kind: 'disconnected' };
+  }
+}
+
 export async function refreshClaudeStatus() {
   // `agent_status` returns both CLIs in one round trip — cheaper than two
   // separate Tauri calls and keeps the two status flags in lockstep.
@@ -66,5 +78,10 @@ export async function refreshClaudeStatus() {
 }
 
 export async function refreshAllStatus() {
-  await Promise.all([refreshGithubStatus(), refreshJiraStatus(), refreshClaudeStatus()]);
+  await Promise.all([
+    refreshGithubStatus(),
+    refreshJiraStatus(),
+    refreshSentryStatus(),
+    refreshClaudeStatus()
+  ]);
 }

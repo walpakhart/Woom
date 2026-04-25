@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { externalId } from './data';
+  import { externalId } from '$lib/data';
   import { inboxState } from '$lib/state/inbox.svelte';
 
   interface Props {
@@ -19,6 +19,7 @@
   <div
     class="palette-backdrop"
     onclick={(e) => { if (e.target === e.currentTarget) open = false; }}
+    onkeydown={(e) => { if (e.key === 'Escape') open = false; }}
     role="dialog"
     tabindex="-1"
   >

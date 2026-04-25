@@ -70,7 +70,7 @@
   });
 </script>
 
-<div class="wdf-backdrop" onclick={(e) => { if (e.target === e.currentTarget) onClose(); }} role="dialog" aria-modal="true" tabindex="-1">
+<div class="wdf-backdrop" onclick={(e) => { if (e.target === e.currentTarget) onClose(); }} onkeydown={(e) => { if (e.key === 'Escape') onClose(); }} role="dialog" aria-modal="true" tabindex="-1">
   <div class="wdf">
     <header class="wdf-head">
       <div class="wdf-title-wrap">

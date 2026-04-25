@@ -1,10 +1,10 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
   import { openUrl } from '@tauri-apps/plugin-opener';
-  import Sigil from '$lib/Sigil.svelte';
-  import Markdown from '$lib/Markdown.svelte';
-  import GithubFocusOverlay from '$lib/GithubFocusOverlay.svelte';
-  import Dropdown, { type DropdownOption } from '$lib/Dropdown.svelte';
+  import Sigil from '$lib/components/ui/Sigil.svelte';
+  import Markdown from '$lib/components/ui/Markdown.svelte';
+  import GithubFocusOverlay from '$lib/components/inbox/GithubFocusOverlay.svelte';
+  import Dropdown, { type DropdownOption } from '$lib/components/ui/Dropdown.svelte';
   import {
     kindLabel,
     relativeTime,
@@ -1029,7 +1029,6 @@
     border: 1px solid rgba(238, 107, 31, 0.25);
   }
   .repo-release-name { font-size: 13px; color: var(--text-0); font-weight: 600; }
-  .repo-release-title:hover .repo-release-name { color: var(--accent-bright); }
   .repo-release-author { font-size: 11px; color: var(--text-2); }
   .repo-release-avatar { width: 18px; height: 18px; border-radius: 50%; }
   .repo-release-time { font-size: 11px; color: var(--text-mute); }

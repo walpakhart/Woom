@@ -5,9 +5,9 @@
   import { EditorView, basicSetup } from 'codemirror';
   import { EditorState } from '@codemirror/state';
   import { oneDark } from '@codemirror/theme-one-dark';
-  import type { FileBlob, RepoBranch, RepoCommit, TreeEntry } from './data';
-  import { languageFor } from './codemirrorLang';
-  import Markdown from './Markdown.svelte';
+  import type { FileBlob, RepoBranch, RepoCommit, TreeEntry } from '$lib/data';
+  import { languageFor } from '$lib/components/editor/codemirrorLang';
+  import Markdown from '$lib/components/ui/Markdown.svelte';
 
   interface Props {
     owner: string;
@@ -48,7 +48,7 @@
   let commitsError = $state<string | null>(null);
 
   // CodeMirror viewer instance.
-  let viewerEl: HTMLDivElement;
+  let viewerEl = $state<HTMLDivElement | null>(null);
   let viewer: EditorView | null = null;
 
   $effect(() => {

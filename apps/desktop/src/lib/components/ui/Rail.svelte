@@ -1,6 +1,6 @@
 <script lang="ts">
-  import Sigil from './Sigil.svelte';
-  import type { ConnectionStatus } from './data';
+  import Sigil from '$lib/components/ui/Sigil.svelte';
+  import type { ConnectionStatus } from '$lib/data';
 
   type View = 'workbench' | 'repositories' | 'tasks' | 'rules' | 'connections' | 'settings';
 

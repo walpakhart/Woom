@@ -7,10 +7,11 @@ import { tick } from 'svelte';
 import { connectionsState } from '$lib/state/connections.svelte';
 import type { PanelInstance, PanelKind, Workbench } from '$lib/types';
 
-export const DEFAULT_PANEL_ORDER: PanelKind[] = ['github', 'jira', 'claude', 'cursor', 'editor'];
+export const DEFAULT_PANEL_ORDER: PanelKind[] = ['github', 'jira', 'sentry', 'claude', 'cursor', 'editor'];
 export const DEFAULT_PANEL_WIDTHS: Record<PanelKind, number> = {
   github: 420,
   jira: 420,
+  sentry: 440,
   claude: 520,
   cursor: 520,
   editor: 720
@@ -256,10 +257,12 @@ export function restorePanelState() {
         : [];
       const widths = safeParse<Partial<Record<PanelKind, number>>>(wMap) ?? {};
 
-      // Defaults for kinds the user never toggled off: github/jira/claude on, cursor/editor off.
+      // Defaults for kinds the user never toggled off: github/jira/claude on,
+      // cursor/sentry/editor off (added 2026-04-25 for sentry).
       const defaults: Record<PanelKind, boolean> = {
         github: true,
         jira: true,
+        sentry: false,
         claude: true,
         cursor: false,
         editor: false
@@ -346,12 +349,52 @@ export function movePanelById(id: string, direction: -1 | 1) {
   }
 }
 
+/** Relocate an instance to a different workbench, preserving its identity
+ *  (id, width, name) and any sessions bound to it. The instance is appended
+ *  to the target workbench's instance list. If `targetWorkbenchId` already
+ *  contains the instance, this is a no-op.
+ *
+ *  Returns true on success, false when the source/target can't be resolved
+ *  (caller can surface a toast). Singleton-kind clashes (two `github`
+ *  panels in one workbench) are rejected since the inbox only renders the
+ *  first one anyway — caller should prompt before calling. */
+export function moveInstanceToWorkbench(
+  instanceId: string,
+  targetWorkbenchId: string
+): boolean {
+  let source: Workbench | null = null;
+  let inst: PanelInstance | null = null;
+  for (const wb of layoutState.workbenches) {
+    const found = wb.instances.find((i) => i.id === instanceId);
+    if (found) {
+      source = wb;
+      inst = found;
+      break;
+    }
+  }
+  if (!source || !inst) return false;
+  if (source.id === targetWorkbenchId) return true;
+  const target = layoutState.workbenches.find((w) => w.id === targetWorkbenchId);
+  if (!target) return false;
+  // Singleton kinds (github / jira / sentry) — only one per workbench.
+  // Refuse to move a second one in; the caller should detect this and ask
+  // the user whether to merge / discard.
+  if ((inst.kind === 'github' || inst.kind === 'jira' || inst.kind === 'sentry')
+      && target.instances.some((i) => i.kind === inst!.kind)) {
+    return false;
+  }
+  source.instances = source.instances.filter((i) => i.id !== instanceId);
+  target.instances = [...target.instances, inst];
+  persistPanelState();
+  return true;
+}
+
 /** Append a new instance of `kind` to the active workbench and return its id.
  *  For singleton kinds (github, jira) this is a no-op if one already exists —
  *  returns the existing instance's id instead. */
 export function addPanelInstance(kind: PanelKind): string {
   const wb = activeWorkbench();
-  if (kind === 'github' || kind === 'jira') {
+  if (kind === 'github' || kind === 'jira' || kind === 'sentry') {
     const existing = wb.instances.find((i) => i.kind === kind);
     if (existing) return existing.id;
   }
@@ -376,6 +419,7 @@ export function firstInstanceOfKind(kind: PanelKind): PanelInstance | null {
 export function isInstanceVisible(inst: PanelInstance): boolean {
   if (inst.kind === 'github') return connectionsState.github.kind === 'connected';
   if (inst.kind === 'jira') return connectionsState.jira.kind === 'connected';
+  if (inst.kind === 'sentry') return connectionsState.sentry.kind === 'connected';
   if (inst.kind === 'claude') return connectionsState.claude?.ready ?? false;
   if (inst.kind === 'cursor') return connectionsState.cursor?.ready ?? false;
   if (inst.kind === 'editor') return true;

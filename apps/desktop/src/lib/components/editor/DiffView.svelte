@@ -8,7 +8,7 @@
   import { syntaxHighlighting, defaultHighlightStyle, bracketMatching, foldGutter } from '@codemirror/language';
   import { MergeView } from '@codemirror/merge';
   import { oneDark } from '@codemirror/theme-one-dark';
-  import { languageFor } from './codemirrorLang';
+  import { languageFor } from '$lib/components/editor/codemirrorLang';
 
   interface Props {
     repo: string;

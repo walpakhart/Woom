@@ -3,11 +3,12 @@
   import { invoke } from '@tauri-apps/api/core';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import { open as openDialog } from '@tauri-apps/plugin-dialog';
-  import Editor from './Editor.svelte';
-  import FileTree from './FileTree.svelte';
-  import GitPanel from './GitPanel.svelte';
-  import DiffView from './DiffView.svelte';
-  import Splitter from './Splitter.svelte';
+  import Editor from '$lib/components/editor/Editor.svelte';
+  import FileTree from '$lib/components/editor/FileTree.svelte';
+  import GitPanel from '$lib/components/editor/GitPanel.svelte';
+  import DiffView from '$lib/components/editor/DiffView.svelte';
+  import Splitter from '$lib/components/ui/Splitter.svelte';
+  import { notifyError } from '$lib/state/toaster.svelte';
 
   const ROOT_STORAGE_KEY = 'forgehold:editor:root';
   const TABS_STORAGE_KEY = 'forgehold:editor:tabs';
@@ -170,9 +171,19 @@
   });
 
   async function pickFolder() {
-    const picked = await openDialog({ directory: true, multiple: false, title: 'Open folder' });
+    let picked: string | string[] | null;
+    try {
+      picked = await openDialog({ directory: true, multiple: false, title: 'Open folder' });
+    } catch (e) {
+      notifyError(e, { title: "Couldn't open folder picker" });
+      return;
+    }
     if (!picked || Array.isArray(picked)) return;
-    await setRoot(picked);
+    try {
+      await setRoot(picked);
+    } catch (e) {
+      notifyError(e, { title: "Couldn't open folder" });
+    }
   }
 
   async function setRoot(path: string) {

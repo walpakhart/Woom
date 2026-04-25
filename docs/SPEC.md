@@ -1,8 +1,16 @@
 # Forge — Technical Specification
 
-**Version:** 0.1 (draft)
-**Last updated:** 2026-04-22
-**Status:** design phase
+**Version:** 0.1
+**Last updated:** 2026-04-25
+**Status:** alpha — implementation matches this spec where noted; cuts and
+revisions are summarized in [MVP.md](MVP.md). Read MVP.md for the
+current scope; this doc describes the intended architecture.
+
+> **Important:** sections covering OAuth PKCE, SQLite schema, Slack source,
+> per-scope rules parser, and saved workflows are **deferred to post-v1**.
+> The implementation today uses manual PAT entry, localStorage on the
+> frontend, and a single global rules string. See MVP.md "Cuts from the
+> original plan" for the full list and reasoning.
 
 ---
 
@@ -15,24 +23,25 @@ messages, comments) onto **actions** (AI agent, send, remind, transform),
 and Forge orchestrates everything through a common protocol — without the
 user having to think about APIs, tokens, or formats.
 
-### Goals (MVP)
+### Goals (v0.1)
 
-1. A unified inbox of objects from Jira, GitHub, and Slack.
-2. Drag-and-drop workflow: object → Claude Code → object/message → destination.
-3. Local credentials encrypted in the OS keychain.
-4. Architecture ready for a team use case (workspaces, shared connections).
-5. All integrations isolated behind the MCP protocol, plus first-class
-   support for Claude Code as an executor.
+1. A unified inbox of objects from Jira and GitHub.
+2. Drag-and-drop workflow: ticket / file / PR → Claude or Cursor.
+3. Local credentials encrypted in the macOS Keychain with Touch ID gating.
+4. Architecture ready for a team use case (post-v1; v0.1 is single-player).
+5. Claude / Cursor invoked as headless CLIs, sidecars exposed via MCP.
 
-### Non-Goals (MVP)
+### Non-Goals (v0.1)
 
 - Mobile app.
 - Cloud sync between devices. (Coming in v0.3.)
-- A built-in code editor. Zed / VS Code stay in place.
-- Our own LLM. We use Claude through the SDK.
-- A long list of integrations. Four integrations, done well.
+- ~~A built-in code editor~~ — **Reversed 2026-04-23.** Editor is in scope
+  (CodeMirror 6, file tree, git panel, diff). Zed / VS Code remain
+  reachable via MCP.
+- Our own LLM. We use Claude / Cursor.
+- A long list of integrations — kept narrow. Slack moved to post-v1.
 - A visual no-code builder for complex workflows. A workflow is a linear chain.
-- **Windows and Linux builds.** MVP ships macOS only; cross-platform is
+- **Windows and Linux builds.** v0.1 ships macOS only; cross-platform is
   post-v1.0. Every design decision below assumes macOS semantics (see §13).
 
 ---

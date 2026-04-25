@@ -1,9 +1,9 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
   import { openUrl } from '@tauri-apps/plugin-opener';
-  import { jiraStatusClass, relativeTime, type JiraComment, type JiraDetail, type JiraUserSummary, type JiraWorklog } from './data';
-  import { formatDuration, jiraStartedString, parseDuration } from './format';
-  import Markdown from './Markdown.svelte';
+  import { jiraStatusClass, relativeTime, type JiraComment, type JiraDetail, type JiraUserSummary, type JiraWorklog } from '$lib/data';
+  import { formatDuration, jiraStartedString, parseDuration } from '$lib/format';
+  import Markdown from '$lib/components/ui/Markdown.svelte';
 
   interface Props {
     issueKey: string;
