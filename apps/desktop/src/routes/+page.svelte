@@ -45,6 +45,7 @@
     sessionsState,
     persistSessionsEffect,
     persistRulesEffect,
+    persistEditorInstanceStateEffect,
     newClaudeSession,
     deleteClaudeSession,
     updateSession,
@@ -364,6 +365,7 @@
   // have to wire the $effect calls inside the component's effect scope.
   persistSessionsEffect();
   persistRulesEffect();
+  persistEditorInstanceStateEffect();
 
   const activeSession = $derived(
     sessionsState.list.find((s) => s.id === sessionsState.activeClaudeId) ?? null
@@ -451,12 +453,25 @@
 
   onMount(async () => {
     restorePanelState();
-    // Seed v1 editor root into the first editor instance, if any.
+    // One-shot v1 → v2 migration: seed the legacy `forgehold:editor:root`
+    // localStorage value into the first editor instance, ONLY if that
+    // instance has no persisted v2 state yet. Without this guard the
+    // migration would clobber the editor's open folder on every reload
+    // (v2 persistence already restored the right path; the legacy key
+    // would re-overwrite it back to the original v1 value).
     try {
       const savedEditorRoot = localStorage.getItem('forgehold:editor:root');
       if (savedEditorRoot) {
         const ed = firstInstanceOfKind('editor');
-        if (ed) setEditorRepoPath(savedEditorRoot, ed.id);
+        const alreadyHasV2 = ed
+          ? !!sessionsState.editorInstanceState[ed.id]?.repoPath
+          : false;
+        if (ed && !alreadyHasV2) {
+          setEditorRepoPath(savedEditorRoot, ed.id);
+        }
+        // Drop the legacy key once we know v2 is in place — keeps
+        // re-mounts cheap and prevents future regressions of this kind.
+        if (alreadyHasV2) localStorage.removeItem('forgehold:editor:root');
       }
     } catch {/* ignore */}
     tickInterval = setInterval(() => (now = Date.now()), 30_000);

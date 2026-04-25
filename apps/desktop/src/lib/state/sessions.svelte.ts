@@ -8,6 +8,25 @@ import { notify } from '$lib/state/toaster.svelte';
 
 export const SESSIONS_STORAGE_KEY = 'forgehold:claude-sessions:v1';
 export const RULES_STORAGE_KEY = 'forgehold:claude-rules:v1';
+export const EDITOR_STATE_STORAGE_KEY = 'forgehold:editor-state:v1';
+
+function loadStoredEditorState(): Record<string, { repoPath: string }> {
+  if (typeof localStorage === 'undefined') return {};
+  try {
+    const raw = localStorage.getItem(EDITOR_STATE_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const out: Record<string, { repoPath: string }> = {};
+    for (const [k, v] of Object.entries(parsed)) {
+      if (v && typeof v === 'object' && typeof (v as { repoPath?: unknown }).repoPath === 'string') {
+        out[k] = { repoPath: (v as { repoPath: string }).repoPath };
+      }
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
 
 export function genId() {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -127,7 +146,7 @@ export const sessionsState = $state<{
   activeClaudeId: __initial.activeId,
   scrollEls: {},
   userRules: loadStoredRules(),
-  editorInstanceState: {}
+  editorInstanceState: loadStoredEditorState()
 });
 
 /** Currently focused session across both columns. */
@@ -221,6 +240,26 @@ export function persistRulesEffect() {
         rulesToastFired = true;
         notify({ kind: 'warning', title: "Couldn't save rules", body: msg, ttlMs: null });
       }
+    }
+  });
+}
+
+/** Persist `sessionsState.editorInstanceState` so each editor column
+ *  remembers its open folder across reloads. Without this, the
+ *  agent-driven `set_editor_repo_path` (and the manual user-side path
+ *  picker) would visually revert on every restart even though sessions
+ *  themselves persist their cwd. */
+export function persistEditorInstanceStateEffect() {
+  $effect(() => {
+    if (typeof localStorage === 'undefined') return;
+    try {
+      localStorage.setItem(
+        EDITOR_STATE_STORAGE_KEY,
+        JSON.stringify(sessionsState.editorInstanceState)
+      );
+    } catch {
+      // Quota / SSR / private mode: silent. Editor path won't survive a
+      // restart in that environment, but it's recoverable by re-picking.
     }
   });
 }
