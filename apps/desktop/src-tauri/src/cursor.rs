@@ -133,17 +133,24 @@ pub async fn ask(
     };
 
     let mut cmd = tokio::process::Command::new(bin);
-    cmd.arg("-p")
-        .arg(&effective_prompt)
+    cmd.arg("--print")
         .arg("--output-format")
         .arg("stream-json")
+        // Without this, cursor-agent buffers the entire model response and
+        // emits one big `assistant` event at the end. The Forgehold spinner
+        // would just tick for 30-90s with no UI feedback. Turn it on so
+        // text deltas stream as the model writes them.
+        .arg("--stream-partial-output")
         .arg("--resume")
         .arg(&chat_id)
         // Let the agent run tools non-interactively — equivalent to Claude's
         // `auto` permission mode. `--approve-mcps` lets MCP servers answer
-        // without the tty prompt they'd otherwise emit.
+        // without the tty prompt they'd otherwise emit. `--trust` skips the
+        // first-time workspace-trust prompt that otherwise hangs the spawn
+        // forever (no tty to confirm on).
         .arg("--force")
-        .arg("--approve-mcps");
+        .arg("--approve-mcps")
+        .arg("--trust");
     if let Some(m) = model.map(str::trim).filter(|m| !m.is_empty()) {
         cmd.arg("--model").arg(m);
     }
@@ -151,6 +158,10 @@ pub async fn ask(
         cmd.arg("--workspace").arg(dir);
         cmd.current_dir(dir);
     }
+    // Prompt is the positional argument — pass it last with `--` so any
+    // `-`/`--`-leading content inside the prompt isn't reinterpreted as
+    // a flag by the CLI parser.
+    cmd.arg("--").arg(&effective_prompt);
     for (k, v) in extended_env() {
         cmd.env(k, v);
     }
@@ -295,16 +306,19 @@ pub async fn generate_commit_message(
     let chat_id = String::from_utf8_lossy(&create_out.stdout).trim().to_string();
 
     let mut cmd = tokio::process::Command::new(bin);
-    cmd.arg("-p")
-        .arg(&prompt)
+    cmd.arg("--print")
         .arg("--output-format")
         .arg("stream-json")
+        .arg("--stream-partial-output")
         .arg("--resume")
         .arg(&chat_id)
         .arg("--force")
         .arg("--approve-mcps")
+        .arg("--trust")
         .arg("--workspace")
-        .arg(repo);
+        .arg(repo)
+        .arg("--")
+        .arg(&prompt);
     cmd.current_dir(repo);
     for (k, v) in extended_env() {
         cmd.env(k, v);
@@ -372,10 +386,27 @@ fn normalize_event(raw: &str) -> Vec<serde_json::Value> {
         return Vec::new();
     };
     match ty {
-        // Text from the model, and the final result: already match Claude's
-        // shape closely enough — frontend only reads `type`, `message.content`,
-        // and `result`.
-        "assistant" | "result" | "system" | "user" => vec![v],
+        // Text deltas, the final result, the init system event, and the user
+        // echo: already match Claude's shape closely enough — frontend only
+        // reads `type`, `message.content`, and `result`.
+        //
+        // BUT: cursor-agent emits two flavours of `assistant` events when
+        // `--stream-partial-output` is on:
+        //   1. partial deltas — have `timestamp_ms` — each carrying one chunk
+        //   2. one final summary — no `timestamp_ms` — carries the FULL text
+        // If we let both through, the frontend's append-delta path runs the
+        // full text on top of the already-streamed chunks, doubling it. Drop
+        // the summary; the final reply still arrives via the `result` event,
+        // which `+page.svelte`'s `replaceLastAssistant` uses for the clean
+        // post-stream text anyway.
+        "assistant" => {
+            if v.get("timestamp_ms").is_some() {
+                vec![v]
+            } else {
+                Vec::new()
+            }
+        }
+        "result" | "system" | "user" => vec![v],
         "tool_call" => normalize_tool_call(&v).into_iter().collect(),
         _ => Vec::new(),
     }
