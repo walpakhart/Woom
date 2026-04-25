@@ -9,6 +9,7 @@
   import JiraConnectModal from './JiraConnectModal.svelte';
   import SentryConnectModal from './SentryConnectModal.svelte';
   import ClaudeStatusModal from './ClaudeStatusModal.svelte';
+  import CursorStatusModal from './CursorStatusModal.svelte';
   import PatModal from './PatModal.svelte';
   import CommentModal from './CommentModal.svelte';
   import ReviewModal from './ReviewModal.svelte';
@@ -30,6 +31,8 @@
     sentryTokenUrl: () => string;
     refreshClaudeStatus: () => Promise<void> | void;
     claudeInstallUrl: () => string;
+    refreshCursorStatus: () => Promise<void> | void;
+    cursorInstallUrl: () => string;
     submitPat: () => Promise<void> | void;
     githubTokenUrl: () => string;
     submitComment: () => Promise<void> | void;
@@ -54,6 +57,8 @@
     sentryTokenUrl,
     refreshClaudeStatus,
     claudeInstallUrl,
+    refreshCursorStatus,
+    cursorInstallUrl,
     submitPat,
     githubTokenUrl,
     submitComment,
@@ -72,6 +77,7 @@
 <JiraConnectModal {openBrowser} {jiraTokenUrl} onSubmit={submitJiraConnect} />
 <SentryConnectModal {openBrowser} {sentryTokenUrl} onSubmit={submitSentryConnect} />
 <ClaudeStatusModal {openBrowser} {claudeInstallUrl} onRefresh={refreshClaudeStatus} />
+<CursorStatusModal {openBrowser} {cursorInstallUrl} onRefresh={refreshCursorStatus} />
 <PatModal {openBrowser} {githubTokenUrl} onSubmit={submitPat} />
 <CommentModal onSubmit={submitComment} />
 <ReviewModal onSubmit={submitReview} />

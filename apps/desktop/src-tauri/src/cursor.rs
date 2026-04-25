@@ -28,9 +28,18 @@ use crate::claude::Runners;
 
 #[derive(Debug, Serialize, Clone)]
 pub struct CursorStatus {
+    /// `cursor-agent` binary found on PATH.
     pub detected: bool,
+    /// Path to the binary if detected.
     pub path: Option<String>,
+    /// Output of `cursor-agent --version`, trimmed.
     pub version: Option<String>,
+    /// `~/.cursor` dir exists — usually means `cursor-agent login` has
+    /// been run (the CLI persists its session there).
+    pub has_config_dir: bool,
+    /// `CURSOR_API_KEY` env var set in our process env.
+    pub has_api_key_env: bool,
+    /// High-level bool for the UI: detected + (config dir or API key env).
     pub ready: bool,
 }
 
@@ -41,15 +50,17 @@ pub fn detect() -> CursorStatus {
     // cursor-agent stores credentials under ~/.cursor; presence of the dir
     // is our cheap proxy for "authenticated". For API-key auth the env var
     // CURSOR_API_KEY works too.
-    let has_cursor_dir = home_dir()
+    let has_config_dir = home_dir()
         .map(|h| h.join(".cursor").is_dir())
         .unwrap_or(false);
-    let has_api_key = std::env::var("CURSOR_API_KEY").is_ok();
+    let has_api_key_env = std::env::var("CURSOR_API_KEY").is_ok();
     CursorStatus {
         detected,
         path: path.map(|p| p.display().to_string()),
         version,
-        ready: detected && (has_cursor_dir || has_api_key),
+        has_config_dir,
+        has_api_key_env,
+        ready: detected && (has_config_dir || has_api_key_env),
     }
 }
 

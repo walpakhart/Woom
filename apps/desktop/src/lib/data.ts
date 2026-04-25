@@ -87,6 +87,8 @@ export interface CursorStatus {
   detected: boolean;
   path: string | null;
   version: string | null;
+  has_config_dir: boolean;
+  has_api_key_env: boolean;
   ready: boolean;
 }
 

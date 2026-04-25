@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { openUrl } from '@tauri-apps/plugin-opener';
   import type {
     ClaudeStatus,
     ConnectionMeta,
@@ -82,9 +81,7 @@
                 {:else if connected && conn.id === 'claude'}
                   <button class="conn-btn conn-btn--configure" onclick={() => onOpenConnectModal(conn)}>Manage</button>
                 {:else if connected && conn.id === 'cursor'}
-                  <button class="conn-btn conn-btn--configure" onclick={() => void openUrl('https://cursor.com/docs/cli')}>Docs</button>
-                {:else if conn.id === 'cursor'}
-                  <button class="conn-btn conn-btn--connect" onclick={() => void openUrl('https://cursor.com/docs/cli/installation')}>Install</button>
+                  <button class="conn-btn conn-btn--configure" onclick={() => onOpenConnectModal(conn)}>Manage</button>
                 {:else if conn.implemented}
                   <button class="conn-btn conn-btn--connect" onclick={() => onOpenConnectModal(conn)}>Connect</button>
                 {:else}

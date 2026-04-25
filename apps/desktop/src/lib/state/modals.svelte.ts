@@ -15,6 +15,7 @@ import type {
   CommitDetail,
   CommitEntry,
   ConnectionMeta,
+  CursorStatus,
   JiraIssueType,
   JiraProject,
   JiraSprint,
@@ -65,6 +66,11 @@ export interface SentryConnectModalState {
 
 export interface ClaudeStatusModalState {
   status: ClaudeStatus | null;
+  loading: boolean;
+}
+
+export interface CursorStatusModalState {
+  status: CursorStatus | null;
   loading: boolean;
 }
 
@@ -153,6 +159,7 @@ export interface ModalsState {
   jiraConnect: JiraConnectModalState | null;
   sentryConnect: SentryConnectModalState | null;
   claudeStatus: ClaudeStatusModalState | null;
+  cursorStatus: CursorStatusModalState | null;
   pat: PatModalState | null;
   comment: CommentModalState | null;
   review: ReviewModalState | null;
@@ -168,6 +175,7 @@ export const modalsState = $state<ModalsState>({
   jiraConnect: null,
   sentryConnect: null,
   claudeStatus: null,
+  cursorStatus: null,
   pat: null,
   comment: null,
   review: null,

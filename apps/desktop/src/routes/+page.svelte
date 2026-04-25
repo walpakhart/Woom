@@ -1759,6 +1759,9 @@
     } else if (conn.id === 'claude') {
       openModal('claudeStatus', { status: claudeStatus, loading: false });
       void refreshClaudeModal();
+    } else if (conn.id === 'cursor') {
+      openModal('cursorStatus', { status: cursorStatus, loading: false });
+      void refreshCursorModal();
     }
   }
 
@@ -1767,6 +1770,19 @@
     patchModal('claudeStatus', { loading: true });
     await refreshClaudeStatus();
     if (modalsState.claudeStatus) patchModal('claudeStatus', { status: claudeStatus, loading: false });
+  }
+
+  async function refreshCursorModal() {
+    if (!modalsState.cursorStatus) return;
+    patchModal('cursorStatus', { loading: true });
+    // refreshClaudeStatus() actually refreshes BOTH agents (cursor + claude) —
+    // see `agent_status` Tauri command. Reuse so we don't double-poll.
+    await refreshClaudeStatus();
+    if (modalsState.cursorStatus) patchModal('cursorStatus', { status: cursorStatus, loading: false });
+  }
+
+  function cursorInstallUrl() {
+    return 'https://cursor.com/docs/cli/installation';
   }
 
   async function submitJira() {
@@ -1882,6 +1898,7 @@
       if (patModal && !patModal.busy) closeModal('pat');
       if (jiraModal && !jiraModal.busy) closeModal('jiraConnect');
       if (claudeModal && !claudeModal.loading) closeModal('claudeStatus');
+      if (modalsState.cursorStatus && !modalsState.cursorStatus.loading) closeModal('cursorStatus');
       if (modalsState.userPicker) closeModal('userPicker');
       if (commentModal && !commentModal.busy) closeModal('comment');
       if (reviewModal && !reviewModal.busy) closeModal('review');
@@ -2662,6 +2679,8 @@
   {sentryTokenUrl}
   refreshClaudeStatus={refreshClaudeModal}
   {claudeInstallUrl}
+  refreshCursorStatus={refreshCursorModal}
+  {cursorInstallUrl}
   {submitPat}
   {githubTokenUrl}
   {submitComment}
