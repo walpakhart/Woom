@@ -365,7 +365,11 @@
   /** Walk back from the caret: if we're inside a `@token` (started by
       whitespace or line-start), set `mentionQuery` to everything between
       the `@` and the caret. Any whitespace breaks the token and closes
-      the popover. */
+      the popover.
+
+      Resets `mentionSelectedIdx` to 0 only when the query actually
+      changes — otherwise ArrowUp/Down + `keyup` would reset the
+      selection back to the first item between every keystroke. */
   function syncMentionFromTextarea(el: HTMLTextAreaElement) {
     const value = el.value;
     const pos = el.selectionStart ?? value.length;
@@ -376,9 +380,12 @@
         // Require whitespace or start-of-string before the '@' so e.g.
         // an email address isn't mistaken for a mention.
         if (i === 0 || /\s/.test(value[i - 1])) {
+          const nextQuery = value.slice(i + 1, pos);
           mentionAt = i;
-          mentionQuery = value.slice(i + 1, pos);
-          mentionSelectedIdx = 0;
+          if (nextQuery !== mentionQuery) {
+            mentionQuery = nextQuery;
+            mentionSelectedIdx = 0;
+          }
           void ensureFileIndex();
           return;
         }
@@ -1025,6 +1032,7 @@
                   <span class="mention-item-kind mention-item-kind--{c.source}">
                     {#if c.source === 'jira'}J
                     {:else if c.source === 'github'}GH
+                    {:else if c.source === 'sentry'}Se
                     {:else}F
                     {/if}
                   </span>
@@ -1708,6 +1716,7 @@
   }
   .mention-item-kind--jira { background: rgba(59, 130, 246, 0.18); color: var(--blue-bright); }
   .mention-item-kind--github { background: rgba(139, 92, 246, 0.18); color: #c7a8ff; }
+  .mention-item-kind--sentry { background: rgba(247, 100, 87, 0.18); color: #f76457; }
   .mention-item-kind--file { background: var(--bg-3); color: var(--text-2); }
   .mention-item-id {
     font-size: 11px; color: var(--text-2); min-width: 56px;
