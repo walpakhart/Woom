@@ -1185,6 +1185,7 @@
     const rules = sessionsState.userRules.trim();
     const agentKind = sess?.agentKind ?? 'claude';
     const cursorModel = agentKind === 'cursor' ? (sess?.cursorModel ?? null) : null;
+    const appContext = buildAgentAppContext(id);
 
     try {
       const result = await runAgentRequest({
@@ -1196,6 +1197,7 @@
         rules: rules || null,
         agentKind,
         cursorModel,
+        appContext,
         onAssistantDelta: appendAssistantDelta,
         onAppNavigation: handleAppNavigation
       });
@@ -1264,6 +1266,96 @@
   function appendAssistantDelta(sessionId: string, delta: string) {
     appendToLastAssistant(sessionId, delta);
     void scrollChatBottom();
+  }
+
+  /** Build the per-turn app-context string we hand the agent as a system-
+   *  prompt suffix. Lists every workbench's instances by name + id, with
+   *  the editor's open path / agent's cwd, and editor↔agent links. Tells
+   *  the agent which instance/session it's running in so "switch myself"
+   *  has a meaning, and which sibling instances exist so it knows whether
+   *  to add a NEW one or just change an existing one's path.
+   *
+   *  Re-derived on every turn from `layoutState` + `sessionsState` so it's
+   *  always current. */
+  function buildAgentAppContext(callingSessionId: string): string {
+    const lines: string[] = [];
+    lines.push(
+      'You are running inside Forgehold, a desktop app where the user has '
+        + 'organised work into workbenches (tabs of side-by-side columns). '
+        + 'You can navigate the UI directly via the `mcp__app__*` tools.'
+    );
+
+    const calling = sessionsState.list.find((s) => s.id === callingSessionId);
+    const callingInstanceId = calling?.columnInstanceId ?? null;
+
+    for (const wb of layoutState.workbenches) {
+      const isActive = wb.id === layoutState.activeWorkbenchId;
+      lines.push('');
+      lines.push(`Workbench "${wb.name}"${isActive ? ' (ACTIVE)' : ''} — id ${wb.id}:`);
+      if (wb.instances.length === 0) {
+        lines.push('  (no columns)');
+        continue;
+      }
+      for (const inst of wb.instances) {
+        const meta: string[] = [`kind=${inst.kind}`, `name=${inst.name}`, `id=${inst.id}`];
+        if (inst.kind === 'editor') {
+          const path = sessionsState.editorInstanceState[inst.id]?.repoPath ?? '';
+          meta.push(`repo_path=${path || '(none)'}`);
+          // Show what agent sessions are linked to this editor.
+          const linked = sessionsState.list
+            .filter((s) => s.linkedToEditor && s.linkedToEditorInstanceId === inst.id)
+            .map((s) => s.title || s.id.slice(0, 6));
+          if (linked.length) meta.push(`linked_agents=[${linked.join(', ')}]`);
+        }
+        if (inst.kind === 'claude' || inst.kind === 'cursor') {
+          // Find the active session bound to this column.
+          const sessId = sessionsState.activeByInstance[inst.id] ?? null;
+          const sess = sessId ? sessionsState.list.find((s) => s.id === sessId) : null;
+          if (sess) {
+            const effCwd = sess.worktreePath || sess.cwd
+              || (sess.linkedToEditor && sess.linkedToEditorInstanceId
+                ? sessionsState.editorInstanceState[sess.linkedToEditorInstanceId]?.repoPath
+                : null)
+              || '(inherits from editor or no cwd)';
+            meta.push(`session=${sess.title || sess.id.slice(0, 6)}`);
+            meta.push(`cwd=${effCwd}`);
+            if (sess.linkedToEditor && sess.linkedToEditorInstanceId) {
+              const link = wb.instances.find((i) => i.id === sess.linkedToEditorInstanceId);
+              if (link) meta.push(`linked_to_editor=${link.name}`);
+            }
+          }
+        }
+        const isYou = inst.id === callingInstanceId;
+        lines.push(`  - ${meta.join(', ')}${isYou ? '  ← THIS IS YOU' : ''}`);
+      }
+    }
+
+    lines.push('');
+    lines.push(
+      'When the user asks to "switch the editor and claude", "open this '
+        + 'repo in editor", "switch myself to /path", etc — DO NOT add a new '
+        + 'column. Use these tools on existing instances:'
+    );
+    lines.push(
+      '  - `mcp__app__set_editor_repo_path` — change an editor\'s open '
+        + 'folder. Pass `instance_name` (the art-name like "Sagrada-Familia") '
+        + 'or `instance_id`. If the editor has linked agents, their cwd '
+        + 'auto-follows.'
+    );
+    lines.push(
+      '  - `mcp__app__set_agent_cwd` — change an agent session\'s cwd. '
+        + 'Pass `instance_name`/`instance_id`, or `target=self` for yourself. '
+        + 'For yourself, the change takes effect on your NEXT turn.'
+    );
+    lines.push(
+      '  - `mcp__app__list_instances` — re-list the current state if you '
+        + 'think this preamble is stale.'
+    );
+    lines.push(
+      'Only use `mcp__app__add_workbench_instance` when the user explicitly '
+        + 'says "add", "new", "another" — not for "switch" / "open in".'
+    );
+    return lines.join('\n');
   }
 
   /** Forgehold-app MCP navigation: the agent calls `mcp__app__open_jira_issue`
@@ -1390,7 +1482,76 @@
         inboxState.pendingRepoNav = { owner, repo, section };
         return;
       }
+      case 'mcp__app__set_editor_repo_path': {
+        const repoPath = str('repo_path');
+        const instName = str('instance_name');
+        const instId = str('instance_id');
+        if (!repoPath) return;
+        const editor = findInstanceByNameOrId('editor', instName, instId);
+        if (!editor) return;
+        view = 'workbench';
+        setEditorRepoPath(repoPath, editor.id);
+        // Linked agents follow: any session pinned to this editor with
+        // `linkedToEditor` reads its cwd from the editor's repoPath via
+        // `effectiveCwd` already, so we just need to bump them so the
+        // change is visible in the UI right away.
+        for (const s of sessionsState.list) {
+          if (s.linkedToEditor && s.linkedToEditorInstanceId === editor.id) {
+            updateSession(s.id, { cwd: repoPath });
+          }
+        }
+        void scrollInstanceIntoView(editor.id);
+        return;
+      }
+      case 'mcp__app__set_agent_cwd': {
+        const repoPath = str('repo_path');
+        if (!repoPath) return;
+        const target = str('target').toLowerCase();
+        if (target === 'self') {
+          // _sessionId is the session that called the tool; update its cwd.
+          updateSession(_sessionId, { cwd: repoPath, linkedToEditor: false });
+          return;
+        }
+        const instName = str('instance_name');
+        const instId = str('instance_id');
+        // Try claude first, then cursor — same pool from the user's POV.
+        const inst = findInstanceByNameOrId('claude', instName, instId)
+          ?? findInstanceByNameOrId('cursor', instName, instId);
+        if (!inst) return;
+        const sessId = sessionsState.activeByInstance[inst.id];
+        if (!sessId) return;
+        view = 'workbench';
+        updateSession(sessId, { cwd: repoPath, linkedToEditor: false });
+        void scrollInstanceIntoView(inst.id);
+        return;
+      }
+      case 'mcp__app__list_instances': {
+        // No-op: the data lives in the system-prompt preamble and is
+        // refreshed on every turn. The sidecar's tool reply explains.
+        return;
+      }
     }
+  }
+
+  /** Look up a workbench instance by name or id within a given kind, across
+   *  every workbench (not just the active one). Returns the first match —
+   *  art-names are unique pool entries within a workbench, but the agent
+   *  might reference one that's in a different workbench. */
+  function findInstanceByNameOrId(
+    kind: PanelKind,
+    name: string,
+    id: string
+  ): PanelInstance | null {
+    const wantName = name.trim().toLowerCase();
+    const wantId = id.trim();
+    for (const wb of layoutState.workbenches) {
+      for (const inst of wb.instances) {
+        if (inst.kind !== kind) continue;
+        if (wantId && inst.id === wantId) return inst;
+        if (wantName && inst.name.toLowerCase() === wantName) return inst;
+      }
+    }
+    return null;
   }
 
   /** Pull a single GitHub item by `(owner, repo, number)` and slot it into

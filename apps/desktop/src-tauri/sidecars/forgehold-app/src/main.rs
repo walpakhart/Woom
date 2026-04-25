@@ -192,6 +192,42 @@ struct OpenRepoParams {
     section: Option<String>,
 }
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct SetEditorRepoPathParams {
+    /// Art-name of the editor instance (e.g. "Sagrada-Familia"). Either
+    /// `instance_name` or `instance_id` must be provided. Names are
+    /// matched case-insensitively.
+    #[serde(default)]
+    instance_name: Option<String>,
+    /// UUID of the editor instance. Either `instance_name` or
+    /// `instance_id` must be provided.
+    #[serde(default)]
+    instance_id: Option<String>,
+    /// Absolute folder path to open in the editor. If the editor has
+    /// linked agent sessions, their cwd is auto-updated to match.
+    repo_path: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct SetAgentCwdParams {
+    /// Use `target = "self"` to point at the calling session (most
+    /// common when the user says "switch myself"). Otherwise pass
+    /// `instance_name` or `instance_id` of the target agent column.
+    #[serde(default)]
+    target: Option<String>,
+    /// Art-name of the agent instance. Optional — only used when
+    /// `target` is omitted or != "self".
+    #[serde(default)]
+    instance_name: Option<String>,
+    /// UUID of the agent instance.
+    #[serde(default)]
+    instance_id: Option<String>,
+    /// Absolute folder path to use as cwd. The change takes effect on
+    /// the agent session's NEXT turn (the current turn keeps the old
+    /// cwd it spawned with).
+    repo_path: String,
+}
+
 fn validate_one_of(value: &str, choices: &[&str], label: &str) -> Result<(), ErrorData> {
     if choices.contains(&value) {
         Ok(())
@@ -424,6 +460,74 @@ impl App {
             s
         ))]))
     }
+
+    #[tool(
+        description = "Change the open folder of an EXISTING editor column. Use this when the user says \"switch the editor to /path\" — do NOT use add_workbench_instance, which creates a new column. Identify the editor by `instance_name` (the art-name like \"Sagrada-Familia\" shown in the workbench bar) or `instance_id`. If the editor has linked agent sessions, their cwd is auto-updated to match (no separate set_agent_cwd call needed)."
+    )]
+    async fn set_editor_repo_path(
+        &self,
+        Parameters(SetEditorRepoPathParams { instance_name, instance_id, repo_path }): Parameters<SetEditorRepoPathParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        if repo_path.trim().is_empty() {
+            return Err(ErrorData::invalid_params("repo_path is required", None));
+        }
+        let by_name = instance_name.as_deref().map(str::trim).filter(|s| !s.is_empty());
+        let by_id = instance_id.as_deref().map(str::trim).filter(|s| !s.is_empty());
+        if by_name.is_none() && by_id.is_none() {
+            return Err(ErrorData::invalid_params(
+                "either `instance_name` or `instance_id` must be provided",
+                None,
+            ));
+        }
+        let label = by_name.or(by_id).unwrap_or("editor");
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Setting editor `{}` repo path → `{}`. Linked agent sessions (if any) update too.",
+            label,
+            repo_path.trim()
+        ))]))
+    }
+
+    #[tool(
+        description = "Change an agent session's cwd (working directory). Use when the user says \"switch yourself to /path\" / \"point Claude at /repo\" / \"have the cursor agent work on X\". For yourself, pass `target=\"self\"` — the change takes effect on your NEXT turn (the current one keeps the old cwd it spawned with). For another agent column, pass `instance_name` (e.g. \"Mona-Lisa\") or `instance_id`. Do NOT use this to create a new agent — use add_workbench_instance for that."
+    )]
+    async fn set_agent_cwd(
+        &self,
+        Parameters(SetAgentCwdParams { target, instance_name, instance_id, repo_path }): Parameters<SetAgentCwdParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        if repo_path.trim().is_empty() {
+            return Err(ErrorData::invalid_params("repo_path is required", None));
+        }
+        let is_self = target.as_deref().map(str::trim).map(|s| s.eq_ignore_ascii_case("self")).unwrap_or(false);
+        if !is_self {
+            let by_name = instance_name.as_deref().map(str::trim).filter(|s| !s.is_empty());
+            let by_id = instance_id.as_deref().map(str::trim).filter(|s| !s.is_empty());
+            if by_name.is_none() && by_id.is_none() {
+                return Err(ErrorData::invalid_params(
+                    "for non-self target, either `instance_name` or `instance_id` must be provided",
+                    None,
+                ));
+            }
+            let label = by_name.or(by_id).unwrap_or("agent");
+            return Ok(CallToolResult::success(vec![Content::text(format!(
+                "Setting agent `{}` cwd → `{}` (effective from its next turn).",
+                label,
+                repo_path.trim()
+            ))]));
+        }
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Setting MY (self) cwd → `{}`. Effective from my next turn — the current one is already running with the old cwd.",
+            repo_path.trim()
+        ))]))
+    }
+
+    #[tool(
+        description = "Re-list the workbenches and their column instances. The Forgehold runtime injects this state into your system prompt at the start of every turn, so you usually already know it. Call this only if you suspect the preamble is stale (e.g. you just added a column and want to confirm its name/id), or if the user references something that wasn't in the preamble."
+    )]
+    async fn list_instances(&self) -> Result<CallToolResult, ErrorData> {
+        Ok(CallToolResult::success(vec![Content::text(
+            "Forgehold injects the current workbench / instance map into your system prompt at the start of every turn. Re-read it for the latest state. (This tool is a placeholder — the frontend interceptor doesn't need to mutate anything for it; the actual data lives in the system prompt preamble.)".to_string(),
+        )]))
+    }
 }
 
 #[tool_handler]
@@ -446,8 +550,11 @@ impl ServerHandler for App {
              ## Workbench manipulation\n\
              - new_workbench — create a fresh workbench tab (with optional name). Activates it by default.\n\
              - switch_workbench — switch active workbench by name or index.\n\
-             - add_workbench_instance — add any kind of column (github/jira/sentry/claude/cursor/editor) to the active workbench. For `editor`, optional `repo_path` opens a folder.\n\
+             - add_workbench_instance — add a NEW column (github/jira/sentry/claude/cursor/editor). Use ONLY when the user explicitly asks for a new/another column. Do NOT use for \"switch the editor to /path\" — that's set_editor_repo_path.\n\
+             - set_editor_repo_path — change an EXISTING editor's open folder. Linked agents auto-follow.\n\
+             - set_agent_cwd — change an agent session's cwd. `target=self` for yourself, or `instance_name` for another column. Effective from the next turn.\n\
              - focus_workbench_instance — scroll-to + highlight an existing column (creates one if none exists).\n\
+             - list_instances — re-read the workbench layout if you think your preamble is stale.\n\
              - add_editor_instance — DEPRECATED, use add_workbench_instance with kind=`editor`. Kept for back-compat.\n\
              \n\
              ## Sources\n\

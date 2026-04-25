@@ -924,6 +924,13 @@ async fn claude_ask(
     // keep the frontend contract stable.
     #[allow(non_snake_case)] agentKind: Option<AgentKind>,
     #[allow(non_snake_case)] cursorModel: Option<String>,
+    // Per-turn dynamic context describing the agent's UI surroundings —
+    // active workbench, sibling instances + their names + cwds, and which
+    // instance the calling session is bound to. Built fresh on the
+    // frontend before every turn (workbench layout changes, sessions
+    // change cwd) so the agent always sees current state. Prepended to
+    // the system prompt for Claude / to the prompt itself for Cursor.
+    #[allow(non_snake_case)] appContext: Option<String>,
 ) -> Result<AgentAskResult, String> {
     let cwd_path = cwd.as_deref().map(std::path::Path::new);
     let kind = agentKind.unwrap_or_default();
@@ -938,6 +945,7 @@ async fn claude_ask(
         resume,
         rules.as_deref(),
         cursorModel.as_deref(),
+        appContext.as_deref(),
     )
     .await
     .map_err(|e| e.to_string())

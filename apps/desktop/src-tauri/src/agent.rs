@@ -78,6 +78,7 @@ pub async fn ask(
     resume: bool,
     rules: Option<&str>,
     cursor_model: Option<&str>,
+    app_context: Option<&str>,
 ) -> Result<AgentAskResult, AgentError> {
     match kind {
         AgentKind::Claude => {
@@ -90,6 +91,7 @@ pub async fn ask(
                 agent_uuid,
                 resume,
                 rules,
+                app_context,
             )
             .await?;
             // Claude reuses whatever UUID we handed it, so no change.
@@ -109,6 +111,7 @@ pub async fn ask(
                 resume,
                 rules,
                 cursor_model,
+                app_context,
             )
             .await?;
             Ok(AgentAskResult {

@@ -155,6 +155,7 @@ pub async fn ask(
     claude_uuid: &str,
     resume: bool,
     rules: Option<&str>,
+    app_context: Option<&str>,
 ) -> Result<String, ClaudeRunError> {
     use tauri::Emitter;
     use tokio::io::AsyncBufReadExt;
@@ -183,12 +184,16 @@ pub async fn ask(
     } else {
         cmd.arg("--session-id").arg(claude_uuid);
     }
-    // Compose the system-prompt suffix in two parts:
+    // Compose the system-prompt suffix in three parts:
+    //  - Per-turn UI context (active workbench, sibling instances, links).
     //  - Auto behaviors Forgehold injects when the relevant MCP sidecars
     //    are wired up (memory recall, source-aware references).
     //  - User-authored rules from the Rules tab.
     // Joined with a separator so Claude reads them as one append-block.
     let mut system_parts: Vec<String> = Vec::new();
+    if let Some(ctx) = app_context.map(str::trim).filter(|s| !s.is_empty()) {
+        system_parts.push(ctx.to_string());
+    }
     let memory_available = mcp
         .as_ref()
         .map(|(_, allowed)| {
@@ -530,6 +535,9 @@ fn build_mcp_config(session_id: &str) -> Option<(PathBuf, Vec<String>)> {
         allowed.push("mcp__app__switch_workbench".into());
         allowed.push("mcp__app__focus_workbench_instance".into());
         allowed.push("mcp__app__open_repo".into());
+        allowed.push("mcp__app__set_editor_repo_path".into());
+        allowed.push("mcp__app__set_agent_cwd".into());
+        allowed.push("mcp__app__list_instances".into());
     }
 
     if servers.is_empty() {

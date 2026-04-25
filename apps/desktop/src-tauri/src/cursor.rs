@@ -90,6 +90,7 @@ pub async fn ask(
     resume: bool,
     rules: Option<&str>,
     model: Option<&str>,
+    app_context: Option<&str>,
 ) -> Result<(String, String), CursorRunError> {
     use tauri::Emitter;
     use tokio::io::AsyncBufReadExt;
@@ -123,13 +124,23 @@ pub async fn ask(
         String::from_utf8_lossy(&out.stdout).trim().to_string()
     };
 
-    // Prepend rules to the prompt — cursor-agent has no `--append-system-prompt`.
-    let effective_prompt = match rules.map(|s| s.trim()).filter(|s| !s.is_empty()) {
-        Some(r) => format!(
-            "User rules (follow these on every turn):\n\n{}\n\n---\n\n{}",
-            r, prompt
-        ),
-        None => prompt.to_string(),
+    // Prepend app context + rules to the prompt — cursor-agent has no
+    // `--append-system-prompt`. Order: app context first (so it frames the
+    // session), then rules, then the user message itself.
+    let mut preamble = String::new();
+    if let Some(ctx) = app_context.map(str::trim).filter(|s| !s.is_empty()) {
+        preamble.push_str(ctx);
+        preamble.push_str("\n\n---\n\n");
+    }
+    if let Some(r) = rules.map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        preamble.push_str("User rules (follow these on every turn):\n\n");
+        preamble.push_str(r);
+        preamble.push_str("\n\n---\n\n");
+    }
+    let effective_prompt = if preamble.is_empty() {
+        prompt.to_string()
+    } else {
+        format!("{}{}", preamble, prompt)
     };
 
     let mut cmd = tokio::process::Command::new(bin);

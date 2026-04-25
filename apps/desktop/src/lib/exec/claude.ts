@@ -25,6 +25,13 @@ export interface AgentRunRequest {
   rules: string | null;
   agentKind: 'claude' | 'cursor';
   cursorModel: string | null;
+  /** Per-turn UI context: a description of the active workbench, sibling
+   *  instances + names + cwds, and which instance the calling session is
+   *  bound to. Lets the agent address specific columns by name (e.g.
+   *  "switch the editor Sagrada-Familia") and know what already exists
+   *  so it doesn't blindly add a NEW column when the user said "switch".
+   *  Built fresh on every turn. */
+  appContext: string | null;
   /** Called with every assistant-text delta as it streams in. */
   onAssistantDelta: (sessionId: string, delta: string) => void;
   /** Called when the agent invokes a `mcp__app__*` UI-navigation tool.
@@ -76,7 +83,8 @@ export async function runAgentRequest(req: AgentRunRequest): Promise<AgentRunRes
       resume: req.resume,
       rules: req.rules,
       agentKind: req.agentKind,
-      cursorModel: req.cursorModel
+      cursorModel: req.cursorModel,
+      appContext: req.appContext
     });
     return { reply: result.reply, sessionUuid: result.session_uuid };
   } finally {
