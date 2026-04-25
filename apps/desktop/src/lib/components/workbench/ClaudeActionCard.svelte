@@ -1,5 +1,6 @@
 <script lang="ts">
   import { openUrl } from '@tauri-apps/plugin-opener';
+  import { invoke } from '@tauri-apps/api/core';
 
   type Action =
     | {
@@ -49,13 +50,45 @@
     /** Called when the user clicks "Open in Forgehold" on a completed PR card.
         Parent parses the URL and wires up focusItem → workbench view. */
     onOpenPrInForgehold?: (url: string) => void;
+    /** Effective cwd of the calling session — used to resolve the head
+        branch for PR cards so the user can see what branch the PR will
+        actually be opened FROM (a frequent footgun: the agent proposes
+        a PR on the wrong branch and validation fails). null when the
+        session has no cwd yet. */
+    repoCwd?: string | null;
   }
-  let { action, onUpdate, onDismiss, onExecute, onOpenPrInForgehold }: Props = $props();
+  let { action, onUpdate, onDismiss, onExecute, onOpenPrInForgehold, repoCwd = null }: Props = $props();
 
   const isBusy = $derived(action.status === 'executing');
   const isDone = $derived(action.status === 'done');
   const isError = $derived(action.status === 'error');
   const isEditable = $derived(action.status === 'pending' || action.status === 'error');
+
+  // Live head-branch readout for PR cards. We re-query when cwd changes or
+  // the card moves between executing/error states (a failed PR is often
+  // followed by the user manually `git checkout`-ing into a different
+  // branch and retrying — the live readout shows the new value).
+  let headBranch = $state<string | null>(null);
+  let headBranchError = $state<string | null>(null);
+  $effect(() => {
+    if (action.kind !== 'pr' || !repoCwd) {
+      headBranch = null;
+      headBranchError = null;
+      return;
+    }
+    // Re-trigger when status flips so a fresh `git checkout` becomes visible.
+    void action.status;
+    void (async () => {
+      try {
+        const b = await invoke<string>('git_current_branch', { repo: repoCwd });
+        headBranch = b.trim();
+        headBranchError = null;
+      } catch (e) {
+        headBranch = null;
+        headBranchError = typeof e === 'string' ? e : String(e);
+      }
+    })();
+  });
 
   function openResultUrl() {
     if (action.kind === 'pr' && action.result?.startsWith('http')) {
@@ -177,6 +210,18 @@
           disabled={!isEditable}
         />
       </label>
+      <div class="cac-label">
+        <span>Head branch <span class="cac-opt">(current branch in {repoCwd ? 'this repo' : 'the working dir'})</span></span>
+        <div class="cac-readonly mono" title={headBranchError ?? undefined}>
+          {#if headBranchError}
+            <span class="cac-readonly--err">⚠ {headBranchError}</span>
+          {:else if headBranch}
+            {headBranch}
+          {:else}
+            <span class="cac-readonly--mute">reading…</span>
+          {/if}
+        </div>
+      </div>
       <label class="cac-label">
         <span>Base branch <span class="cac-opt">(empty = repo default)</span></span>
         <input
@@ -304,6 +349,14 @@
   }
   .cac-input:focus { outline: none; border-color: var(--border-hi2); }
   .cac-input--subject { font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', monospace; font-size: 12.5px; }
+  .cac-readonly {
+    padding: 7px 10px;
+    background: var(--bg-1); border: 1px solid var(--border-neutral);
+    border-radius: 6px; color: var(--text-1); font-size: 13px;
+    cursor: default;
+  }
+  .cac-readonly--mute { color: var(--text-mute); font-style: italic; }
+  .cac-readonly--err { color: var(--error, #fca5a5); }
   .cac-textarea { resize: vertical; line-height: 1.5; min-height: 54px; }
   .cac-check { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--text-1); cursor: pointer; }
   .cac-check input { cursor: pointer; }

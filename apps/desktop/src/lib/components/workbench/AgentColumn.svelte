@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick } from 'svelte';
   import { slide } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
   import Markdown from '$lib/components/ui/Markdown.svelte';
@@ -147,6 +148,25 @@
   const kindSessions = $derived(sessionsForInstance(instanceId, kind, isFirstOfKind));
   const activeSess = $derived(activeSessionInInstance(instanceId, kind, isFirstOfKind));
   const dragOver = $derived(dragOverInstanceId === instanceId);
+
+  // Snap the chat scroll to the bottom whenever the active session changes
+  // (workbench switch, app reopen, user picks a different chat from the
+  // dropdown, agent column re-mounts). Without this the column lands at
+  // the top of the message list, which on long conversations means the
+  // user has to scroll past N old messages every time. Watching just
+  // `activeSess.id` keeps mid-stream auto-scroll (which is handled by
+  // appendAssistantDelta on the page side) untouched.
+  let lastScrolledSessionId: string | null = null;
+  $effect(() => {
+    const sid = activeSess?.id ?? null;
+    if (!sid || sid === lastScrolledSessionId) return;
+    lastScrolledSessionId = sid;
+    void (async () => {
+      await tick();
+      const el = sessionsState.scrollEls[instanceId];
+      if (el) el.scrollTop = el.scrollHeight;
+    })();
+  });
   const inst = $derived(activeInstances().find((i) => i.id === instanceId));
   const order = $derived(activeInstances().findIndex((i) => i.id === instanceId));
 
@@ -964,6 +984,7 @@
                 onExecuteAction(sess.id, act);
               }}
               onOpenPrInForgehold={(url) => onOpenPrInForgehold(url, act.kind === 'pr' ? act : null)}
+              repoCwd={sess.worktreePath ?? sess.cwd ?? null}
             />
           {/each}
         </div>

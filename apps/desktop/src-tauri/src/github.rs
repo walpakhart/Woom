@@ -182,12 +182,89 @@ pub enum GithubError {
     InvalidToken,
     #[error("rate limited — try again later")]
     RateLimited,
-    #[error("GitHub returned {status}")]
-    Api { status: u16 },
+    #[error("GitHub {status}{}", detail.as_deref().map(|d| format!(": {}", d)).unwrap_or_default())]
+    Api { status: u16, detail: Option<String> },
     #[error(transparent)]
     Reqwest(#[from] reqwest::Error),
     #[error("{0}")]
     Message(String),
+}
+
+/// Pull a useful one-line summary out of GitHub's JSON error body. GitHub's
+/// shape is `{ "message": "Validation Failed", "errors": [{ "message": "..." }] }`.
+/// We fold both into one string so the user sees *why* (e.g. "A pull request
+/// already exists for owner:branch") rather than just `422`. Falls back to a
+/// truncated raw body when the response isn't JSON.
+fn extract_api_detail(body: &str) -> Option<String> {
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) {
+        let top = v.get("message").and_then(|m| m.as_str()).unwrap_or("");
+        if let Some(arr) = v.get("errors").and_then(|e| e.as_array()) {
+            let parts: Vec<String> = arr
+                .iter()
+                .filter_map(|e| {
+                    e.get("message")
+                        .and_then(|m| m.as_str())
+                        .map(String::from)
+                        .or_else(|| {
+                            // Some endpoints return only `{ resource, field, code }`
+                            // — synthesize a readable fragment from those.
+                            let res = e.get("resource").and_then(|r| r.as_str()).unwrap_or("");
+                            let field = e.get("field").and_then(|f| f.as_str()).unwrap_or("");
+                            let code = e.get("code").and_then(|c| c.as_str()).unwrap_or("");
+                            let frag = [res, field, code]
+                                .iter()
+                                .filter(|s| !s.is_empty())
+                                .copied()
+                                .collect::<Vec<_>>()
+                                .join("/");
+                            if frag.is_empty() { None } else { Some(frag) }
+                        })
+                })
+                .collect();
+            if !parts.is_empty() {
+                return Some(if top.is_empty() {
+                    parts.join("; ")
+                } else {
+                    format!("{} — {}", top, parts.join("; "))
+                });
+            }
+        }
+        if !top.is_empty() {
+            return Some(top.to_string());
+        }
+    }
+    Some(trimmed.chars().take(300).collect::<String>())
+}
+
+/// Build an `Api` error from a non-success response, asynchronously reading
+/// the body so the resulting error includes GitHub's diagnostic text. Used
+/// by both `handle` and `handle_unit`.
+async fn api_error(resp: reqwest::Response) -> GithubError {
+    let status = resp.status();
+    if status == reqwest::StatusCode::UNAUTHORIZED {
+        return GithubError::InvalidToken;
+    }
+    if status == reqwest::StatusCode::TOO_MANY_REQUESTS
+        || status == reqwest::StatusCode::FORBIDDEN
+    {
+        if resp
+            .headers()
+            .get("x-ratelimit-remaining")
+            .and_then(|v| v.to_str().ok())
+            == Some("0")
+        {
+            return GithubError::RateLimited;
+        }
+    }
+    let body = resp.text().await.unwrap_or_default();
+    GithubError::Api {
+        status: status.as_u16(),
+        detail: extract_api_detail(&body),
+    }
 }
 
 // ---------- Client ----------
@@ -212,36 +289,17 @@ fn request(
 async fn handle<T: for<'de> serde::Deserialize<'de>>(
     resp: reqwest::Response,
 ) -> Result<T, GithubError> {
-    check_status(&resp)?;
+    if !resp.status().is_success() {
+        return Err(api_error(resp).await);
+    }
     Ok(resp.json().await?)
 }
 
 async fn handle_unit(resp: reqwest::Response) -> Result<(), GithubError> {
-    check_status(&resp)?;
+    if !resp.status().is_success() {
+        return Err(api_error(resp).await);
+    }
     Ok(())
-}
-
-fn check_status(resp: &reqwest::Response) -> Result<(), GithubError> {
-    let status = resp.status();
-    if status.is_success() {
-        return Ok(());
-    }
-    if status == reqwest::StatusCode::UNAUTHORIZED {
-        return Err(GithubError::InvalidToken);
-    }
-    if status == reqwest::StatusCode::TOO_MANY_REQUESTS
-        || status == reqwest::StatusCode::FORBIDDEN
-    {
-        if resp
-            .headers()
-            .get("x-ratelimit-remaining")
-            .and_then(|v| v.to_str().ok())
-            == Some("0")
-        {
-            return Err(GithubError::RateLimited);
-        }
-    }
-    Err(GithubError::Api { status: status.as_u16() })
 }
 
 // ---------- /user ----------
@@ -1421,7 +1479,9 @@ pub async fn fetch_default_branch(
     let c = client()?;
     let url = format!("{API_BASE}/repos/{owner}/{repo}");
     let resp = request(&c, reqwest::Method::GET, token, url).send().await?;
-    check_status(&resp)?;
+    if !resp.status().is_success() {
+        return Err(api_error(resp).await);
+    }
     let v: serde_json::Value = resp.json().await?;
     Ok(v.get("default_branch")
         .and_then(|d| d.as_str())
