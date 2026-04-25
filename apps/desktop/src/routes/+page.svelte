@@ -579,15 +579,25 @@
     }
   });
 
-  // Re-fetch detail when focus item changes. Kept in +page.svelte because it
-  // also pokes `tab` (parent-owned UI state) back to 'conversation' on every
-  // focus-change.
+  // Re-fetch detail every time the overlay opens (i.e. focusItem flips
+  // null→set). Previously we cached by (owner/repo/number) and never
+  // re-fetched on subsequent opens — a PR you came back to after pushing
+  // commits would still show the stale snapshot until you hit "Retry".
+  // Now: clear the cache key on close, so the next open re-loads.
+  // Switching directly between two PRs already re-loaded (different
+  // keys); only the close→reopen-same-PR case was stale.
   let lastLoadedKey = $state<string | null>(null);
   $effect(() => {
-    const key = inboxState.focusItem
-      ? `${inboxState.focusItem.repo?.owner}/${inboxState.focusItem.repo?.name}#${inboxState.focusItem.number}`
+    const focused = inboxState.focusItem;
+    const key = focused
+      ? `${focused.repo?.owner}/${focused.repo?.name}#${focused.number}`
       : null;
-    if (key && key !== lastLoadedKey) {
+    if (!key) {
+      // Closed — reset so the next open (even of the same PR) refetches.
+      lastLoadedKey = null;
+      return;
+    }
+    if (key !== lastLoadedKey) {
       lastLoadedKey = key;
       tab = 'conversation';
       void loadDetail();

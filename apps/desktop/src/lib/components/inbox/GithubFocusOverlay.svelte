@@ -152,6 +152,20 @@
           <span class="gfo-branches mono">{inboxState.prDetail.base_ref} ← {inboxState.prDetail.head_ref}</span>
         {/if}
         <div style="flex:1"></div>
+        <button
+          class="gfo-btn gfo-btn--icon"
+          onclick={onRetryLoadDetail}
+          disabled={inboxState.detailLoading}
+          title="Refresh PR detail (PR/files/commits/checks)"
+          aria-label="Refresh"
+        >
+          <svg class="i i-sm" class:gfo-spin={inboxState.detailLoading} viewBox="0 0 24 24">
+            <path d="M21 12a9 9 0 0 1-9 9 9 9 0 0 1-8.5-6"/>
+            <path d="M3 12a9 9 0 0 1 9-9 9 9 0 0 1 8.5 6"/>
+            <polyline points="21 3 21 9 15 9"/>
+            <polyline points="3 21 3 15 9 15"/>
+          </svg>
+        </button>
         <button class="gfo-btn" onclick={() => onOpenBrowser(item.url)} title="Open on GitHub">
           <svg class="i i-sm" viewBox="0 0 24 24"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><path d="M15 3h6v6M10 14 21 3"/></svg>
           Open on GitHub
@@ -558,6 +572,11 @@
     font-size: 12px; border: 1px solid var(--border-neutral-hi); cursor: pointer;
   }
   .gfo-btn:hover:not(:disabled) { background: var(--bg-3); color: var(--text-0); }
+  .gfo-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+  .gfo-btn--icon { padding: 6px; }
+  .gfo-btn--icon .i-sm { width: 14px; height: 14px; }
+  .gfo-spin { animation: gfo-spin 0.8s linear infinite; }
+  @keyframes gfo-spin { to { transform: rotate(360deg); } }
 
   .focus-scroll { flex: 1; overflow-y: auto; }
   .focus-shell { max-width: 920px; margin: 0 auto; padding: 32px 40px 80px; }
