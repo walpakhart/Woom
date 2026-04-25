@@ -12,6 +12,7 @@
     inboxState,
     loadSentryEnvironments,
     loadSentryProjects,
+    openSentryFocus,
     refreshSentryInbox,
     scheduleSentryFilterRefresh
   } from '$lib/state/inbox.svelte';
@@ -267,7 +268,7 @@
         <div class="tab-state">No issues match the current filters.</div>
       {:else}
         {#each inboxState.sentryItems as issue (issue.id)}
-          <button class="issue-row" onclick={() => (inboxState.sentryFocusId = issue.id)}>
+          <button class="issue-row" onclick={() => openSentryFocus(issue.id)}>
             <span class="mini-tag {sentryLevelClass(issue.level)}">{issue.level}</span>
             <span class="issue-id mono">{issue.short_id || issue.id}</span>
             <span class="issue-title">{shortText(issue.title, 110)}</span>

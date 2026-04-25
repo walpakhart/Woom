@@ -538,6 +538,7 @@ fn build_mcp_config(session_id: &str) -> Option<(PathBuf, Vec<String>)> {
         allowed.push("mcp__app__set_editor_repo_path".into());
         allowed.push("mcp__app__set_agent_cwd".into());
         allowed.push("mcp__app__list_instances".into());
+        allowed.push("mcp__app__open_sentry_event".into());
     }
 
     if servers.is_empty() {

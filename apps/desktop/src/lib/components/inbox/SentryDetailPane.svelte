@@ -25,9 +25,14 @@
   let eventLoading = $state(false);
   let eventError = $state<string | null>(null);
 
-  // Refresh on every issueId change.
+  // Refresh on every issueId change. Also re-runs when the agent (via
+  // mcp__app__open_sentry_event) sets `inboxState.sentryFocusEventId`
+  // to a specific event id — without that dependency the pane would
+  // stay on the latest event even after the agent navigated.
   $effect(() => {
     if (!issueId) return;
+    // touch the focus-event slot so the effect re-runs when it changes
+    void inboxState.sentryFocusEventId;
     void loadIssue();
     void loadEvent();
   });
@@ -50,7 +55,7 @@
     try {
       event = await invoke<SentryEventDetail>('sentry_get_event_detail', {
         issueId,
-        eventId: 'latest'
+        eventId: inboxState.sentryFocusEventId ?? 'latest'
       });
     } catch (e) {
       eventError = typeof e === 'string' ? e : String(e);

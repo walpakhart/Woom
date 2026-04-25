@@ -103,6 +103,19 @@ struct OpenSentryIssueParams {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct OpenSentryEventParams {
+    /// Sentry issue id (numeric or short id).
+    issue_id: String,
+    /// Specific event id to open. Omit (or pass "latest") to load the
+    /// most recent occurrence — same as plain `open_sentry_issue`.
+    /// Use a real event id to surface a particular occurrence (e.g. the
+    /// one with the user's email or the failing release) instead of
+    /// the latest. Pair with `mcp__sentry__list_events` to pick one.
+    #[serde(default)]
+    event_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct SwitchViewParams {
     /// Which top-level tab to switch to. One of:
     /// `workbench` (default columns view), `repositories` (full GitHub
@@ -309,6 +322,28 @@ impl App {
         Ok(CallToolResult::success(vec![Content::text(format!(
             "Opening Sentry issue {} in Forgehold's detail pane.",
             trimmed
+        ))]))
+    }
+
+    #[tool(
+        description = "Open a SPECIFIC event of a Sentry issue in Forgehold's detail pane (instead of just the latest). Use this when you've called mcp__sentry__list_events and want to surface one particular occurrence — e.g. \"the one in production after release 2.4.1\" or \"the one where user X hit it\". Pass `issue_id` (numeric or short id) and `event_id` (the real event id from list_events). Omit event_id to fall back to latest, equivalent to open_sentry_issue."
+    )]
+    async fn open_sentry_event(
+        &self,
+        Parameters(OpenSentryEventParams { issue_id, event_id }): Parameters<OpenSentryEventParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let issue = issue_id.trim();
+        if issue.is_empty() {
+            return Err(ErrorData::invalid_params("issue_id is empty", None));
+        }
+        let event = event_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("latest");
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Opening Sentry issue {} on event {} in Forgehold's detail pane.",
+            issue, event
         ))]))
     }
 

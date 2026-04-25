@@ -14,6 +14,7 @@
     inboxState,
     loadSentryEnvironments,
     loadSentryProjects,
+    openSentryFocus,
     refreshSentryInbox,
     scheduleSentryFilterRefresh
   } from '$lib/state/inbox.svelte';
@@ -253,8 +254,8 @@
           ondragstart={(e) => onDragStart({ source: 'sentry', item: issue }, e)}
           ondragend={onDragEnd}
           onmousedown={onCardMouseDown}
-          onclick={(e) => { if (isClickNotDrag(e)) inboxState.sentryFocusId = issue.id; }}
-          onkeydown={(e) => { if (e.key === 'Enter') inboxState.sentryFocusId = issue.id; }}
+          onclick={(e) => { if (isClickNotDrag(e)) openSentryFocus(issue.id); }}
+          onkeydown={(e) => { if (e.key === 'Enter') openSentryFocus(issue.id); }}
         >
           <div class="inbox-item-top">
             <span class="source-mark sentry-mark" aria-hidden="true">St</span>

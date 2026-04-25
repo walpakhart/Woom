@@ -84,6 +84,7 @@
     reloadDetailAndLists as reloadDetailAndListsCore,
     selectInboxItem,
     openFocusItem,
+    openSentryFocus,
     closeFocusItem,
     moveSelection,
     toggleFile,
@@ -1584,8 +1585,17 @@
         return;
       }
       case 'mcp__app__open_sentry_issue': {
+        // openSentryFocus(id) defaults eventId to null — equivalent to
+        // "latest" so a stale event id from a previous open_sentry_event
+        // call doesn't carry over.
         const id = str('id');
-        if (id) inboxState.sentryFocusId = id;
+        if (id) openSentryFocus(id);
+        return;
+      }
+      case 'mcp__app__open_sentry_event': {
+        const id = str('issue_id');
+        const eventId = str('event_id') || null;
+        if (id) openSentryFocus(id, eventId);
         return;
       }
       case 'mcp__app__open_github_pr':

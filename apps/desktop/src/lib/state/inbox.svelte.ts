@@ -312,6 +312,12 @@ export const inboxState = $state<{
   sentryEnvironmentOptionsLoading: boolean;
   /** Slide-over pane key — issue id of the currently focused issue. */
   sentryFocusId: string | null;
+  /** When the agent (or a deep link) wants to land on a specific event
+      of the focused issue rather than the latest. SentryDetailPane reads
+      this on mount and passes it into `sentry_get_event_detail`.
+      Null = use "latest" (default). Cleared whenever sentryFocusId
+      changes so a stale event id doesn't follow you to another issue. */
+  sentryFocusEventId: string | null;
 
   // ---- App-navigation channel (driven by `mcp__app__*` tools) ----
   // RepositoriesView watches `pendingRepoNav` and, when set, opens the
@@ -375,6 +381,7 @@ export const inboxState = $state<{
   sentryEnvironmentOptions: [],
   sentryEnvironmentOptionsLoading: false,
   sentryFocusId: null,
+  sentryFocusEventId: null,
   pendingRepoNav: null
 });
 
@@ -818,6 +825,15 @@ export async function selectAnyAssignee() {
 // connect-state effect when the auth check reveals we've lost credentials.
 // State tied to the disconnected source is wiped so stale data doesn't
 // leak into the UI.
+
+/** Open the Sentry slide-over on `id`, optionally on a specific event.
+ *  Always sets both `sentryFocusId` and `sentryFocusEventId` atomically
+ *  so a stale event id from a previous open doesn't leak into the new
+ *  one (which would otherwise 404 from `sentry_get_event_detail`). */
+export function openSentryFocus(id: string | null, eventId: string | null = null) {
+  inboxState.sentryFocusEventId = eventId;
+  inboxState.sentryFocusId = id;
+}
 
 export function resetGithubInbox() {
   inboxState.items = [];
