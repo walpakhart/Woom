@@ -193,7 +193,7 @@ pub enum GithubError {
 // ---------- Client ----------
 
 fn client() -> reqwest::Result<reqwest::Client> {
-    reqwest::Client::builder().user_agent(USER_AGENT).build()
+    reqwest::Client::builder().user_agent(USER_AGENT).timeout(std::time::Duration::from_secs(30)).build()
 }
 
 fn request(
@@ -1411,7 +1411,7 @@ pub async fn fetch_default_branch(
 
 /// Create a PR via the REST API (`POST /repos/{owner}/{repo}/pulls`). Returns
 /// the new PR's `html_url`. Replaces the legacy `gh pr create` shell-out so
-/// forge only needs the Keychain token — no `gh` CLI install required.
+/// Forgehold only needs the Keychain token — no `gh` CLI install required.
 pub async fn create_pr(
     token: &str,
     owner: &str,

@@ -193,6 +193,7 @@ impl Gh {
     fn new(creds: GhCreds) -> anyhow::Result<Self> {
         let http = reqwest::Client::builder()
             .user_agent(USER_AGENT)
+            .timeout(std::time::Duration::from_secs(30))
             .build()
             .context("build reqwest client")?;
         Ok(Self { creds, http, tool_router: Self::tool_router() })
@@ -374,7 +375,7 @@ impl Gh {
     }
 
     #[tool(
-        description = "Propose a commit for the user to review. Use this after you've finished making code changes and want to suggest a commit. Does NOT perform the commit — it surfaces an editable commit card in the Forge UI so the user can review, tweak the message, and approve with one click. Only call this when the user asked you to commit."
+        description = "Propose a commit for the user to review. Use this after you've finished making code changes and want to suggest a commit. Does NOT perform the commit — it surfaces an editable commit card in the Forgehold UI so the user can review, tweak the message, and approve with one click. Only call this when the user asked you to commit."
     )]
     async fn propose_commit(
         &self,
@@ -387,7 +388,7 @@ impl Gh {
              push:    {}\n\
              body:    {}\n\
              note:    {}\n\n\
-             The user will see an editable card with [Commit & Push] / [Dismiss] in the Forge chat. \
+             The user will see an editable card with [Commit & Push] / [Dismiss] in the Forgehold chat. \
              Do not call git-write tools yourself — wait for the user.",
             message,
             push_s,
@@ -408,7 +409,7 @@ impl Gh {
             "Bash command queued for user approval.\n\n\
              command: {}\n\
              reason:  {}\n\n\
-             The user will see an editable [Run] / [Dismiss] card in the Forge chat. \
+             The user will see an editable [Run] / [Dismiss] card in the Forgehold chat. \
              When the user approves and the command finishes, they'll paste the output \
              back to you so you can continue. Do not call other state-changing tools \
              until they respond.",
@@ -429,7 +430,7 @@ impl Gh {
             "Working-directory switch proposed for user approval.\n\n\
              path:   {}\n\
              reason: {}\n\n\
-             The user will see an approval card in the Forge chat. Do not call \
+             The user will see an approval card in the Forgehold chat. Do not call \
              other tools until they accept or dismiss.",
             path,
             reason.as_deref().unwrap_or("(none)"),
@@ -438,7 +439,7 @@ impl Gh {
     }
 
     #[tool(
-        description = "Propose a pull request for the user to review. Use after the commit is made (or will be made) and the user asked to open a PR. Does NOT create the PR — it surfaces an editable PR card in the Forge UI. Only call when the user asked you to open a PR."
+        description = "Propose a pull request for the user to review. Use after the commit is made (or will be made) and the user asked to open a PR. Does NOT create the PR — it surfaces an editable PR card in the Forgehold UI. Only call when the user asked you to open a PR."
     )]
     async fn propose_pr(
         &self,
@@ -451,7 +452,7 @@ impl Gh {
              draft: {}\n\
              body:  {}\n\
              note:  {}\n\n\
-             The user will see an editable card with [Create PR] / [Dismiss] in the Forge chat. \
+             The user will see an editable card with [Create PR] / [Dismiss] in the Forgehold chat. \
              Wait for the user before doing anything else.",
             title,
             base.as_deref().unwrap_or("(repo default)"),
@@ -472,7 +473,7 @@ impl ServerHandler for Gh {
             "Access GitHub and propose local actions on behalf of the user.\n\n\
              READ: get_pr, get_pr_diff, get_pr_files, get_pr_comments, list_tree, get_file, list_commits, list_releases, list_workflow_runs, get_readme.\n\n\
              WRITE (needs user confirmation in their chat client): add_comment, submit_review, merge_pr.\n\n\
-             PROPOSE (queues an approval card in Forge UI, does nothing itself — use when the user asked you to commit/open-pr/switch-repo/run-a-command): propose_commit, propose_pr, propose_switch_cwd, propose_bash.\n\n\
+             PROPOSE (queues an approval card in Forgehold UI, does nothing itself — use when the user asked you to commit/open-pr/switch-repo/run-a-command): propose_commit, propose_pr, propose_switch_cwd, propose_bash.\n\n\
              RULE: for any command that modifies state (git checkout/switch/merge/push/pull/reset/rebase, rm, mv, npm install, migrations, deploys, etc.) call propose_bash instead of the regular Bash tool. Read-only commands (git status, ls, cat, grep, find, rg) can use Bash directly. After proposing, STOP and wait for the user's approval before doing anything else."
                 .to_string(),
         );

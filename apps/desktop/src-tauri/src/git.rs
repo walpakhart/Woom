@@ -651,7 +651,7 @@ pub fn gh_cli_available() -> bool {
 }
 
 /// Create a PR via GitHub's REST API using the Keychain-stored token. Fully
-/// replaces the old `gh pr create` shell-out so forge needs no extra CLI.
+/// replaces the old `gh pr create` shell-out so Forgehold needs no extra CLI.
 ///
 /// The caller must push the head branch first — this function does NOT push.
 /// Orchestration: read the current branch + origin URL from the local repo,

@@ -2,6 +2,7 @@ mod agent;
 mod biometry;
 mod claude;
 mod cursor;
+mod cursor_mcp;
 mod fs;
 mod git;
 mod github;
@@ -79,7 +80,12 @@ fn hydrate_path_from_login_shell() {
         if out.status.success() {
             let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
             if !path.is_empty() {
-                std::env::set_var("PATH", path);
+                // SAFETY: Rust 2024 marks `set_var` unsafe because mutating
+                // process env is unsound when other threads may read it
+                // concurrently. We're called once, synchronously, at the
+                // top of `run()` — before Tauri spawns its event loop or
+                // any tokio worker. No reader thread exists yet.
+                unsafe { std::env::set_var("PATH", path) };
             }
         }
     }
@@ -138,6 +144,7 @@ pub fn run() {
             sentry_list_environments,
             sentry_get_event_detail,
             sentry_set_status,
+            cursor_mcp_sync,
             jira_list_inbox,
             jira_list_inbox_for,
             jira_search,
@@ -220,6 +227,7 @@ async fn github_connect_pat(token: String) -> Result<GithubUser, String> {
     }
     let user = github::fetch_user(&trimmed).await.map_err(|e| e.to_string())?;
     keychain::set(GITHUB_KEY, &trimmed).map_err(|e| e.to_string())?;
+    let _ = cursor_mcp::sync();
     Ok(user)
 }
 
@@ -241,7 +249,18 @@ async fn github_status() -> Result<ConnectionStatus, String> {
 #[tauri::command]
 fn github_disconnect() -> Result<(), String> {
     keychain::delete(GITHUB_KEY).map_err(|e| e.to_string())?;
+    let _ = cursor_mcp::sync();
     Ok(())
+}
+
+/// Idempotent re-sync of `~/.cursor/mcp.json` with whatever creds are
+/// currently in Keychain. Wired into every connect/disconnect so Cursor
+/// sees the same Jira/GitHub/Sentry/Memory tools as Claude with no
+/// manual `cursor-agent mcp add` step. Best-effort — a failure here
+/// just means Cursor stays out of sync; doesn't break the connect flow.
+#[tauri::command]
+fn cursor_mcp_sync() -> Result<Vec<String>, String> {
+    cursor_mcp::sync()
 }
 
 #[tauri::command]
@@ -533,6 +552,7 @@ async fn jira_connect(
     let user = jira::fetch_myself(&creds).await.map_err(|e| e.to_string())?;
     let payload = serde_json::to_string(&creds).map_err(|e| e.to_string())?;
     keychain::set(JIRA_KEY, &payload).map_err(|e| e.to_string())?;
+    let _ = cursor_mcp::sync();
     Ok(user)
 }
 
@@ -561,6 +581,7 @@ async fn jira_status() -> Result<JiraStatus, String> {
 #[tauri::command]
 fn jira_disconnect() -> Result<(), String> {
     keychain::delete(JIRA_KEY).map_err(|e| e.to_string())?;
+    let _ = cursor_mcp::sync();
     Ok(())
 }
 
@@ -593,6 +614,7 @@ async fn sentry_connect(
     let user = sentry::validate(&creds).await?;
     let payload = serde_json::to_string(&creds).map_err(|e| e.to_string())?;
     keychain::set(SENTRY_KEY, &payload).map_err(|e| e.to_string())?;
+    let _ = cursor_mcp::sync();
     Ok(user)
 }
 
@@ -621,6 +643,7 @@ async fn sentry_status() -> Result<SentryConnectionStatus, String> {
 #[tauri::command]
 fn sentry_disconnect() -> Result<(), String> {
     keychain::delete(SENTRY_KEY).map_err(|e| e.to_string())?;
+    let _ = cursor_mcp::sync();
     Ok(())
 }
 

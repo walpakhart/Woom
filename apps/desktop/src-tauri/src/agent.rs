@@ -1,4 +1,4 @@
-//! Agent dispatcher — routes forge chat sessions to either the Claude Code
+//! Agent dispatcher — routes Forgehold chat sessions to either the Claude Code
 //! or Cursor Agent CLI. Both adapters (`claude.rs`, `cursor.rs`) emit the
 //! same Claude-style stream-json events to the frontend so the UI never
 //! branches on agent kind.

@@ -73,6 +73,7 @@ impl Jira {
     fn new(creds: Creds) -> anyhow::Result<Self> {
         let http = reqwest::Client::builder()
             .user_agent(USER_AGENT)
+            .timeout(std::time::Duration::from_secs(30))
             .build()
             .context("build reqwest client")?;
         Ok(Self { creds, http, tool_router: Self::tool_router() })

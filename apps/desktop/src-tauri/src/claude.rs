@@ -141,10 +141,10 @@ pub enum ClaudeRunError {
 /// JSONL events to the frontend via `claude:stream:{session_id}` events.
 /// Returns the final result text (from the `result` event) when done.
 ///
-/// `claude_uuid` is the Claude CLI session UUID (independent of forge's own
+/// `claude_uuid` is the Claude CLI session UUID (independent of Forgehold's own
 /// `session_id`). When `resume` is false we pass `--session-id <uuid>` so the
 /// CLI creates a new persisted session; when true we pass `--resume <uuid>`
-/// so it continues the existing one with full history. This gives forge
+/// so it continues the existing one with full history. This gives Forgehold
 /// chat-level memory equivalent to native `claude` interactive sessions.
 pub async fn ask(
     app: tauri::AppHandle,
@@ -466,6 +466,12 @@ fn build_mcp_config(session_id: &str) -> Option<(PathBuf, Vec<String>)> {
         allowed.push("mcp__sentry__get_issue".into());
         allowed.push("mcp__sentry__search_issues".into());
         allowed.push("mcp__sentry__get_event".into());
+        allowed.push("mcp__sentry__get_issue_tags".into());
+        allowed.push("mcp__sentry__list_events".into());
+        allowed.push("mcp__sentry__update_issue".into());
+        allowed.push("mcp__sentry__add_comment".into());
+        allowed.push("mcp__sentry__list_projects".into());
+        allowed.push("mcp__sentry__list_releases".into());
     }
 
     if servers.is_empty() {

@@ -68,7 +68,7 @@ pub async fn fetch_myself(creds: &JiraCredentials) -> Result<JiraUser, JiraError
     if ws.is_empty() {
         return Err(JiraError::WorkspaceNotFound);
     }
-    let client = reqwest::Client::builder().user_agent(USER_AGENT).build()?;
+    let client = reqwest::Client::builder().user_agent(USER_AGENT).timeout(std::time::Duration::from_secs(30)).build()?;
     let resp = client
         .get(format!("https://{ws}/rest/api/3/myself"))
         .basic_auth(&creds.email, Some(&creds.token))
@@ -275,7 +275,7 @@ pub async fn set_assignee(
     account_id: Option<&str>,
 ) -> Result<(), JiraError> {
     let ws = normalize_workspace(&creds.workspace);
-    let client = reqwest::Client::builder().user_agent(USER_AGENT).build()?;
+    let client = reqwest::Client::builder().user_agent(USER_AGENT).timeout(std::time::Duration::from_secs(30)).build()?;
     let body = serde_json::json!({ "accountId": account_id });
     let resp = client
         .put(format!("https://{ws}/rest/api/3/issue/{key}/assignee"))
@@ -301,7 +301,7 @@ pub async fn set_priority(
     priority: &str,
 ) -> Result<(), JiraError> {
     let ws = normalize_workspace(&creds.workspace);
-    let client = reqwest::Client::builder().user_agent(USER_AGENT).build()?;
+    let client = reqwest::Client::builder().user_agent(USER_AGENT).timeout(std::time::Duration::from_secs(30)).build()?;
     let body = serde_json::json!({
         "fields": { "priority": { "name": priority } }
     });
@@ -329,7 +329,7 @@ pub async fn set_labels(
     labels: Vec<String>,
 ) -> Result<(), JiraError> {
     let ws = normalize_workspace(&creds.workspace);
-    let client = reqwest::Client::builder().user_agent(USER_AGENT).build()?;
+    let client = reqwest::Client::builder().user_agent(USER_AGENT).timeout(std::time::Duration::from_secs(30)).build()?;
     let body = serde_json::json!({ "fields": { "labels": labels } });
     let resp = client
         .put(format!("https://{ws}/rest/api/3/issue/{key}"))
@@ -389,7 +389,7 @@ pub async fn search_users(
     query: &str,
 ) -> Result<Vec<JiraUserSummary>, JiraError> {
     let ws = normalize_workspace(&creds.workspace);
-    let client = reqwest::Client::builder().user_agent(USER_AGENT).build()?;
+    let client = reqwest::Client::builder().user_agent(USER_AGENT).timeout(std::time::Duration::from_secs(30)).build()?;
     let resp = client
         .get(format!("https://{ws}/rest/api/3/user/search"))
         .basic_auth(&creds.email, Some(&creds.token))
@@ -497,7 +497,7 @@ pub async fn get_issue_detail(
     key: &str,
 ) -> Result<JiraDetail, JiraError> {
     let ws = normalize_workspace(&creds.workspace);
-    let client = reqwest::Client::builder().user_agent(USER_AGENT).build()?;
+    let client = reqwest::Client::builder().user_agent(USER_AGENT).timeout(std::time::Duration::from_secs(30)).build()?;
 
     // Pull issue with transitions in one call.
     let issue_url = format!(
@@ -637,7 +637,7 @@ pub async fn update_issue(
         return Ok(());
     }
     let ws = normalize_workspace(&creds.workspace);
-    let client = reqwest::Client::builder().user_agent(USER_AGENT).build()?;
+    let client = reqwest::Client::builder().user_agent(USER_AGENT).timeout(std::time::Duration::from_secs(30)).build()?;
 
     let mut fields = serde_json::Map::new();
     if let Some(s) = summary {
@@ -672,7 +672,7 @@ pub async fn transition_issue(
     transition_id: &str,
 ) -> Result<(), JiraError> {
     let ws = normalize_workspace(&creds.workspace);
-    let client = reqwest::Client::builder().user_agent(USER_AGENT).build()?;
+    let client = reqwest::Client::builder().user_agent(USER_AGENT).timeout(std::time::Duration::from_secs(30)).build()?;
     let body = serde_json::json!({ "transition": { "id": transition_id } });
     let resp = client
         .post(format!("https://{ws}/rest/api/3/issue/{key}/transitions"))
@@ -698,7 +698,7 @@ pub async fn add_comment(
     body: &str,
 ) -> Result<JiraComment, JiraError> {
     let ws = normalize_workspace(&creds.workspace);
-    let client = reqwest::Client::builder().user_agent(USER_AGENT).build()?;
+    let client = reqwest::Client::builder().user_agent(USER_AGENT).timeout(std::time::Duration::from_secs(30)).build()?;
     let payload = serde_json::json!({ "body": text_to_adf(body) });
     let resp = client
         .post(format!("https://{ws}/rest/api/3/issue/{key}/comment"))
@@ -786,7 +786,7 @@ pub async fn list_worklogs(
     key: &str,
 ) -> Result<Vec<JiraWorklog>, JiraError> {
     let ws = normalize_workspace(&creds.workspace);
-    let client = reqwest::Client::builder().user_agent(USER_AGENT).build()?;
+    let client = reqwest::Client::builder().user_agent(USER_AGENT).timeout(std::time::Duration::from_secs(30)).build()?;
     let resp = client
         .get(format!(
             "https://{ws}/rest/api/3/issue/{key}/worklog?maxResults=100"
@@ -814,7 +814,7 @@ pub async fn add_worklog(
     comment: Option<&str>,
 ) -> Result<JiraWorklog, JiraError> {
     let ws = normalize_workspace(&creds.workspace);
-    let client = reqwest::Client::builder().user_agent(USER_AGENT).build()?;
+    let client = reqwest::Client::builder().user_agent(USER_AGENT).timeout(std::time::Duration::from_secs(30)).build()?;
     let mut payload = serde_json::json!({
         "timeSpentSeconds": time_spent_seconds,
     });
@@ -851,7 +851,7 @@ pub async fn delete_worklog(
     worklog_id: &str,
 ) -> Result<(), JiraError> {
     let ws = normalize_workspace(&creds.workspace);
-    let client = reqwest::Client::builder().user_agent(USER_AGENT).build()?;
+    let client = reqwest::Client::builder().user_agent(USER_AGENT).timeout(std::time::Duration::from_secs(30)).build()?;
     let resp = client
         .delete(format!(
             "https://{ws}/rest/api/3/issue/{key}/worklog/{worklog_id}"
@@ -891,7 +891,7 @@ pub async fn search_issues(
     jql: &str,
 ) -> Result<Vec<JiraItem>, JiraError> {
     let ws = normalize_workspace(&creds.workspace);
-    let client = reqwest::Client::builder().user_agent(USER_AGENT).build()?;
+    let client = reqwest::Client::builder().user_agent(USER_AGENT).timeout(std::time::Duration::from_secs(30)).build()?;
     let body = serde_json::json!({
         "jql": jql,
         "fields": [
@@ -1030,7 +1030,7 @@ pub async fn list_statuses(
     project_key: Option<&str>,
 ) -> Result<Vec<JiraStatus>, JiraError> {
     let ws = normalize_workspace(&creds.workspace);
-    let client = reqwest::Client::builder().user_agent(USER_AGENT).build()?;
+    let client = reqwest::Client::builder().user_agent(USER_AGENT).timeout(std::time::Duration::from_secs(30)).build()?;
 
     if let Some(key) = project_key {
         let url = format!("https://{ws}/rest/api/3/project/{key}/statuses");
@@ -1114,7 +1114,7 @@ struct RawProject {
 
 pub async fn list_projects(creds: &JiraCredentials) -> Result<Vec<JiraProject>, JiraError> {
     let ws = normalize_workspace(&creds.workspace);
-    let client = reqwest::Client::builder().user_agent(USER_AGENT).build()?;
+    let client = reqwest::Client::builder().user_agent(USER_AGENT).timeout(std::time::Duration::from_secs(30)).build()?;
     let resp = client
         .get(format!("https://{ws}/rest/api/3/project/search"))
         .basic_auth(&creds.email, Some(&creds.token))
@@ -1181,7 +1181,7 @@ pub async fn list_boards(
     project_key: Option<&str>,
 ) -> Result<Vec<JiraBoard>, JiraError> {
     let ws = normalize_workspace(&creds.workspace);
-    let client = reqwest::Client::builder().user_agent(USER_AGENT).build()?;
+    let client = reqwest::Client::builder().user_agent(USER_AGENT).timeout(std::time::Duration::from_secs(30)).build()?;
     let mut req = client
         .get(format!("https://{ws}/rest/agile/1.0/board"))
         .basic_auth(&creds.email, Some(&creds.token))
@@ -1244,7 +1244,7 @@ pub async fn list_sprints(
     board_id: u64,
 ) -> Result<Vec<JiraSprint>, JiraError> {
     let ws = normalize_workspace(&creds.workspace);
-    let client = reqwest::Client::builder().user_agent(USER_AGENT).build()?;
+    let client = reqwest::Client::builder().user_agent(USER_AGENT).timeout(std::time::Duration::from_secs(30)).build()?;
     let resp = client
         .get(format!(
             "https://{ws}/rest/agile/1.0/board/{board_id}/sprint"
@@ -1311,7 +1311,7 @@ pub async fn list_issue_types(
     project_key: &str,
 ) -> Result<Vec<JiraIssueType>, JiraError> {
     let ws = normalize_workspace(&creds.workspace);
-    let client = reqwest::Client::builder().user_agent(USER_AGENT).build()?;
+    let client = reqwest::Client::builder().user_agent(USER_AGENT).timeout(std::time::Duration::from_secs(30)).build()?;
     let resp = client
         .get(format!(
             "https://{ws}/rest/api/3/issue/createmeta/{project_key}/issuetypes"
@@ -1364,7 +1364,7 @@ pub async fn create_issue(
     sprint_id: Option<u64>,
 ) -> Result<JiraItem, JiraError> {
     let ws = normalize_workspace(&creds.workspace);
-    let client = reqwest::Client::builder().user_agent(USER_AGENT).build()?;
+    let client = reqwest::Client::builder().user_agent(USER_AGENT).timeout(std::time::Duration::from_secs(30)).build()?;
 
     let mut fields = serde_json::Map::new();
     fields.insert(

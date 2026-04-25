@@ -149,6 +149,7 @@ pub fn normalize_host(raw: &str) -> String {
 fn http() -> reqwest::Client {
     reqwest::Client::builder()
         .user_agent(USER_AGENT)
+        .timeout(std::time::Duration::from_secs(30))
         .build()
         .expect("reqwest client")
 }

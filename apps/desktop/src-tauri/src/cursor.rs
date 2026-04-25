@@ -1,6 +1,6 @@
 //! Cursor Agent CLI adapter — parallel to `claude.rs`.
 //!
-//! Forge spawns `cursor-agent -p <prompt> --output-format stream-json
+//! Forgehold spawns `cursor-agent -p <prompt> --output-format stream-json
 //! --resume <chat_id>` and normalizes Cursor's native event stream into the
 //! same Claude-style shape the frontend already parses (`type: "assistant"`
 //! with a `content[]` array of `{type: "text"|"tool_use", …}` blocks). That
@@ -14,7 +14,7 @@
 //!   - No `--append-system-prompt` — user-authored Rules are prepended to
 //!     the prompt text as a fenced preamble.
 //!   - No `--mcp-config` — Cursor reads `~/.cursor/mcp.json` and
-//!     `<workspace>/.cursor/mcp.json`. Forge's sidecars aren't wired in by
+//!     `<workspace>/.cursor/mcp.json`. Forgehold's sidecars aren't wired in by
 //!     default in v1; users can add them manually via `cursor-agent mcp
 //!     enable` or a project-local mcp.json.
 
@@ -373,7 +373,7 @@ fn normalize_event(raw: &str) -> Vec<serde_json::Value> {
 /// Cursor's `tool_call` event carries a discriminated-union payload; pick out
 /// the readable tool name + args and re-emit as a Claude-style `tool_use`
 /// content block. We only handle the `started` subtype (tool *invocation*) —
-/// `completed` carries the tool *result*, which forge already surfaces via
+/// `completed` carries the tool *result*, which Forgehold already surfaces via
 /// action cards or inline bash output, so rendering it again would duplicate.
 fn normalize_tool_call(v: &serde_json::Value) -> Option<serde_json::Value> {
     let subtype = v.get("subtype").and_then(|s| s.as_str()).unwrap_or("");
@@ -405,7 +405,7 @@ fn normalize_tool_call(v: &serde_json::Value) -> Option<serde_json::Value> {
 
 /// Reach into cursor's discriminated tool_call union (readToolCall /
 /// writeToolCall / function / …) and return a `(tool_name, input_object)`
-/// pair. Best-effort — forge's `formatToolUse` gracefully falls back to a
+/// pair. Best-effort — Forgehold's `formatToolUse` gracefully falls back to a
 /// compact generic render for unknown names/shapes.
 fn extract_tool_shape(tc: &serde_json::Value) -> (String, serde_json::Value) {
     let Some(obj) = tc.as_object() else {
@@ -457,7 +457,7 @@ fn humanize_discriminator(key: &str) -> &'static str {
     }
 }
 
-/// Send SIGTERM to a running cursor-agent spawn for the given forge session.
+/// Send SIGTERM to a running cursor-agent spawn for the given Forgehold session.
 pub fn stop(runners: &Runners, session_id: &str) -> bool {
     let pid = runners.lock().unwrap().get(session_id).copied();
     match pid {
