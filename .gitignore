@@ -10,6 +10,7 @@ dist/
 # Tauri build outputs
 **/src-tauri/target/
 **/src-tauri/gen/schemas/
+apps/desktop/src-tauri/binaries/forgehold-*
 
 # Env + secrets
 .env
