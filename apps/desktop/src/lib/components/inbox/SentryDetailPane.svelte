@@ -3,10 +3,11 @@
   import {
     relativeTime,
     sentryLevelClass,
+    type SentryEvent,
     type SentryEventDetail,
     type SentryIssue
   } from '$lib/data';
-  import { inboxState } from '$lib/state/inbox.svelte';
+  import { inboxState, openSentryFocus } from '$lib/state/inbox.svelte';
   import { notify, notifyError } from '$lib/state/toaster.svelte';
 
   interface Props {
@@ -25,6 +26,16 @@
   let eventLoading = $state(false);
   let eventError = $state<string | null>(null);
 
+  // Per-issue events list — populates the "Other events" picker so the
+  // user can hop between occurrences without going through the agent
+  // or leaving the app. Loaded once per issueId change (separate from
+  // the active event detail above so we don't re-fetch the list every
+  // time the user clicks a different event).
+  let events = $state<SentryEvent[]>([]);
+  let eventsLoading = $state(false);
+  let eventsError = $state<string | null>(null);
+  let eventsExpanded = $state(false);
+
   // Refresh on every issueId change. Also re-runs when the agent (via
   // mcp__app__open_sentry_event) sets `inboxState.sentryFocusEventId`
   // to a specific event id — without that dependency the pane would
@@ -36,6 +47,29 @@
     void loadIssue();
     void loadEvent();
   });
+
+  // Events list is keyed only on issueId (no eventId dep) so picking a
+  // different event from the list doesn't re-fetch the list itself.
+  $effect(() => {
+    if (!issueId) return;
+    void loadEvents();
+  });
+
+  async function loadEvents() {
+    eventsLoading = true;
+    eventsError = null;
+    try {
+      events = await invoke<SentryEvent[]>('sentry_list_events', {
+        issueId,
+        limit: 30
+      });
+    } catch (e) {
+      events = [];
+      eventsError = typeof e === 'string' ? e : String(e);
+    } finally {
+      eventsLoading = false;
+    }
+  }
 
   async function loadIssue() {
     issueLoading = true;
@@ -189,10 +223,59 @@
         </div>
       </div>
 
+      <!-- Other events picker. Collapsed by default to keep the pane
+           compact; expand to scan / pick a different occurrence. The
+           agent's `mcp__app__open_sentry_event` calls land on the
+           same `sentryFocusEventId` slot, so click-from-UI and
+           click-from-chat funnel through one path. -->
+      {#if events.length > 1 || eventsLoading || eventsError}
+        <section class="sdp-section">
+          <header class="sdp-section-head">
+            <h3 class="sdp-section-title">Other events</h3>
+            {#if events.length > 0}
+              <span class="sdp-section-sub mono">{events.length}{events.length === 30 ? '+' : ''}</span>
+            {/if}
+            <div style="flex:1"></div>
+            <button class="sdp-link" onclick={() => void loadEvents()} disabled={eventsLoading}>
+              {eventsLoading ? 'Loading…' : 'Refresh'}
+            </button>
+            <button class="sdp-link" onclick={() => (eventsExpanded = !eventsExpanded)}>
+              {eventsExpanded ? 'Hide' : 'Show'}
+            </button>
+          </header>
+          {#if eventsError}
+            <div class="sdp-state sdp-err">{eventsError}</div>
+          {:else if eventsExpanded}
+            <div class="sdp-events">
+              {#each events as ev (ev.event_id)}
+                {@const active = (inboxState.sentryFocusEventId ?? '') === ev.event_id
+                  || (!inboxState.sentryFocusEventId && event?.event_id === ev.event_id)}
+                <button
+                  class="sdp-event-row"
+                  class:sdp-event-row--active={active}
+                  onclick={() => openSentryFocus(issueId, ev.event_id)}
+                  title={ev.event_id}
+                >
+                  <span class="sdp-event-id mono">{ev.event_id.slice(0, 8)}</span>
+                  <span class="sdp-event-when mono">{relativeTime(ev.date_created, now)}</span>
+                  <span class="sdp-event-msg">{ev.exception_summary ?? ev.message ?? ''}</span>
+                  {#if ev.platform}<span class="sdp-event-tag mono">{ev.platform}</span>{/if}
+                </button>
+              {/each}
+              {#if inboxState.sentryFocusEventId}
+                <button class="sdp-link sdp-link--center" onclick={() => openSentryFocus(issueId, null)}>
+                  ← Back to latest
+                </button>
+              {/if}
+            </div>
+          {/if}
+        </section>
+      {/if}
+
       <!-- Latest event -->
       <section class="sdp-section">
         <header class="sdp-section-head">
-          <h3 class="sdp-section-title">Latest event</h3>
+          <h3 class="sdp-section-title">{inboxState.sentryFocusEventId ? 'Selected event' : 'Latest event'}</h3>
           {#if event?.event_id}<span class="sdp-section-sub mono">{event.event_id.slice(0, 8)}</span>{/if}
           <div style="flex:1"></div>
           <button class="sdp-link" onclick={() => void loadEvent()} disabled={eventLoading}>
@@ -352,6 +435,40 @@
     text-transform: uppercase; letter-spacing: 0.05em; margin: 0;
   }
   .sdp-section-sub { font-size: 11px; color: var(--text-mute); }
+
+  /* Other-events picker rows. Compact, click-to-load, highlight the
+     currently-loaded one so the user can tell which event the body
+     below corresponds to. */
+  .sdp-events { display: flex; flex-direction: column; gap: 2px; }
+  .sdp-event-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 6px 10px;
+    background: var(--bg-1); border: 1px solid var(--border-neutral);
+    border-radius: 6px; text-align: left; cursor: pointer;
+    color: var(--text-1); font-size: 12px;
+    transition: background 100ms;
+    width: 100%;
+  }
+  .sdp-event-row:hover { background: var(--bg-2); color: var(--text-0); }
+  .sdp-event-row--active {
+    background: var(--accent-soft); border-color: rgba(232, 163, 58, 0.3);
+    color: var(--text-0);
+  }
+  .sdp-event-id { color: var(--text-2); font-size: 11px; min-width: 70px; }
+  .sdp-event-when { color: var(--text-mute); font-size: 11px; min-width: 70px; }
+  .sdp-event-msg {
+    flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-size: 11.5px;
+  }
+  .sdp-event-tag {
+    font-size: 10px; padding: 1px 6px; border-radius: 3px;
+    background: var(--bg-2); color: var(--text-2);
+    border: 1px solid var(--border-neutral);
+  }
+  .sdp-link--center {
+    display: block; margin: 4px auto 0;
+    text-align: center; font-size: 11px;
+  }
 
   .sdp-event-meta { display: flex; flex-wrap: wrap; gap: 6px; font-size: 11px; }
   .sdp-chip {

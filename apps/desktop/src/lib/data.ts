@@ -203,6 +203,20 @@ export interface SentryException {
   frames: SentryStackFrame[];
 }
 
+/** One row in the per-issue event list — what `sentry_list_events`
+ *  returns. Lighter than `SentryEventDetail` (no stack frames or
+ *  breadcrumbs); used by the sidecar pane's "Other events" picker so
+ *  the user can jump to a specific occurrence without leaving the app. */
+export interface SentryEvent {
+  event_id: string;
+  date_created: string;
+  message: string | null;
+  platform: string | null;
+  /** First-line summary of the exception type + value, when present. */
+  exception_summary: string | null;
+  permalink: string | null;
+}
+
 export interface SentryEventDetail {
   event_id: string;
   date_created: string;
