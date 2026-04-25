@@ -183,12 +183,44 @@ pub async fn ask(
     } else {
         cmd.arg("--session-id").arg(claude_uuid);
     }
+    // Compose the system-prompt suffix in two parts:
+    //  - Auto behaviors Forgehold injects when the relevant MCP sidecars
+    //    are wired up (memory recall, source-aware references).
+    //  - User-authored rules from the Rules tab.
+    // Joined with a separator so Claude reads them as one append-block.
+    let mut system_parts: Vec<String> = Vec::new();
+    let memory_available = mcp
+        .as_ref()
+        .map(|(_, allowed)| {
+            allowed.iter().any(|t| t.starts_with("mcp__memory__"))
+        })
+        .unwrap_or(false);
+    if memory_available {
+        system_parts.push(
+            "Forgehold memory (persistent across sessions): you have \
+             `mcp__memory__memory_search`, `memory_save`, `memory_list`, \
+             `memory_delete`. Behavior:\n\
+             - At the START of a non-trivial turn, run `memory_search` with \
+               the user's keywords (or a paraphrase). If it returns relevant \
+               facts/preferences/context, lean on them — don't ask the user \
+               to repeat themselves.\n\
+             - When the user states a preference, gives feedback on your \
+               approach, or shares persistent context (their role, project, \
+               tools, conventions), call `memory_save` to record it. Tag \
+               with category like `preference`, `project`, `feedback`, \
+               `reference`. Keep entries terse (1-3 sentences).\n\
+             - Don't save ephemeral task state, code, or anything already in \
+               git/the codebase. Only save what would be lost across restarts.\n\
+             - If a recalled memory conflicts with current state, trust what \
+               you see now and update or delete the stale memory."
+                .to_string(),
+        );
+    }
     if let Some(r) = rules.map(|s| s.trim()).filter(|s| !s.is_empty()) {
-        // User-authored rules from the Rules tab — appended to the system
-        // prompt so Claude respects them on every turn without us having to
-        // bake them into each user message.
-        let wrapped = format!("User rules (follow these on every turn):\n\n{}", r);
-        cmd.arg("--append-system-prompt").arg(wrapped);
+        system_parts.push(format!("User rules (follow these on every turn):\n\n{}", r));
+    }
+    if !system_parts.is_empty() {
+        cmd.arg("--append-system-prompt").arg(system_parts.join("\n\n---\n\n"));
     }
     if let Some((path, allowed)) = &mcp {
         cmd.arg("--mcp-config").arg(path);
@@ -430,6 +462,9 @@ fn build_mcp_config(session_id: &str) -> Option<(PathBuf, Vec<String>)> {
         servers.insert("jira".into(), jira);
         allowed.push("mcp__jira__get_issue".into());
         allowed.push("mcp__jira__search".into());
+        allowed.push("mcp__jira__add_comment".into());
+        allowed.push("mcp__jira__transition_issue".into());
+        allowed.push("mcp__jira__list_projects".into());
     }
 
     if let Some(gh) = build_github_server() {
@@ -444,6 +479,9 @@ fn build_mcp_config(session_id: &str) -> Option<(PathBuf, Vec<String>)> {
         allowed.push("mcp__github__list_releases".into());
         allowed.push("mcp__github__list_workflow_runs".into());
         allowed.push("mcp__github__get_readme".into());
+        allowed.push("mcp__github__search_prs".into());
+        allowed.push("mcp__github__search_issues".into());
+        allowed.push("mcp__github__list_repos".into());
         allowed.push("mcp__github__add_comment".into());
         allowed.push("mcp__github__submit_review".into());
         allowed.push("mcp__github__merge_pr".into());

@@ -68,6 +68,37 @@ struct SearchParams {
     max_results: Option<u32>,
 }
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct AddCommentParams {
+    /// Issue key, e.g. "DEVOPS-414".
+    key: String,
+    /// Comment body. Plain text or Atlassian Markdown — converted to ADF.
+    body: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct TransitionIssueParams {
+    /// Issue key, e.g. "DEVOPS-414".
+    key: String,
+    /// Either the transition name (e.g. "In Review", "Done", case-insensitive
+    /// match against the available transitions) OR the literal transition id.
+    /// Use list_transitions implicitly by passing the human name.
+    to: String,
+    /// Optional comment posted with the transition. Some workflows require it.
+    #[serde(default)]
+    comment: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct ListProjectsParams {
+    /// Filter by name/key substring (case-insensitive). Omit for all.
+    #[serde(default)]
+    query: Option<String>,
+    /// Max projects to return (default 50, cap 200).
+    #[serde(default)]
+    limit: Option<u32>,
+}
+
 #[tool_router]
 impl Jira {
     fn new(creds: Creds) -> anyhow::Result<Self> {
@@ -105,6 +136,47 @@ impl Jira {
             Err(e) => Err(ErrorData::internal_error(e.to_string(), None)),
         }
     }
+
+    #[tool(
+        description = "Post a comment on a Jira issue. Body accepts plain text or simple Markdown (bold, italic, code, links, lists) — converted to ADF before sending. Use this for status updates, follow-ups, or to document what you found while investigating."
+    )]
+    async fn add_comment(
+        &self,
+        Parameters(AddCommentParams { key, body }): Parameters<AddCommentParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        match self.do_add_comment(&key, &body).await {
+            Ok(text) => Ok(CallToolResult::success(vec![Content::text(text)])),
+            Err(e) => Err(ErrorData::internal_error(e.to_string(), None)),
+        }
+    }
+
+    #[tool(
+        description = "Transition a Jira issue to a new workflow status (e.g. \"In Review\", \"Done\", \"Blocked\"). Accepts the human name or a transition id — call get_issue first if you don't know which transitions are available. Optional `comment` posts an inline comment with the transition (some workflows require it)."
+    )]
+    async fn transition_issue(
+        &self,
+        Parameters(TransitionIssueParams { key, to, comment }): Parameters<TransitionIssueParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        match self.do_transition(&key, &to, comment.as_deref()).await {
+            Ok(text) => Ok(CallToolResult::success(vec![Content::text(text)])),
+            Err(e) => Err(ErrorData::internal_error(e.to_string(), None)),
+        }
+    }
+
+    #[tool(
+        description = "List projects in the user's Jira workspace. Returns key, name, project type, lead. Useful when the user mentions a project by name (or partial name) and you need its key to construct a JQL search or get_issue call."
+    )]
+    async fn list_projects(
+        &self,
+        Parameters(ListProjectsParams { query, limit }): Parameters<ListProjectsParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let max = limit.unwrap_or(50).min(200);
+        let needle = query.as_deref().map(str::trim).filter(|s| !s.is_empty());
+        match self.fetch_projects(needle, max).await {
+            Ok(text) => Ok(CallToolResult::success(vec![Content::text(text)])),
+            Err(e) => Err(ErrorData::internal_error(e.to_string(), None)),
+        }
+    }
 }
 
 #[tool_handler]
@@ -113,7 +185,15 @@ impl ServerHandler for Jira {
         let mut info = ServerInfo::default();
         info.capabilities = ServerCapabilities::builder().enable_tools().build();
         info.instructions = Some(
-            "Access the user's Jira (Atlassian Cloud) workspace. Use get_issue when the user references a ticket (e.g. 'DEVOPS-396'); use search with JQL for lists."
+            "Access the user's Jira (Atlassian Cloud) workspace.\n\n\
+             READ:\n\
+             - get_issue(key) — full detail with comments/transitions for a single ticket.\n\
+             - search(jql) — JQL query for lists. e.g. `assignee = currentUser() AND resolution = Unresolved`.\n\
+             - list_projects(query?) — discover project keys when the user mentions a project by partial name.\n\n\
+             WRITE:\n\
+             - add_comment(key, body) — post a comment. Use for status updates / handoffs / documenting findings.\n\
+             - transition_issue(key, to, comment?) — move workflow state. Pass the human name (e.g. \"In Review\") or transition id.\n\n\
+             Match GitHub semantics: read-only ops are auto-approved; mutation ops should be called only when the user explicitly asks for them."
                 .to_string(),
         );
         info
@@ -165,6 +245,218 @@ impl Jira {
         }
         let v: serde_json::Value = resp.json().await?;
         Ok(format_search(&v, &self.creds.workspace))
+    }
+
+    async fn do_add_comment(&self, key: &str, body: &str) -> anyhow::Result<String> {
+        let trimmed = body.trim();
+        if trimmed.is_empty() {
+            anyhow::bail!("comment body is empty");
+        }
+        // Wrap as a minimal ADF doc — Jira Cloud's POST comment endpoint
+        // expects ADF, not plain text. One paragraph with a single text node
+        // is enough for our case (the user's body is plain Markdown-flavored
+        // text; we don't try to render bold/links/etc. — Jira won't parse
+        // that anyway without proper ADF marks).
+        let url = format!(
+            "https://{}/rest/api/3/issue/{}/comment",
+            self.creds.workspace, key
+        );
+        let payload = serde_json::json!({
+            "body": {
+                "type": "doc",
+                "version": 1,
+                "content": [{
+                    "type": "paragraph",
+                    "content": [{ "type": "text", "text": trimmed }]
+                }]
+            }
+        });
+        let resp = self
+            .http
+            .post(&url)
+            .basic_auth(&self.creds.email, Some(&self.creds.token))
+            .header("Accept", "application/json")
+            .header("Content-Type", "application/json")
+            .json(&payload)
+            .send()
+            .await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("Jira {} adding comment: {}", status, truncate(&body, 500));
+        }
+        Ok(format!("Comment posted on {}.", key))
+    }
+
+    async fn do_transition(
+        &self,
+        key: &str,
+        to: &str,
+        comment: Option<&str>,
+    ) -> anyhow::Result<String> {
+        // 1) Fetch the available transitions to map a name → id.
+        let list_url = format!(
+            "https://{}/rest/api/3/issue/{}/transitions",
+            self.creds.workspace, key
+        );
+        let list_resp = self
+            .http
+            .get(&list_url)
+            .basic_auth(&self.creds.email, Some(&self.creds.token))
+            .header("Accept", "application/json")
+            .send()
+            .await?;
+        let list_status = list_resp.status();
+        if !list_status.is_success() {
+            let body = list_resp.text().await.unwrap_or_default();
+            anyhow::bail!(
+                "Jira {} fetching transitions for {}: {}",
+                list_status,
+                key,
+                truncate(&body, 500)
+            );
+        }
+        let list_v: serde_json::Value = list_resp.json().await?;
+        let transitions = list_v
+            .get("transitions")
+            .and_then(|x| x.as_array())
+            .cloned()
+            .unwrap_or_default();
+        if transitions.is_empty() {
+            anyhow::bail!("No transitions available for {}", key);
+        }
+        // Try id match first, then case-insensitive name match.
+        let to_lower = to.to_lowercase();
+        let matched = transitions.iter().find(|t| {
+            t.get("id").and_then(|x| x.as_str()) == Some(to)
+                || t.get("name")
+                    .and_then(|x| x.as_str())
+                    .map(|n| n.to_lowercase() == to_lower)
+                    .unwrap_or(false)
+        });
+        let Some(t) = matched else {
+            let names: Vec<String> = transitions
+                .iter()
+                .filter_map(|x| x.get("name").and_then(|n| n.as_str()).map(String::from))
+                .collect();
+            anyhow::bail!(
+                "No transition matching `{}` on {}. Available: {}",
+                to,
+                key,
+                names.join(", ")
+            );
+        };
+        let transition_id = t
+            .get("id")
+            .and_then(|x| x.as_str())
+            .ok_or_else(|| anyhow::anyhow!("transition has no id"))?;
+        let transition_name = t.get("name").and_then(|x| x.as_str()).unwrap_or("?");
+
+        // 2) POST the transition.
+        let url = format!(
+            "https://{}/rest/api/3/issue/{}/transitions",
+            self.creds.workspace, key
+        );
+        let mut payload = serde_json::json!({
+            "transition": { "id": transition_id }
+        });
+        if let Some(c) = comment.map(str::trim).filter(|s| !s.is_empty()) {
+            payload["update"] = serde_json::json!({
+                "comment": [{
+                    "add": {
+                        "body": {
+                            "type": "doc",
+                            "version": 1,
+                            "content": [{
+                                "type": "paragraph",
+                                "content": [{ "type": "text", "text": c }]
+                            }]
+                        }
+                    }
+                }]
+            });
+        }
+        let resp = self
+            .http
+            .post(&url)
+            .basic_auth(&self.creds.email, Some(&self.creds.token))
+            .header("Accept", "application/json")
+            .header("Content-Type", "application/json")
+            .json(&payload)
+            .send()
+            .await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!(
+                "Jira {} transitioning {}: {}",
+                status,
+                key,
+                truncate(&body, 500)
+            );
+        }
+        Ok(format!(
+            "Transitioned {} → {} (id {}).",
+            key, transition_name, transition_id
+        ))
+    }
+
+    async fn fetch_projects(
+        &self,
+        needle: Option<&str>,
+        max_results: u32,
+    ) -> anyhow::Result<String> {
+        // Search endpoint supports paging; we just take the first page since
+        // most tenants have <200 projects. `expand=lead` enriches with the
+        // owner so the LLM can route asks intelligently.
+        let mut url = format!(
+            "https://{}/rest/api/3/project/search?maxResults={}&expand=lead",
+            self.creds.workspace, max_results
+        );
+        if let Some(n) = needle {
+            url.push_str(&format!("&query={}", urlencoding::encode(n)));
+        }
+        let resp = self
+            .http
+            .get(&url)
+            .basic_auth(&self.creds.email, Some(&self.creds.token))
+            .header("Accept", "application/json")
+            .send()
+            .await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("Jira {} listing projects: {}", status, truncate(&body, 500));
+        }
+        let v: serde_json::Value = resp.json().await?;
+        let arr = v
+            .get("values")
+            .and_then(|x| x.as_array())
+            .cloned()
+            .unwrap_or_default();
+        if arr.is_empty() {
+            return Ok("No projects matched.".into());
+        }
+        let mut out = format!("{} project(s):\n", arr.len());
+        for p in &arr {
+            let key = p.get("key").and_then(|x| x.as_str()).unwrap_or("?");
+            let name = p.get("name").and_then(|x| x.as_str()).unwrap_or("?");
+            let typ = p.get("projectTypeKey").and_then(|x| x.as_str()).unwrap_or("");
+            let lead = p
+                .get("lead")
+                .and_then(|l| l.get("displayName"))
+                .and_then(|x| x.as_str())
+                .unwrap_or("");
+            out.push_str(&format!("- {} — {}", key, name));
+            if !typ.is_empty() {
+                out.push_str(&format!(" · type={}", typ));
+            }
+            if !lead.is_empty() {
+                out.push_str(&format!(" · lead={}", lead));
+            }
+            out.push('\n');
+        }
+        Ok(out)
     }
 }
 

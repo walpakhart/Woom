@@ -77,6 +77,82 @@ export interface JiraFilters {
 
 const GITHUB_FILTERS_KEY = 'forgehold:github-filters:v1';
 const JIRA_FILTERS_KEY = 'forgehold:jira-filters:v1';
+const SENTRY_FILTERS_KEY = 'forgehold:sentry-filters:v1';
+
+interface SentryFiltersPersisted {
+  search: string;
+  status: 'unresolved' | 'resolved' | 'ignored' | 'all';
+  level: 'all' | 'fatal' | 'error' | 'warning' | 'info' | 'debug';
+  projects: string[];
+  environment: string | null;
+  sort: 'date' | 'new' | 'priority' | 'freq' | 'user';
+}
+
+const DEFAULT_SENTRY_FILTERS: SentryFiltersPersisted = {
+  search: '',
+  status: 'unresolved',
+  level: 'all',
+  projects: [],
+  environment: null,
+  sort: 'date'
+};
+
+function readSentryFilters(): SentryFiltersPersisted {
+  try {
+    const raw = localStorage.getItem(SENTRY_FILTERS_KEY);
+    if (!raw) return { ...DEFAULT_SENTRY_FILTERS };
+    const parsed = JSON.parse(raw) as Partial<SentryFiltersPersisted>;
+    return {
+      search: typeof parsed.search === 'string' ? parsed.search : '',
+      status:
+        parsed.status === 'unresolved' ||
+        parsed.status === 'resolved' ||
+        parsed.status === 'ignored' ||
+        parsed.status === 'all'
+          ? parsed.status
+          : 'unresolved',
+      level:
+        parsed.level === 'all' ||
+        parsed.level === 'fatal' ||
+        parsed.level === 'error' ||
+        parsed.level === 'warning' ||
+        parsed.level === 'info' ||
+        parsed.level === 'debug'
+          ? parsed.level
+          : 'all',
+      projects: Array.isArray(parsed.projects)
+        ? parsed.projects.filter((p): p is string => typeof p === 'string')
+        : [],
+      environment: typeof parsed.environment === 'string' ? parsed.environment : null,
+      sort:
+        parsed.sort === 'date' ||
+        parsed.sort === 'new' ||
+        parsed.sort === 'priority' ||
+        parsed.sort === 'freq' ||
+        parsed.sort === 'user'
+          ? parsed.sort
+          : 'date'
+    };
+  } catch {
+    return { ...DEFAULT_SENTRY_FILTERS };
+  }
+}
+
+function persistSentryFilters() {
+  try {
+    const payload: SentryFiltersPersisted = {
+      search: inboxState.sentrySearch,
+      status: inboxState.sentryStatus,
+      level: inboxState.sentryLevel,
+      projects: inboxState.sentryProjects,
+      environment: inboxState.sentryEnvironment,
+      sort: inboxState.sentrySort
+    };
+    localStorage.setItem(SENTRY_FILTERS_KEY, JSON.stringify(payload));
+  } catch {
+    /* quota / SSR: ignore */
+  }
+}
 
 const DEFAULT_GH_FILTERS: GithubFilters = {
   mode: 'involving',
@@ -274,12 +350,17 @@ export const inboxState = $state<{
   sentryItems: [],
   sentryItemsLoading: false,
   sentryItemsError: null,
-  sentrySearch: '',
-  sentryStatus: 'unresolved',
-  sentryLevel: 'all',
-  sentryProjects: [],
-  sentryEnvironment: null,
-  sentrySort: 'date',
+  ...(() => {
+    const f = readSentryFilters();
+    return {
+      sentrySearch: f.search,
+      sentryStatus: f.status,
+      sentryLevel: f.level,
+      sentryProjects: f.projects,
+      sentryEnvironment: f.environment,
+      sentrySort: f.sort
+    };
+  })(),
   sentryProjectOptions: [],
   sentryProjectOptionsLoading: false,
   sentryEnvironmentOptions: [],
@@ -779,8 +860,11 @@ export async function refreshSentryInbox({ silent = false }: { silent?: boolean 
 }
 
 /** Schedule a debounced refresh after a filter change (250ms). Avoids
- *  hammering the API while the user types in the search box. */
+ *  hammering the API while the user types in the search box. Also
+ *  persists the new filter shape to localStorage so the user comes back
+ *  to the same view after restart (mirrors Jira / GitHub behavior). */
 export function scheduleSentryFilterRefresh() {
+  persistSentryFilters();
   if (sentryFilterDebounce) clearTimeout(sentryFilterDebounce);
   sentryFilterDebounce = setTimeout(() => void refreshSentryInbox({ silent: true }), 250);
 }

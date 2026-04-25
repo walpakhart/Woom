@@ -14,6 +14,7 @@ use rmcp::{
     transport::stdio,
 };
 use serde::Deserialize;
+use urlencoding;
 
 const USER_AGENT: &str = concat!("forgehold-github/", env!("CARGO_PKG_VERSION"));
 const API_BASE: &str = "https://api.github.com";
@@ -168,6 +169,29 @@ struct ProposeSwitchCwdParams {
     /// A short free-form note for the user explaining why you want to switch.
     #[serde(default)]
     reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct SearchParams {
+    /// GitHub search syntax forwarded verbatim to `/search/issues`. Examples:
+    /// `is:pr is:merged DEVOPS-414 org:Efficiently-Dev`,
+    /// `is:open author:nik repo:acme/api`,
+    /// `is:issue label:bug created:>2025-01-01 org:acme`.
+    /// See https://docs.github.com/en/search-github/searching-on-github/searching-issues-and-pull-requests
+    query: String,
+    /// Max items to return (default 25, cap 100).
+    #[serde(default)]
+    limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct ListReposParams {
+    /// Max repos to return (default 30, cap 100).
+    #[serde(default)]
+    limit: Option<u32>,
+    /// Filter by name substring (case-insensitive). Omit for all.
+    #[serde(default)]
+    name: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -439,6 +463,51 @@ impl Gh {
     }
 
     #[tool(
+        description = "Search GitHub pull requests across one or more repos / orgs. Returns id, number, repo, title, state (open/closed/merged), author, draft flag, created/updated, url. Use this when the user wants to find PRs by keyword, ticket id, author, label, or status — e.g. \"find merged PRs that mention DEVOPS-414\" → `is:pr is:merged DEVOPS-414`. Pass full GitHub search syntax."
+    )]
+    async fn search_prs(
+        &self,
+        Parameters(SearchParams { query, limit }): Parameters<SearchParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let max = limit.unwrap_or(25).min(100);
+        let q = format!("is:pr {}", query.trim());
+        match self.fetch_search(&q, max).await {
+            Ok(t) => Ok(CallToolResult::success(vec![Content::text(t)])),
+            Err(e) => Err(ErrorData::internal_error(e.to_string(), None)),
+        }
+    }
+
+    #[tool(
+        description = "Search GitHub issues across one or more repos / orgs. Same syntax as search_prs but defaults to `is:issue`. Use to find tickets by label, milestone, mention, or full-text — e.g. \"open issues with label:bug touched in the last week\" → `is:issue is:open label:bug updated:>2025-04-18`."
+    )]
+    async fn search_issues(
+        &self,
+        Parameters(SearchParams { query, limit }): Parameters<SearchParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let max = limit.unwrap_or(25).min(100);
+        let q = format!("is:issue {}", query.trim());
+        match self.fetch_search(&q, max).await {
+            Ok(t) => Ok(CallToolResult::success(vec![Content::text(t)])),
+            Err(e) => Err(ErrorData::internal_error(e.to_string(), None)),
+        }
+    }
+
+    #[tool(
+        description = "List GitHub repos accessible by the authenticated user (own + collaborator + org). Returns owner/name, default branch, private flag, language, last push. Useful when the user says \"the repo I'm working on\" or asks to scope a search to a particular repo and you don't already know its slug."
+    )]
+    async fn list_repos(
+        &self,
+        Parameters(ListReposParams { limit, name }): Parameters<ListReposParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let max = limit.unwrap_or(30).min(100);
+        let needle = name.as_deref().map(str::trim).filter(|s| !s.is_empty());
+        match self.fetch_repos(max, needle).await {
+            Ok(t) => Ok(CallToolResult::success(vec![Content::text(t)])),
+            Err(e) => Err(ErrorData::internal_error(e.to_string(), None)),
+        }
+    }
+
+    #[tool(
         description = "Propose a pull request for the user to review. Use after the commit is made (or will be made) and the user asked to open a PR. Does NOT create the PR — it surfaces an editable PR card in the Forgehold UI. Only call when the user asked you to open a PR."
     )]
     async fn propose_pr(
@@ -488,6 +557,130 @@ impl Gh {
             .bearer_auth(&self.creds.token)
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", "2022-11-28")
+    }
+
+    async fn fetch_search(&self, q: &str, per_page: u32) -> anyhow::Result<String> {
+        // /search/issues handles both PRs and Issues; the `is:pr` /
+        // `is:issue` qualifier already in `q` filters server-side.
+        let url = format!(
+            "{API_BASE}/search/issues?q={}&per_page={}&sort=updated",
+            urlencoding::encode(q),
+            per_page
+        );
+        let resp = self.req(&url).send().await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("GitHub search {} — {}", status, truncate(&body, 500));
+        }
+        let v: serde_json::Value = resp.json().await?;
+        let items = v
+            .get("items")
+            .and_then(|x| x.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let total = v.get("total_count").and_then(|x| x.as_u64()).unwrap_or(0);
+        if items.is_empty() {
+            return Ok(format!("No results for `{}`.", q));
+        }
+        let mut out = format!(
+            "{} of {} matches for `{}`:\n",
+            items.len(),
+            total,
+            q
+        );
+        for it in &items {
+            let number = it.get("number").and_then(|x| x.as_u64()).unwrap_or(0);
+            let title = it.get("title").and_then(|x| x.as_str()).unwrap_or("");
+            let state = it.get("state").and_then(|x| x.as_str()).unwrap_or("?");
+            let url = it.get("html_url").and_then(|x| x.as_str()).unwrap_or("");
+            // pull_request.merged_at distinguishes merged from just closed.
+            let merged = it
+                .get("pull_request")
+                .and_then(|p| p.get("merged_at"))
+                .map(|x| !x.is_null())
+                .unwrap_or(false);
+            let draft = it.get("draft").and_then(|x| x.as_bool()).unwrap_or(false);
+            let user = it
+                .get("user")
+                .and_then(|u| u.get("login"))
+                .and_then(|x| x.as_str())
+                .unwrap_or("?");
+            let updated = it
+                .get("updated_at")
+                .and_then(|x| x.as_str())
+                .unwrap_or("");
+            // Repo derived from html_url (`https://github.com/<owner>/<repo>/...`).
+            let repo_slug = url
+                .strip_prefix("https://github.com/")
+                .and_then(|s| s.split('/').take(2).collect::<Vec<_>>().join("/").into())
+                .unwrap_or_default();
+            let kind = if it.get("pull_request").is_some() { "PR" } else { "Issue" };
+            let state_label = if merged {
+                "merged"
+            } else if draft {
+                "draft"
+            } else {
+                state
+            };
+            out.push_str(&format!(
+                "- {} {}#{} [{}] {} (by @{}, updated {})\n  {}\n",
+                kind, repo_slug, number, state_label, title, user, updated, url
+            ));
+        }
+        Ok(out)
+    }
+
+    async fn fetch_repos(
+        &self,
+        per_page: u32,
+        needle: Option<&str>,
+    ) -> anyhow::Result<String> {
+        // /user/repos returns repos the auth'd user owns OR collaborates on
+        // OR can see via org membership. Sorted by recency by default.
+        let url = format!(
+            "{API_BASE}/user/repos?per_page={}&sort=pushed&affiliation=owner,collaborator,organization_member",
+            per_page
+        );
+        let resp = self.req(&url).send().await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("GitHub /user/repos {} — {}", status, truncate(&body, 500));
+        }
+        let v: serde_json::Value = resp.json().await?;
+        let items = v.as_array().cloned().unwrap_or_default();
+        let needle_lower = needle.map(|s| s.to_lowercase());
+        let mut out = String::new();
+        let mut count = 0usize;
+        for r in &items {
+            let full = r.get("full_name").and_then(|x| x.as_str()).unwrap_or("?");
+            if let Some(n) = &needle_lower {
+                if !full.to_lowercase().contains(n) {
+                    continue;
+                }
+            }
+            let private = r.get("private").and_then(|x| x.as_bool()).unwrap_or(false);
+            let lang = r.get("language").and_then(|x| x.as_str()).unwrap_or("");
+            let default_branch = r
+                .get("default_branch")
+                .and_then(|x| x.as_str())
+                .unwrap_or("");
+            let pushed = r.get("pushed_at").and_then(|x| x.as_str()).unwrap_or("");
+            out.push_str(&format!(
+                "- {} ({}) · default={} · lang={} · pushed={}\n",
+                full,
+                if private { "private" } else { "public" },
+                default_branch,
+                if lang.is_empty() { "?" } else { lang },
+                pushed
+            ));
+            count += 1;
+        }
+        if count == 0 {
+            return Ok("No repositories matched.".into());
+        }
+        Ok(format!("{} repo(s):\n{}", count, out))
     }
 
     async fn fetch_pr(&self, owner: &str, repo: &str, number: u64) -> anyhow::Result<String> {
