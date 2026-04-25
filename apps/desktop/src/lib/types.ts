@@ -118,6 +118,15 @@ export type ClaudeSession = {
       keeps continuity for the user without permanently inflating prompts.
       Cleared after the next turn ships. */
   cwdSwitchRecap: string | null;
+  /** Per-cwd CLI session ids. Key = cwd path (the actual string we passed
+      as `--cwd`). Value = the claudeUuid that the CLI accepted for that
+      project. Lets us *resume* an old conversation when the user moves
+      back to a previously-visited cwd, instead of starting fresh every
+      time. Populated as we leave each cwd (we stash the current uuid
+      under the cwd we're leaving), consulted on entry to a cwd we have
+      a record of. CLI-kind specific — cleared on switchAgentKind since
+      a cursor-agent chat id can't resume in claude and vice versa. */
+  cwdUuids: Record<string, string>;
 };
 
 export interface RepoInfo {

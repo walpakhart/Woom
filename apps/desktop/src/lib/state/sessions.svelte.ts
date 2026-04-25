@@ -74,7 +74,9 @@ function loadStoredSessions(): {
       columnInstanceId:
         (s as { columnInstanceId?: string | null }).columnInstanceId ?? null,
       cwdSwitchRecap:
-        (s as { cwdSwitchRecap?: string | null }).cwdSwitchRecap ?? null
+        (s as { cwdSwitchRecap?: string | null }).cwdSwitchRecap ?? null,
+      cwdUuids:
+        (s as { cwdUuids?: Record<string, string> }).cwdUuids ?? {}
     }));
     return {
       sessions,
@@ -182,7 +184,8 @@ export function persistSessionsEffect() {
           linkedToEditor: s.linkedToEditor,
           linkedToEditorInstanceId: s.linkedToEditorInstanceId,
           columnInstanceId: s.columnInstanceId,
-          cwdSwitchRecap: s.cwdSwitchRecap
+          cwdSwitchRecap: s.cwdSwitchRecap,
+          cwdUuids: s.cwdUuids
         })),
         activeId: sessionsState.activeClaudeId
       };
@@ -252,7 +255,8 @@ export function newClaudeSession(
       linkedToEditor: !!opts.linkedToEditor,
       linkedToEditorInstanceId: opts.linkedToEditorInstanceId ?? null,
       columnInstanceId,
-      cwdSwitchRecap: null
+      cwdSwitchRecap: null,
+      cwdUuids: {}
     },
     ...sessionsState.list
   ];
@@ -415,16 +419,20 @@ export function appendSessionMessage(id: string, msg: ClaudeMessage) {
 
 /** Swap the agent CLI for a session. Rotates `claudeUuid` and resets the
     resumable flag because each CLI keeps its own session store — resuming
-    a Claude id against cursor-agent (or vice versa) would fail. The UI
-    history in Forgehold is retained but neither CLI will remember earlier
-    turns on the new side. */
+    a Claude id against cursor-agent (or vice versa) would fail. Also
+    drops the per-cwd uuid map: those ids are CLI-specific (a saved
+    claudeUuid wouldn't resume in cursor-agent), so carrying the map
+    across a CLI swap would only mislead future cwd switches. The UI
+    history in Forgehold is retained but neither CLI will remember
+    earlier turns on the new side. */
 export function switchAgentKind(sessionId: string, kind: 'claude' | 'cursor') {
   const sess = sessionsState.list.find((s) => s.id === sessionId);
   if (!sess || sess.agentKind === kind) return;
   updateSession(sessionId, {
     agentKind: kind,
     claudeUuid: genUuid(),
-    claudeResumable: false
+    claudeResumable: false,
+    cwdUuids: {}
   });
 }
 

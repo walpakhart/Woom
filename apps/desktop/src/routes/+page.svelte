@@ -202,13 +202,17 @@
    *  scope conversations by *project directory* (cwd-derived), so resuming
    *  an old session id under a new cwd fails ("No conversation found with
    *  session ID …"). When the cwd actually changes:
-   *    - rotate `claudeUuid` and clear `claudeResumable` so the next turn
-   *      creates a fresh conversation in the new project
-   *    - snapshot the recent UI conversation into `cwdSwitchRecap` so
-   *      the next turn's system prompt can prime the FRESH CLI session
-   *      with what was just being discussed. Without this the agent
-   *      would lose all conversational context every time the user
-   *      asked to "switch to the other repo and continue".
+   *    - Stash the current uuid under the old cwd in `cwdUuids` (only if
+   *      it has a real CLI-side conversation, i.e. `claudeResumable`).
+   *      This lets a future return to that cwd resume the original chat.
+   *    - Look up the new cwd in the map. If we've been there before,
+   *      restore that uuid and resume — full CLI memory of the prior
+   *      thread, no recap needed.
+   *    - Otherwise mint a fresh uuid for the new project AND snapshot
+   *      the recent UI conversation into `cwdSwitchRecap` so the next
+   *      turn's system prompt can prime the fresh CLI session with what
+   *      was just being discussed. Without that the agent would lose
+   *      conversational context every time the user moves between repos.
    *  `breakLink: true` also unlinks from the editor (used by manual user
    *  actions like `pickCwd`). */
   function applySessionCwd(
@@ -222,9 +226,25 @@
     const cwdChanged = (oldCwd ?? '') !== (newCwd ?? '');
     const patch: Partial<ClaudeSession> = { cwd: newCwd };
     if (cwdChanged) {
-      patch.claudeUuid = genUuid();
-      patch.claudeResumable = false;
-      patch.cwdSwitchRecap = buildCwdSwitchRecap(sess, oldCwd, newCwd);
+      // Stash departing cwd's uuid (only if it's a live CLI conversation).
+      const map = { ...sess.cwdUuids };
+      if (oldCwd && sess.claudeResumable) {
+        map[oldCwd] = sess.claudeUuid;
+      }
+      const restoreUuid = newCwd ? map[newCwd] : null;
+      if (restoreUuid) {
+        // Returning to a project we've been in before — resume its
+        // conversation. Drop any stale recap; the CLI already remembers.
+        patch.claudeUuid = restoreUuid;
+        patch.claudeResumable = true;
+        patch.cwdSwitchRecap = null;
+      } else {
+        // Fresh project. New uuid, prime with recap.
+        patch.claudeUuid = genUuid();
+        patch.claudeResumable = false;
+        patch.cwdSwitchRecap = buildCwdSwitchRecap(sess, oldCwd, newCwd);
+      }
+      patch.cwdUuids = map;
     }
     if (opts.breakLink) {
       patch.linkedToEditor = false;
