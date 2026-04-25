@@ -512,6 +512,21 @@ fn build_mcp_config(session_id: &str) -> Option<(PathBuf, Vec<String>)> {
         allowed.push("mcp__sentry__list_releases".into());
     }
 
+    // forgehold-app: in-app navigation. Tool calls are intercepted by
+    // the frontend's stream parser to drive the UI (open detail panes,
+    // switch views, add editor instances, surface connect modals).
+    // Always wired — no creds needed.
+    if let Some(app) = build_app_server() {
+        servers.insert("app".into(), app);
+        allowed.push("mcp__app__open_github_pr".into());
+        allowed.push("mcp__app__open_github_issue".into());
+        allowed.push("mcp__app__open_jira_issue".into());
+        allowed.push("mcp__app__open_sentry_issue".into());
+        allowed.push("mcp__app__switch_view".into());
+        allowed.push("mcp__app__add_editor_instance".into());
+        allowed.push("mcp__app__open_connect_modal".into());
+    }
+
     if servers.is_empty() {
         return None;
     }
@@ -581,6 +596,17 @@ fn build_memory_server() -> Option<serde_json::Value> {
         "env": {
             "FORGEHOLD_MEMORY_DB": db_str,
         }
+    }))
+}
+
+/// Wire up the bundled `forgehold-app` sidecar — exposes UI navigation
+/// tools (open detail panes, switch views, add editor columns). Tool
+/// calls are intercepted by the frontend's stream parser; the sidecar
+/// is intentionally thin (just registers the schemas).
+fn build_app_server() -> Option<serde_json::Value> {
+    let sidecar = find_sidecar("forgehold-app")?;
+    Some(serde_json::json!({
+        "command": sidecar.to_string_lossy(),
     }))
 }
 

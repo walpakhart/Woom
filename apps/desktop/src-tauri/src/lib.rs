@@ -108,6 +108,7 @@ pub fn run() {
             github_search_inbox,
             github_list_repos,
             github_list_repo_items,
+            github_get_inbox_item,
             github_list_workflow_runs,
             github_rerun_workflow,
             github_cancel_workflow,
@@ -293,6 +294,22 @@ async fn github_list_repo_items(
 ) -> Result<Vec<InboxItem>, String> {
     let t = token().await?;
     github::list_repo_issues(&t, &owner, &repo, &state).await.map_err(|e| e.to_string())
+}
+
+/// Single PR or issue lookup by `(owner, repo, number)`. Used by the
+/// frontend's app-navigation handler when the agent calls
+/// `mcp__app__open_github_pr` so we can slot the item into the focus
+/// pane without first scrolling through an inbox.
+#[tauri::command]
+async fn github_get_inbox_item(
+    owner: String,
+    repo: String,
+    number: u64,
+) -> Result<InboxItem, String> {
+    let t = token().await?;
+    github::fetch_inbox_item(&t, &owner, &repo, number)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

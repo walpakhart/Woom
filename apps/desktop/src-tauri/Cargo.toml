@@ -1,5 +1,5 @@
 [workspace]
-members = ["sidecars/forgehold-jira", "sidecars/forgehold-github", "sidecars/forgehold-memory", "sidecars/forgehold-sentry"]
+members = ["sidecars/forgehold-jira", "sidecars/forgehold-github", "sidecars/forgehold-memory", "sidecars/forgehold-sentry", "sidecars/forgehold-app"]
 
 [package]
 name = "forgehold-desktop"

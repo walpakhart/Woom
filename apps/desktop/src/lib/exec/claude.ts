@@ -27,6 +27,14 @@ export interface AgentRunRequest {
   cursorModel: string | null;
   /** Called with every assistant-text delta as it streams in. */
   onAssistantDelta: (sessionId: string, delta: string) => void;
+  /** Called when the agent invokes a `mcp__app__*` UI-navigation tool.
+   *  Threaded through to the stream handler — see
+   *  `ClaudeStreamHandlers.onAppNavigation`. Optional. */
+  onAppNavigation?: (
+    sessionId: string,
+    name: string,
+    input: Record<string, unknown>
+  ) => void;
 }
 
 export interface AgentRunResult {
@@ -46,7 +54,8 @@ export async function runAgentRequest(req: AgentRunRequest): Promise<AgentRunRes
       try {
         const parsed = JSON.parse(event.payload);
         handleStreamEvent(req.sessionId, parsed, {
-          onAssistantDelta: req.onAssistantDelta
+          onAssistantDelta: req.onAssistantDelta,
+          onAppNavigation: req.onAppNavigation
         });
       } catch {
         // Malformed line — drop it. The CLI sometimes interleaves a stray

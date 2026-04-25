@@ -2,7 +2,7 @@
   import Sigil from '$lib/components/ui/Sigil.svelte';
   import type { ConnectionStatus } from '$lib/data';
 
-  type View = 'workbench' | 'repositories' | 'tasks' | 'rules' | 'connections' | 'settings';
+  type View = 'workbench' | 'repositories' | 'tasks' | 'issues' | 'rules' | 'connections' | 'settings';
 
   interface Props {
     view: View;
@@ -33,6 +33,9 @@
     </button>
     <button class="rail-btn" class:active={view === 'tasks'} data-tooltip="Tasks" onclick={() => (view = 'tasks')} aria-label="Tasks">
       <svg class="i" viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="2" /><path d="M9 3v2h6V3" /><path d="M8 11h8M8 15h6" /></svg>
+    </button>
+    <button class="rail-btn" class:active={view === 'issues'} data-tooltip="Issues (Sentry)" onclick={() => (view = 'issues')} aria-label="Issues">
+      <svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/></svg>
     </button>
     <button class="rail-btn" class:active={view === 'rules'} data-tooltip="Rules" onclick={() => (view = 'rules')} aria-label="Rules">
       <svg class="i" viewBox="0 0 24 24"><path d="M14 3v4a1 1 0 0 0 1 1h4M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z" /><path d="M9 12h6M9 16h6" /></svg>

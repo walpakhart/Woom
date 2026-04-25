@@ -45,7 +45,8 @@
       "binaries/forgehold-github",
       "binaries/forgehold-jira",
       "binaries/forgehold-memory",
-      "binaries/forgehold-sentry"
+      "binaries/forgehold-sentry",
+      "binaries/forgehold-app"
     ],
     "icon": [
       "icons/32x32.png",

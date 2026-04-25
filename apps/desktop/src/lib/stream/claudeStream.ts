@@ -22,6 +22,16 @@ export interface ClaudeStreamHandlers {
   /** Called with raw text deltas for the assistant turn. Implementations
    *  typically forward to `appendToLastAssistant` and scroll the chat. */
   onAssistantDelta: (sessionId: string, delta: string) => void;
+  /** Called when Claude invokes a `mcp__app__*` tool — Forgehold-app's
+   *  navigation surface (open detail pane, switch view, add editor
+   *  column, surface connect modal). The caller has access to all the
+   *  reactive state slices and decides what to mutate. Optional — if
+   *  omitted the call is rendered like any other tool_use. */
+  onAppNavigation?: (
+    sessionId: string,
+    name: string,
+    input: Record<string, unknown>
+  ) => void;
 }
 
 /** Default handler: write to the sessions store. UIs that want to also
@@ -99,6 +109,15 @@ export function handleStreamEvent(
         });
         continue;
       default: {
+        // forgehold-app navigation tools — drive the UI directly. We
+        // also surface a one-line "navigated to X" hint into the chat
+        // so the user has a record of what happened.
+        if (name.startsWith('mcp__app__')) {
+          handlers.onAppNavigation?.(sessionId, name, input);
+          const hint = formatToolUse(name, input);
+          if (hint) handlers.onAssistantDelta(sessionId, `\n\n${hint}\n\n`);
+          continue;
+        }
         const formatted = formatToolUse(name, input);
         if (formatted) handlers.onAssistantDelta(sessionId, `\n\n${formatted}\n\n`);
       }

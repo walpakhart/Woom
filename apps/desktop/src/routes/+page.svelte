@@ -13,6 +13,7 @@
   import SettingsView from '$lib/views/SettingsView.svelte';
   import RepositoriesView from '$lib/views/RepositoriesView.svelte';
   import TasksView from '$lib/views/TasksView.svelte';
+  import IssuesView from '$lib/views/IssuesView.svelte';
   import CommandPalette from '$lib/components/ui/CommandPalette.svelte';
   import ModalsRoot from '$lib/components/modals/ModalsRoot.svelte';
   import GithubColumn from '$lib/components/workbench/GithubColumn.svelte';
@@ -129,7 +130,7 @@
   } from '$lib/data';
   import { basename, formatToolUse, isImagePath, truncInline } from '$lib/format';
 
-  type View = 'workbench' | 'repositories' | 'tasks' | 'rules' | 'connections' | 'settings';
+  type View = 'workbench' | 'repositories' | 'tasks' | 'issues' | 'rules' | 'connections' | 'settings';
   type DetailTab = 'conversation' | 'commits' | 'files' | 'reviews' | 'checks';
 
   // View & layout state
@@ -1194,7 +1195,8 @@
         rules: rules || null,
         agentKind,
         cursorModel,
-        onAssistantDelta: appendAssistantDelta
+        onAssistantDelta: appendAssistantDelta,
+        onAppNavigation: handleAppNavigation
       });
       // Replace the streaming-accumulated body with the clean final text.
       replaceLastAssistant(id, result.reply.trim() || '(empty response)');
@@ -1261,6 +1263,88 @@
   function appendAssistantDelta(sessionId: string, delta: string) {
     appendToLastAssistant(sessionId, delta);
     void scrollChatBottom();
+  }
+
+  /** Forgehold-app MCP navigation: the agent calls `mcp__app__open_jira_issue`
+   *  / `switch_view` / `add_editor_instance` / etc., the stream parser sees
+   *  the `tool_use` event, and we drive Forgehold's reactive state directly
+   *  here — same outcome as if the user had clicked through the UI by hand.
+   *  No approval card, since these are read-only navigations.
+   *
+   *  When inputs are bad (unknown view name, blank id) we silently no-op
+   *  rather than throw — the chat still shows the inline `> *Tool* …` hint
+   *  so the user can see what the agent tried. */
+  function handleAppNavigation(
+    _sessionId: string,
+    name: string,
+    input: Record<string, unknown>
+  ) {
+    const str = (k: string): string =>
+      typeof input[k] === 'string' ? (input[k] as string).trim() : '';
+    const num = (k: string): number => {
+      const v = input[k];
+      return typeof v === 'number' ? v : Number(v);
+    };
+    switch (name) {
+      case 'mcp__app__open_jira_issue': {
+        const key = str('key');
+        if (key) inboxState.jiraFocusKey = key;
+        return;
+      }
+      case 'mcp__app__open_sentry_issue': {
+        const id = str('id');
+        if (id) inboxState.sentryFocusId = id;
+        return;
+      }
+      case 'mcp__app__open_github_pr':
+      case 'mcp__app__open_github_issue': {
+        // GitHub focus pane wants a full InboxItem; fetch it on demand
+        // through the same API call the inbox uses, then stash. The user
+        // sees a brief flash before it lands — fine for a navigation.
+        const owner = str('owner');
+        const repo = str('repo');
+        const n = num('number');
+        if (!owner || !repo || !Number.isFinite(n)) return;
+        void resolveGithubFocus(owner, repo, n);
+        return;
+      }
+      case 'mcp__app__switch_view': {
+        const v = str('view');
+        // Type-safe: view is the View union, validated server-side too.
+        if (v) view = v as View;
+        return;
+      }
+      case 'mcp__app__add_editor_instance': {
+        const repoPath = str('repo_path');
+        const newId = addPanelInstance('editor');
+        if (repoPath && newId) setEditorRepoPath(repoPath, newId);
+        return;
+      }
+      case 'mcp__app__open_connect_modal': {
+        const sourceId = str('source');
+        const conn = connectionsMeta.find((c) => c.id === sourceId);
+        if (conn) openConnectModal(conn);
+        return;
+      }
+    }
+  }
+
+  /** Pull a single GitHub item by `(owner, repo, number)` and slot it into
+   *  the focus pane. Used by the `open_github_pr` / `open_github_issue`
+   *  app-navigation tools. Best-effort — if the fetch fails we just
+   *  swallow; the chat still shows what the agent tried. */
+  async function resolveGithubFocus(owner: string, repo: string, number: number) {
+    try {
+      const item = await invoke<InboxItem>('github_get_inbox_item', {
+        owner,
+        repo,
+        number
+      });
+      openFocusItem(item);
+      tab = 'conversation';
+    } catch (e) {
+      console.warn('open_github_pr resolution failed:', e);
+    }
   }
 
   // ---- Message replay / edit ----
@@ -2634,6 +2718,13 @@
         bind:view
         {now}
         onOpenCreateIssue={openJiraCreateIssue}
+      />
+
+    {:else if view === 'issues'}
+      <IssuesView
+        {sentryStatus}
+        bind:view
+        {now}
       />
 
     {:else if view === 'rules'}

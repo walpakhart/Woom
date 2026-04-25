@@ -417,6 +417,26 @@ pub async fn list_repos(token: &str) -> Result<Vec<Repository>, GithubError> {
 
 // ---------- Per-repo listings ----------
 
+/// Fetch a single PR/issue by number and adapt it into the same InboxItem
+/// shape `list_repo_issues` returns. Used when the frontend needs to slot
+/// an item into the focus pane without a prior list view (e.g. when the
+/// agent calls `mcp__app__open_github_pr` to navigate the user there).
+///
+/// Routes through `/repos/{owner}/{repo}/issues/{number}` because that
+/// endpoint covers both PRs and issues — issues unify under it server-side.
+pub async fn fetch_inbox_item(
+    token: &str,
+    owner: &str,
+    repo: &str,
+    number: u64,
+) -> Result<InboxItem, GithubError> {
+    let c = client()?;
+    let url = format!("{API_BASE}/repos/{owner}/{repo}/issues/{number}");
+    let resp = request(&c, reqwest::Method::GET, token, url).send().await?;
+    let raw: SearchItem = handle(resp).await?;
+    Ok(InboxItem::from(raw))
+}
+
 pub async fn list_repo_issues(
     token: &str,
     owner: &str,

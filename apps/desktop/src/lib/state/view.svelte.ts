@@ -6,7 +6,7 @@
 // independent but live together because every consumer that flips one
 // usually wants to read the other.
 
-export type View = 'workbench' | 'repositories' | 'tasks' | 'rules' | 'connections' | 'settings';
+export type View = 'workbench' | 'repositories' | 'tasks' | 'issues' | 'rules' | 'connections' | 'settings';
 export type DetailTab = 'conversation' | 'commits' | 'files' | 'reviews' | 'checks';
 
 export const viewState = $state<{ view: View; tab: DetailTab }>({
