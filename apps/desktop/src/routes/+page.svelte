@@ -1340,12 +1340,17 @@
       '  - `mcp__app__set_editor_repo_path` — change an editor\'s open '
         + 'folder. Pass `instance_name` (the art-name like "Sagrada-Familia") '
         + 'or `instance_id`. If the editor has linked agents, their cwd '
-        + 'auto-follows.'
+        + 'auto-follows — see the `linked_agents=[…]` field on each editor '
+        + 'in the preamble above. So if your column is in `linked_agents` of '
+        + 'the editor you\'re moving, you DON\'T need a separate set_agent_cwd '
+        + 'for yourself — the link handles it.'
     );
     lines.push(
       '  - `mcp__app__set_agent_cwd` — change an agent session\'s cwd. '
         + 'Pass `instance_name`/`instance_id`, or `target=self` for yourself. '
-        + 'For yourself, the change takes effect on your NEXT turn.'
+        + 'For yourself, the change takes effect on your NEXT turn. The '
+        + 'editor↔agent link is NEVER broken by this call — only by the '
+        + 'user clicking "Unlink" in the UI.'
     );
     lines.push(
       '  - `mcp__app__list_instances` — re-list the current state if you '
@@ -1354,6 +1359,14 @@
     lines.push(
       'Only use `mcp__app__add_workbench_instance` when the user explicitly '
         + 'says "add", "new", "another" — not for "switch" / "open in".'
+    );
+    lines.push('');
+    lines.push(
+      'Approval cards: `set_editor_repo_path` and `set_agent_cwd` execute '
+        + 'immediately when the USER asked you to switch — no approval card. '
+        + 'If you want to PROACTIVELY suggest a switch (the user didn\'t '
+        + 'ask but you think they should), use `mcp__github__propose_switch_cwd` '
+        + 'instead — that one queues an approval card.'
     );
     return lines.join('\n');
   }
@@ -1507,22 +1520,30 @@
         const repoPath = str('repo_path');
         if (!repoPath) return;
         const target = str('target').toLowerCase();
+        let sessId: string | null = null;
         if (target === 'self') {
-          // _sessionId is the session that called the tool; update its cwd.
-          updateSession(_sessionId, { cwd: repoPath, linkedToEditor: false });
-          return;
+          sessId = _sessionId;
+        } else {
+          const instName = str('instance_name');
+          const instId = str('instance_id');
+          // Try claude first, then cursor — same pool from the user's POV.
+          const inst = findInstanceByNameOrId('claude', instName, instId)
+            ?? findInstanceByNameOrId('cursor', instName, instId);
+          if (inst) {
+            view = 'workbench';
+            void scrollInstanceIntoView(inst.id);
+            sessId = sessionsState.activeByInstance[inst.id] ?? null;
+          }
         }
-        const instName = str('instance_name');
-        const instId = str('instance_id');
-        // Try claude first, then cursor — same pool from the user's POV.
-        const inst = findInstanceByNameOrId('claude', instName, instId)
-          ?? findInstanceByNameOrId('cursor', instName, instId);
-        if (!inst) return;
-        const sessId = sessionsState.activeByInstance[inst.id];
         if (!sessId) return;
-        view = 'workbench';
-        updateSession(sessId, { cwd: repoPath, linkedToEditor: false });
-        void scrollInstanceIntoView(inst.id);
+        // NEVER break the link automatically — it's a soft binding the
+        // user controls via the UI's unlink button. Even when the new cwd
+        // diverges from the linked editor's path, leaving the link
+        // intact is the right call: the agent uses its explicit `cwd`
+        // (it wins in `effectiveCwd`), and if the user later moves the
+        // editor, the linked agent auto-follows that move just like
+        // before. Manual unlink stays the only way to actually detach.
+        updateSession(sessId, { cwd: repoPath });
         return;
       }
       case 'mcp__app__list_instances': {
