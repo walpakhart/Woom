@@ -15,13 +15,20 @@
 // scroll out of this module means the same handler can drive replays
 // later (e.g. an artifact re-render) without DOM coupling.
 
-import { appendToLastAssistant, addAction, genId } from '$lib/state/sessions.svelte';
+import { appendToLastAssistant, appendToLastThinking, addAction, genId } from '$lib/state/sessions.svelte';
 import { formatToolUse } from '$lib/format';
 
 export interface ClaudeStreamHandlers {
   /** Called with raw text deltas for the assistant turn. Implementations
    *  typically forward to `appendToLastAssistant` and scroll the chat. */
   onAssistantDelta: (sessionId: string, delta: string) => void;
+  /** Called with `thinking` content blocks emitted by reasoning models
+   *  (Claude `*-thinking-*`, Cursor reasoning models). The default
+   *  handler routes these into the assistant message's `thinking`
+   *  field — AgentColumn collapses them into an expandable pill so
+   *  the user can inspect the chain-of-thought after the answer
+   *  lands. Without this they'd be silently dropped. */
+  onThinkingDelta?: (sessionId: string, delta: string) => void;
   /** Called when Claude invokes a `mcp__app__*` tool — Forgehold-app's
    *  navigation surface (open detail pane, switch view, add editor
    *  column, surface connect modal). The caller has access to all the
@@ -39,15 +46,25 @@ export interface ClaudeStreamHandlers {
 export const defaultStreamHandlers: ClaudeStreamHandlers = {
   onAssistantDelta(sessionId, delta) {
     appendToLastAssistant(sessionId, delta);
+  },
+  onThinkingDelta(sessionId, delta) {
+    appendToLastThinking(sessionId, delta);
   }
 };
 
-/** Dispatch a single parsed stream event for `sessionId`. */
+/** Dispatch a single parsed stream event for `sessionId`. Caller-supplied
+ *  handlers are merged on top of `defaultStreamHandlers`, so a caller
+ *  that only overrides `onAssistantDelta` (typical: chat column adds a
+ *  scroll-on-append) still gets the default `onThinkingDelta` (writes
+ *  to the session's `thinking` field). */
 export function handleStreamEvent(
   sessionId: string,
   parsed: unknown,
   handlers: ClaudeStreamHandlers = defaultStreamHandlers
 ): void {
+  const merged = handlers === defaultStreamHandlers
+    ? defaultStreamHandlers
+    : { ...defaultStreamHandlers, ...handlers };
   if (!parsed || typeof parsed !== 'object') return;
   const msg = parsed as Record<string, unknown>;
   if (msg.type !== 'assistant') return;
@@ -56,7 +73,11 @@ export function handleStreamEvent(
 
   for (const block of inner.content) {
     if (block.type === 'text' && typeof block.text === 'string') {
-      handlers.onAssistantDelta(sessionId, block.text);
+      merged.onAssistantDelta(sessionId, block.text);
+      continue;
+    }
+    if (block.type === 'thinking' && typeof block.thinking === 'string') {
+      merged.onThinkingDelta?.(sessionId, block.thinking);
       continue;
     }
     if (block.type !== 'tool_use') continue;
@@ -113,13 +134,13 @@ export function handleStreamEvent(
         // also surface a one-line "navigated to X" hint into the chat
         // so the user has a record of what happened.
         if (name.startsWith('mcp__app__')) {
-          handlers.onAppNavigation?.(sessionId, name, input);
+          merged.onAppNavigation?.(sessionId, name, input);
           const hint = formatToolUse(name, input);
-          if (hint) handlers.onAssistantDelta(sessionId, `\n\n${hint}\n\n`);
+          if (hint) merged.onAssistantDelta(sessionId, `\n\n${hint}\n\n`);
           continue;
         }
         const formatted = formatToolUse(name, input);
-        if (formatted) handlers.onAssistantDelta(sessionId, `\n\n${formatted}\n\n`);
+        if (formatted) merged.onAssistantDelta(sessionId, `\n\n${formatted}\n\n`);
       }
     }
   }

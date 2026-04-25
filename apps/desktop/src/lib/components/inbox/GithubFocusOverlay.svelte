@@ -100,6 +100,20 @@
     return map;
   });
 
+  // Per-review expansion state for the inline comments. The conversation
+  // tab renders an "X inline comments on Y files" pill — clicking it
+  // expands the comments inline (file path + line + body) right under
+  // the review block, instead of jumping to the Files tab. A small
+  // "Open in Files →" link still gives the old behaviour for users who
+  // want the diff context.
+  let expandedReviews = $state(new Set<number>());
+  function toggleReviewExpansion(id: number) {
+    const next = new Set(expandedReviews);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    expandedReviews = next;
+  }
+
   // Rolled-up counts for the Checks tab badge and summary row.
   const prChecksSummary = $derived.by(() => {
     const counts = {
@@ -251,10 +265,31 @@
                         <div class="review-empty">No written feedback.</div>
                       {/if}
                       {#if inline.length > 0}
-                        <button class="review-inline-link" onclick={() => onTabChange('files')}>
-                          <svg class="i i-sm" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
-                          {inline.length} inline comment{inline.length > 1 ? 's' : ''} on {new Set(inline.map((c) => c.path)).size} file{new Set(inline.map((c) => c.path)).size > 1 ? 's' : ''} →
+                        {@const expanded = expandedReviews.has(r.id)}
+                        {@const fileCount = new Set(inline.map((c) => c.path)).size}
+                        <button class="review-inline-link" onclick={() => toggleReviewExpansion(r.id)} aria-expanded={expanded}>
+                          <svg class="i i-sm review-chevron" class:review-chevron--open={expanded} viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg>
+                          {inline.length} inline comment{inline.length > 1 ? 's' : ''} on {fileCount} file{fileCount > 1 ? 's' : ''}
                         </button>
+                        {#if expanded}
+                          <div class="inline-comments inline-comments--review">
+                            {#each inline as ic (ic.id)}
+                              <div class="inline-comment">
+                                <div class="inline-comment-head">
+                                  {#if ic.user}<img src={ic.user.avatar_url} alt="" class="meta-avatar" /><span class="mono">@{ic.user.login}</span>{/if}
+                                  <span class="inline-path mono" title={ic.path}>{ic.path}</span>
+                                  {#if ic.line}<span class="inline-line mono">L{ic.line}</span>{/if}
+                                  <span class="meta-time mono">{relativeTime(ic.created_at, now)} ago</span>
+                                </div>
+                                <Markdown source={ic.body} />
+                              </div>
+                            {/each}
+                            <button class="review-inline-link review-inline-link--secondary" onclick={() => onTabChange('files')}>
+                              <svg class="i i-sm" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
+                              Open in Files →
+                            </button>
+                          </div>
+                        {/if}
                       {/if}
                     </div>
                   {:else}
@@ -682,6 +717,34 @@
     background: rgba(59, 130, 246, 0.14);
     border-color: rgba(59, 130, 246, 0.35);
     transform: translateY(-1px);
+  }
+  .review-inline-link--secondary {
+    margin-top: 8px;
+    background: var(--bg-1);
+    border-color: var(--border-neutral-hi);
+    color: var(--text-1);
+  }
+  .review-inline-link--secondary:hover {
+    background: var(--bg-2);
+    color: var(--text-0);
+    transform: none;
+  }
+  .review-chevron {
+    transition: transform 140ms ease;
+  }
+  .review-chevron--open {
+    transform: rotate(90deg);
+  }
+  .inline-comments--review {
+    margin-top: 10px;
+  }
+  .inline-path {
+    color: var(--text-1);
+    font-size: 11px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 320px;
   }
 
   /* Commits list */

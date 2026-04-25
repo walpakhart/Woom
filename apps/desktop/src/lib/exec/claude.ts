@@ -34,6 +34,10 @@ export interface AgentRunRequest {
   appContext: string | null;
   /** Called with every assistant-text delta as it streams in. */
   onAssistantDelta: (sessionId: string, delta: string) => void;
+  /** Called with `thinking` deltas from reasoning models. Optional —
+   *  when omitted the stream handler falls back to its default
+   *  (`appendToLastThinking` on the session). */
+  onThinkingDelta?: (sessionId: string, delta: string) => void;
   /** Called when the agent invokes a `mcp__app__*` UI-navigation tool.
    *  Threaded through to the stream handler — see
    *  `ClaudeStreamHandlers.onAppNavigation`. Optional. */
@@ -62,6 +66,7 @@ export async function runAgentRequest(req: AgentRunRequest): Promise<AgentRunRes
         const parsed = JSON.parse(event.payload);
         handleStreamEvent(req.sessionId, parsed, {
           onAssistantDelta: req.onAssistantDelta,
+          onThinkingDelta: req.onThinkingDelta,
           onAppNavigation: req.onAppNavigation
         });
       } catch {

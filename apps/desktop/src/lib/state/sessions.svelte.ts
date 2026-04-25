@@ -491,6 +491,23 @@ export function appendToLastAssistant(sessionId: string, delta: string) {
   });
 }
 
+/** Mirror of `appendToLastAssistant` for `thinking` content blocks.
+    Concatenates onto the last assistant message's `thinking` field
+    (lazily initialised). The pill in AgentColumn collapses these into
+    a "Thinking ✓" button the user can expand to inspect after the
+    final answer lands. */
+export function appendToLastThinking(sessionId: string, delta: string) {
+  sessionsState.list = sessionsState.list.map((s) => {
+    if (s.id !== sessionId) return s;
+    const msgs = [...s.messages];
+    const last = msgs[msgs.length - 1];
+    if (last && last.role === 'assistant') {
+      msgs[msgs.length - 1] = { ...last, thinking: (last.thinking ?? '') + delta };
+    }
+    return { ...s, messages: msgs };
+  });
+}
+
 export function replaceLastAssistant(sessionId: string, content: string) {
   sessionsState.list = sessionsState.list.map((s) => {
     if (s.id !== sessionId) return s;

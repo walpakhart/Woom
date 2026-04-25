@@ -149,6 +149,17 @@
   const activeSess = $derived(activeSessionInInstance(instanceId, kind, isFirstOfKind));
   const dragOver = $derived(dragOverInstanceId === instanceId);
 
+  // Per-message expansion of the "Thinking" pill. Keyed by `${sessId}:${idx}`
+  // so two sessions in the same column don't share state. Default = collapsed
+  // (only show the badge); user clicks to read the chain-of-thought.
+  let expandedThinking = $state(new Set<string>());
+  function toggleThinkingExpansion(key: string) {
+    const next = new Set(expandedThinking);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    expandedThinking = next;
+  }
+
   // Snap the chat scroll to the bottom whenever the active session changes
   // (workbench switch, app reopen, user picks a different chat from the
   // dropdown, agent column re-mounts). Without this the column lands at
@@ -954,6 +965,23 @@
                 {:else if msg.role === 'system'}
                   <div class="chat-plain">{msg.content}</div>
                 {:else}
+                  {#if msg.role === 'assistant' && msg.thinking && msg.thinking.trim()}
+                    {@const tkey = `${sess.id}:${idx}`}
+                    {@const tOpen = expandedThinking.has(tkey)}
+                    <button
+                      class="thinking-pill"
+                      onclick={() => toggleThinkingExpansion(tkey)}
+                      aria-expanded={tOpen}
+                      title={tOpen ? 'Collapse thinking' : 'Show thinking'}
+                    >
+                      <svg class="i i-sm thinking-chevron" class:thinking-chevron--open={tOpen} viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg>
+                      <span class="thinking-pill-label">Thinking</span>
+                      <svg class="i i-sm thinking-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>
+                    </button>
+                    {#if tOpen}
+                      <div class="thinking-body mono">{msg.thinking}</div>
+                    {/if}
+                  {/if}
                   <Markdown source={msg.content} onOpenFile={onOpenMentionPath} />
                 {/if}
               </div>
@@ -1255,6 +1283,52 @@
     margin-left: 8px;
     color: var(--text-mute); font-size: 10.5px;
     font-variant-numeric: tabular-nums;
+  }
+  /* Collapsed "Thinking ✓" pill above an assistant message that emitted
+     reasoning blocks. Click to expand the chain-of-thought below it.
+     Muted style — secondary to the answer body. */
+  .thinking-pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    margin: 0 0 8px;
+    padding: 4px 10px 4px 6px;
+    background: var(--bg-1);
+    border: 1px solid var(--border-neutral);
+    border-radius: 999px;
+    color: var(--text-2);
+    font-size: 11.5px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 120ms;
+  }
+  .thinking-pill:hover {
+    background: var(--bg-2);
+    color: var(--text-0);
+    border-color: var(--border-neutral-hi);
+  }
+  .thinking-chevron {
+    transition: transform 140ms ease;
+    width: 12px; height: 12px;
+  }
+  .thinking-chevron--open {
+    transform: rotate(90deg);
+  }
+  .thinking-check {
+    width: 12px; height: 12px;
+    color: var(--accent-bright);
+  }
+  .thinking-body {
+    margin: 0 0 10px;
+    padding: 10px 12px;
+    background: rgba(15, 24, 40, 0.5);
+    border: 1px solid var(--border-neutral);
+    border-left: 3px solid var(--border-neutral-hi);
+    border-radius: 6px;
+    font-size: 11.5px;
+    color: var(--text-2);
+    white-space: pre-wrap;
+    line-height: 1.55;
+    max-height: 320px;
+    overflow-y: auto;
   }
   .dot-pulse {
     width: 6px; height: 6px; border-radius: 50%;

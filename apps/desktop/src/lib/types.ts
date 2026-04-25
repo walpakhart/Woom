@@ -32,6 +32,13 @@ export type ClaudeMessage = {
   role: 'system' | 'user' | 'assistant';
   content: string;
   at: string;
+  /** Concatenated `thinking` content blocks the agent emitted before the
+      final answer. Surfaced as a collapsed "Thinking ✓" pill in the UI
+      that the user can expand to read. Only set on assistant messages
+      from thinking-capable models (Claude with `*-thinking-*` model
+      family, Cursor with reasoning models). Persisted alongside the
+      session so a reload still shows the same pill. */
+  thinking?: string;
 };
 
 export type Mention = {
