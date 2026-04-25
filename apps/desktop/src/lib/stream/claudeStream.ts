@@ -105,7 +105,25 @@ export function handleStreamEvent(
       merged.onThinkingDelta?.(sessionId, block.thinking);
       continue;
     }
-    if (block.type !== 'tool_use') continue;
+    if (block.type === 'redacted_thinking') {
+      // Thinking-models occasionally produce blocks the API redacts
+      // (signed/encrypted, can't be displayed). Surface a placeholder
+      // so the pill expansion still tells the user *something* was
+      // there — without it the thinking pill might show only partial
+      // content and feel buggy.
+      merged.onThinkingDelta?.(sessionId, '\n\n[redacted thinking — content not available]\n\n');
+      continue;
+    }
+    if (block.type !== 'tool_use') {
+      // Anything we don't recognize (image, server_tool_use, future
+      // block types) — log once per unknown shape so future drops
+      // don't go unnoticed. Kept silent in production-build console
+      // (warn level only fires in DevTools).
+      if (typeof block.type === 'string') {
+        console.warn('[claudeStream] dropped unknown content block:', block.type, block);
+      }
+      continue;
+    }
     const name = typeof block.name === 'string' ? block.name : 'tool';
     const input = (block.input ?? {}) as Record<string, unknown>;
     const id = typeof block.id === 'string' ? block.id : genId();

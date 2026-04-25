@@ -307,13 +307,18 @@ pub async fn list_issues(
     Ok(arr.into_iter().map(parse_issue).collect())
 }
 
-/// Fetch one issue by id (numeric or short-id). Includes culprit + metadata.
+/// Fetch one issue by id (numeric or short-id). For short-ids
+/// (`AUDIT-30`, `BMS-API-J6`) the `/api/0/issues/{id}/` endpoint
+/// returns 404 — Sentry routes those by numeric id only. Resolve via
+/// the org-scoped `shortids` endpoint first when the input looks like
+/// a short id (i.e. contains a non-digit character).
 pub async fn get_issue(
     creds: &SentryCredentials,
     issue_id: &str,
 ) -> Result<SentryIssue, String> {
+    let resolved = resolve_to_numeric_id(creds, issue_id).await?;
     let client = http();
-    let url = format!("{}/api/0/issues/{}/", creds.host, issue_id);
+    let url = format!("{}/api/0/issues/{}/", creds.host, resolved);
     let resp = client
         .get(&url)
         .bearer_auth(&creds.token)
@@ -330,6 +335,54 @@ pub async fn get_issue(
     Ok(parse_issue(v))
 }
 
+/// Map a Sentry short-id (`AUDIT-30`, `BMS-API-J6`) to its numeric
+/// issue id. Pure pass-through when the input is already numeric.
+/// Used by every endpoint that takes an issue id since the agent
+/// often hands us short-ids straight from search results.
+pub async fn resolve_to_numeric_id(
+    creds: &SentryCredentials,
+    issue_id: &str,
+) -> Result<String, String> {
+    let trimmed = issue_id.trim();
+    // Already numeric → no lookup needed.
+    if !trimmed.is_empty() && trimmed.chars().all(|c| c.is_ascii_digit()) {
+        return Ok(trimmed.to_string());
+    }
+    let client = http();
+    // `shortids/{short_id}/` returns the group object with `id` (numeric).
+    let url = format!(
+        "{}/api/0/organizations/{}/shortids/{}/",
+        creds.host, creds.organization_slug, trimmed
+    );
+    let resp = client
+        .get(&url)
+        .bearer_auth(&creds.token)
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .map_err(|e| format!("network resolving short id: {}", e))?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!(
+            "resolve short id {} {}: {}",
+            trimmed,
+            status,
+            truncate(&body, 200)
+        ));
+    }
+    let v: serde_json::Value = resp.json().await.map_err(|e| format!("JSON: {}", e))?;
+    // The shortids endpoint returns `{ "shortId": "...", "group": { "id": "...", ... } }`.
+    let group_id = v
+        .get("group")
+        .and_then(|g| g.get("id"))
+        .and_then(|i| i.as_str())
+        .or_else(|| v.get("groupId").and_then(|i| i.as_str()))
+        .ok_or_else(|| format!("short id {} resolved but no numeric id in response", trimmed))?
+        .to_string();
+    Ok(group_id)
+}
+
 /// List recent events (occurrences) for an issue. The `latest` event
 /// alias is special-cased by Sentry — it returns the most recent.
 pub async fn list_events(
@@ -337,11 +390,12 @@ pub async fn list_events(
     issue_id: &str,
     limit: u32,
 ) -> Result<Vec<SentryEvent>, String> {
+    let resolved = resolve_to_numeric_id(creds, issue_id).await?;
     let client = http();
     let url = format!(
         "{}/api/0/issues/{}/events/?limit={}",
         creds.host,
-        issue_id,
+        resolved,
         limit.min(50)
     );
     let resp = client
@@ -448,8 +502,9 @@ pub async fn get_event_detail(
     issue_id: &str,
     event_id: &str,
 ) -> Result<SentryEventDetail, String> {
+    let resolved_issue = resolve_to_numeric_id(creds, issue_id).await?;
     let target = if event_id.is_empty() { "latest" } else { event_id };
-    let url = format!("{}/api/0/issues/{}/events/{}/", creds.host, issue_id, target);
+    let url = format!("{}/api/0/issues/{}/events/{}/", creds.host, resolved_issue, target);
     let resp = http()
         .get(&url)
         .bearer_auth(&creds.token)
@@ -463,7 +518,7 @@ pub async fn get_event_detail(
         return Err(format!("event {}: {}", status, truncate(&body, 240)));
     }
     let v: serde_json::Value = resp.json().await.map_err(|e| format!("JSON: {}", e))?;
-    Ok(parse_event_detail(v, issue_id, &creds.host))
+    Ok(parse_event_detail(v, &resolved_issue, &creds.host))
 }
 
 /// Resolve / unresolve / ignore an issue. `status` ∈ unresolved | resolved |
@@ -473,8 +528,9 @@ pub async fn set_issue_status(
     issue_id: &str,
     status: &str,
 ) -> Result<SentryIssue, String> {
+    let resolved = resolve_to_numeric_id(creds, issue_id).await?;
     let body = serde_json::json!({ "status": status });
-    let url = format!("{}/api/0/issues/{}/", creds.host, issue_id);
+    let url = format!("{}/api/0/issues/{}/", creds.host, resolved);
     let resp = http()
         .put(&url)
         .bearer_auth(&creds.token)
