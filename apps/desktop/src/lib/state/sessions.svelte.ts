@@ -508,6 +508,26 @@ export function appendToLastThinking(sessionId: string, delta: string) {
   });
 }
 
+/** Append a tool-use trace line (already formatted by `formatToolUse`)
+    onto the last assistant message's `trace` field. Each call adds one
+    "step" separated by `\n\n` so the renderer can count and render
+    individual entries. The pill in AgentColumn collapses these into a
+    "✓ N steps" button users can expand. */
+export function appendToLastTrace(sessionId: string, segment: string) {
+  if (!segment.trim()) return;
+  sessionsState.list = sessionsState.list.map((s) => {
+    if (s.id !== sessionId) return s;
+    const msgs = [...s.messages];
+    const last = msgs[msgs.length - 1];
+    if (last && last.role === 'assistant') {
+      const prev = last.trace ?? '';
+      const next = prev ? `${prev}\n\n${segment}` : segment;
+      msgs[msgs.length - 1] = { ...last, trace: next };
+    }
+    return { ...s, messages: msgs };
+  });
+}
+
 export function replaceLastAssistant(sessionId: string, content: string) {
   sessionsState.list = sessionsState.list.map((s) => {
     if (s.id !== sessionId) return s;

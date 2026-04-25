@@ -159,6 +159,16 @@
     else next.add(key);
     expandedThinking = next;
   }
+  // Same shape, separate Set for the "✓ N steps" trace pill (tool-use
+  // hints). Independent so a user can expand thinking without auto-
+  // expanding trace and vice versa.
+  let expandedTrace = $state(new Set<string>());
+  function toggleTraceExpansion(key: string) {
+    const next = new Set(expandedTrace);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    expandedTrace = next;
+  }
 
   // Snap the chat scroll to the bottom whenever the active session changes
   // (workbench switch, app reopen, user picks a different chat from the
@@ -982,6 +992,26 @@
                       <div class="thinking-body mono">{msg.thinking}</div>
                     {/if}
                   {/if}
+                  {#if msg.role === 'assistant' && msg.trace && msg.trace.trim()}
+                    {@const ckey = `${sess.id}:${idx}:trace`}
+                    {@const cOpen = expandedTrace.has(ckey)}
+                    {@const stepCount = msg.trace.split('\n\n').filter((s) => s.trim()).length}
+                    <button
+                      class="thinking-pill"
+                      onclick={() => toggleTraceExpansion(ckey)}
+                      aria-expanded={cOpen}
+                      title={cOpen ? 'Hide steps' : 'Show steps'}
+                    >
+                      <svg class="i i-sm thinking-chevron" class:thinking-chevron--open={cOpen} viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg>
+                      <span class="thinking-pill-label">{stepCount} step{stepCount === 1 ? '' : 's'}</span>
+                      <svg class="i i-sm thinking-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>
+                    </button>
+                    {#if cOpen}
+                      <div class="trace-body">
+                        <Markdown source={msg.trace} onOpenFile={onOpenMentionPath} />
+                      </div>
+                    {/if}
+                  {/if}
                   <Markdown source={msg.content} onOpenFile={onOpenMentionPath} />
                 {/if}
               </div>
@@ -1330,6 +1360,22 @@
     max-height: 320px;
     overflow-y: auto;
   }
+  /* Trace body uses Markdown rendering (inherits .prose styles), so no
+     pre-wrap. Same chrome as thinking-body otherwise — muted, scrollable,
+     left-bordered to read as "secondary detail". */
+  .trace-body {
+    margin: 0 0 10px;
+    padding: 6px 12px;
+    background: rgba(15, 24, 40, 0.5);
+    border: 1px solid var(--border-neutral);
+    border-left: 3px solid var(--border-neutral-hi);
+    border-radius: 6px;
+    max-height: 320px;
+    overflow-y: auto;
+    font-size: 12px;
+  }
+  .trace-body :global(p) { margin: 4px 0; }
+  .trace-body :global(em) { color: var(--text-1); font-style: normal; font-weight: 500; }
   .dot-pulse {
     width: 6px; height: 6px; border-radius: 50%;
     background: var(--accent-bright);

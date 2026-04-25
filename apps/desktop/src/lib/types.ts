@@ -39,6 +39,14 @@ export type ClaudeMessage = {
       family, Cursor with reasoning models). Persisted alongside the
       session so a reload still shows the same pill. */
   thinking?: string;
+  /** Concatenated `formatToolUse` lines for every tool call the agent
+      ran during the turn (Read / Edit / Bash / Grep / Glob / TodoWrite /
+      mcp__*) — i.e. the "what I did" trace. Surfaced as a collapsed
+      "✓ N steps" pill above the answer body so the chat doesn't get
+      buried in tool hints. Each segment is separated by `\n\n` so the
+      step count is just `trace.split('\n\n').filter(Boolean).length`.
+      Persisted alongside the session. */
+  trace?: string;
 };
 
 export type Mention = {

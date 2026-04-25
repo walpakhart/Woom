@@ -15,7 +15,7 @@
 // scroll out of this module means the same handler can drive replays
 // later (e.g. an artifact re-render) without DOM coupling.
 
-import { appendToLastAssistant, appendToLastThinking, addAction, genId } from '$lib/state/sessions.svelte';
+import { appendToLastAssistant, appendToLastThinking, appendToLastTrace, addAction, genId } from '$lib/state/sessions.svelte';
 import { formatToolUse } from '$lib/format';
 
 export interface ClaudeStreamHandlers {
@@ -29,6 +29,13 @@ export interface ClaudeStreamHandlers {
    *  the user can inspect the chain-of-thought after the answer
    *  lands. Without this they'd be silently dropped. */
   onThinkingDelta?: (sessionId: string, delta: string) => void;
+  /** Called with one tool-use trace segment per call (already formatted
+   *  via `formatToolUse`). The default handler appends to the message's
+   *  `trace` field; AgentColumn collapses the trace into a "✓ N steps"
+   *  pill above the answer body so the chat doesn't drown in
+   *  read/edit/bash hints. Routed separately from `onAssistantDelta`
+   *  so the assistant's actual reply text stays clean. */
+  onTraceDelta?: (sessionId: string, segment: string) => void;
   /** Called when Claude invokes a `mcp__app__*` tool — Forgehold-app's
    *  navigation surface (open detail pane, switch view, add editor
    *  column, surface connect modal). The caller has access to all the
@@ -49,6 +56,9 @@ export const defaultStreamHandlers: ClaudeStreamHandlers = {
   },
   onThinkingDelta(sessionId, delta) {
     appendToLastThinking(sessionId, delta);
+  },
+  onTraceDelta(sessionId, segment) {
+    appendToLastTrace(sessionId, segment);
   }
 };
 
@@ -136,11 +146,11 @@ export function handleStreamEvent(
         if (name.startsWith('mcp__app__')) {
           merged.onAppNavigation?.(sessionId, name, input);
           const hint = formatToolUse(name, input);
-          if (hint) merged.onAssistantDelta(sessionId, `\n\n${hint}\n\n`);
+          if (hint) merged.onTraceDelta?.(sessionId, hint);
           continue;
         }
         const formatted = formatToolUse(name, input);
-        if (formatted) merged.onAssistantDelta(sessionId, `\n\n${formatted}\n\n`);
+        if (formatted) merged.onTraceDelta?.(sessionId, formatted);
       }
     }
   }

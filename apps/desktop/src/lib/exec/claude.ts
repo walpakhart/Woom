@@ -38,6 +38,9 @@ export interface AgentRunRequest {
    *  when omitted the stream handler falls back to its default
    *  (`appendToLastThinking` on the session). */
   onThinkingDelta?: (sessionId: string, delta: string) => void;
+  /** Called once per tool-use trace segment. Optional — defaults to
+   *  `appendToLastTrace` which feeds the "✓ N steps" pill. */
+  onTraceDelta?: (sessionId: string, segment: string) => void;
   /** Called when the agent invokes a `mcp__app__*` UI-navigation tool.
    *  Threaded through to the stream handler — see
    *  `ClaudeStreamHandlers.onAppNavigation`. Optional. */
@@ -67,6 +70,7 @@ export async function runAgentRequest(req: AgentRunRequest): Promise<AgentRunRes
         handleStreamEvent(req.sessionId, parsed, {
           onAssistantDelta: req.onAssistantDelta,
           onThinkingDelta: req.onThinkingDelta,
+          onTraceDelta: req.onTraceDelta,
           onAppNavigation: req.onAppNavigation
         });
       } catch {
