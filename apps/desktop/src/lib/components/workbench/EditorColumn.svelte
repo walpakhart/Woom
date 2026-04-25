@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   import { slide } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
   import EditorView from '$lib/components/editor/EditorView.svelte';
@@ -61,42 +62,49 @@
   // `bind:repoPath` has a stable slot to mutate. Two Editor columns can
   // open different folders simultaneously.
   //
-  // Sync model: local `repoPath` is the write side. The store
-  // (`sessionsState.editorInstanceState[instanceId].repoPath`) is a
-  // persistence mirror — a one-way effect copies local → store on every
-  // change. We previously also synced store → local, but that created a
-  // race: a new path coming in via `bind:repoPath` from the EditorView
-  // child would land on local first; the store-sync effect read the stale
-  // store value and overwrote local back to '' before the local→store
-  // effect could persist it. End result: clicking "Open folder" appeared
-  // to do nothing. Initial hydration is now done once at mount via the
-  // `$state(...)` initializer below.
+  // Sync model: bidirectional with a `lastSyncedFromStore` guard to
+  // prevent the original race. Local is mutated by EditorView's
+  // `bind:repoPath` (user picks folder); store is also a write target
+  // for *external* writers (the agent's `mcp__app__set_editor_repo_path`
+  // tool calls `setEditorRepoPath` in +page.svelte, which writes the
+  // store directly). The guard tracks the most recent value either side
+  // wrote so the two effects don't form a feedback loop.
   let repoPath = $state('');
-  // Hydrate once on mount from whatever we last persisted for this column
-  // instance. `instanceId` is stable per-mount (different ids produce a
-  // fresh Svelte component via the `{#each}` keyed block), so a one-shot
-  // pre-effect is the right shape — using a `$state(...)` initializer
-  // would trip Svelte's `state_referenced_locally` warning since the
-  // initializer captures the prop at construction time.
+  let lastSyncedFromStore = $state('');
   let hydrated = false;
   $effect.pre(() => {
     if (hydrated) return;
     hydrated = true;
-    if (!sessionsState.editorInstanceState[instanceId]) {
+    const slot = sessionsState.editorInstanceState[instanceId];
+    if (!slot) {
       sessionsState.editorInstanceState[instanceId] = { repoPath: '' };
-    } else if (sessionsState.editorInstanceState[instanceId].repoPath) {
-      repoPath = sessionsState.editorInstanceState[instanceId].repoPath;
+    } else if (slot.repoPath) {
+      repoPath = slot.repoPath;
+      lastSyncedFromStore = slot.repoPath;
     }
   });
 
-  // One-way mirror: local → store. The local var is the authoritative
-  // write side (mutated by `bind:repoPath` from EditorView when the user
-  // picks a folder); the store is just a persistence layer so the panel
-  // remembers the path across reloads / column re-mounts.
+  // Store → local. Adopt external writes (agent-driven set_editor_repo_path
+  // / linked-agent path push). `untrack` on the local read keeps this
+  // effect's deps to just the store, avoiding the feedback loop the
+  // earlier code warned about (where a local change re-triggered this
+  // effect with a stale store read and clobbered local).
+  $effect(() => {
+    const stored = sessionsState.editorInstanceState[instanceId]?.repoPath ?? '';
+    if (stored === lastSyncedFromStore) return; // we wrote it via local→store
+    lastSyncedFromStore = stored;
+    untrack(() => {
+      if (stored !== repoPath) repoPath = stored;
+    });
+  });
+
+  // Local → store. Persists user-side picks + keeps the guard in sync so
+  // the store→local effect doesn't bounce.
   $effect(() => {
     const slot = sessionsState.editorInstanceState[instanceId];
     if (slot && slot.repoPath !== repoPath) {
       slot.repoPath = repoPath;
+      lastSyncedFromStore = repoPath;
     }
   });
 
