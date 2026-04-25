@@ -66,15 +66,30 @@ export const defaultStreamHandlers: ClaudeStreamHandlers = {
  *  handlers are merged on top of `defaultStreamHandlers`, so a caller
  *  that only overrides `onAssistantDelta` (typical: chat column adds a
  *  scroll-on-append) still gets the default `onThinkingDelta` (writes
- *  to the session's `thinking` field). */
+ *  to the session's `thinking` field).
+ *
+ *  Important: `{...defaults, ...handlers}` with `handlers.onThinkingDelta
+ *  = undefined` would overwrite the default with undefined and silently
+ *  drop thinking + trace blocks (the classic JS spread-undefined bug —
+ *  bit us once already when callers passed an object literal with
+ *  `onThinkingDelta: req.onThinkingDelta` and req didn't supply it).
+ *  Build the override map from defined values only. */
 export function handleStreamEvent(
   sessionId: string,
   parsed: unknown,
   handlers: ClaudeStreamHandlers = defaultStreamHandlers
 ): void {
-  const merged = handlers === defaultStreamHandlers
-    ? defaultStreamHandlers
-    : { ...defaultStreamHandlers, ...handlers };
+  let merged: ClaudeStreamHandlers;
+  if (handlers === defaultStreamHandlers) {
+    merged = defaultStreamHandlers;
+  } else {
+    const overrides: Partial<ClaudeStreamHandlers> = {};
+    if (handlers.onAssistantDelta) overrides.onAssistantDelta = handlers.onAssistantDelta;
+    if (handlers.onThinkingDelta) overrides.onThinkingDelta = handlers.onThinkingDelta;
+    if (handlers.onTraceDelta) overrides.onTraceDelta = handlers.onTraceDelta;
+    if (handlers.onAppNavigation) overrides.onAppNavigation = handlers.onAppNavigation;
+    merged = { ...defaultStreamHandlers, ...overrides };
+  }
   if (!parsed || typeof parsed !== 'object') return;
   const msg = parsed as Record<string, unknown>;
   if (msg.type !== 'assistant') return;

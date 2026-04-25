@@ -236,11 +236,30 @@
               <span class="sdp-section-sub mono">{events.length}{events.length === 30 ? '+' : ''}</span>
             {/if}
             <div style="flex:1"></div>
-            <button class="sdp-link" onclick={() => void loadEvents()} disabled={eventsLoading}>
-              {eventsLoading ? 'Loading…' : 'Refresh'}
+            <button
+              class="sdp-icon-btn"
+              onclick={() => void loadEvents()}
+              disabled={eventsLoading}
+              title="Reload events"
+              aria-label="Reload events"
+            >
+              <svg class="i i-sm" class:sdp-spin={eventsLoading} viewBox="0 0 24 24">
+                <path d="M21 12a9 9 0 0 1-9 9 9 9 0 0 1-8.5-6"/>
+                <path d="M3 12a9 9 0 0 1 9-9 9 9 0 0 1 8.5 6"/>
+                <polyline points="21 3 21 9 15 9"/>
+                <polyline points="3 21 3 15 9 15"/>
+              </svg>
             </button>
-            <button class="sdp-link" onclick={() => (eventsExpanded = !eventsExpanded)}>
-              {eventsExpanded ? 'Hide' : 'Show'}
+            <button
+              class="sdp-icon-btn"
+              onclick={() => (eventsExpanded = !eventsExpanded)}
+              aria-expanded={eventsExpanded}
+              title={eventsExpanded ? 'Hide list' : 'Show list'}
+              aria-label={eventsExpanded ? 'Hide list' : 'Show list'}
+            >
+              <svg class="i i-sm sdp-chevron" class:sdp-chevron--open={eventsExpanded} viewBox="0 0 24 24">
+                <path d="m9 18 6-6-6-6"/>
+              </svg>
             </button>
           </header>
           {#if eventsError}
@@ -278,8 +297,19 @@
           <h3 class="sdp-section-title">{inboxState.sentryFocusEventId ? 'Selected event' : 'Latest event'}</h3>
           {#if event?.event_id}<span class="sdp-section-sub mono">{event.event_id.slice(0, 8)}</span>{/if}
           <div style="flex:1"></div>
-          <button class="sdp-link" onclick={() => void loadEvent()} disabled={eventLoading}>
-            {eventLoading ? 'Loading…' : 'Refresh'}
+          <button
+            class="sdp-icon-btn"
+            onclick={() => void loadEvent()}
+            disabled={eventLoading}
+            title="Reload event"
+            aria-label="Reload event"
+          >
+            <svg class="i i-sm" class:sdp-spin={eventLoading} viewBox="0 0 24 24">
+              <path d="M21 12a9 9 0 0 1-9 9 9 9 0 0 1-8.5-6"/>
+              <path d="M3 12a9 9 0 0 1 9-9 9 9 0 0 1 8.5 6"/>
+              <polyline points="21 3 21 9 15 9"/>
+              <polyline points="3 21 3 15 9 15"/>
+            </svg>
           </button>
         </header>
         {#if eventLoading && !event}
@@ -391,6 +421,25 @@
     background: none; border: none; padding: 0; text-decoration: underline; font-size: 12px;
   }
   .sdp-link:disabled { opacity: 0.5; cursor: default; }
+  /* Compact icon-button used inside section headers (Other events,
+     Latest event). Smaller than `.sdp-btn` because section headers are
+     dense; a square chip with just the icon. */
+  .sdp-icon-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 24px; height: 24px;
+    background: transparent; border: 1px solid transparent;
+    border-radius: 5px;
+    color: var(--text-2); cursor: pointer;
+    transition: all 100ms;
+  }
+  .sdp-icon-btn:hover:not(:disabled) {
+    background: var(--bg-2); color: var(--text-0);
+    border-color: var(--border-neutral);
+  }
+  .sdp-icon-btn:disabled { opacity: 0.45; cursor: default; }
+  .sdp-icon-btn .i-sm { width: 13px; height: 13px; }
+  .sdp-chevron { transition: transform 140ms ease; }
+  .sdp-chevron--open { transform: rotate(90deg); }
 
   .sdp-body {
     flex: 1; overflow-y: auto;
