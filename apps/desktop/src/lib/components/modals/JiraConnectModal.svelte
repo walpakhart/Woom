@@ -36,7 +36,12 @@
         </button>
       </header>
       <div class="modal-body">
-        <p class="modal-copy">Basic auth with an API token. Token is stored in your macOS Keychain, not on disk.</p>
+        <p class="modal-copy">
+          Basic auth with an Atlassian API token. The token inherits your account's
+          permissions — you'll need <em>browse projects</em> for reads, plus <em>edit issues</em>
+          / <em>transition issues</em> / <em>add comments</em> on the projects you want Claude
+          to mutate. Token is stored in your macOS Keychain, not on disk.
+        </p>
         <button class="link-btn" onclick={() => openBrowser(jiraTokenUrl())}>
           <svg class="i i-sm" viewBox="0 0 24 24"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><path d="M15 3h6v6M10 14 21 3"/></svg>
           Create an API token on id.atlassian.com

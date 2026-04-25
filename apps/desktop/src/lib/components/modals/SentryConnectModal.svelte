@@ -39,9 +39,10 @@
       </header>
       <div class="modal-body">
         <p class="modal-copy">
-          Mint a token at <code class="mono">&lt;host&gt;/settings/account/api/auth-tokens/</code> with scopes
-          <code class="mono">org:read</code>, <code class="mono">project:read</code>, <code class="mono">event:read</code>.
-          Token is stored in macOS Keychain, not on disk.
+          Mint a User Auth Token at <code class="mono">&lt;host&gt;/settings/account/api/auth-tokens/</code> with scopes
+          <code class="mono">org:read</code>, <code class="mono">project:read</code>, <code class="mono">event:read</code>,
+          <code class="mono">event:write</code> (the last is required so Claude can resolve / ignore / comment on issues).
+          Self-hosted works too — point Host at your install. Token is stored in macOS Keychain, not on disk.
         </p>
         <button class="link-btn" onclick={() => openBrowser(sentryTokenUrl())}>
           <svg class="i i-sm" viewBox="0 0 24 24"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><path d="M15 3h6v6M10 14 21 3"/></svg>

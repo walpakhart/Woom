@@ -43,7 +43,11 @@
       <div class="modal-body">
         {#if m.conn.id === 'github'}
           <p class="modal-copy">
-            Need a token? Create one with scopes <code class="mono">repo</code>, <code class="mono">read:user</code>, <code class="mono">read:org</code>.
+            Classic personal access token with scopes <code class="mono">repo</code>,
+            <code class="mono">read:user</code>, <code class="mono">read:org</code>. The link
+            below pre-fills these. Fine-grained tokens also work — give them
+            Pull requests / Issues / Contents / Metadata read+write on the repos
+            you care about. Token is stored in your macOS Keychain, not on disk.
           </p>
           <button class="link-btn" onclick={() => openBrowser(githubTokenUrl())}>
             <svg class="i i-sm" viewBox="0 0 24 24"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><path d="M15 3h6v6M10 14 21 3"/></svg>
