@@ -312,6 +312,15 @@ export const inboxState = $state<{
   sentryEnvironmentOptionsLoading: boolean;
   /** Slide-over pane key — issue id of the currently focused issue. */
   sentryFocusId: string | null;
+
+  // ---- App-navigation channel (driven by `mcp__app__*` tools) ----
+  // RepositoriesView watches `pendingRepoNav` and, when set, opens the
+  // requested repo on the requested section, then nulls it back out. We
+  // can't call into the view component directly because state is owned
+  // there; this reactive channel lets the agent-driven navigation
+  // tools land cleanly without a circular dep. Section is a hint —
+  // RepositoriesView validates against its own RepoSection union.
+  pendingRepoNav: { owner: string; repo: string; section: string } | null;
 }>({
   items: [],
   loading: false,
@@ -365,7 +374,8 @@ export const inboxState = $state<{
   sentryProjectOptionsLoading: false,
   sentryEnvironmentOptions: [],
   sentryEnvironmentOptionsLoading: false,
-  sentryFocusId: null
+  sentryFocusId: null,
+  pendingRepoNav: null
 });
 
 let userPickerDebounce: ReturnType<typeof setTimeout> | null = null;

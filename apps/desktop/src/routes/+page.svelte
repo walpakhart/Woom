@@ -7,6 +7,7 @@
   import WorktreeDiffModal from '$lib/components/editor/WorktreeDiffModal.svelte';
   import JiraDetailPane from '$lib/components/inbox/JiraDetailPane.svelte';
   import SentryDetailPane from '$lib/components/inbox/SentryDetailPane.svelte';
+  import GithubFocusOverlay from '$lib/components/inbox/GithubFocusOverlay.svelte';
   import Rail from '$lib/components/ui/Rail.svelte';
   import RulesView from '$lib/views/RulesView.svelte';
   import ConnectionsView from '$lib/views/ConnectionsView.svelte';
@@ -1301,11 +1302,14 @@
         // GitHub focus pane wants a full InboxItem; fetch it on demand
         // through the same API call the inbox uses, then stash. The user
         // sees a brief flash before it lands — fine for a navigation.
+        // The overlay is mounted at page root, so it appears over
+        // whatever view the user is currently on.
         const owner = str('owner');
         const repo = str('repo');
         const n = num('number');
         if (!owner || !repo || !Number.isFinite(n)) return;
-        void resolveGithubFocus(owner, repo, n);
+        const tabHint = str('tab') as DetailTab | '';
+        void resolveGithubFocus(owner, repo, n, tabHint || null);
         return;
       }
       case 'mcp__app__switch_view': {
@@ -1316,6 +1320,7 @@
       }
       case 'mcp__app__add_editor_instance': {
         const repoPath = str('repo_path');
+        view = 'workbench';
         const newId = addPanelInstance('editor');
         if (repoPath && newId) setEditorRepoPath(repoPath, newId);
         return;
@@ -1326,14 +1331,83 @@
         if (conn) openConnectModal(conn);
         return;
       }
+      case 'mcp__app__add_workbench_instance': {
+        const kind = str('kind');
+        const validKinds: PanelKind[] = ['github', 'jira', 'sentry', 'claude', 'cursor', 'editor'];
+        if (!validKinds.includes(kind as PanelKind)) return;
+        view = 'workbench';
+        const newId = addPanelInstance(kind as PanelKind);
+        if (kind === 'editor') {
+          const repoPath = str('repo_path');
+          if (repoPath && newId) setEditorRepoPath(repoPath, newId);
+        }
+        // Scroll the new column into view so the user actually sees the
+        // change — addPanelInstance can drop a column off-screen on a
+        // wide layout.
+        if (newId) void scrollInstanceIntoView(newId);
+        return;
+      }
+      case 'mcp__app__new_workbench': {
+        const name = str('name') || 'Workbench';
+        const activate = input.activate !== false; // default true
+        const newId = addWorkbench(name);
+        if (activate && newId) setActiveWorkbench(newId);
+        view = 'workbench';
+        return;
+      }
+      case 'mcp__app__switch_workbench': {
+        const name = str('name');
+        const indexRaw = input.index;
+        view = 'workbench';
+        if (name) {
+          const target = layoutState.workbenches.find(
+            (w) => w.name.toLowerCase() === name.toLowerCase()
+          );
+          if (target) setActiveWorkbench(target.id);
+          return;
+        }
+        if (typeof indexRaw === 'number' && Number.isInteger(indexRaw)) {
+          const target = layoutState.workbenches[indexRaw];
+          if (target) setActiveWorkbench(target.id);
+        }
+        return;
+      }
+      case 'mcp__app__focus_workbench_instance': {
+        const kind = str('kind');
+        const validKinds: PanelKind[] = ['github', 'jira', 'sentry', 'claude', 'cursor', 'editor'];
+        if (!validKinds.includes(kind as PanelKind)) return;
+        view = 'workbench';
+        void scrollKindIntoView(kind as PanelKind);
+        return;
+      }
+      case 'mcp__app__open_repo': {
+        const owner = str('owner');
+        const repo = str('repo');
+        const section = str('section') || 'pulls';
+        if (!owner || !repo) return;
+        view = 'repositories';
+        // RepositoriesView watches this slot and clears it after opening.
+        inboxState.pendingRepoNav = { owner, repo, section };
+        return;
+      }
     }
   }
 
   /** Pull a single GitHub item by `(owner, repo, number)` and slot it into
    *  the focus pane. Used by the `open_github_pr` / `open_github_issue`
    *  app-navigation tools. Best-effort — if the fetch fails we just
-   *  swallow; the chat still shows what the agent tried. */
-  async function resolveGithubFocus(owner: string, repo: string, number: number) {
+   *  swallow; the chat still shows what the agent tried.
+   *
+   *  `tabHint` is only used when the agent explicitly asked for a
+   *  non-default tab (e.g. "open #123 on the files tab"); otherwise we
+   *  reset to `conversation` so a fresh PR doesn't inherit the previous
+   *  one's tab. */
+  async function resolveGithubFocus(
+    owner: string,
+    repo: string,
+    number: number,
+    tabHint: DetailTab | null = null
+  ) {
     try {
       const item = await invoke<InboxItem>('github_get_inbox_item', {
         owner,
@@ -1341,7 +1415,7 @@
         number
       });
       openFocusItem(item);
-      tab = 'conversation';
+      tab = tabHint ?? 'conversation';
     } catch (e) {
       console.warn('open_github_pr resolution failed:', e);
     }
@@ -2651,32 +2725,6 @@
             {/if}
           {/each}
 
-          {#if inboxState.jiraFocusKey}
-            <div class="slide-over" onclick={(e) => { if (e.target === e.currentTarget) inboxState.jiraFocusKey = null; }} onkeydown={(e) => { if (e.key === 'Escape') inboxState.jiraFocusKey = null; }} role="dialog" aria-modal="true" tabindex="-1">
-              <div class="slide-panel">
-                <JiraDetailPane
-                  issueKey={inboxState.jiraFocusKey}
-                  {now}
-                  onClose={() => (inboxState.jiraFocusKey = null)}
-                  onStatusChange={() => void refreshJiraInbox({ silent: true })}
-                />
-              </div>
-            </div>
-          {/if}
-
-          {#if inboxState.sentryFocusId}
-            <div class="slide-over" onclick={(e) => { if (e.target === e.currentTarget) inboxState.sentryFocusId = null; }} onkeydown={(e) => { if (e.key === 'Escape') inboxState.sentryFocusId = null; }} role="dialog" aria-modal="true" tabindex="-1">
-              <div class="slide-panel">
-                <SentryDetailPane
-                  issueId={inboxState.sentryFocusId}
-                  {now}
-                  onClose={() => (inboxState.sentryFocusId = null)}
-                  onOpenBrowser={openBrowser}
-                />
-              </div>
-            </div>
-          {/if}
-
           {#if worktreeDiffOpen && activeSession?.worktreePath && activeSession.worktreeRepo && activeSession.worktreeBranch}
             <WorktreeDiffModal
               repo={activeSession.worktreeRepo}
@@ -2757,6 +2805,59 @@
     {/if}
   </div>
 </div>
+
+<!-- Global focus overlays. Hoisted to page root so they appear in *any*
+     view — workbench, repositories, tasks, issues, etc. The earlier
+     per-view mounts only rendered when their owning component was on
+     screen, which broke the `mcp__app__open_*` navigation tools (PR
+     opened in the focus state but no overlay rendered until the user
+     manually flipped to Repositories). -->
+{#if inboxState.focusItem}
+  <GithubFocusOverlay
+    {now}
+    {tab}
+    {actionBusy}
+    onCloseFocus={closeFocusItem}
+    onRetryLoadDetail={() => loadDetail()}
+    onTabChange={(t) => (tab = t)}
+    onToggleFile={toggleFile}
+    onOpenCommit={openCommit}
+    onOpenComment={() => openModal('comment', { body: '', busy: false, error: null })}
+    onOpenReview={() => openModal('review', { event: 'APPROVE', body: '', busy: false, error: null })}
+    onOpenMerge={() => openModal('merge', { method: 'squash', busy: false, error: null })}
+    onAskClose={askClose}
+    onReopen={() => setState('open')}
+    onOpenBrowser={openBrowser}
+    onOpenCheckDetails={(url) => void openUrl(url)}
+    {mergeDisabled}
+  />
+{/if}
+
+{#if inboxState.jiraFocusKey}
+  <div class="slide-over" onclick={(e) => { if (e.target === e.currentTarget) inboxState.jiraFocusKey = null; }} onkeydown={(e) => { if (e.key === 'Escape') inboxState.jiraFocusKey = null; }} role="dialog" aria-modal="true" tabindex="-1">
+    <div class="slide-panel">
+      <JiraDetailPane
+        issueKey={inboxState.jiraFocusKey}
+        {now}
+        onClose={() => (inboxState.jiraFocusKey = null)}
+        onStatusChange={() => void refreshJiraInbox({ silent: true })}
+      />
+    </div>
+  </div>
+{/if}
+
+{#if inboxState.sentryFocusId}
+  <div class="slide-over" onclick={(e) => { if (e.target === e.currentTarget) inboxState.sentryFocusId = null; }} onkeydown={(e) => { if (e.key === 'Escape') inboxState.sentryFocusId = null; }} role="dialog" aria-modal="true" tabindex="-1">
+    <div class="slide-panel">
+      <SentryDetailPane
+        issueId={inboxState.sentryFocusId}
+        {now}
+        onClose={() => (inboxState.sentryFocusId = null)}
+        onOpenBrowser={openBrowser}
+      />
+    </div>
+  </div>
+{/if}
 
 <ModalsRoot
   {now}

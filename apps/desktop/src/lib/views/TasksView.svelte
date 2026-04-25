@@ -1,7 +1,6 @@
 <script lang="ts">
   import { openUrl } from '@tauri-apps/plugin-opener';
   import Sigil from '$lib/components/ui/Sigil.svelte';
-  import JiraDetailPane from '$lib/components/inbox/JiraDetailPane.svelte';
   import Dropdown, { type DropdownOption } from '$lib/components/ui/Dropdown.svelte';
   import {
     jiraStatusClass,
@@ -358,18 +357,7 @@
   </section>
 {/if}
 
-{#if inboxState.jiraFocusKey}
-  <div class="slide-over" onclick={(e) => { if (e.target === e.currentTarget) inboxState.jiraFocusKey = null; }} onkeydown={(e) => { if (e.key === 'Escape') inboxState.jiraFocusKey = null; }} role="dialog" aria-modal="true" tabindex="-1">
-    <div class="slide-panel">
-      <JiraDetailPane
-        issueKey={inboxState.jiraFocusKey}
-        {now}
-        onClose={() => (inboxState.jiraFocusKey = null)}
-        onStatusChange={() => void refreshJiraInbox({ silent: true })}
-      />
-    </div>
-  </div>
-{/if}
+<!-- JiraDetailPane slide-over is mounted globally at the page root. -->
 
 <style>
   /* Shared layout helpers — mirrored from RepositoriesView so Tasks feels at

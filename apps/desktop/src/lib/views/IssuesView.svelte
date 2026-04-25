@@ -1,7 +1,6 @@
 <script lang="ts">
   import { openUrl } from '@tauri-apps/plugin-opener';
   import Sigil from '$lib/components/ui/Sigil.svelte';
-  import SentryDetailPane from '$lib/components/inbox/SentryDetailPane.svelte';
   import Dropdown, { type DropdownOption } from '$lib/components/ui/Dropdown.svelte';
   import {
     relativeTime,
@@ -284,18 +283,7 @@
   </section>
 {/if}
 
-{#if inboxState.sentryFocusId}
-  <div class="slide-over" onclick={(e) => { if (e.target === e.currentTarget) inboxState.sentryFocusId = null; }} onkeydown={(e) => { if (e.key === 'Escape') inboxState.sentryFocusId = null; }} role="dialog" aria-modal="true" tabindex="-1">
-    <div class="slide-panel">
-      <SentryDetailPane
-        issueId={inboxState.sentryFocusId}
-        {now}
-        onClose={() => (inboxState.sentryFocusId = null)}
-        onOpenBrowser={openBrowser}
-      />
-    </div>
-  </div>
-{/if}
+<!-- SentryDetailPane slide-over is mounted globally at the page root. -->
 
 <style>
   .full-center { flex: 1; display: flex; align-items: center; justify-content: center; padding: 40px; }

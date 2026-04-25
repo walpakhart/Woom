@@ -1,7 +1,6 @@
 <script lang="ts">
   import { slide } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
-  import GithubFocusOverlay from '$lib/components/inbox/GithubFocusOverlay.svelte';
   import Dropdown, { type DropdownOption } from '$lib/components/ui/Dropdown.svelte';
   import {
     connectionsMeta,
@@ -288,24 +287,9 @@
   </div>
 </section>
 
-<GithubFocusOverlay
-  {now}
-  {tab}
-  {actionBusy}
-  {onCloseFocus}
-  {onRetryLoadDetail}
-  {onTabChange}
-  {onToggleFile}
-  {onOpenCommit}
-  {onOpenComment}
-  {onOpenReview}
-  {onOpenMerge}
-  {onAskClose}
-  {onReopen}
-  {onOpenBrowser}
-  {onOpenCheckDetails}
-  {mergeDisabled}
-/>
+<!-- GithubFocusOverlay is mounted globally at the page root (in
+     `+page.svelte`) so it can render regardless of which view / column
+     is on screen. -->
 
 <style>
   /* GitHub inbox column. Uses generic .wb-column / .wb-col-controls /

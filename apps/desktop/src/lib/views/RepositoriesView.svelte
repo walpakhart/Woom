@@ -3,7 +3,6 @@
   import { openUrl } from '@tauri-apps/plugin-opener';
   import Sigil from '$lib/components/ui/Sigil.svelte';
   import Markdown from '$lib/components/ui/Markdown.svelte';
-  import GithubFocusOverlay from '$lib/components/inbox/GithubFocusOverlay.svelte';
   import Dropdown, { type DropdownOption } from '$lib/components/ui/Dropdown.svelte';
   import {
     kindLabel,
@@ -128,6 +127,36 @@
       selectedRepo = null;
       repoItems = [];
     }
+  });
+
+  // Agent-driven navigation: handleAppNavigation in +page.svelte sets
+  // `inboxState.pendingRepoNav` after switching the view. We consume it
+  // here, find the matching repo (loading the list first if needed), and
+  // open it on the requested section. Then we null the slot so it
+  // doesn't fire twice on a re-render.
+  $effect(() => {
+    const nav = inboxState.pendingRepoNav;
+    if (!nav || !connectedGithub) return;
+    void (async () => {
+      if (!repos.length && !reposLoading) {
+        await loadRepos();
+      }
+      const target = repos.find(
+        (r) =>
+          r.owner.toLowerCase() === nav.owner.toLowerCase() &&
+          r.name.toLowerCase() === nav.repo.toLowerCase()
+      );
+      if (target) {
+        await openRepo(target);
+        const sec = nav.section as RepoSection;
+        if (['code', 'pulls', 'issues', 'actions', 'releases'].includes(sec)) {
+          selectRepoSection(sec);
+        }
+      }
+      // Always clear, even if the repo wasn't found — the agent's
+      // confirmation message already told the user; don't loop.
+      inboxState.pendingRepoNav = null;
+    })();
   });
 
   async function loadRepos() {
@@ -685,24 +714,8 @@
   </section>
 {/if}
 
-<GithubFocusOverlay
-  {now}
-  {tab}
-  {actionBusy}
-  onCloseFocus={() => (inboxState.focusItem = null)}
-  {onRetryLoadDetail}
-  {onTabChange}
-  {onToggleFile}
-  {onOpenCommit}
-  {onOpenComment}
-  {onOpenReview}
-  {onOpenMerge}
-  {onAskClose}
-  {onReopen}
-  {onOpenBrowser}
-  {onOpenCheckDetails}
-  {mergeDisabled}
-/>
+<!-- GithubFocusOverlay is mounted globally at the page root (in
+     `+page.svelte`). RepositoriesView no longer owns its own copy. -->
 
 <style>
   /* Shared layout helpers — duplicated from +page.svelte so the component is

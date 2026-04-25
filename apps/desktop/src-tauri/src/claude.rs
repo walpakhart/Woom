@@ -525,6 +525,11 @@ fn build_mcp_config(session_id: &str) -> Option<(PathBuf, Vec<String>)> {
         allowed.push("mcp__app__switch_view".into());
         allowed.push("mcp__app__add_editor_instance".into());
         allowed.push("mcp__app__open_connect_modal".into());
+        allowed.push("mcp__app__add_workbench_instance".into());
+        allowed.push("mcp__app__new_workbench".into());
+        allowed.push("mcp__app__switch_workbench".into());
+        allowed.push("mcp__app__focus_workbench_instance".into());
+        allowed.push("mcp__app__open_repo".into());
     }
 
     if servers.is_empty() {
