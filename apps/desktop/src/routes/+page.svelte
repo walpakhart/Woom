@@ -1328,8 +1328,26 @@
         onAssistantDelta: appendAssistantDelta,
         onAppNavigation: handleAppNavigation
       });
-      // Replace the streaming-accumulated body with the clean final text.
-      replaceLastAssistant(id, result.reply.trim() || '(empty response)');
+      // Keep the streamed transcript intact — it includes intermediate
+      // assistant text, `> *Tool* …` hint lines from `formatToolUse`,
+      // navigation hints from `mcp__app__*` tools, and so on. The
+      // earlier `replaceLastAssistant(id, result.reply)` wiped all of
+      // that and left only the final answer; users lost the context
+      // of what the agent did to get there.
+      //
+      // Two fallback cases where we DO need to write to the message:
+      //   1. Streaming dropped everything (some agent backends emit no
+      //      `text` blocks, only the final result event). In that case
+      //      content is empty — fall back to `result.reply`.
+      //   2. Empty reply with empty stream (rare — model returned nothing).
+      //      Stamp a placeholder so the chat doesn't look broken.
+      const sessNowForReply = sessionsState.list.find((s) => s.id === id);
+      const lastMsg = sessNowForReply?.messages[sessNowForReply.messages.length - 1];
+      const streamed = lastMsg?.role === 'assistant' ? lastMsg.content.trim() : '';
+      const finalReply = result.reply.trim();
+      if (!streamed) {
+        replaceLastAssistant(id, finalReply || '(empty response)');
+      }
       // Did `applySessionCwd` swap the session's claudeUuid mid-turn? That
       // happens when an in-turn tool call (`set_editor_repo_path` /
       // `set_agent_cwd`) changed cwd — the new uuid is fresh, not yet
