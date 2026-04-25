@@ -1306,16 +1306,32 @@
       });
       // Replace the streaming-accumulated body with the clean final text.
       replaceLastAssistant(id, result.reply.trim() || '(empty response)');
-      // Persist the effective session uuid — for Cursor this may differ from
-      // what we sent (CLI mints its own `chat_id` via `create-chat` on the
-      // first turn); for Claude it round-trips unchanged.
-      const patch: Partial<ClaudeSession> = { claudeResumable: true };
-      if (result.sessionUuid && result.sessionUuid !== claudeUuid) {
-        patch.claudeUuid = result.sessionUuid;
+      // Did `applySessionCwd` swap the session's claudeUuid mid-turn? That
+      // happens when an in-turn tool call (`set_editor_repo_path` /
+      // `set_agent_cwd`) changed cwd — the new uuid is fresh, not yet
+      // used by the CLI. If we blindly set `claudeResumable=true` here we
+      // overwrite the `false` applySessionCwd just set, and the *next*
+      // turn does `--resume <new-uuid>` against a CLI that has never
+      // heard of it ("No conversation found with session ID …"). So when
+      // the uuid changed mid-turn, leave both fields alone — the new
+      // uuid will be created via `--session-id` on its first ever use.
+      const sessAfter = sessionsState.list.find((s) => s.id === id);
+      const uuidStable = !!sessAfter && sessAfter.claudeUuid === claudeUuid;
+      const patch: Partial<ClaudeSession> = {};
+      if (uuidStable) {
+        patch.claudeResumable = true;
+        // Cursor mints a new chat_id via `create-chat` on the first turn;
+        // round-trip it back so subsequent turns resume cleanly.
+        if (result.sessionUuid && result.sessionUuid !== claudeUuid) {
+          patch.claudeUuid = result.sessionUuid;
+        }
       }
       // One-shot recap consumed — clear so it doesn't re-inject on every
-      // subsequent turn. Only fires after a successful run; if the turn
-      // erred out, recap stays so the retry still gets the context.
+      // subsequent turn. We check `sessAfter` (post-turn) because
+      // applySessionCwd may have just *set* the recap mid-turn; in that
+      // case it's freshly minted for the NEXT turn, don't clear yet.
+      // Only clear if the recap pre-dated this turn (i.e. it was the one
+      // we already injected into appContext).
       if (sess?.cwdSwitchRecap) {
         patch.cwdSwitchRecap = null;
       }
