@@ -325,13 +325,6 @@
             onclick={() => pick(opt)}
             onmouseenter={() => { if (!opt.disabled) activeIndex = i; }}
           >
-            {#if isMulti}
-              <span class="dd-checkbox" class:dd-checkbox--on={isSelected} aria-hidden="true">
-                {#if isSelected}
-                  <svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>
-                {/if}
-              </span>
-            {/if}
             {#if opt.color}
               <span class="dd-dot" style="background: {opt.color};"></span>
             {/if}
@@ -339,7 +332,7 @@
               <span class="dd-opt-label">{opt.label}</span>
               {#if opt.hint}<span class="dd-opt-hint">{opt.hint}</span>{/if}
             </span>
-            {#if !isMulti && isSelected}
+            {#if isSelected}
               <svg class="dd-check" viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M20 6 9 17l-5-5" />
               </svg>
@@ -511,31 +504,5 @@
     stroke-linejoin: round;
     color: var(--accent-bright);
     flex-shrink: 0;
-  }
-  /* Per-option checkbox in multi-select mode. Square chip with the
-     check glyph appearing when on. Grey when off, accent when on —
-     matches the rest of the dark palette. */
-  .dd-checkbox {
-    display: inline-flex; align-items: center; justify-content: center;
-    width: 14px; height: 14px;
-    border-radius: 3px;
-    background: transparent;
-    border: 1px solid var(--border-neutral-hi);
-    color: transparent;
-    flex-shrink: 0;
-    transition: background 100ms, border-color 100ms;
-  }
-  .dd-checkbox--on {
-    background: var(--accent-bright);
-    border-color: var(--accent-bright);
-    color: #0a111e;
-  }
-  .dd-checkbox svg {
-    width: 10px; height: 10px;
-    stroke: currentColor;
-    fill: none;
-    stroke-width: 2.6;
-    stroke-linecap: round;
-    stroke-linejoin: round;
   }
 </style>
