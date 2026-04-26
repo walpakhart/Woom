@@ -69,9 +69,11 @@
   }
 
   function onSprintOpen() {
-    const bid = inboxState.jiraFilters.boardId;
-    if (bid != null && !inboxState.jiraSprintOptions.length) {
-      void loadJiraSprints(bid);
+    // Sprint scope is per-board: only meaningful with exactly one
+    // board selected. Multi-board / no-board hides the dropdown.
+    const ids = inboxState.jiraFilters.boardIds;
+    if (ids.length === 1 && !inboxState.jiraSprintOptions.length) {
+      void loadJiraSprints(ids[0]);
     }
   }
 
@@ -83,19 +85,65 @@
     const projectKey = value ? value : null;
     // Picking a project invalidates the board/sprint/status choices — status
     // names are project-specific, so the cached list is stale too.
-    updateJiraFilters({ projectKey, boardId: null, sprintId: null, statusName: null });
+    updateJiraFilters({ projectKey, boardIds: [], sprintId: null, statusName: null });
     inboxState.jiraBoardOptions = [];
     inboxState.jiraSprintOptions = [];
     invalidateJiraStatuses();
     void loadJiraBoards(projectKey);
   }
 
+  /** Add or remove a board from the multi-select. Picking the empty
+   *  "All boards" option clears the entire selection. Picking a real
+   *  board toggles it: present → removed, absent → added. Sprint
+   *  filter is cleared whenever the board set changes since sprints
+   *  belong to a single board. */
   function onBoardChange(value: string) {
-    const boardId = value ? Number(value) : null;
-    updateJiraFilters({ boardId, sprintId: null });
+    const next = inboxState.jiraFilters.boardIds.slice();
+    if (!value) {
+      updateJiraFilters({ boardIds: [], sprintId: null });
+      inboxState.jiraSprintOptions = [];
+      return;
+    }
+    const id = Number(value);
+    const idx = next.indexOf(id);
+    if (idx >= 0) next.splice(idx, 1);
+    else next.push(id);
+    updateJiraFilters({ boardIds: next, sprintId: null });
     inboxState.jiraSprintOptions = [];
-    void loadJiraSprints(boardId);
+    if (next.length === 1) void loadJiraSprints(next[0]);
   }
+
+  function removeBoard(id: number) {
+    const next = inboxState.jiraFilters.boardIds.filter((b) => b !== id);
+    updateJiraFilters({ boardIds: next, sprintId: null });
+    inboxState.jiraSprintOptions = [];
+    if (next.length === 1) void loadJiraSprints(next[0]);
+  }
+
+  /** Resolve a board id to its display name. Falls back to `#id` when
+   *  the board options aren't loaded yet so the chip still shows
+   *  something readable. */
+  function boardLabel(id: number): string {
+    return inboxState.jiraBoardOptions.find((b) => b.id === id)?.name ?? `#${id}`;
+  }
+
+  /** When the user has selected 2+ boards (which fans the JQL out to
+   *  multiple projects), group the issue list by project key so the
+   *  output is visually separated. Single-board / no-board renders as
+   *  a flat list (no grouping). Project key derived from the issue
+   *  key prefix (`DEVOPS-414` → `DEVOPS`) since `JiraItem` doesn't
+   *  carry the field directly. */
+  const groupedJiraItems = $derived.by(() => {
+    if (inboxState.jiraFilters.boardIds.length <= 1) return null;
+    const groups = new Map<string, typeof inboxState.jiraItems>();
+    for (const item of inboxState.jiraItems) {
+      const proj = (item.key.split('-')[0] ?? 'OTHER').toUpperCase();
+      const arr = groups.get(proj) ?? [];
+      arr.push(item);
+      groups.set(proj, arr);
+    }
+    return Array.from(groups.entries()).map(([project, items]) => ({ project, items }));
+  });
 
   // Sprint dropdown value is a string for wire stability (numeric ids and
   // the `'backlog'` literal both coexist). Empty string = "any".
@@ -221,28 +269,47 @@
       </div>
       <div class="filter-row">
         <div class="filter-cell">
+          <!-- Board picker is multi-select: choosing a board toggles
+               it in `boardIds`. The dropdown's selected value resets
+               to '' so it always shows "+ Add board / All boards" as
+               the placeholder; the actual selection lives in the
+               chip strip below. -->
           <Dropdown
-            value={inboxState.jiraFilters.boardId == null ? '' : String(inboxState.jiraFilters.boardId)}
+            value=""
             options={boardOptions}
             onChange={onBoardChange}
             onOpen={onBoardOpen}
             ariaLabel="Board"
-            placeholder={inboxState.jiraBoardOptionsLoading ? 'Loading…' : 'All boards'}
+            placeholder={inboxState.jiraFilters.boardIds.length === 0
+              ? (inboxState.jiraBoardOptionsLoading ? 'Loading…' : 'All boards')
+              : '+ Add another board'}
             width="100%"
           />
         </div>
-        <div class="filter-cell">
-          <Dropdown
-            value={sprintSelectValue}
-            options={sprintOptions}
-            onChange={onSprintChange}
-            onOpen={onSprintOpen}
-            ariaLabel="Sprint"
-            placeholder={inboxState.jiraSprintOptionsLoading ? 'Loading…' : 'Any sprint'}
-            width="100%"
-          />
-        </div>
+        {#if inboxState.jiraFilters.boardIds.length === 1}
+          <div class="filter-cell">
+            <Dropdown
+              value={sprintSelectValue}
+              options={sprintOptions}
+              onChange={onSprintChange}
+              onOpen={onSprintOpen}
+              ariaLabel="Sprint"
+              placeholder={inboxState.jiraSprintOptionsLoading ? 'Loading…' : 'Any sprint'}
+              width="100%"
+            />
+          </div>
+        {/if}
       </div>
+      {#if inboxState.jiraFilters.boardIds.length > 0}
+        <div class="board-chips">
+          {#each inboxState.jiraFilters.boardIds as bid (bid)}
+            <button class="board-chip" onclick={() => removeBoard(bid)} title="Remove board">
+              <span class="board-chip-name">{boardLabel(bid)}</span>
+              <svg class="i i-sm" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>
+            </button>
+          {/each}
+        </div>
+      {/if}
       <div class="filter-row">
         <div class="filter-cell">
           <Dropdown
@@ -300,6 +367,43 @@
           No open issues assigned to {inboxState.jiraAssignee ? inboxState.jiraAssignee.display_name : 'the authenticated account'}.
         {/if}
       </div>
+    {:else if groupedJiraItems}
+      {#each groupedJiraItems as group (group.project)}
+        <div class="inbox-group-head mono">{group.project} <span class="inbox-group-count">{group.items.length}</span></div>
+        {#each group.items as j (j.id)}
+          <div
+            class="inbox-item"
+            draggable="true"
+            role="button"
+            tabindex="0"
+            ondragstart={(e) => onDragStart({ source: 'jira', item: j }, e)}
+            ondragend={onDragEnd}
+            onmousedown={onCardMouseDown}
+            onclick={(e) => { if (isClickNotDrag(e)) inboxState.jiraFocusKey = j.key; }}
+            onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); inboxState.jiraFocusKey = j.key; } }}
+          >
+            <div class="inbox-item-top">
+              <span class="source-mark">J</span>
+              <span class="inbox-item-id mono">{j.key}</span>
+              <button
+                class="inbox-item-ext"
+                onclick={(e) => { e.stopPropagation(); onOpenBrowser(j.url); }}
+                aria-label="Open on Jira"
+                title="Open on Jira"
+              >
+                <svg class="i i-sm" viewBox="0 0 24 24"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /><path d="M15 3h6v6M10 14 21 3" /></svg>
+              </button>
+              <span class="inbox-item-time mono">{relativeTime(j.updated, now)}</span>
+            </div>
+            <div class="inbox-item-title">{j.summary}</div>
+            <div class="inbox-item-meta">
+              <span class="mini-tag {jiraStatusClass(j.status_category)}">{j.status.toLowerCase()}</span>
+              <span class="mini-kind">{j.issue_type.toLowerCase()}</span>
+              {#if j.priority}<span class="mini-repo">· {j.priority.toLowerCase()}</span>{/if}
+            </div>
+          </div>
+        {/each}
+      {/each}
     {:else}
       {#each inboxState.jiraItems as j (j.id)}
         <div
@@ -368,6 +472,50 @@
   .filter-bar { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
   .filter-row { display: flex; align-items: center; gap: 6px; }
   .filter-cell { flex: 1 1 auto; min-width: 0; }
+  /* Selected-board chip strip — sits under the board picker when 1+
+     boards are selected. Each chip shows the board name + an X to
+     remove. Compact so it doesn't push the search bar off screen. */
+  .board-chips {
+    display: flex; flex-wrap: wrap; gap: 4px;
+    margin-top: 4px;
+  }
+  .board-chip {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 2px 4px 2px 8px;
+    background: var(--accent-soft);
+    border: 1px solid rgba(232, 163, 58, 0.25);
+    border-radius: 5px;
+    font-size: 11px;
+    color: var(--text-1);
+    cursor: pointer;
+    transition: background 100ms;
+  }
+  .board-chip:hover {
+    background: rgba(232, 163, 58, 0.18);
+    color: var(--text-0);
+  }
+  .board-chip-name { white-space: nowrap; max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
+  .board-chip .i-sm { width: 11px; height: 11px; opacity: 0.6; }
+  .board-chip:hover .i-sm { opacity: 1; }
+  /* Per-project group header — only shown when 2+ boards selected
+     (multi-project scope). Sticky to the top of its group so the
+     project label stays visible while scrolling through long lists. */
+  .inbox-group-head {
+    position: sticky; top: 0;
+    z-index: 1;
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 14px 4px;
+    background: var(--bg-1);
+    font-size: 11px; font-weight: 600;
+    color: var(--accent-bright);
+    text-transform: uppercase; letter-spacing: 0.06em;
+    border-bottom: 1px solid var(--border-neutral);
+  }
+  .inbox-group-count {
+    font-size: 10px; padding: 1px 6px; border-radius: 4px;
+    background: var(--bg-2); color: var(--text-2);
+    text-transform: none;
+  }
   .filter-input {
     flex: 1 1 auto; min-width: 0;
     padding: 6px 8px;

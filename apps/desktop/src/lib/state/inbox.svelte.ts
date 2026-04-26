@@ -66,7 +66,13 @@ export type JiraSprintFilter = number | 'backlog' | null;
 
 export interface JiraFilters {
   projectKey: string | null;
-  boardId: number | null;
+  /** Selected Jira boards. Multi-select: when more than one is picked,
+   *  the JQL builder OR-merges their project keys (`project IN (…)`)
+   *  so issues from every selected board's project show up in the
+   *  same view. Sprint filter is only meaningful with exactly one
+   *  board (sprints belong to a board) and is hidden / cleared
+   *  otherwise. Empty array = no board filter ("All boards"). */
+  boardIds: number[];
   sprintId: JiraSprintFilter;
   /** Literal workflow status name (`"BLOCKED"`, `"In Review"`, …) or `null`
    *  for "Any". When `null`, JQL does NOT constrain by resolution either —
@@ -163,7 +169,7 @@ const DEFAULT_GH_FILTERS: GithubFilters = {
 
 const DEFAULT_JIRA_FILTERS: JiraFilters = {
   projectKey: null,
-  boardId: null,
+  boardIds: [],
   sprintId: null,
   statusName: null,
   search: ''
@@ -202,9 +208,20 @@ function readJiraFilters(): JiraFilters {
       typeof parsed.statusName === 'string' && parsed.statusName.trim()
         ? parsed.statusName
         : null;
+    // Migrate legacy single-board persisted shape (`boardId: number | null`)
+    // into the new array shape (`boardIds: number[]`). Array form is
+    // preferred — old single-board users land with [boardId], everyone
+    // else with [].
+    const boardIdsRaw = parsed.boardIds;
+    let boardIds: number[] = [];
+    if (Array.isArray(boardIdsRaw)) {
+      boardIds = boardIdsRaw.filter((n): n is number => typeof n === 'number');
+    } else if (typeof parsed.boardId === 'number') {
+      boardIds = [parsed.boardId];
+    }
     return {
       projectKey: typeof parsed.projectKey === 'string' ? parsed.projectKey : null,
-      boardId: typeof parsed.boardId === 'number' ? parsed.boardId : null,
+      boardIds,
       sprintId,
       statusName,
       search: typeof parsed.search === 'string' ? parsed.search : ''
@@ -639,11 +656,37 @@ export function buildJiraJql(
   assigneeAny: boolean = false
 ): string {
   const parts: string[] = [];
-  if (filters.projectKey) parts.push(`project = "${jqlEscape(filters.projectKey)}"`);
-  if (filters.sprintId === 'backlog') {
-    parts.push('sprint is EMPTY');
-  } else if (typeof filters.sprintId === 'number') {
-    parts.push(`sprint = ${filters.sprintId}`);
+  if (filters.projectKey) {
+    parts.push(`project = "${jqlEscape(filters.projectKey)}"`);
+  } else if (filters.boardIds.length > 0) {
+    // Project filter takes precedence — when explicit `projectKey` is
+    // set, the user has already drilled into one project; respect that.
+    // Otherwise translate selected boards to their backing project keys
+    // and OR-merge so issues from every selected board's project show.
+    // Boards without a known project_key are skipped (rare — happens
+    // before `loadJiraBoards` populates options, or when a saved board
+    // id was deleted upstream and we haven't re-fetched).
+    const projectKeys = new Set<string>();
+    for (const bid of filters.boardIds) {
+      const board = inboxState.jiraBoardOptions.find((b) => b.id === bid);
+      if (board?.project_key) projectKeys.add(board.project_key);
+    }
+    if (projectKeys.size === 1) {
+      parts.push(`project = "${jqlEscape([...projectKeys][0])}"`);
+    } else if (projectKeys.size > 1) {
+      const list = [...projectKeys].map((k) => `"${jqlEscape(k)}"`).join(', ');
+      parts.push(`project IN (${list})`);
+    }
+  }
+  // Sprint clause is per-board; only meaningful with exactly one board
+  // selected. Multi-board scope drops it (UI hides the sprint dropdown
+  // in that case too — see JiraColumn.svelte).
+  if (filters.boardIds.length <= 1) {
+    if (filters.sprintId === 'backlog') {
+      parts.push('sprint is EMPTY');
+    } else if (typeof filters.sprintId === 'number') {
+      parts.push(`sprint = ${filters.sprintId}`);
+    }
   }
   if (filters.statusName) {
     parts.push(`status = "${jqlEscape(filters.statusName)}"`);
@@ -677,6 +720,7 @@ export async function refreshJiraInbox({ silent = false }: { silent?: boolean } 
     // no-assignee-clause JQL route. Same for non-default filters.
     const usingDefault =
       !f.projectKey &&
+      f.boardIds.length === 0 &&
       f.sprintId == null &&
       f.statusName == null &&
       !f.search.trim() &&

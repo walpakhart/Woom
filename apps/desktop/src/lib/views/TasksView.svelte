@@ -89,7 +89,7 @@
   function openProject(p: JiraProject) {
     updateJiraFilters({
       projectKey: p.key,
-      boardId: null,
+      boardIds: [],
       sprintId: null,
       statusName: null
     });
@@ -102,7 +102,7 @@
   function backToProjects() {
     updateJiraFilters({
       projectKey: null,
-      boardId: null,
+      boardIds: [],
       sprintId: null,
       statusName: null
     });
@@ -117,20 +117,42 @@
     }
   }
   function onSprintOpen() {
-    const b = inboxState.jiraFilters.boardId;
-    if (b != null && !inboxState.jiraSprintOptions.length) {
-      void loadJiraSprints(b);
+    const ids = inboxState.jiraFilters.boardIds;
+    if (ids.length === 1 && !inboxState.jiraSprintOptions.length) {
+      void loadJiraSprints(ids[0]);
     }
   }
   function onStatusOpen() {
     void loadJiraStatuses(inboxState.jiraFilters.projectKey);
   }
 
+  /** Mirror of JiraColumn's multi-select handler — see that file's
+   *  comment for semantics. Project drill-down already pinned us to
+   *  one project so multi-board here mostly means picking sprints
+   *  from multiple boards within that project. */
   function onBoardChange(value: string) {
-    const boardId = value ? Number(value) : null;
-    updateJiraFilters({ boardId, sprintId: null });
+    const next = inboxState.jiraFilters.boardIds.slice();
+    if (!value) {
+      updateJiraFilters({ boardIds: [], sprintId: null });
+      inboxState.jiraSprintOptions = [];
+      return;
+    }
+    const id = Number(value);
+    const idx = next.indexOf(id);
+    if (idx >= 0) next.splice(idx, 1);
+    else next.push(id);
+    updateJiraFilters({ boardIds: next, sprintId: null });
     inboxState.jiraSprintOptions = [];
-    void loadJiraSprints(boardId);
+    if (next.length === 1) void loadJiraSprints(next[0]);
+  }
+  function removeBoard(id: number) {
+    const next = inboxState.jiraFilters.boardIds.filter((b) => b !== id);
+    updateJiraFilters({ boardIds: next, sprintId: null });
+    inboxState.jiraSprintOptions = [];
+    if (next.length === 1) void loadJiraSprints(next[0]);
+  }
+  function boardLabel(id: number): string {
+    return inboxState.jiraBoardOptions.find((b) => b.id === id)?.name ?? `#${id}`;
   }
   function onSprintChange(value: string) {
     let sprintId: number | 'backlog' | null;
@@ -266,27 +288,35 @@
 
     <div class="project-filters">
       <div class="filter-cell">
+        <!-- Multi-select board picker (see JiraColumn.svelte for the
+             same shape). Selected boards live as chips below the
+             filter row; sprint dropdown only shows when exactly one
+             board is selected. -->
         <Dropdown
-          value={inboxState.jiraFilters.boardId == null ? '' : String(inboxState.jiraFilters.boardId)}
+          value=""
           options={boardOptions}
           onChange={onBoardChange}
           onOpen={onBoardOpen}
           ariaLabel="Board"
-          placeholder={inboxState.jiraBoardOptionsLoading ? 'Loading…' : 'All boards'}
+          placeholder={inboxState.jiraFilters.boardIds.length === 0
+            ? (inboxState.jiraBoardOptionsLoading ? 'Loading…' : 'All boards')
+            : '+ Add another board'}
           width="200px"
         />
       </div>
-      <div class="filter-cell">
-        <Dropdown
-          value={sprintSelectValue}
-          options={sprintOptions}
-          onChange={onSprintChange}
-          onOpen={onSprintOpen}
-          ariaLabel="Sprint"
-          placeholder={inboxState.jiraSprintOptionsLoading ? 'Loading…' : 'Any sprint'}
-          width="200px"
-        />
-      </div>
+      {#if inboxState.jiraFilters.boardIds.length === 1}
+        <div class="filter-cell">
+          <Dropdown
+            value={sprintSelectValue}
+            options={sprintOptions}
+            onChange={onSprintChange}
+            onOpen={onSprintOpen}
+            ariaLabel="Sprint"
+            placeholder={inboxState.jiraSprintOptionsLoading ? 'Loading…' : 'Any sprint'}
+            width="200px"
+          />
+        </div>
+      {/if}
       <div class="filter-cell">
         <Dropdown
           value={inboxState.jiraFilters.statusName ?? ''}
@@ -330,6 +360,18 @@
         </svg>
       </button>
     </div>
+
+    {#if inboxState.jiraFilters.boardIds.length > 0}
+      <div class="board-chips">
+        <span class="board-chips-label">Boards:</span>
+        {#each inboxState.jiraFilters.boardIds as bid (bid)}
+          <button class="board-chip" onclick={() => removeBoard(bid)} title="Remove board">
+            <span class="board-chip-name">{boardLabel(bid)}</span>
+            <svg class="i i-sm" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>
+          </button>
+        {/each}
+      </div>
+    {/if}
 
     <div class="issues-list">
       {#if inboxState.jiraItemsLoading && inboxState.jiraItems.length === 0}
@@ -524,6 +566,29 @@
     background: linear-gradient(135deg, #5aa2ff, #8b96ab);
   }
   .issues-count { font-size: 11px; color: var(--text-mute); }
+
+  /* Selected-board chip strip — sits between filters and the issue
+     list when 1+ boards are selected. Mirrors the JiraColumn version. */
+  .board-chips {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+    padding: 6px 28px 0;
+  }
+  .board-chips-label { font-size: 11px; color: var(--text-mute); text-transform: uppercase; letter-spacing: 0.04em; }
+  .board-chip {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 3px 6px 3px 9px;
+    background: var(--accent-soft);
+    border: 1px solid rgba(232, 163, 58, 0.25);
+    border-radius: 5px;
+    font-size: 11px;
+    color: var(--text-1);
+    cursor: pointer;
+    transition: background 100ms;
+  }
+  .board-chip:hover { background: rgba(232, 163, 58, 0.18); color: var(--text-0); }
+  .board-chip-name { white-space: nowrap; max-width: 200px; overflow: hidden; text-overflow: ellipsis; }
+  .board-chip .i-sm { width: 11px; height: 11px; opacity: 0.6; }
+  .board-chip:hover .i-sm { opacity: 1; }
 
   .issues-list { flex: 1; overflow-y: auto; padding: 8px 28px 60px; min-height: 0; }
   .issue-row {
