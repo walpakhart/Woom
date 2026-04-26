@@ -61,6 +61,9 @@
   // First time a project is in scope, make sure we have board/status lookups
   // ready so the filters render populated on open — matches the UX in
   // RepositoriesView where branches load the moment you enter a repo.
+  // ALSO triggers when the user has persisted board/sprint selections
+  // from a previous session: without the option lists, chips would
+  // show fallback `#71` / `#1617` labels instead of real names.
   $effect(() => {
     if (!selectedProject) return;
     if (
@@ -68,6 +71,15 @@
       !inboxState.jiraBoardOptionsLoading
     ) {
       void loadJiraBoards(selectedProject.key);
+    }
+    const f = inboxState.jiraFilters;
+    if (
+      f.boardIds.length === 1 &&
+      f.sprintIds.length > 0 &&
+      inboxState.jiraSprintOptions.length === 0 &&
+      !inboxState.jiraSprintOptionsLoading
+    ) {
+      void loadJiraSprints(f.boardIds[0]);
     }
   });
 
@@ -303,11 +315,11 @@
     <div class="project-filters">
       <div class="filter-cell">
         <!-- Multi-select board picker (see JiraColumn.svelte for the
-             same shape). Selected boards live as chips below the
-             filter row; sprint dropdown only shows when exactly one
-             board is selected. -->
+             same shape). Sentinel value when boardIds non-empty so
+             the "All boards" option doesn't override the
+             "+ Add another board" placeholder. -->
         <Dropdown
-          value=""
+          value={inboxState.jiraFilters.boardIds.length === 0 ? '' : '__multi__'}
           options={boardOptions}
           onChange={onBoardChange}
           onOpen={onBoardOpen}
@@ -321,7 +333,7 @@
       {#if inboxState.jiraFilters.boardIds.length === 1}
         <div class="filter-cell">
           <Dropdown
-            value={sprintSelectValue}
+            value={inboxState.jiraFilters.sprintIds.length === 0 ? '' : '__multi__'}
             options={sprintOptions}
             onChange={onSprintChange}
             onOpen={onSprintOpen}

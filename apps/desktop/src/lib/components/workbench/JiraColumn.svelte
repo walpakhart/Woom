@@ -55,6 +55,31 @@
     onOpenCreateIssue
   }: Props = $props();
 
+  // After a reload, persisted board/sprint selections come back but the
+  // option lists themselves are still empty (lazy-loaded on dropdown
+  // open). That makes chips fall back to `#71` / `#1617` instead of
+  // real names. Force-fetch them on mount when the user has any
+  // persisted selection so the chips populate immediately.
+  $effect(() => {
+    if (jiraStatus.kind !== 'connected') return;
+    const f = inboxState.jiraFilters;
+    if (
+      f.boardIds.length > 0 &&
+      inboxState.jiraBoardOptions.length === 0 &&
+      !inboxState.jiraBoardOptionsLoading
+    ) {
+      void loadJiraBoards(f.projectKey);
+    }
+    if (
+      f.boardIds.length === 1 &&
+      f.sprintIds.length > 0 &&
+      inboxState.jiraSprintOptions.length === 0 &&
+      !inboxState.jiraSprintOptionsLoading
+    ) {
+      void loadJiraSprints(f.boardIds[0]);
+    }
+  });
+
   // Lazy loaders — fire when a Dropdown opens, so disconnected users /
   // Free-tier workspaces don't pay the round-trip cost before the filter
   // panel is actually opened.
@@ -288,12 +313,14 @@
       <div class="filter-row">
         <div class="filter-cell">
           <!-- Board picker is multi-select: choosing a board toggles
-               it in `boardIds`. The dropdown's selected value resets
-               to '' so it always shows "+ Add board / All boards" as
-               the placeholder; the actual selection lives in the
-               chip strip below. -->
+               it in `boardIds`. We pass a sentinel value when at least
+               one board is selected so it doesn't match the "All
+               boards" option (otherwise that option's label would
+               render and hide the "+ Add another board" placeholder).
+               When the selection is empty, we pass '' to deliberately
+               match the "All boards" option. -->
           <Dropdown
-            value=""
+            value={inboxState.jiraFilters.boardIds.length === 0 ? '' : '__multi__'}
             options={boardOptions}
             onChange={onBoardChange}
             onOpen={onBoardOpen}
@@ -307,7 +334,7 @@
         {#if inboxState.jiraFilters.boardIds.length === 1}
           <div class="filter-cell">
             <Dropdown
-              value={sprintSelectValue}
+              value={inboxState.jiraFilters.sprintIds.length === 0 ? '' : '__multi__'}
               options={sprintOptions}
               onChange={onSprintChange}
               onOpen={onSprintOpen}
