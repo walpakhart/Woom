@@ -3588,7 +3588,10 @@
     display: flex; align-items: center; gap: 2px;
     padding: 6px 12px 4px;
     border-bottom: 1px solid var(--border-neutral);
-    background: var(--bg-0);
+    /* `bg-2` is the "elevated header" surface: lighter than bg-0 in
+       dark themes, darker than bg-0 in light. Either way the strip
+       reads as its own toolbar instead of melting into the page bg. */
+    background: var(--bg-2);
     overflow-x: auto;
     scrollbar-width: none;
   }
