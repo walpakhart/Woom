@@ -1,6 +1,6 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
-  import { openUrl } from '@tauri-apps/plugin-opener';
+  import { openPath } from '@tauri-apps/plugin-opener';
   import { sessionsState, persistError, SESSIONS_STORAGE_KEY, RULES_STORAGE_KEY } from '$lib/state/sessions.svelte';
   import { layoutState } from '$lib/state/layout.svelte';
   import { notify, notifyError } from '$lib/state/toaster.svelte';
@@ -101,7 +101,11 @@
   async function openWorktreeDir() {
     if (!worktreeDir) return;
     try {
-      await openUrl(`file://${worktreeDir}`);
+      /* `openPath` takes a raw path — no `file://` prefix, no URL
+         encoding required. Previous `openUrl(`file://${worktreeDir}`)`
+         broke on macOS because `Application Support` has a space in
+         it, which `file://…` only accepts URL-encoded. */
+      await openPath(worktreeDir);
     } catch (e) {
       notifyError(e, { title: 'Could not open folder' });
     }
