@@ -312,57 +312,38 @@
       </div>
       <div class="filter-row">
         <div class="filter-cell">
-          <!-- Board picker is multi-select: choosing a board toggles
-               it in `boardIds`. We pass a sentinel value when at least
-               one board is selected so it doesn't match the "All
-               boards" option (otherwise that option's label would
-               render and hide the "+ Add another board" placeholder).
-               When the selection is empty, we pass '' to deliberately
-               match the "All boards" option. -->
+          <!-- Multi-select board picker. The "All boards" option in
+               the list still works as a "clear everything" entry:
+               clicking it fires onChange('') which our handler
+               interprets as the empty-selection clear. Every other
+               click toggles the board in `boardIds` and the panel
+               stays open so the user can pick several. -->
           <Dropdown
-            value={inboxState.jiraFilters.boardIds.length === 0 ? '' : '__multi__'}
+            value=""
+            selectedValues={inboxState.jiraFilters.boardIds.map(String)}
             options={boardOptions}
             onChange={onBoardChange}
             onOpen={onBoardOpen}
             ariaLabel="Board"
-            placeholder={inboxState.jiraFilters.boardIds.length === 0
-              ? (inboxState.jiraBoardOptionsLoading ? 'Loading…' : 'All boards')
-              : '+ Add another board'}
+            placeholder={inboxState.jiraBoardOptionsLoading ? 'Loading…' : 'All boards'}
             width="100%"
           />
         </div>
         {#if inboxState.jiraFilters.boardIds.length === 1}
           <div class="filter-cell">
             <Dropdown
-              value={inboxState.jiraFilters.sprintIds.length === 0 ? '' : '__multi__'}
+              value=""
+              selectedValues={inboxState.jiraFilters.sprintIds.map((s) => typeof s === 'string' ? s : String(s))}
               options={sprintOptions}
               onChange={onSprintChange}
               onOpen={onSprintOpen}
               ariaLabel="Sprint"
-              placeholder={inboxState.jiraFilters.sprintIds.length === 0
-                ? (inboxState.jiraSprintOptionsLoading ? 'Loading…' : 'Any sprint')
-                : '+ Add another sprint'}
+              placeholder={inboxState.jiraSprintOptionsLoading ? 'Loading…' : 'Any sprint'}
               width="100%"
             />
           </div>
         {/if}
       </div>
-      {#if inboxState.jiraFilters.boardIds.length > 0 || inboxState.jiraFilters.sprintIds.length > 0}
-        <div class="board-chips">
-          {#each inboxState.jiraFilters.boardIds as bid (bid)}
-            <button class="board-chip" onclick={() => removeBoard(bid)} title="Remove board">
-              <span class="board-chip-name">{boardLabel(bid)}</span>
-              <svg class="i i-sm" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>
-            </button>
-          {/each}
-          {#each inboxState.jiraFilters.sprintIds as sid (typeof sid === 'string' ? sid : `s-${sid}`)}
-            <button class="board-chip board-chip--sprint" onclick={() => removeSprint(sid)} title="Remove sprint">
-              <span class="board-chip-name">{sprintLabel(sid)}</span>
-              <svg class="i i-sm" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>
-            </button>
-          {/each}
-        </div>
-      {/if}
       <div class="filter-row">
         <div class="filter-cell">
           <Dropdown
@@ -558,8 +539,6 @@
     background: rgba(91, 124, 250, 0.22);
   }
   .board-chip-name { white-space: nowrap; max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
-  .board-chip .i-sm { width: 11px; height: 11px; opacity: 0.6; }
-  .board-chip:hover .i-sm { opacity: 1; }
   /* Per-project group header — only shown when 2+ boards selected
      (multi-project scope). Sticky to the top of its group so the
      project label stays visible while scrolling through long lists. */

@@ -42,6 +42,18 @@
     ariaLabel?: string;
     /** Optional compact mode — smaller padding/font. */
     compact?: boolean;
+    /** When provided, the dropdown enters multi-select mode:
+     *   - trigger shows a comma-joined list of selected option labels
+     *     (CSS truncates with ellipsis when it doesn't fit)
+     *   - each option in the panel renders with a checkbox; selected
+     *     ones are checked
+     *   - clicking an option fires `onChange(option.value)` (toggle
+     *     semantics expected on the caller) and the panel STAYS OPEN
+     *     so you can pick several in a row
+     *   - `value` is ignored for label resolution; the placeholder
+     *     shows iff `selectedValues` is empty
+     *  Use `null` / undefined to keep the legacy single-select shape. */
+    selectedValues?: V[] | null;
   }
 
   let {
@@ -55,8 +67,11 @@
     icon,
     onOpen,
     ariaLabel,
-    compact = false
+    compact = false,
+    selectedValues = null
   }: Props<T> = $props();
+
+  const isMulti = $derived(selectedValues !== null && selectedValues !== undefined);
 
   let open = $state(false);
   /** Index of the "focused" option for keyboard navigation. -1 = nothing. */
@@ -72,6 +87,27 @@
   let typeaheadTimer: ReturnType<typeof setTimeout> | null = null;
 
   const selected = $derived(options.find((o) => o.value === value) ?? null);
+
+  /** Multi-select trigger label — joined names of every option whose
+   *  value is in `selectedValues`. CSS handles overflow ellipsis on
+   *  the trigger, so a long join naturally truncates with `…`. */
+  const multiLabel = $derived.by(() => {
+    if (!selectedValues || selectedValues.length === 0) return '';
+    const labels: string[] = [];
+    for (const v of selectedValues) {
+      const opt = options.find((o) => o.value === v);
+      if (opt) labels.push(opt.label);
+    }
+    return labels.join(', ');
+  });
+
+  /** Quick lookup: is `v` in the multi-select selection? Used to
+   *  render checkbox state on each option. Stable — recomputes only
+   *  when `selectedValues` changes. */
+  const selectedSet = $derived.by(() => {
+    if (!selectedValues) return new Set<T>();
+    return new Set(selectedValues);
+  });
 
   function toggle() {
     if (disabled) return;
@@ -102,8 +138,13 @@
   function pick(opt: DropdownOption<T>) {
     if (opt.disabled) return;
     onChange(opt.value);
+    if (isMulti) {
+      // Stay open so the user can toggle several entries in a row.
+      // Keep keyboard focus inside the panel — re-focus the trigger
+      // would close the panel via blur.
+      return;
+    }
     close();
-    // Return focus to the trigger so keyboard users aren't lost.
     triggerEl?.focus();
   }
 
@@ -237,12 +278,18 @@
     onkeydown={onKey}
   >
     {#if icon}{@render icon()}{/if}
-    {#if selected?.color}
-      <span class="dd-dot" style="background: {selected.color};"></span>
+    {#if isMulti}
+      <span class="dd-label" class:dd-label--placeholder={!multiLabel}>
+        {multiLabel || placeholder}
+      </span>
+    {:else}
+      {#if selected?.color}
+        <span class="dd-dot" style="background: {selected.color};"></span>
+      {/if}
+      <span class="dd-label" class:dd-label--placeholder={!selected}>
+        {selected?.label ?? placeholder}
+      </span>
     {/if}
-    <span class="dd-label" class:dd-label--placeholder={!selected}>
-      {selected?.label ?? placeholder}
-    </span>
     <svg class="dd-caret" viewBox="0 0 24 24" aria-hidden="true">
       <path d="m6 9 6 6 6-6" />
     </svg>
@@ -263,20 +310,28 @@
           <div class="dd-empty">No options</div>
         {/if}
         {#each options as opt, i (i)}
+          {@const isSelected = isMulti ? selectedSet.has(opt.value) : opt.value === value}
           <button
             type="button"
             class="dd-opt"
             class:dd-opt--active={i === activeIndex}
-            class:dd-opt--selected={opt.value === value}
+            class:dd-opt--selected={isSelected}
             class:dd-opt--disabled={opt.disabled}
             data-idx={i}
             role="option"
-            aria-selected={opt.value === value}
+            aria-selected={isSelected}
             aria-disabled={opt.disabled}
             disabled={opt.disabled}
             onclick={() => pick(opt)}
             onmouseenter={() => { if (!opt.disabled) activeIndex = i; }}
           >
+            {#if isMulti}
+              <span class="dd-checkbox" class:dd-checkbox--on={isSelected} aria-hidden="true">
+                {#if isSelected}
+                  <svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>
+                {/if}
+              </span>
+            {/if}
             {#if opt.color}
               <span class="dd-dot" style="background: {opt.color};"></span>
             {/if}
@@ -284,7 +339,7 @@
               <span class="dd-opt-label">{opt.label}</span>
               {#if opt.hint}<span class="dd-opt-hint">{opt.hint}</span>{/if}
             </span>
-            {#if opt.value === value}
+            {#if !isMulti && isSelected}
               <svg class="dd-check" viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M20 6 9 17l-5-5" />
               </svg>
@@ -456,5 +511,31 @@
     stroke-linejoin: round;
     color: var(--accent-bright);
     flex-shrink: 0;
+  }
+  /* Per-option checkbox in multi-select mode. Square chip with the
+     check glyph appearing when on. Grey when off, accent when on —
+     matches the rest of the dark palette. */
+  .dd-checkbox {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 14px; height: 14px;
+    border-radius: 3px;
+    background: transparent;
+    border: 1px solid var(--border-neutral-hi);
+    color: transparent;
+    flex-shrink: 0;
+    transition: background 100ms, border-color 100ms;
+  }
+  .dd-checkbox--on {
+    background: var(--accent-bright);
+    border-color: var(--accent-bright);
+    color: #0a111e;
+  }
+  .dd-checkbox svg {
+    width: 10px; height: 10px;
+    stroke: currentColor;
+    fill: none;
+    stroke-width: 2.6;
+    stroke-linecap: round;
+    stroke-linejoin: round;
   }
 </style>

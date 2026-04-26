@@ -314,33 +314,31 @@
 
     <div class="project-filters">
       <div class="filter-cell">
-        <!-- Multi-select board picker (see JiraColumn.svelte for the
-             same shape). Sentinel value when boardIds non-empty so
-             the "All boards" option doesn't override the
-             "+ Add another board" placeholder. -->
+        <!-- Multi-select via Dropdown.selectedValues — comma-joined
+             label in the trigger, checkboxes in the panel, panel
+             stays open across picks. Empty "All boards" entry doubles
+             as a clear-everything button. -->
         <Dropdown
-          value={inboxState.jiraFilters.boardIds.length === 0 ? '' : '__multi__'}
+          value=""
+          selectedValues={inboxState.jiraFilters.boardIds.map(String)}
           options={boardOptions}
           onChange={onBoardChange}
           onOpen={onBoardOpen}
           ariaLabel="Board"
-          placeholder={inboxState.jiraFilters.boardIds.length === 0
-            ? (inboxState.jiraBoardOptionsLoading ? 'Loading…' : 'All boards')
-            : '+ Add another board'}
+          placeholder={inboxState.jiraBoardOptionsLoading ? 'Loading…' : 'All boards'}
           width="200px"
         />
       </div>
       {#if inboxState.jiraFilters.boardIds.length === 1}
         <div class="filter-cell">
           <Dropdown
-            value={inboxState.jiraFilters.sprintIds.length === 0 ? '' : '__multi__'}
+            value=""
+            selectedValues={inboxState.jiraFilters.sprintIds.map((s) => typeof s === 'string' ? s : String(s))}
             options={sprintOptions}
             onChange={onSprintChange}
             onOpen={onSprintOpen}
             ariaLabel="Sprint"
-            placeholder={inboxState.jiraFilters.sprintIds.length === 0
-              ? (inboxState.jiraSprintOptionsLoading ? 'Loading…' : 'Any sprint')
-              : '+ Add another sprint'}
+            placeholder={inboxState.jiraSprintOptionsLoading ? 'Loading…' : 'Any sprint'}
             width="200px"
           />
         </div>
@@ -389,30 +387,7 @@
       </button>
     </div>
 
-    {#if inboxState.jiraFilters.boardIds.length > 0 || inboxState.jiraFilters.sprintIds.length > 0}
-      <div class="board-chips">
-        {#if inboxState.jiraFilters.boardIds.length > 0}
-          <span class="board-chips-label">Boards:</span>
-          {#each inboxState.jiraFilters.boardIds as bid (bid)}
-            <button class="board-chip" onclick={() => removeBoard(bid)} title="Remove board">
-              <span class="board-chip-name">{boardLabel(bid)}</span>
-              <svg class="i i-sm" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>
-            </button>
-          {/each}
-        {/if}
-        {#if inboxState.jiraFilters.sprintIds.length > 0}
-          <span class="board-chips-label">Sprints:</span>
-          {#each inboxState.jiraFilters.sprintIds as sid (typeof sid === 'string' ? sid : `s-${sid}`)}
-            <button class="board-chip board-chip--sprint" onclick={() => removeSprint(sid)} title="Remove sprint">
-              <span class="board-chip-name">{sprintLabel(sid)}</span>
-              <svg class="i i-sm" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>
-            </button>
-          {/each}
-        {/if}
-      </div>
-    {/if}
-
-    <div class="issues-list">
+<div class="issues-list">
       {#if inboxState.jiraItemsLoading && inboxState.jiraItems.length === 0}
         <div class="tab-state">Loading issues…</div>
       {:else if inboxState.jiraItemsError}
@@ -631,8 +606,6 @@
   }
   .board-chip--sprint:hover { background: rgba(91, 124, 250, 0.22); }
   .board-chip-name { white-space: nowrap; max-width: 200px; overflow: hidden; text-overflow: ellipsis; }
-  .board-chip .i-sm { width: 11px; height: 11px; opacity: 0.6; }
-  .board-chip:hover .i-sm { opacity: 1; }
 
   .issues-list { flex: 1; overflow-y: auto; padding: 8px 28px 60px; min-height: 0; }
   .issue-row {
