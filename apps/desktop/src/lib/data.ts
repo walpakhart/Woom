@@ -10,6 +10,11 @@ export interface ConnectionMeta {
       viewBox — single-color (uses `currentColor`) so the icon inherits the
       card tint. Falls back to `iconLetters` if omitted. */
   iconSvg?: string;
+  /** Optional raster brand mark (PNG in /static). Used when the official
+   *  logo can't be cleanly distilled into a single mono `<path>` —
+   *  Cursor's gradient-shaded 3D hexagon, Claude's coral 12-spike
+   *  asterisk, etc. Renderers prefer `iconImg` over `iconSvg` when set. */
+  iconImg?: string;
   iconLetters: string;
   iconClass: string;
   category: ConnectionCategory;
@@ -47,8 +52,8 @@ export const connectionsMeta: ConnectionMeta[] = [
   { id: 'gitlab', name: 'GitLab', desc: 'Merge requests and issues.', iconSvg: SVG_GITLAB, iconLetters: 'Gl', iconClass: 'conn-icon--gitlab', category: 'sources', kind: 'oauth', implemented: false },
   { id: 'teams', name: 'MS Teams', desc: 'Channels, chats, mentions.', iconSvg: SVG_TEAMS, iconLetters: 'T', iconClass: 'conn-icon--teams', category: 'sources', kind: 'graph api', implemented: false },
   { id: 'asana', name: 'Asana', desc: 'Tasks and assignments.', iconSvg: SVG_ASANA, iconLetters: 'As', iconClass: 'conn-icon--asana', category: 'sources', kind: 'oauth', implemented: false },
-  { id: 'claude', name: 'Claude Code', desc: 'Headless coding agent in a worktree.', iconSvg: SVG_CLAUDE, iconLetters: 'C', iconClass: 'conn-icon--claude', category: 'agents', kind: 'claude CLI', implemented: true },
-  { id: 'cursor', name: 'Cursor', desc: 'cursor-agent CLI as an alternate agent.', iconSvg: SVG_CURSOR, iconLetters: 'Cr', iconClass: 'conn-icon--cursor', category: 'agents', kind: 'cursor-agent', implemented: true },
+  { id: 'claude', name: 'Claude Code', desc: 'Headless coding agent in a worktree.', iconSvg: SVG_CLAUDE, iconImg: '/brand-claude.png', iconLetters: 'C', iconClass: 'conn-icon--claude', category: 'agents', kind: 'claude CLI', implemented: true },
+  { id: 'cursor', name: 'Cursor', desc: 'cursor-agent CLI as an alternate agent.', iconSvg: SVG_CURSOR, iconImg: '/brand-cursor.png', iconLetters: 'Cr', iconClass: 'conn-icon--cursor', category: 'agents', kind: 'cursor-agent', implemented: true },
   { id: 'codex', name: 'Codex CLI', desc: 'OpenAI Codex CLI for coding runs.', iconSvg: SVG_OPENAI, iconLetters: 'Cd', iconClass: 'conn-icon--codex', category: 'agents', kind: 'codex', implemented: false },
   { id: 'aider', name: 'Aider', desc: 'Open-source AI pair programmer.', iconSvg: SVG_AIDER, iconLetters: 'A', iconClass: 'conn-icon--aider', category: 'agents', kind: 'aider', implemented: false },
   { id: 'copilot', name: 'GitHub Copilot', desc: 'Copilot CLI for shell-mode suggestions.', iconSvg: SVG_COPILOT, iconLetters: 'Co', iconClass: 'conn-icon--copilot', category: 'agents', kind: 'gh copilot', implemented: false }

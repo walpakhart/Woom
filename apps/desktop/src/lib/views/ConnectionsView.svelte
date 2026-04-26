@@ -57,8 +57,10 @@
             {@const connected = connectedIds.has(conn.id)}
             <div class="conn-card" class:connected class:disabled={!conn.implemented}>
               <div class="conn-head">
-                <span class="conn-icon {conn.iconClass}" class:conn-icon--svg={!!conn.iconSvg}>
-                  {#if conn.iconSvg}
+                <span class="conn-icon {conn.iconClass}" class:conn-icon--svg={!!(conn.iconSvg && !conn.iconImg)} class:conn-icon--img={!!conn.iconImg}>
+                  {#if conn.iconImg}
+                    <img src={conn.iconImg} alt="" class="conn-icon-img" />
+                  {:else if conn.iconSvg}
                     <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">{@html conn.iconSvg}</svg>
                   {:else}
                     {conn.iconLetters}

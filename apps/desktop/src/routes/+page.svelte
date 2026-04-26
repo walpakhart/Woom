@@ -3098,7 +3098,12 @@
                 disabled={count === 0}
                 title={count === 0 ? `No ${label} columns yet — click + to create` : `Jump to ${label}`}
               >
-                {#if meta?.iconSvg}
+                {#if meta?.iconImg}
+                  <!-- Raster brand mark (Claude / Cursor) — true-colour
+                       PNG instead of single-tone SVG so the official
+                       gradient / palette comes through. -->
+                  <span class="pill-icon pill-icon--img"><img src={meta.iconImg} alt="" class="pill-icon-img" /></span>
+                {:else if meta?.iconSvg}
                   <span class="pill-icon {meta.iconClass}"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">{@html meta.iconSvg}</svg></span>
                 {:else if kind === 'editor'}
                   <!-- Folder icon — matches the EditorView header so the

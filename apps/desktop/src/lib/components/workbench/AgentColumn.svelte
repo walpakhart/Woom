@@ -658,12 +658,12 @@
   <div class="wb-col-resize" class:snap-flash={layoutState.snapFlashInstanceId === instanceId} role="separator" aria-orientation="vertical" onpointerdown={(e) => startResizeById(instanceId, e)}></div>
   <div class="inbox-brand">
     {#if kind === 'claude'}
-      <span class="brand-icon conn-icon--claude conn-icon--svg" aria-hidden="true">
-        <svg viewBox="0 0 24 24" fill="currentColor">{@html claudeMeta.iconSvg}</svg>
+      <span class="brand-icon conn-icon--claude conn-icon--img" aria-hidden="true">
+        <img src={claudeMeta.iconImg} alt="" class="conn-icon-img" />
       </span>
     {:else}
-      <span class="brand-icon conn-icon--cursor conn-icon--svg" aria-hidden="true">
-        <svg viewBox="0 0 24 24" fill="currentColor">{@html cursorMeta.iconSvg}</svg>
+      <span class="brand-icon conn-icon--cursor conn-icon--img" aria-hidden="true">
+        <img src={cursorMeta.iconImg} alt="" class="conn-icon-img" />
       </span>
     {/if}
     <span class="brand-word">{brandLabel}</span>

@@ -388,6 +388,25 @@ kbd {
   font-size: 10px; font-weight: 700; letter-spacing: -0.02em; flex-shrink: 0;
 }
 .brand-icon.conn-icon--svg svg { width: 13px; height: 13px; display: block; color: currentColor; }
+
+/* Raster brand mark — official PNG instead of single-tone SVG. The
+   image carries its own colours so we drop the tinted bg / border
+   the `.conn-icon--*` rules normally paint, and let the logo sit on
+   a transparent square. */
+.conn-icon.conn-icon--img,
+.brand-icon.conn-icon--img {
+  background: transparent;
+  border: none;
+  padding: 0;
+}
+.conn-icon-img {
+  width: 100%; height: 100%;
+  object-fit: contain;
+  display: block;
+}
+.brand-icon .conn-icon-img { width: 18px; height: 18px; margin: auto; }
+.pill-icon--img { background: transparent; padding: 0; }
+.pill-icon-img { width: 14px; height: 14px; object-fit: contain; display: block; }
 .brand-sub { font-size: 11.5px; color: var(--text-2); margin-left: auto; }
 .inbox-header { padding: 14px 20px 8px; }
 
@@ -1575,6 +1594,154 @@ img.chat-avatar { padding: 0; }
   background: var(--bg-0);
   flex-shrink: 0;
 }
+
+/* ============================================================
+   Claude / Cursor status modal — shared markup, shared styles.
+   Two checks (CLI present + auth present) rendered as a vertical
+   list with a green/grey status dot. Below: a hint card with the
+   install / login command in a copyable code block, OR a green
+   "Ready" banner once both checks pass.
+   ============================================================ */
+.claude-detect {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 6px;
+  background: var(--bg-2);
+  border: 1px solid var(--border-neutral);
+  border-radius: 10px;
+}
+.detect-row {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 10px 12px;
+  border-radius: 7px;
+  transition: background 120ms;
+}
+.detect-row:hover { background: var(--bg-1); }
+.detect-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--text-mute);
+  margin-top: 6px;
+  flex-shrink: 0;
+  box-shadow: 0 0 0 3px transparent;
+  transition: all 140ms;
+}
+.detect-row.ok .detect-dot {
+  background: var(--success);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 22%, transparent);
+}
+.detect-main { flex: 1; min-width: 0; }
+.detect-title {
+  font-size: 13px; font-weight: 600; color: var(--text-0);
+  margin-bottom: 4px;
+  letter-spacing: -0.005em;
+}
+.detect-sub {
+  font-size: 12px; color: var(--text-2); line-height: 1.55;
+  word-break: break-word;
+}
+.detect-sub.mono {
+  color: var(--text-1);
+  font-size: 11.5px;
+}
+.detect-sub code.mono {
+  display: inline-block;
+  padding: 1px 6px;
+  background: var(--bg-3);
+  border: 1px solid var(--border-neutral-hi);
+  border-radius: 3px;
+  font-size: 11px;
+  color: var(--text-1);
+}
+
+/* Hint / call-to-action card. Accent left-stripe, soft accent fill so
+   it reads as "you need to do something here". */
+.claude-hint {
+  margin-top: 4px;
+  padding: 14px 16px;
+  background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+}
+.claude-hint-title {
+  font-size: 13px; font-weight: 600; color: var(--accent-bright);
+  margin-bottom: 8px;
+}
+.claude-hint-body {
+  display: flex; flex-direction: column; gap: 8px;
+  font-size: 12.5px; color: var(--text-1); line-height: 1.55;
+}
+.claude-hint-body p { margin: 0; }
+.claude-hint-body code.mono {
+  display: inline-block;
+  padding: 1px 5px;
+  background: var(--bg-3);
+  border: 1px solid var(--border-neutral-hi);
+  border-radius: 3px;
+  font-size: 11px;
+  color: var(--text-1);
+}
+
+/* Code block + inline copy button. Used for `claude login`,
+   `cursor-agent login`, the curl one-liner. */
+.cmd-line {
+  display: flex; align-items: stretch;
+  gap: 0;
+  background: var(--bg-0);
+  border: 1px solid var(--border-neutral-hi);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.cmd-line code.cmd-text {
+  flex: 1;
+  padding: 9px 12px;
+  font-size: 12px;
+  color: var(--text-0);
+  word-break: break-all;
+  background: transparent;
+  border: none;
+  font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', monospace;
+}
+.cmd-copy {
+  display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+  padding: 0 12px;
+  font-size: 11px; font-weight: 500;
+  color: var(--text-2);
+  background: var(--bg-2);
+  border: none; border-left: 1px solid var(--border-neutral);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 120ms;
+}
+.cmd-copy:hover { background: var(--bg-3); color: var(--text-0); }
+.cmd-copy.copied { color: var(--success); background: color-mix(in srgb, var(--success) 14%, var(--bg-2)); }
+.cmd-copy svg { width: 11px; height: 11px; }
+
+/* Green "Ready" banner — replaces the hint when both checks pass. */
+.claude-ok {
+  display: flex; align-items: center; gap: 12px;
+  padding: 14px 16px;
+  background: color-mix(in srgb, var(--success) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--success) 32%, transparent);
+  border-left: 3px solid var(--success);
+  border-radius: 8px;
+}
+.claude-ok > svg { color: var(--success) !important; flex-shrink: 0; }
+
+/* "Open docs" external-link button — used by the install hint. */
+.link-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 10px;
+  background: var(--bg-2);
+  border: 1px solid var(--border-neutral-hi);
+  border-radius: 6px;
+  color: var(--text-1);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 120ms;
+  align-self: flex-start;
+}
+.link-btn:hover { background: var(--bg-3); color: var(--accent-bright); border-color: var(--border-hi); }
+.link-btn svg { width: 12px; height: 12px; }
 
 /* Slide-over (focus detail panel) */
 .slide-over {
