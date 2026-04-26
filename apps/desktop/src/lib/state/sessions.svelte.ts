@@ -95,7 +95,9 @@ function loadStoredSessions(): {
       cwdSwitchRecap:
         (s as { cwdSwitchRecap?: string | null }).cwdSwitchRecap ?? null,
       cwdUuids:
-        (s as { cwdUuids?: Record<string, string> }).cwdUuids ?? {}
+        (s as { cwdUuids?: Record<string, string> }).cwdUuids ?? {},
+      awaitingApproval:
+        Boolean((s as { awaitingApproval?: boolean }).awaitingApproval)
     }));
     return {
       sessions,
@@ -204,7 +206,8 @@ export function persistSessionsEffect() {
           linkedToEditorInstanceId: s.linkedToEditorInstanceId,
           columnInstanceId: s.columnInstanceId,
           cwdSwitchRecap: s.cwdSwitchRecap,
-          cwdUuids: s.cwdUuids
+          cwdUuids: s.cwdUuids,
+          awaitingApproval: s.awaitingApproval
         })),
         activeId: sessionsState.activeClaudeId
       };
@@ -295,7 +298,8 @@ export function newClaudeSession(
       linkedToEditorInstanceId: opts.linkedToEditorInstanceId ?? null,
       columnInstanceId,
       cwdSwitchRecap: null,
-      cwdUuids: {}
+      cwdUuids: {},
+      awaitingApproval: false
     },
     ...sessionsState.list
   ];
@@ -485,7 +489,20 @@ export function appendToLastAssistant(sessionId: string, delta: string) {
     const msgs = [...s.messages];
     const last = msgs[msgs.length - 1];
     if (last && last.role === 'assistant') {
-      msgs[msgs.length - 1] = { ...last, content: last.content + delta };
+      // Mirror into both `content` (legacy concat for search /
+      // replaceLastAssistant / back-compat with old persisted messages)
+      // AND `events` (new ordered array — text deltas merge into the
+      // last text event, or start a new one if the previous event was
+      // a trace block). This preserves interleaving without breaking
+      // any code that still reads `content`.
+      const events = [...(last.events ?? [])];
+      const lastEv = events[events.length - 1];
+      if (lastEv && lastEv.kind === 'text') {
+        events[events.length - 1] = { kind: 'text', body: lastEv.body + delta };
+      } else {
+        events.push({ kind: 'text', body: delta });
+      }
+      msgs[msgs.length - 1] = { ...last, content: last.content + delta, events };
     }
     return { ...s, messages: msgs };
   });
@@ -509,10 +526,16 @@ export function appendToLastThinking(sessionId: string, delta: string) {
 }
 
 /** Append a tool-use trace line (already formatted by `formatToolUse`)
-    onto the last assistant message's `trace` field. Each call adds one
-    "step" separated by `\n\n` so the renderer can count and render
-    individual entries. The pill in AgentColumn collapses these into a
-    "✓ N steps" button users can expand. */
+    onto the last assistant message. Mirrored into:
+      - the legacy `trace: string` field (joined with `\n\n` between
+        segments) — kept so older renderers / persisted-but-not-yet-
+        re-rendered messages still work
+      - the new `events` array (consecutive trace segments merge into
+        one event with multiple segments — that one event renders as
+        a single "✓ N steps" pill, where N = segments.length). When a
+        trace event lands AFTER a text event, a new trace event opens
+        so the chat shows: text → pill → text → pill in chronological
+        order, instead of the old "all pills at top + all text below". */
 export function appendToLastTrace(sessionId: string, segment: string) {
   if (!segment.trim()) return;
   sessionsState.list = sessionsState.list.map((s) => {
@@ -521,8 +544,15 @@ export function appendToLastTrace(sessionId: string, segment: string) {
     const last = msgs[msgs.length - 1];
     if (last && last.role === 'assistant') {
       const prev = last.trace ?? '';
-      const next = prev ? `${prev}\n\n${segment}` : segment;
-      msgs[msgs.length - 1] = { ...last, trace: next };
+      const nextTrace = prev ? `${prev}\n\n${segment}` : segment;
+      const events = [...(last.events ?? [])];
+      const lastEv = events[events.length - 1];
+      if (lastEv && lastEv.kind === 'trace') {
+        events[events.length - 1] = { kind: 'trace', segments: [...lastEv.segments, segment] };
+      } else {
+        events.push({ kind: 'trace', segments: [segment] });
+      }
+      msgs[msgs.length - 1] = { ...last, trace: nextTrace, events };
     }
     return { ...s, messages: msgs };
   });
@@ -534,7 +564,14 @@ export function replaceLastAssistant(sessionId: string, content: string) {
     const msgs = [...s.messages];
     const last = msgs[msgs.length - 1];
     if (last && last.role === 'assistant') {
-      msgs[msgs.length - 1] = { ...last, content };
+      // Wipe events too — the renderer prefers events when present, so
+      // leaving an empty events list with non-empty content would
+      // render an empty bubble. Reset to a single text event matching
+      // the new content.
+      const events = content
+        ? ([{ kind: 'text', body: content }] as ClaudeMessage['events'])
+        : [];
+      msgs[msgs.length - 1] = { ...last, content, events };
     }
     return { ...s, messages: msgs };
   });

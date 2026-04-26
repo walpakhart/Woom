@@ -19,6 +19,19 @@ import { activeInstances } from '$lib/state/layout.svelte';
 import { truncInline } from '$lib/format';
 import type { ClaudeAction, ClaudeSession } from '$lib/types';
 
+/** Fired after an action card runs (success or failure). The caller in
+ *  +page.svelte uses this to auto-continue the agent's turn — when an
+ *  agent proposes a commit / PR / bash, its turn ENDS waiting for the
+ *  user's approval; this callback feeds the result back so the agent
+ *  can pick up where it left off without the user having to type
+ *  "now make the PR" by hand. `summary` is a short prose recap suited
+ *  to inject as a follow-up user prompt. */
+export type ActionResolvedCallback = (
+  sessionId: string,
+  action: ClaudeAction,
+  result: { ok: boolean; summary: string }
+) => void;
+
 /** Resolve the working directory the action should run in. Order:
  *  worktree → explicit cwd → first editor's open repo → null. */
 export function effectiveCwd(s: ClaudeSession): string | null {
@@ -37,21 +50,23 @@ function asMessage(e: unknown): string {
 
 interface GitStatusFile { path: string; unstaged: boolean; staged: boolean }
 
-export async function executeCommit(sessionId: string, actionId: string): Promise<void> {
+export async function executeCommit(
+  sessionId: string,
+  actionId: string,
+  onResolved?: ActionResolvedCallback
+): Promise<void> {
   const sess = sessionsState.list.find((x) => x.id === sessionId);
   const action = sess?.actions.find((a) => a.id === actionId && a.kind === 'commit');
   if (!sess || !action || action.kind !== 'commit') return;
   const cwd = effectiveCwd(sess);
   if (!cwd) {
-    updateAction(sessionId, actionId, {
-      status: 'error',
-      result: 'No working directory — pick a folder or enable worktree first.'
-    });
+    const msg = 'No working directory — pick a folder or enable worktree first.';
+    updateAction(sessionId, actionId, { status: 'error', result: msg });
+    onResolved?.(sessionId, action, { ok: false, summary: msg });
     return;
   }
   updateAction(sessionId, actionId, { status: 'executing' });
   try {
-    // Stage every dirty path before commit (Forgehold-style: full stage).
     const status = await invoke<{ files: GitStatusFile[] }>('git_status', { repo: cwd });
     const toStage = status.files.filter((f) => f.unstaged).map((f) => f.path);
     if (toStage.length) {
@@ -61,27 +76,32 @@ export async function executeCommit(sessionId: string, actionId: string): Promis
     const cmd = action.push ? 'git_commit_and_push' : 'git_commit';
     const res = await invoke<string>(cmd, { repo: cwd, message: fullMsg });
     updateAction(sessionId, actionId, { status: 'done', result: res });
-    // Auto-dismiss successful commits so the chat stays tidy.
+    onResolved?.(sessionId, action, {
+      ok: true,
+      summary: `Commit landed (${action.push ? 'pushed' : 'local'}): ${action.message}\n${res}`
+    });
     setTimeout(() => removeAction(sessionId, actionId), 4000);
   } catch (e) {
-    updateAction(sessionId, actionId, { status: 'error', result: asMessage(e) });
+    const msg = asMessage(e);
+    updateAction(sessionId, actionId, { status: 'error', result: msg });
+    onResolved?.(sessionId, action, { ok: false, summary: `Commit failed: ${msg}` });
   }
 }
 
 export async function executeBash(
   sessionId: string,
   actionId: string,
-  appendToTranscript: (sessionId: string, delta: string) => void
+  appendToTranscript: (sessionId: string, delta: string) => void,
+  onResolved?: ActionResolvedCallback
 ): Promise<void> {
   const sess = sessionsState.list.find((x) => x.id === sessionId);
   const action = sess?.actions.find((a) => a.id === actionId && a.kind === 'bash');
   if (!sess || !action || action.kind !== 'bash') return;
   const cwd = effectiveCwd(sess);
   if (!cwd) {
-    updateAction(sessionId, actionId, {
-      status: 'error',
-      result: 'No working directory — pick a folder first.'
-    });
+    const msg = 'No working directory — pick a folder first.';
+    updateAction(sessionId, actionId, { status: 'error', result: msg });
+    onResolved?.(sessionId, action, { ok: false, summary: msg });
     return;
   }
   updateAction(sessionId, actionId, { status: 'executing' });
@@ -96,23 +116,31 @@ export async function executeBash(
       result: combined || '(no output)',
       exitCode: res.code
     });
-    // Render `$ command` + output inline in Claude's last assistant turn so
-    // the transcript reads as a continuous flow.
     const output = combined || '(no output)';
     const exitNote = res.ok ? '' : ` _(exit ${res.code})_`;
     appendToTranscript(
       sessionId,
       `\n\n\`$ ${truncInline(action.command, 400)}\`${exitNote}\n\n\`\`\`\n${truncInline(output, 4000)}\n\`\`\`\n\n`
     );
+    onResolved?.(sessionId, action, {
+      ok: res.ok,
+      summary: `bash \`${truncInline(action.command, 200)}\` exited ${res.code}.\nOutput:\n${truncInline(output, 2000)}`
+    });
     if (res.ok) {
       setTimeout(() => removeAction(sessionId, actionId), 4000);
     }
   } catch (e) {
-    updateAction(sessionId, actionId, { status: 'error', result: asMessage(e) });
+    const msg = asMessage(e);
+    updateAction(sessionId, actionId, { status: 'error', result: msg });
+    onResolved?.(sessionId, action, { ok: false, summary: `bash failed to start: ${msg}` });
   }
 }
 
-export async function executeSwitchCwd(sessionId: string, actionId: string): Promise<void> {
+export async function executeSwitchCwd(
+  sessionId: string,
+  actionId: string,
+  onResolved?: ActionResolvedCallback
+): Promise<void> {
   const sess = sessionsState.list.find((x) => x.id === sessionId);
   const action = sess?.actions.find((a) => a.id === actionId && a.kind === 'switch_cwd');
   if (!sess || !action || action.kind !== 'switch_cwd') return;
@@ -120,10 +148,11 @@ export async function executeSwitchCwd(sessionId: string, actionId: string): Pro
   try {
     const exists = await invoke<boolean>('fs_path_exists', { path: action.path });
     if (!exists) {
-      updateAction(sessionId, actionId, { status: 'error', result: `Path does not exist: ${action.path}` });
+      const msg = `Path does not exist: ${action.path}`;
+      updateAction(sessionId, actionId, { status: 'error', result: msg });
+      onResolved?.(sessionId, action, { ok: false, summary: msg });
       return;
     }
-    // Drop any worktree override — the user is switching to a new location.
     updateSession(sessionId, {
       cwd: action.path,
       worktreePath: null,
@@ -131,22 +160,31 @@ export async function executeSwitchCwd(sessionId: string, actionId: string): Pro
       worktreeRepo: null
     });
     updateAction(sessionId, actionId, { status: 'done', result: `Switched to ${action.path}` });
+    onResolved?.(sessionId, action, {
+      ok: true,
+      summary: `cwd switched to ${action.path}.`
+    });
     setTimeout(() => removeAction(sessionId, actionId), 3000);
   } catch (e) {
-    updateAction(sessionId, actionId, { status: 'error', result: asMessage(e) });
+    const msg = asMessage(e);
+    updateAction(sessionId, actionId, { status: 'error', result: msg });
+    onResolved?.(sessionId, action, { ok: false, summary: `cwd switch failed: ${msg}` });
   }
 }
 
-export async function executePr(sessionId: string, actionId: string): Promise<void> {
+export async function executePr(
+  sessionId: string,
+  actionId: string,
+  onResolved?: ActionResolvedCallback
+): Promise<void> {
   const sess = sessionsState.list.find((x) => x.id === sessionId);
   const action = sess?.actions.find((a) => a.id === actionId && a.kind === 'pr');
   if (!sess || !action || action.kind !== 'pr') return;
   const cwd = effectiveCwd(sess);
   if (!cwd) {
-    updateAction(sessionId, actionId, {
-      status: 'error',
-      result: 'No working directory — pick a folder first.'
-    });
+    const msg = 'No working directory — pick a folder first.';
+    updateAction(sessionId, actionId, { status: 'error', result: msg });
+    onResolved?.(sessionId, action, { ok: false, summary: msg });
     return;
   }
   updateAction(sessionId, actionId, { status: 'executing' });
@@ -159,21 +197,30 @@ export async function executePr(sessionId: string, actionId: string): Promise<vo
       base: action.base.trim() || null
     });
     updateAction(sessionId, actionId, { status: 'done', result: url });
+    onResolved?.(sessionId, action, {
+      ok: true,
+      summary: `PR opened: ${action.title}\n${url}`
+    });
   } catch (e) {
-    updateAction(sessionId, actionId, { status: 'error', result: asMessage(e) });
+    const msg = asMessage(e);
+    updateAction(sessionId, actionId, { status: 'error', result: msg });
+    onResolved?.(sessionId, action, { ok: false, summary: `PR creation failed: ${msg}` });
   }
 }
 
 /** Dispatch by kind. Each ClaudeActionCard's approve button funnels here so
  *  the column component doesn't have to know which backend function runs
- *  for each action kind. */
+ *  for each action kind. `onResolved` fires once the underlying execute
+ *  finishes — the page-level continuation logic uses it to auto-resume
+ *  the agent's turn with the result. */
 export function dispatchAction(
   sessionId: string,
   action: ClaudeAction,
-  appendToTranscript: (sessionId: string, delta: string) => void
+  appendToTranscript: (sessionId: string, delta: string) => void,
+  onResolved?: ActionResolvedCallback
 ): void {
-  if (action.kind === 'commit') void executeCommit(sessionId, action.id);
-  else if (action.kind === 'pr') void executePr(sessionId, action.id);
-  else if (action.kind === 'switch_cwd') void executeSwitchCwd(sessionId, action.id);
-  else if (action.kind === 'bash') void executeBash(sessionId, action.id, appendToTranscript);
+  if (action.kind === 'commit') void executeCommit(sessionId, action.id, onResolved);
+  else if (action.kind === 'pr') void executePr(sessionId, action.id, onResolved);
+  else if (action.kind === 'switch_cwd') void executeSwitchCwd(sessionId, action.id, onResolved);
+  else if (action.kind === 'bash') void executeBash(sessionId, action.id, appendToTranscript, onResolved);
 }

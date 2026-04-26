@@ -476,6 +476,21 @@
   // floating pool so they reattach elsewhere instead of vanishing.
   registerInstanceRemovedHook((id) => orphanSessionsForInstance(id));
 
+  // Auto-clear `awaitingApproval` when the user dismisses every pending
+  // action card without approving any. Otherwise the "waiting for
+  // approval" hint would stay visible forever and the next user message
+  // would unnecessarily re-clear it. Only clears when there are no more
+  // actions in any state (pending / executing / done / error). Keeps
+  // the flag while done/error cards are still on screen so a chained
+  // continuation can still see them in `onActionResolved`.
+  $effect(() => {
+    for (const sess of sessionsState.list) {
+      if (sess.awaitingApproval && sess.actions.length === 0) {
+        updateSession(sess.id, { awaitingApproval: false });
+      }
+    }
+  });
+
   onMount(async () => {
     restorePanelState();
     // One-shot v1 → v2 migration: seed the legacy `forgehold:editor:root`
@@ -1274,9 +1289,9 @@
       curr.mentions.length === 0
     ) {
       const autoTitle = text.slice(0, 36) + (text.length > 36 ? '…' : '');
-      updateSession(id, { title: autoTitle, input: '', sending: true, mentions: [] });
+      updateSession(id, { title: autoTitle, input: '', sending: true, mentions: [], awaitingApproval: false });
     } else {
-      updateSession(id, { input: '', sending: true, mentions: [] });
+      updateSession(id, { input: '', sending: true, mentions: [], awaitingApproval: false });
     }
     // Append empty assistant message that streaming will fill.
     appendSessionMessage(id, {
@@ -1388,6 +1403,13 @@
       if (sess?.cwdSwitchRecap) {
         patch.cwdSwitchRecap = null;
       }
+      // Did the agent end its turn with pending approval cards? If so,
+      // mark `awaitingApproval` so the UI shows a "waiting for your
+      // approval" hint, AND so onActionResolved knows to auto-continue
+      // the agent's turn once the user approves. Without this the user
+      // has to manually type "now make the PR" after every commit.
+      const stillPending = sessAfter?.actions.some((a) => a.status === 'pending') ?? false;
+      if (stillPending) patch.awaitingApproval = true;
       updateSession(id, patch);
     } catch (e) {
       const msg = typeof e === 'string' ? e : String(e);
@@ -2087,8 +2109,130 @@
 
   // Action execution is in `$lib/exec/actions.ts`. The bash executor needs
   // `appendAssistantDelta` (DOM-coupled scroll) injected from here.
+  // `onActionResolved` auto-continues the agent's turn — when the agent
+  // ended its prior turn waiting on an approval card (commit / PR /
+  // bash / switch_cwd), the result of running it is fed back as a
+  // synthesised user message so the agent can continue from there
+  // (e.g. propose_pr after the commit lands) without the user having
+  // to manually type "now make the PR".
   function executeAction(sessionId: string, action: ClaudeAction) {
-    dispatchAction(sessionId, action, appendAssistantDelta);
+    dispatchAction(sessionId, action, appendAssistantDelta, onActionResolved);
+  }
+
+  /** Called by every executeXxx after the action ran. If the session
+   *  was awaiting approval AND no other actions are still pending,
+   *  fire a follow-up agent turn with the result baked in. */
+  function onActionResolved(
+    sessionId: string,
+    _action: ClaudeAction,
+    result: { ok: boolean; summary: string }
+  ) {
+    const sess = sessionsState.list.find((s) => s.id === sessionId);
+    if (!sess || !sess.awaitingApproval) return;
+    // Wait for ALL pending actions before continuing — agent may have
+    // proposed a sequence (commit + PR) that we want to resolve in one
+    // batch. `executing` counts as "still in flight".
+    const stillBusy = sess.actions.some(
+      (a) => a.status === 'pending' || a.status === 'executing'
+    );
+    if (stillBusy) return;
+    updateSession(sessionId, { awaitingApproval: false });
+    // Compose a recap of every action that ran since the last user turn.
+    // For a single action it's just the one summary; for a batch the
+    // agent gets the whole list in order.
+    const recentActionSummaries = sess.actions
+      .filter((a) => a.status === 'done' || a.status === 'error')
+      .map((a) => `- ${a.kind}: ${a.status === 'done' ? '✓' : '✗'} ${actionShortSummary(a)}`)
+      .join('\n');
+    const continuation = recentActionSummaries
+      ? `[Forgehold: action card resolved]\n${recentActionSummaries}\n\nLast result: ${result.ok ? '✓' : '✗'} ${result.summary}\n\nContinue with what you were doing.`
+      : `[Forgehold: action resolved]\n${result.ok ? '✓' : '✗'} ${result.summary}\n\nContinue with what you were doing.`;
+    void continueAgentTurn(sessionId, continuation);
+  }
+
+  /** Render an action card down to one line for the auto-continuation
+   *  recap. Conservative — keeps url / hash / first line of cmd. */
+  function actionShortSummary(a: ClaudeAction): string {
+    if (a.kind === 'commit') return `${a.message}${a.result ? ` → ${a.result.split('\n')[0]}` : ''}`;
+    if (a.kind === 'pr') return `${a.title}${a.result?.startsWith('http') ? ` → ${a.result}` : ''}`;
+    if (a.kind === 'bash') return `\`${truncInline(a.command, 120)}\``;
+    if (a.kind === 'switch_cwd') return a.path;
+    return '(unknown)';
+  }
+
+  /** Re-enter `runAgentRequest` with a synthesised follow-up prompt.
+   *  Doesn't append a user message to the chat — the recap from
+   *  `onActionResolved` carries the context, and the Action Card
+   *  results already render visibly in the transcript. */
+  async function continueAgentTurn(sessionId: string, prompt: string) {
+    const sess = sessionsState.list.find((s) => s.id === sessionId);
+    if (!sess || sess.sending) return;
+    updateSession(sessionId, { sending: true });
+    appendSessionMessage(sessionId, {
+      role: 'assistant',
+      content: '',
+      at: new Date().toISOString()
+    });
+    startThinkingTimer();
+    const runStartedAt = Date.now();
+    void scrollChatBottom();
+
+    const cwd = sess.worktreePath || sess.cwd || editorRepoPath || null;
+    const claudeUuid = sess.claudeUuid;
+    const resume = Boolean(sess.claudeResumable);
+    const rules = sessionsState.userRules.trim();
+    const agentKind = sess.agentKind;
+    const cursorModel = agentKind === 'cursor' ? sess.cursorModel : null;
+    const appContext = buildAgentAppContext(sessionId);
+
+    try {
+      const result = await runAgentRequest({
+        sessionId,
+        prompt,
+        cwd,
+        claudeUuid,
+        resume,
+        rules: rules || null,
+        agentKind,
+        cursorModel,
+        appContext,
+        onAssistantDelta: appendAssistantDelta,
+        onAppNavigation: handleAppNavigation
+      });
+      const sessAfter = sessionsState.list.find((s) => s.id === sessionId);
+      const lastMsg = sessAfter?.messages[sessAfter.messages.length - 1];
+      const streamed = lastMsg?.role === 'assistant' ? lastMsg.content.trim() : '';
+      const finalReply = result.reply.trim();
+      const uuidStable = !!sessAfter && sessAfter.claudeUuid === claudeUuid;
+      const patch: Partial<ClaudeSession> = {};
+      if (uuidStable) {
+        patch.claudeResumable = true;
+        if (result.sessionUuid && result.sessionUuid !== claudeUuid) {
+          patch.claudeUuid = result.sessionUuid;
+        }
+      }
+      if (!streamed) {
+        replaceLastAssistant(sessionId, finalReply || '(empty response)');
+      }
+      // Mark awaitingApproval again if the continuation also added
+      // pending action cards — chains of commit → PR are common.
+      const sessAfter2 = sessionsState.list.find((s) => s.id === sessionId);
+      const stillPending = sessAfter2?.actions.some((a) => a.status === 'pending') ?? false;
+      if (stillPending) patch.awaitingApproval = true;
+      updateSession(sessionId, patch);
+    } catch (e) {
+      const msg = typeof e === 'string' ? e : String(e);
+      replaceLastAssistant(
+        sessionId,
+        `**${sess.agentKind === 'cursor' ? 'Cursor' : 'Claude'} failed:** ${msg}`
+      );
+    }
+    stopThinkingTimer();
+    updateSession(sessionId, { sending: false });
+    void scrollChatBottom();
+    // Best-effort — keeps the session-store invariant consistent if
+    // an error message-bubble was just stamped.
+    void runStartedAt;
   }
 
   // ---- Claude stub flow ----

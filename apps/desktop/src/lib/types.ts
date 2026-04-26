@@ -28,6 +28,18 @@ export type Workbench = {
   instances: PanelInstance[];
 };
 
+/** Ordered chunk that makes up an assistant message's body. The stream
+    parser appends events as they arrive, merging consecutive same-kind
+    runs (a wall of `text` deltas collapses into one event; a sequence
+    of tool_use calls between two text blocks groups into one `trace`
+    event with multiple segments). The chat column renders events in
+    order — text → markdown bubble, trace → collapsed "✓ N steps" pill.
+    Without this the prior architecture lost interleaving (all tool
+    hints fell into one pill at the top + all text concatenated below). */
+export type MessageEvent =
+  | { kind: 'text'; body: string }
+  | { kind: 'trace'; segments: string[] };
+
 export type ClaudeMessage = {
   role: 'system' | 'user' | 'assistant';
   content: string;
@@ -39,14 +51,18 @@ export type ClaudeMessage = {
       family, Cursor with reasoning models). Persisted alongside the
       session so a reload still shows the same pill. */
   thinking?: string;
-  /** Concatenated `formatToolUse` lines for every tool call the agent
-      ran during the turn (Read / Edit / Bash / Grep / Glob / TodoWrite /
-      mcp__*) — i.e. the "what I did" trace. Surfaced as a collapsed
-      "✓ N steps" pill above the answer body so the chat doesn't get
-      buried in tool hints. Each segment is separated by `\n\n` so the
-      step count is just `trace.split('\n\n').filter(Boolean).length`.
-      Persisted alongside the session. */
+  /** LEGACY — concatenated `formatToolUse` lines (one big string with
+      `\n\n` separators). Kept so old persisted messages still render.
+      New messages use `events` instead, which preserves interleaving
+      between text and tool-use blocks. */
   trace?: string;
+  /** Ordered text/trace events. When present, the renderer uses this
+      instead of `content` + `trace` so the chat shows tool calls right
+      where they happened in the conversation, not all jammed into one
+      pill at the top. `content` is still maintained as a flat
+      concatenation of every text-event body (used for search /
+      back-compat / replaceLastAssistant). */
+  events?: MessageEvent[];
 };
 
 export type Mention = {
@@ -142,6 +158,13 @@ export type ClaudeSession = {
       a record of. CLI-kind specific — cleared on switchAgentKind since
       a cursor-agent chat id can't resume in claude and vice versa. */
   cwdUuids: Record<string, string>;
+  /** True when the agent's last turn ended with one or more pending
+      action cards (commit / PR / bash / switch_cwd) that block the
+      next step of its plan. Set in sendClaudeMessage's success path,
+      cleared on action resolution → automatic follow-up turn. UI
+      shows a "waiting for your approval" hint instead of the idle
+      input prompt so the user knows the agent is paused on them. */
+  awaitingApproval: boolean;
 };
 
 export interface RepoInfo {

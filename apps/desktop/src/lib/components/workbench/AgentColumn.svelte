@@ -992,27 +992,61 @@
                       <div class="thinking-body mono">{msg.thinking}</div>
                     {/if}
                   {/if}
-                  {#if msg.role === 'assistant' && msg.trace && msg.trace.trim()}
-                    {@const ckey = `${sess.id}:${idx}:trace`}
-                    {@const cOpen = expandedTrace.has(ckey)}
-                    {@const stepCount = msg.trace.split('\n\n').filter((s) => s.trim()).length}
-                    <button
-                      class="thinking-pill"
-                      onclick={() => toggleTraceExpansion(ckey)}
-                      aria-expanded={cOpen}
-                      title={cOpen ? 'Hide steps' : 'Show steps'}
-                    >
-                      <svg class="i i-sm thinking-chevron" class:thinking-chevron--open={cOpen} viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg>
-                      <span class="thinking-pill-label">{stepCount} step{stepCount === 1 ? '' : 's'}</span>
-                      <svg class="i i-sm thinking-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>
-                    </button>
-                    {#if cOpen}
-                      <div class="trace-body">
-                        <Markdown source={msg.trace} onOpenFile={onOpenMentionPath} />
-                      </div>
+                  {#if msg.role === 'assistant' && msg.events && msg.events.length > 0}
+                    <!-- Preferred render path: walk the ordered events
+                         array so text bubbles + tool-trace pills appear
+                         in the order the agent produced them. Each
+                         trace event is one pill; text events fall
+                         straight into Markdown. -->
+                    {#each msg.events as ev, evIdx (evIdx)}
+                      {#if ev.kind === 'text'}
+                        <Markdown source={ev.body} onOpenFile={onOpenMentionPath} />
+                      {:else}
+                        {@const ckey = `${sess.id}:${idx}:trace:${evIdx}`}
+                        {@const cOpen = expandedTrace.has(ckey)}
+                        <button
+                          class="thinking-pill"
+                          onclick={() => toggleTraceExpansion(ckey)}
+                          aria-expanded={cOpen}
+                          title={cOpen ? 'Hide steps' : 'Show steps'}
+                        >
+                          <svg class="i i-sm thinking-chevron" class:thinking-chevron--open={cOpen} viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg>
+                          <span class="thinking-pill-label">{ev.segments.length} step{ev.segments.length === 1 ? '' : 's'}</span>
+                          <svg class="i i-sm thinking-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>
+                        </button>
+                        {#if cOpen}
+                          <div class="trace-body">
+                            <Markdown source={ev.segments.join('\n\n')} onOpenFile={onOpenMentionPath} />
+                          </div>
+                        {/if}
+                      {/if}
+                    {/each}
+                  {:else}
+                    <!-- Legacy path: messages persisted before the
+                         events array existed. Pill on top, body below
+                         — same shape as before this refactor. -->
+                    {#if msg.role === 'assistant' && msg.trace && msg.trace.trim()}
+                      {@const ckey = `${sess.id}:${idx}:trace:legacy`}
+                      {@const cOpen = expandedTrace.has(ckey)}
+                      {@const stepCount = msg.trace.split('\n\n').filter((s) => s.trim()).length}
+                      <button
+                        class="thinking-pill"
+                        onclick={() => toggleTraceExpansion(ckey)}
+                        aria-expanded={cOpen}
+                        title={cOpen ? 'Hide steps' : 'Show steps'}
+                      >
+                        <svg class="i i-sm thinking-chevron" class:thinking-chevron--open={cOpen} viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg>
+                        <span class="thinking-pill-label">{stepCount} step{stepCount === 1 ? '' : 's'}</span>
+                        <svg class="i i-sm thinking-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>
+                      </button>
+                      {#if cOpen}
+                        <div class="trace-body">
+                          <Markdown source={msg.trace} onOpenFile={onOpenMentionPath} />
+                        </div>
+                      {/if}
                     {/if}
+                    <Markdown source={msg.content} onOpenFile={onOpenMentionPath} />
                   {/if}
-                  <Markdown source={msg.content} onOpenFile={onOpenMentionPath} />
                 {/if}
               </div>
             </div>
@@ -1032,6 +1066,16 @@
 
       {#if sess.actions.length > 0}
         <div class="action-cards">
+          {#if sess.awaitingApproval && !sess.sending}
+            <!-- Surface that the agent's turn is paused waiting on the
+                 user's decision. After approval (or all-dismiss) the
+                 page-level continuation auto-resumes the agent — no
+                 need to type "now make the PR" by hand. -->
+            <div class="awaiting-approval">
+              <span class="awaiting-dot"></span>
+              <span>Agent paused — approve or dismiss above to continue.</span>
+            </div>
+          {/if}
           {#each sess.actions as act (act.id)}
             <ClaudeActionCard
               action={act}
@@ -1391,6 +1435,20 @@
   .action-cards {
     display: flex; flex-direction: column; gap: 10px;
     padding: 0 16px 10px;
+  }
+  .awaiting-approval {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 10px;
+    background: var(--accent-soft);
+    border: 1px solid rgba(232, 163, 58, 0.25);
+    border-radius: 6px;
+    font-size: 11.5px;
+    color: var(--accent-bright);
+  }
+  .awaiting-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--accent-bright);
+    animation: pulse 1.4s ease-in-out infinite;
   }
 
   /* Attachment chips — shown above the composer whenever the active session
