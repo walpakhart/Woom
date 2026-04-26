@@ -11,14 +11,13 @@
 
   interface Props {
     instanceId: string;
-    /** Used to keep singleton-kind move guards in sync with the layout
-     *  store's logic — callers pass the panel kind so we can pre-disable
-     *  workbenches that already host one of the same kind. */
+    /** Panel kind — kept on the prop because the drag chip / aria
+     *  labels read it. After the per-instance refactor every kind is
+     *  free to appear multiple times per workbench, so there is no
+     *  singleton guard here anymore. */
     kind: 'github' | 'jira' | 'sentry' | 'claude' | 'cursor' | 'editor';
   }
   let { instanceId, kind }: Props = $props();
-
-  const SINGLETON_KINDS = new Set(['github', 'jira', 'sentry']);
 
   let menuOpen = $state(false);
   /** When the trigger sits too close to the bottom of the viewport, the
@@ -59,14 +58,7 @@
     );
     return layoutState.workbenches
       .filter((w) => w.id !== sourceWb?.id)
-      .map((w) => ({
-        id: w.id,
-        name: w.name,
-        // Singleton kinds (github/jira) — flag if the target already has
-        // one. We render that row disabled with a hint so the user
-        // understands why it can't accept the move.
-        blocked: SINGLETON_KINDS.has(kind) && w.instances.some((i) => i.kind === kind)
-      }));
+      .map((w) => ({ id: w.id, name: w.name }));
   }
   const candidates = $derived(targetWorkbenches());
 
@@ -79,10 +71,7 @@
       notify({
         kind: 'warning',
         title: "Couldn't move column",
-        body:
-          SINGLETON_KINDS.has(kind)
-            ? `${wbName} already has a ${kind} column — only one allowed per workbench.`
-            : 'Source or target workbench not found.'
+        body: 'Source or target workbench not found.'
       });
     }
   }
@@ -138,12 +127,10 @@
             <button
               class="wb-col-move-item"
               role="menuitem"
-              disabled={c.blocked}
-              title={c.blocked ? 'Already has a column of this kind' : `Move to ${c.name}`}
+              title={`Move to ${c.name}`}
               onclick={() => moveTo(c.id, c.name)}
             >
               <span class="wb-col-move-name">{c.name}</span>
-              {#if c.blocked}<span class="wb-col-move-hint">already has {kind}</span>{/if}
             </button>
           {/each}
         </div>
@@ -213,10 +200,6 @@
   .wb-col-move-item:hover:not(:disabled) { background: var(--bg-3); color: var(--text-0); }
   .wb-col-move-item:disabled { opacity: 0.45; cursor: not-allowed; }
   .wb-col-move-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .wb-col-move-hint {
-    font-size: 10.5px; color: var(--text-mute); font-style: italic;
-    flex-shrink: 0;
-  }
   @keyframes fadeIn { from { opacity: 0; transform: translateY(-2px); } to { opacity: 1; transform: translateY(0); } }
   @keyframes fadeInUp { from { opacity: 0; transform: translateY(2px); } to { opacity: 1; transform: translateY(0); } }
 </style>

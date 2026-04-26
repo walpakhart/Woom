@@ -412,9 +412,8 @@ export function archiveInstance(id: string) {
 /** Restore an archived instance. Default target is the original
  *  workbench at the original index; if that workbench was deleted, we
  *  fall back to `fallbackWorkbenchId` (or the active workbench if
- *  none was given). For singleton kinds (github / jira / sentry) the
- *  target must not already host one of the same kind — caller surfaces
- *  the conflict. Returns true on success, false if blocked. */
+ *  none was given). Returns true on success, false only when the
+ *  archive entry can't be found. */
 export function unarchiveInstance(id: string, fallbackWorkbenchId?: string): boolean {
   const idx = layoutState.archivedInstances.findIndex((a) => a.inst.id === id);
   if (idx < 0) return false;
@@ -426,14 +425,6 @@ export function unarchiveInstance(id: string, fallbackWorkbenchId?: string): boo
     ) ??
     layoutState.workbenches[0];
   if (!target) return false;
-  if (
-    (archived.inst.kind === 'github' ||
-      archived.inst.kind === 'jira' ||
-      archived.inst.kind === 'sentry') &&
-    target.instances.some((i) => i.kind === archived.inst.kind)
-  ) {
-    return false;
-  }
   const insertAt = Math.min(Math.max(0, archived.originalIndex), target.instances.length);
   target.instances = [
     ...target.instances.slice(0, insertAt),
@@ -511,28 +502,21 @@ export function moveInstanceToWorkbench(
   if (source.id === targetWorkbenchId) return true;
   const target = layoutState.workbenches.find((w) => w.id === targetWorkbenchId);
   if (!target) return false;
-  // Singleton kinds (github / jira / sentry) — only one per workbench.
-  // Refuse to move a second one in; the caller should detect this and ask
-  // the user whether to merge / discard.
-  if ((inst.kind === 'github' || inst.kind === 'jira' || inst.kind === 'sentry')
-      && target.instances.some((i) => i.kind === inst!.kind)) {
-    return false;
-  }
+  /* Per-instance refactor removed the old "one of each kind per
+     workbench" rule — every column owns its own filter / item slot
+     keyed by `instance.id`, so two Jira columns side by side can
+     legitimately browse different boards. No singleton check here. */
   source.instances = source.instances.filter((i) => i.id !== instanceId);
   target.instances = [...target.instances, inst];
   persistPanelState();
   return true;
 }
 
-/** Append a new instance of `kind` to the active workbench and return its id.
- *  For singleton kinds (github, jira) this is a no-op if one already exists —
- *  returns the existing instance's id instead. */
+/** Append a new instance of `kind` to the active workbench and return
+ *  its id. Always creates a fresh instance now that columns are
+ *  per-instance — multiple github / jira / sentry columns are valid. */
 export function addPanelInstance(kind: PanelKind): string {
   const wb = activeWorkbench();
-  if (kind === 'github' || kind === 'jira' || kind === 'sentry') {
-    const existing = wb.instances.find((i) => i.kind === kind);
-    if (existing) return existing.id;
-  }
   const id = genInstanceId();
   wb.instances = [
     ...wb.instances,

@@ -2012,7 +2012,7 @@
       notify({
         kind: 'warning',
         title: "Couldn't move column",
-        body: `${target.name} already has a column of that kind, or the source disappeared.`
+        body: 'Source or target workbench disappeared.'
       });
     }
   }
@@ -3145,14 +3145,7 @@
                           aria-label="Restore"
                           onclick={(e) => {
                             e.stopPropagation();
-                            const ok = unarchiveInstance(a.id, layoutState.activeWorkbenchId);
-                            if (!ok) {
-                              notify({
-                                kind: 'warning',
-                                title: "Couldn't restore column",
-                                body: 'A column of this kind already exists here — only one allowed per workbench.'
-                              });
-                            }
+                            unarchiveInstance(a.id, layoutState.activeWorkbenchId);
                           }}
                         >
                           <svg class="i i-sm" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5"/></svg>
