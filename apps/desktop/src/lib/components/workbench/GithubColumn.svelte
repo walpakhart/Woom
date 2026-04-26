@@ -300,6 +300,7 @@
 
   .inbox-brand {
     padding: 16px 20px 10px; display: flex; align-items: center; gap: 10px;
+    min-height: 53px;
   }
   .brand-word { font-size: 14px; font-weight: 600; color: var(--text-0); letter-spacing: -0.01em; }
   .brand-sub { font-size: 11.5px; color: var(--text-2); margin-left: auto; }

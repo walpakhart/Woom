@@ -300,8 +300,16 @@
     display: flex; flex-direction: column;
     background: rgba(16, 24, 40, 0.3);
   }
+  /* Pin the brand row's box height so the icon / "Sentry" word /
+     refresh button center on the same Y as Jira's icon / "Jira" word
+     / "+ New issue" button. Without this, the row's intrinsic height
+     resolves from `max(child)` and any sub-pixel difference in the
+     refresh-btn vs new-issue-btn boxes (e.g. 27px vs 27.25px from
+     line-height rounding) shifts the brand-bar center by ~0.5–1 px,
+     which the eye reads as a visible misalignment between columns. */
   .inbox-brand {
     padding: 16px 20px 10px; display: flex; align-items: center; gap: 10px;
+    min-height: 53px;
   }
   .brand-word { font-size: 14px; font-weight: 600; color: var(--text-0); letter-spacing: -0.01em; }
   .bench-name { font-size: 11px; color: var(--text-2); }
