@@ -416,7 +416,7 @@
   .sdp-spin { animation: sdp-spin 0.8s linear infinite; }
   @keyframes sdp-spin { to { transform: rotate(360deg); } }
   .sdp-btn--primary {
-    background: var(--accent); color: #1a0a04;
+    background: var(--accent); color: var(--accent-fg);
     border-color: transparent; font-weight: 600;
   }
   .sdp-btn--primary:hover:not(:disabled) { background: var(--accent-bright); }

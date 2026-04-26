@@ -143,7 +143,7 @@
     display: flex; align-items: center; gap: 10px;
     padding: 16px 20px 10px;
     border-bottom: 1px solid var(--border-neutral);
-    background: rgba(15, 24, 40, 0.4);
+    background: var(--bg-1);
     flex-shrink: 0;
   }
   .editor-bench-head .source-mark {

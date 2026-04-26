@@ -46,7 +46,7 @@
   >
     <div class="modal modal-xl">
       <header class="modal-head">
-        <span class="conn-icon" style="background: #0a111e; color: #fff; border: 1px solid var(--border-neutral-hi);">PR</span>
+        <span class="conn-icon" style="background: var(--accent-fg); color: #fff; border: 1px solid var(--border-neutral-hi);">PR</span>
         <div>
           <div class="modal-title">New pull request</div>
           <div class="modal-sub">{m.repo || 'pick a repository'}</div>

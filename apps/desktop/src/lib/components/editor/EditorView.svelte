@@ -503,7 +503,7 @@
     padding: 9px 22px;
     border-radius: 8px;
     background: var(--accent);
-    color: #1a0a04;
+    color: var(--accent-fg);
     font-size: 13px; font-weight: 600;
   }
   .ev-empty-cta:hover { background: var(--accent-bright); }

@@ -228,7 +228,7 @@
      stay pure highlight (no interaction yet). */
   .prose :global(.ment-clickable) { cursor: pointer; transition: all 120ms; }
   .prose :global(.ment-clickable:hover) {
-    color: #0a111e;
+    color: var(--accent-fg);
     background: var(--accent-bright);
     border-color: var(--accent);
   }

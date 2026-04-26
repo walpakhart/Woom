@@ -475,7 +475,7 @@
 <style>
   .palette-backdrop {
     position: fixed; inset: 0;
-    background: rgba(10, 17, 30, 0.78);
+    background: var(--backdrop);
     backdrop-filter: blur(20px);
     display: flex; align-items: flex-start; justify-content: center;
     padding-top: 12vh; z-index: 200;
@@ -485,7 +485,7 @@
     width: 720px; max-width: 92vw;
     max-height: 70vh;
     display: flex; flex-direction: column;
-    background: rgba(15, 24, 40, 0.94);
+    background: var(--bg-1);
     backdrop-filter: blur(24px);
     border: 1px solid var(--border-hi2); border-radius: 14px;
     overflow: hidden;

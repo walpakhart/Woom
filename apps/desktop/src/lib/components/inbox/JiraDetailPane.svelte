@@ -668,10 +668,10 @@
   .jdp-spin { animation: jdp-spin 0.8s linear infinite; }
   @keyframes jdp-spin { to { transform: rotate(360deg); } }
   .jdp-btn--primary {
-    background: var(--accent); color: #1a0a04;
+    background: var(--accent); color: var(--accent-fg);
     border-color: transparent; font-weight: 600;
   }
-  .jdp-btn--primary:hover:not(:disabled) { background: var(--accent-bright); color: #1a0a04; }
+  .jdp-btn--primary:hover:not(:disabled) { background: var(--accent-bright); color: var(--accent-fg); }
 
   .jdp-state { padding: 40px; text-align: center; color: var(--text-2); }
   .jdp-err { color: var(--error); }

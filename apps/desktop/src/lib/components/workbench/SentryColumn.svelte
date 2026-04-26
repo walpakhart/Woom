@@ -309,7 +309,7 @@
     flex: 1 1 420px;
     min-width: 360px;
     display: flex; flex-direction: column;
-    background: rgba(16, 24, 40, 0.3);
+    background: var(--bg-1);
   }
   /* Lock the brand row's box height as `height` (not min-height) so it
      can't grow from intrinsic child sizes (e.g. new-issue-btn 27.25px

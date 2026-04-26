@@ -3610,17 +3610,17 @@
   .wb-tab:hover { color: var(--text-0); background: var(--bg-1); }
   .wb-tab.active {
     color: var(--text-0);
-    background: rgba(15, 24, 40, 0.35);
+    background: var(--bg-1);
     border-color: var(--border-neutral);
   }
   /* Drag-over highlight when the user is moving a column onto this tab. */
   .wb-tab.drag-over {
-    color: #1a0a04;
+    color: var(--accent-fg);
     background: var(--accent);
     border-color: var(--accent);
     box-shadow: 0 0 0 2px var(--accent), 0 0 12px var(--accent-glow);
   }
-  .wb-tab.drag-over .wb-tab-count { background: rgba(26, 10, 4, 0.18); color: #1a0a04; }
+  .wb-tab.drag-over .wb-tab-count { background: rgba(26, 10, 4, 0.18); color: var(--accent-fg); }
   .wb-tab-name {
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     letter-spacing: -0.005em;
@@ -3678,7 +3678,7 @@
     display: flex; align-items: center; gap: 6px;
     padding: 10px 16px;
     border-bottom: 1px solid var(--border-neutral);
-    background: rgba(15, 24, 40, 0.35);
+    background: var(--bg-1);
   }
 
   /* Pill-group — a single pill or a pill + plus-button compound. The whole
@@ -3820,13 +3820,13 @@
   }
   .pill-menu-item.drag-over {
     background: var(--accent);
-    color: #1a0a04;
+    color: var(--accent-fg);
   }
   .pill-menu-item.drag-over .pill-menu-dot {
-    background: #1a0a04; box-shadow: none;
+    background: var(--accent-fg); box-shadow: none;
   }
   .pill-menu-item.drag-over .pill-menu-wb {
-    background: rgba(26, 10, 4, 0.2); color: #1a0a04; border-color: transparent;
+    background: rgba(26, 10, 4, 0.2); color: var(--accent-fg); border-color: transparent;
   }
   .pill-menu-head {
     font-size: 10px; font-weight: 600; letter-spacing: 0.05em;

@@ -518,7 +518,7 @@
     padding: 6px 12px;
     border-radius: 6px;
     background: var(--accent);
-    color: #1a0a04;
+    color: var(--accent-fg);
     font-size: 12px; font-weight: 600;
     flex-shrink: 0;
   }

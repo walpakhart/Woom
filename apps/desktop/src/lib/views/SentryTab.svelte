@@ -312,7 +312,7 @@
     border: none; cursor: pointer; transition: all 140ms; white-space: nowrap;
   }
   .btn--primary {
-    color: #0a111e;
+    color: var(--accent-fg);
     background: linear-gradient(135deg, #34d399, #10b981);
     box-shadow: 0 2px 8px rgba(16, 185, 129, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.2);
     font-weight: 600;

@@ -1208,7 +1208,7 @@
     flex: 1.3 1 420px;
     min-width: 400px;
     display: flex; flex-direction: column;
-    background: rgba(16, 24, 40, 0.3);
+    background: var(--bg-1);
     transition: background 180ms, box-shadow 180ms;
   }
   .claude-col.drag-over {
@@ -1301,7 +1301,7 @@
   }
   :global(.btn-tiny:hover:not(:disabled)) { background: var(--bg-3); color: var(--text-0); }
   :global(.btn-tiny--primary) {
-    color: #0a111e;
+    color: var(--accent-fg);
     background: linear-gradient(135deg, #34d399, #10b981);
     border-color: rgba(16, 185, 129, 0.5);
     font-weight: 600;
@@ -1400,7 +1400,7 @@
   .thinking-body {
     margin: 0 0 10px;
     padding: 10px 12px;
-    background: rgba(15, 24, 40, 0.5);
+    background: var(--bg-1);
     border: 1px solid var(--border-neutral);
     border-left: 3px solid var(--border-neutral-hi);
     border-radius: 6px;
@@ -1417,7 +1417,7 @@
   .trace-body {
     margin: 0 0 10px;
     padding: 6px 12px;
-    background: rgba(15, 24, 40, 0.5);
+    background: var(--bg-1);
     border: 1px solid var(--border-neutral);
     border-left: 3px solid var(--border-neutral-hi);
     border-radius: 6px;

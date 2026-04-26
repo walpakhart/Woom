@@ -392,7 +392,7 @@
   }
   .cac-btn--ghost:hover:not(:disabled) { background: var(--bg-3); color: var(--text-0); }
   .cac-btn--primary {
-    background: var(--accent); color: #1a0a04;
+    background: var(--accent); color: var(--accent-fg);
   }
   .cac-btn--primary:hover:not(:disabled) { background: var(--accent-bright); }
 </style>

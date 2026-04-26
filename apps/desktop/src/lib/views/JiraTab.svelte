@@ -435,7 +435,7 @@
   .btn--ghost { color: var(--text-1); background: transparent; border: 1px solid var(--border-neutral-hi); }
   .btn--ghost:hover:not(:disabled) { background: var(--bg-1); color: var(--text-0); border-color: var(--border-hi2); }
   .btn--primary {
-    color: #0a111e;
+    color: var(--accent-fg);
     background: linear-gradient(135deg, #34d399, #10b981);
     box-shadow: 0 2px 8px rgba(16, 185, 129, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.2);
     font-weight: 600;

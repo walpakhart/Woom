@@ -192,7 +192,7 @@
   .conn-soon { font-size: 10.5px; color: var(--text-mute); font-style: italic; }
   .conn-btn { padding: 6px 14px; border-radius: 6px; font-size: 11.5px; font-weight: 500; transition: all 140ms; background: none; border: none; cursor: pointer; }
   .conn-btn--connect {
-    color: #0a111e;
+    color: var(--accent-fg);
     background: linear-gradient(135deg, #34d399, #10b981);
     box-shadow: 0 2px 8px rgba(16, 185, 129, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.2);
     font-weight: 600;

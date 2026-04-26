@@ -63,7 +63,7 @@
     display: flex; flex-direction: column; align-items: center;
     padding: 14px 0; gap: 6px;
     border-right: 1px solid var(--border-neutral);
-    background: rgba(10, 17, 30, 0.6);
+    background: var(--bg-1);
     backdrop-filter: blur(8px);
     /* Guarantee the rail renders above workbench tabs / pill hover menus
        so its badges and active-view indicator stay readable even when a
@@ -89,7 +89,7 @@
   .rail-badge {
     position: absolute; top: 2px; right: 2px;
     min-width: 14px; height: 14px; padding: 0 3px; border-radius: 7px;
-    background: var(--accent); color: #0a111e;
+    background: var(--accent); color: var(--accent-fg);
     font-size: 9.5px; font-weight: 700;
     display: inline-flex; align-items: center; justify-content: center;
     box-shadow: 0 0 0 2px var(--bg-0), 0 0 8px var(--accent-glow);

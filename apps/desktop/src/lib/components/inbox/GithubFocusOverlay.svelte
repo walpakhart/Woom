@@ -842,7 +842,7 @@
   .hunk-header {
     padding: 4px 16px;
     font-size: 11px; color: var(--text-mute);
-    background: rgba(15, 24, 40, 0.6);
+    background: var(--bg-1);
     border-top: 1px solid var(--border-neutral);
     border-bottom: 1px solid var(--border-neutral);
   }
@@ -866,7 +866,7 @@
   .inline-comments {
     border-top: 1px solid var(--border-neutral);
     padding: 12px 14px;
-    background: rgba(15, 24, 40, 0.3);
+    background: var(--bg-1);
   }
   .inline-comments-head {
     font-size: 10.5px; font-weight: 600; color: var(--text-2);
@@ -892,14 +892,14 @@
     border-top: 1px solid var(--border-neutral);
     padding: 12px 24px;
     display: flex; align-items: center; gap: 8px;
-    background: rgba(10, 17, 30, 0.7);
+    background: var(--backdrop);
     backdrop-filter: blur(12px);
   }
 
   /* Slide-over */
   .slide-over {
     position: fixed; inset: 0;
-    background: rgba(10, 17, 30, 0.7);
+    background: var(--backdrop);
     backdrop-filter: blur(8px);
     z-index: 180;
     display: flex; justify-content: flex-end;
