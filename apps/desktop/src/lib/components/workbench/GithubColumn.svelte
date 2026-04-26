@@ -114,6 +114,25 @@
     }
   });
 
+  /* After a reload, the persisted `filters.repo` (e.g. `owner/name`)
+     comes back but `githubRepoOptions` is still empty — it's lazy-
+     loaded on dropdown open. The Dropdown can't find an option
+     matching the persisted value, so it falls back to the "All repos"
+     placeholder even though a real repo is active. Force-fetch the
+     repo list when there's a non-empty selection so the trigger
+     label populates immediately. Mirror of the same fix on
+     JiraColumn for projectKey / boardIds / sprintIds. */
+  $effect(() => {
+    if (githubStatus.kind !== 'connected') return;
+    if (
+      filters.repo &&
+      inboxState.githubRepoOptions.length === 0 &&
+      !inboxState.githubRepoOptionsLoading
+    ) {
+      void loadGithubRepoOptions();
+    }
+  });
+
   const grouped = $derived(groupByTime(items, now));
 
   // Filter mode options — label + the corresponding GitHub search qualifier
