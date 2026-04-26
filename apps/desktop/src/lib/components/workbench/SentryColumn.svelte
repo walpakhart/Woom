@@ -179,8 +179,9 @@
     </button>
   </div>
 
-  <div class="filter-bar">
-    <div class="filter-row">
+  <div class="inbox-header">
+    <div class="filter-bar">
+      <div class="filter-row">
       <Dropdown
         value={projectValue}
         options={projectOpts}
@@ -230,6 +231,7 @@
       placeholder="search… (free text or `tag:value`)"
       aria-label="Sentry search query"
     />
+    </div>
   </div>
 
   <div class="inbox-list">
@@ -313,8 +315,10 @@
   .refresh-btn .spin { animation: spin 0.8s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
 
+  /* Padding is provided by the parent .inbox-header (global rule in
+     app.css: 14px 20px 8px) so the filter strip lines up vertically
+     with Jira / GitHub. */
   .filter-bar {
-    padding: 10px 16px; border-bottom: 1px solid var(--border-neutral);
     display: flex; flex-direction: column; gap: 6px;
   }
   .filter-row { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
