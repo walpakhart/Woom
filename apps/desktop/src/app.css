@@ -48,7 +48,16 @@
   /* Modal & popover backdrop — translucent layer drawn over the app
      when a dialog opens. Per-theme so the haze reads as "darker than
      the surface" everywhere. */
-  --backdrop: var(--backdrop);
+  --backdrop: rgba(10, 17, 30, 0.78);
+
+  /* Elevation shadows — soft drop-shadows for "this surface sits
+     above the page". Three intensities so callers can tier elements
+     (cards · panels · modals). On dark themes the colour is near-
+     black; Light theme overrides this with a softer brown that reads
+     on cream surfaces. */
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.20), 0 2px 6px rgba(0, 0, 0, 0.18);
+  --shadow-2: 0 2px 4px rgba(0, 0, 0, 0.24), 0 8px 22px rgba(0, 0, 0, 0.32);
+  --shadow-3: 0 4px 10px rgba(0, 0, 0, 0.30), 0 22px 50px rgba(0, 0, 0, 0.42);
 }
 
 /* ---- Light theme ----
@@ -92,6 +101,13 @@
      forward without going milk-white. */
   --accent-fg: #FAEEE0;
   --backdrop: rgba(78, 40, 18, 0.32);
+
+  /* Brown shadows for the cream surface — black would punch a
+     visible halo. Slightly stronger opacity than the dark themes
+     because brown-on-cream needs more density to read as depth. */
+  --shadow-1: 0 1px 2px rgba(78, 40, 18, 0.10), 0 2px 6px rgba(78, 40, 18, 0.10);
+  --shadow-2: 0 2px 4px rgba(78, 40, 18, 0.14), 0 8px 22px rgba(78, 40, 18, 0.12);
+  --shadow-3: 0 4px 10px rgba(78, 40, 18, 0.18), 0 22px 50px rgba(78, 40, 18, 0.18);
 }
 
 /* ---- Dark theme ----
@@ -134,6 +150,13 @@
      surface) so modals still feel "above the page". */
   --accent-fg: #1A0E07;
   --backdrop: rgba(0, 0, 0, 0.74);
+
+  /* Dark theme uses the same near-black shadow recipe as Iconic —
+     surfaces are dark-on-darker so black halos are invisible /
+     work as natural depth cues. */
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.30), 0 2px 6px rgba(0, 0, 0, 0.26);
+  --shadow-2: 0 2px 4px rgba(0, 0, 0, 0.34), 0 8px 22px rgba(0, 0, 0, 0.40);
+  --shadow-3: 0 4px 10px rgba(0, 0, 0, 0.38), 0 22px 50px rgba(0, 0, 0, 0.50);
 }
 
 * { box-sizing: border-box; }
@@ -224,6 +247,10 @@ kbd {
   display: flex; flex-direction: column;
   background: var(--bg-0);
   position: relative;
+  /* Subtle depth — pulls each column slightly off the workbench
+     background so the eye groups its content as one panel. Crosses
+     the right border so adjacent columns don't double-up. */
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02), var(--shadow-1);
 }
 .wb-column + .wb-column { background: var(--bg-0); }
 .wb-column:last-child { border-right: none; }
@@ -246,7 +273,7 @@ kbd {
   border-radius: 6px;
   padding: 2px;
   backdrop-filter: blur(6px);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--shadow-1);
 }
 .wb-column:hover .wb-col-controls,
 .wb-col-controls:focus-within {
@@ -1094,7 +1121,7 @@ kbd {
   background: var(--bg-2);
   border: 1px solid var(--border-hi2);
   border-radius: 8px;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--shadow-2);
   z-index: 20;
   padding: 4px;
   display: flex; flex-direction: column; gap: 1px;
@@ -1454,7 +1481,7 @@ img.chat-avatar { padding: 0; }
 .modal {
   width: 480px; max-width: 90vw;
   background: var(--bg-1); border: 1px solid var(--border-hi2); border-radius: 14px;
-  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  box-shadow: var(--shadow-3), inset 0 1px 0 rgba(255, 255, 255, 0.04);
   overflow: hidden;
   animation: slideDown 220ms cubic-bezier(0.34, 1.56, 0.64, 1);
   display: flex; flex-direction: column;

@@ -436,7 +436,7 @@
     -webkit-backdrop-filter: blur(16px);
     border: 1px solid var(--border-hi);
     border-radius: 8px;
-    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.03);
+    box-shadow: var(--shadow-2), inset 0 1px 0 rgba(255, 255, 255, 0.03);
     overflow: hidden;
   }
   .dd-panel--right { left: auto; right: 0; }

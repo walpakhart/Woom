@@ -79,7 +79,7 @@
     border-radius: 10px;
     background: var(--bg-2);
     border: 1px solid var(--border-hi);
-    box-shadow: 0 10px 32px rgba(0, 0, 0, 0.45), 0 1px 0 rgba(255, 255, 255, 0.04) inset;
+    box-shadow: var(--shadow-2), 0 1px 0 rgba(255, 255, 255, 0.04) inset;
     color: var(--text-0);
     font-size: 12.5px;
   }

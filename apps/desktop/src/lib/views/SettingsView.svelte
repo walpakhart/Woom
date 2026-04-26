@@ -273,6 +273,7 @@
     border-radius: 12px;
     padding: 20px 22px;
     display: flex; flex-direction: column; gap: 14px;
+    box-shadow: var(--shadow-1);
   }
   .card-head { display: flex; flex-direction: column; gap: 4px; }
   .card-title { font-size: 15px; font-weight: 600; color: var(--text-0); margin: 0; }

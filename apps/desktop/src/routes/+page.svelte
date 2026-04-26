@@ -3588,7 +3588,7 @@
     display: flex; align-items: center; gap: 2px;
     padding: 6px 12px 4px;
     border-bottom: 1px solid var(--border-neutral);
-    background: rgba(12, 20, 34, 0.5);
+    background: var(--bg-0);
     overflow-x: auto;
     scrollbar-width: none;
   }
@@ -3620,7 +3620,7 @@
     border-color: var(--accent);
     box-shadow: 0 0 0 2px var(--accent), 0 0 12px var(--accent-glow);
   }
-  .wb-tab.drag-over .wb-tab-count { background: rgba(26, 10, 4, 0.18); color: var(--accent-fg); }
+  .wb-tab.drag-over .wb-tab-count { background: color-mix(in srgb, var(--accent-fg) 18%, transparent); color: var(--accent-fg); }
   .wb-tab-name {
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     letter-spacing: -0.005em;
@@ -3694,11 +3694,15 @@
     transition: border-color 140ms, background 140ms, box-shadow 140ms;
     position: relative;
   }
-  .pill-group:hover { border-color: var(--border-neutral-hi); background: var(--bg-2); }
+  .pill-group:hover {
+    border-color: var(--border-neutral-hi);
+    background: var(--bg-2);
+    box-shadow: var(--shadow-1);
+  }
   .pill-group.active {
     border-color: var(--border-hi);
     background: var(--bg-2);
-    box-shadow: 0 0 0 1px var(--border-hi), 0 1px 8px rgba(232, 163, 58, 0.08);
+    box-shadow: 0 0 0 1px var(--border-hi), var(--shadow-1), 0 0 12px var(--accent-glow);
   }
   .pill-group.active::after {
     /* Little glow dot at the bottom-center when column is open. */
@@ -3826,7 +3830,7 @@
     background: var(--accent-fg); box-shadow: none;
   }
   .pill-menu-item.drag-over .pill-menu-wb {
-    background: rgba(26, 10, 4, 0.2); color: var(--accent-fg); border-color: transparent;
+    background: color-mix(in srgb, var(--accent-fg) 20%, transparent); color: var(--accent-fg); border-color: transparent;
   }
   .pill-menu-head {
     font-size: 10px; font-weight: 600; letter-spacing: 0.05em;

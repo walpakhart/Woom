@@ -489,7 +489,7 @@
     backdrop-filter: blur(24px);
     border: 1px solid var(--border-hi2); border-radius: 14px;
     overflow: hidden;
-    box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    box-shadow: var(--shadow-3), inset 0 1px 0 rgba(255, 255, 255, 0.04);
     animation: slideDown 220ms cubic-bezier(0.34, 1.56, 0.64, 1);
   }
   .palette-input {

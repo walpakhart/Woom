@@ -747,7 +747,7 @@
     border: 1px solid var(--border-hi);
     border-radius: 8px;
     z-index: 10;
-    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.4);
+    box-shadow: var(--shadow-2);
     padding: 4px;
     display: flex; flex-direction: column; gap: 2px;
   }
@@ -792,7 +792,7 @@
     border: 1px solid var(--border-hi);
     border-radius: 8px;
     z-index: 10;
-    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.4);
+    box-shadow: var(--shadow-2);
     padding: 4px;
   }
   .jdp-transition {
