@@ -314,14 +314,21 @@
   }
   .source-mark svg { width: 12px; height: 12px; color: currentColor; }
   .sentry-mark { color: #f88f74; background: rgba(248, 143, 116, 0.12); border-color: rgba(248, 143, 116, 0.3); }
-  /* Sized to match Jira's `new-issue-btn` / GitHub's `new-pr-btn`
-     (~22-23px tall) so the brand-bar row height is identical across
-     all three columns. */
+  /* Mirror Jira's `new-issue-btn` / GitHub's `new-pr-btn` box
+     (padding 4px 8px, 1px border, font-size 11.5px / line-height 1.5
+     → ~27px tall). Since this button is icon-only, an explicit
+     `min-height` ensures it doesn't collapse to the 14px icon and
+     undercut the row height — without it, sentry's brand-bar would
+     resolve to 22px (the source-mark) instead of matching jira's
+     ~27px row dictated by its text-bearing button. */
   .refresh-btn {
-    width: 22px; height: 22px; border-radius: 6px;
     display: inline-flex; align-items: center; justify-content: center;
-    color: var(--text-2); background: transparent; cursor: pointer;
+    padding: 0 8px; min-height: 27px;
+    border-radius: 6px;
+    background: transparent;
     border: 1px solid var(--border-neutral-hi);
+    color: var(--text-2);
+    cursor: pointer;
   }
   .refresh-btn:hover { background: var(--bg-2); color: var(--text-0); }
   .refresh-btn .spin { animation: spin 0.8s linear infinite; }
