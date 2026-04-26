@@ -3447,7 +3447,7 @@
 
 <CommandPalette
   bind:open={paletteOpen}
-  onSelect={(id) => { selectInboxItem(id); paletteOpen = false; view = 'workbench'; }}
+  setView={(v) => (view = v)}
 />
 
 <style>

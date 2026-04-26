@@ -319,7 +319,6 @@
     background: var(--bg-2); color: var(--text-1);
     border: 1px solid var(--border-neutral-hi);
   }
-  .source-mark svg { width: 12px; height: 12px; color: currentColor; }
   .sentry-mark { color: #f88f74; background: rgba(248, 143, 116, 0.12); border-color: rgba(248, 143, 116, 0.3); }
   /* Mirror Jira's `new-issue-btn` / GitHub's `new-pr-btn` box
      (padding 4px 8px, 1px border, font-size 11.5px / line-height 1.5
