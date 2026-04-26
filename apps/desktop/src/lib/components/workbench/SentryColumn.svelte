@@ -292,7 +292,6 @@
   }
   .inbox-brand {
     padding: 16px 20px 10px; display: flex; align-items: center; gap: 10px;
-    border-bottom: 1px solid var(--border-neutral);
   }
   .brand-word { font-size: 14px; font-weight: 600; color: var(--text-0); letter-spacing: -0.01em; }
   .bench-name { font-size: 11px; color: var(--text-2); }
