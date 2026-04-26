@@ -1334,7 +1334,7 @@ img.chat-avatar { padding: 0; }
 /* Conn-icon color variants — used by ConnectionsView and inbox source marks. */
 .conn-icon--jira   { background: rgba(59, 130, 246, 0.12); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.24); }
 .conn-icon--github { background: rgba(139, 92, 246, 0.1);  color: #b199f6; border: 1px solid rgba(139, 92, 246, 0.22); }
-.conn-icon--sentry { background: rgba(248, 143, 116, 0.12); color: #f88f74; border: 1px solid rgba(248, 143, 116, 0.3); }
+.conn-icon--sentry { background: rgba(248, 143, 116, 0.08); color: #f8a994; border: 1px solid rgba(248, 143, 116, 0.2); }
 .conn-icon--slack  { background: rgba(236, 72, 153, 0.1);  color: #f472b6; border: 1px solid rgba(236, 72, 153, 0.22); }
 .conn-icon--claude { background: rgba(16, 185, 129, 0.12); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.24); }
 .conn-icon--cursor { background: rgba(255, 255, 255, 0.05); color: #e5ebf4; border: 1px solid rgba(255, 255, 255, 0.1); }
