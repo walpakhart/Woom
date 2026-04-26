@@ -41,6 +41,79 @@
   --error: #D4664A;
 }
 
+/* ---- Light theme ----
+ * Tint (cream) surfaces + Shade (chocolate) text & accent. Picked off
+ * the Light/Dark mode swatch in the brand reference. Only colour
+ * variables are overridden — every layout / spacing / radius rule
+ * stays shared, so swap-on-the-fly is paint-only.
+ */
+:root[data-theme='light'] {
+  --bg-0: #FAEEE0;
+  --bg-1: #F2E2CD;
+  --bg-2: #E8D2B5;
+  --bg-3: #D9BE99;
+
+  --border: rgba(78, 40, 18, 0.14);
+  --border-hi: rgba(78, 40, 18, 0.32);
+  --border-hi2: rgba(78, 40, 18, 0.50);
+  --border-neutral: rgba(78, 40, 18, 0.10);
+  --border-neutral-hi: rgba(78, 40, 18, 0.20);
+
+  --text-0: #2A1208;
+  --text-1: #4E2812;
+  --text-2: #7A4E2E;
+  --text-mute: #A38566;
+
+  --accent: #4E2812;
+  --accent-bright: #2A1208;
+  --accent-soft: rgba(78, 40, 18, 0.10);
+  --accent-glow: rgba(78, 40, 18, 0.22);
+
+  --blue: #4E2812;
+  --blue-bright: #2A1208;
+  --blue-deep: #C29873;
+
+  --success: #4F7A57;
+  --warning: #8E5A1A;
+  --error: #A33A22;
+}
+
+/* ---- Dark theme ----
+ * Inverse of Light: Shade chocolate surfaces + Tint cream text and
+ * accent. Same brown family as Light so source-brand colours
+ * (Jira blue / GitHub violet / Sentry coral) keep reading clearly.
+ */
+:root[data-theme='dark'] {
+  --bg-0: #1A0E07;
+  --bg-1: #261611;
+  --bg-2: #34201A;
+  --bg-3: #4A2E22;
+
+  --border: rgba(250, 238, 224, 0.10);
+  --border-hi: rgba(250, 238, 224, 0.20);
+  --border-hi2: rgba(250, 238, 224, 0.34);
+  --border-neutral: rgba(250, 238, 224, 0.06);
+  --border-neutral-hi: rgba(250, 238, 224, 0.14);
+
+  --text-0: #FAEEE0;
+  --text-1: #DCC8AE;
+  --text-2: #A88E73;
+  --text-mute: #756050;
+
+  --accent: #FAEEE0;
+  --accent-bright: #FFFFFF;
+  --accent-soft: rgba(250, 238, 224, 0.10);
+  --accent-glow: rgba(250, 238, 224, 0.24);
+
+  --blue: #FAEEE0;
+  --blue-bright: #FFFFFF;
+  --blue-deep: #B8997B;
+
+  --success: #8FCAA0;
+  --warning: #E5B574;
+  --error: #E48C70;
+}
+
 * { box-sizing: border-box; }
 
 html, body {

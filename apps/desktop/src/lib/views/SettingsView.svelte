@@ -4,6 +4,15 @@
   import { sessionsState, persistError, SESSIONS_STORAGE_KEY, RULES_STORAGE_KEY } from '$lib/state/sessions.svelte';
   import { layoutState } from '$lib/state/layout.svelte';
   import { notify, notifyError } from '$lib/state/toaster.svelte';
+  import { themeState, applyTheme, type ThemeName } from '$lib/state/theme.svelte';
+
+  /* Theme picker. Each entry encodes a tiny preview swatch (bg, text,
+     accent) so the user can eyeball the palette without applying. */
+  const THEMES: { name: ThemeName; label: string; sub: string; bg: string; fg: string; accent: string }[] = [
+    { name: 'iconic', label: 'Iconic', sub: 'Molten gold on graphite', bg: '#0C1117', fg: '#EDE5D1', accent: '#E8A33A' },
+    { name: 'light',  label: 'Light',  sub: 'Tint cream + Shade chocolate', bg: '#FAEEE0', fg: '#2A1208', accent: '#4E2812' },
+    { name: 'dark',   label: 'Dark',   sub: 'Shade chocolate + Tint cream', bg: '#1A0E07', fg: '#FAEEE0', accent: '#FAEEE0' }
+  ];
 
   /** 14 days in seconds — matches the SPEC §worktrees retention rule. */
   const ORPHAN_AGE_SECS = 14 * 24 * 60 * 60;
@@ -200,6 +209,34 @@
       </div>
     </div>
 
+    <!-- Theme picker -->
+    <div class="card">
+      <header class="card-head">
+        <h2 class="card-title">Theme</h2>
+        <p class="card-sub">
+          Pick a colour palette. Layout, fonts and spacing stay the same — only colours flip.
+        </p>
+      </header>
+      <div class="theme-grid">
+        {#each THEMES as t (t.name)}
+          <button
+            class="theme-card"
+            class:active={themeState.name === t.name}
+            onclick={() => applyTheme(t.name)}
+            title={t.sub}
+            aria-pressed={themeState.name === t.name}
+          >
+            <span class="theme-swatch" style="background: {t.bg}; color: {t.fg};">
+              <span class="theme-swatch-dot" style="background: {t.accent};"></span>
+              <span class="theme-swatch-text">Aa</span>
+            </span>
+            <span class="theme-label">{t.label}</span>
+            <span class="theme-sub">{t.sub}</span>
+          </button>
+        {/each}
+      </div>
+    </div>
+
     <!-- Build / app info -->
     <div class="card">
       <header class="card-head">
@@ -276,4 +313,53 @@
   .card-actions {
     display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
   }
+
+  /* Theme picker — three side-by-side cards. The swatch shows the
+     palette literally so the user can compare at a glance: surface
+     colour as background, text colour for the "Aa" preview, accent
+     colour as a dot. */
+  .theme-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 10px;
+  }
+  .theme-card {
+    display: flex; flex-direction: column; gap: 6px;
+    padding: 14px;
+    background: var(--bg-2);
+    border: 1px solid var(--border-neutral);
+    border-radius: 10px;
+    text-align: left;
+    cursor: pointer;
+    transition: all 140ms;
+  }
+  .theme-card:hover {
+    border-color: var(--border-neutral-hi);
+    background: var(--bg-3);
+    transform: translateY(-1px);
+  }
+  .theme-card.active {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent), 0 4px 14px var(--accent-glow);
+  }
+  .theme-swatch {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 16px;
+    border-radius: 7px;
+    font-size: 22px; font-weight: 700;
+    border: 1px solid rgba(0, 0, 0, 0.12);
+  }
+  .theme-swatch-dot {
+    width: 14px; height: 14px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.08);
+  }
+  .theme-swatch-text { letter-spacing: -0.02em; }
+  .theme-label {
+    font-size: 13px; font-weight: 600; color: var(--text-0);
+    margin-top: 4px;
+  }
+  .theme-sub { font-size: 11.5px; color: var(--text-2); }
+  .theme-card.active .theme-label { color: var(--accent-bright); }
 </style>

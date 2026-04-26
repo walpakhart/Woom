@@ -101,6 +101,7 @@
     resetJiraInbox,
     setGithubMeLogin
   } from '$lib/state/inbox.svelte';
+  import { initTheme } from '$lib/state/theme.svelte';
   import { dragState, setDragPayload, type DragPayload } from '$lib/state/drag.svelte';
   import { attachDragChip } from '$lib/dragImage';
   import { notify, notifyError } from '$lib/state/toaster.svelte';
@@ -497,6 +498,10 @@
   });
 
   onMount(async () => {
+    /* Re-apply the persisted theme on boot — the SSR shell rendered
+       with default `:root` vars, this flips `<html data-theme="…">`
+       so the saved palette wins on first paint. */
+    initTheme();
     restorePanelState();
     // One-shot v1 → v2 migration: seed the legacy `forgehold:editor:root`
     // localStorage value into the first editor instance, ONLY if that
