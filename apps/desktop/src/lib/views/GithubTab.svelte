@@ -20,11 +20,14 @@
   } from '$lib/data';
   import { formatBytes } from '$lib/format';
   import { inboxState } from '$lib/state/inbox.svelte';
+  import {
+    githubTabState,
+    type RepoSection,
+    type RepoTab
+  } from '$lib/state/github-tab.svelte';
 
   type View = 'workbench' | 'githubTab' | 'jiraTab' | 'rules' | 'connections' | 'settings';
   type DetailTab = 'conversation' | 'commits' | 'files' | 'reviews' | 'checks';
-  type RepoSection = 'code' | 'pulls' | 'issues' | 'actions' | 'releases';
-  type RepoTab = 'open' | 'closed' | 'all';
 
   interface Props {
     connectedGithub: boolean;
@@ -71,50 +74,17 @@
     mergeDisabled
   }: Props = $props();
 
-  // Repositories state (owned by this component)
-  let repos = $state<Repository[]>([]);
-  let reposLoading = $state(false);
-  let reposError = $state<string | null>(null);
-  let selectedRepo = $state<Repository | null>(null);
-  let repoItems = $state<InboxItem[]>([]);
-  let repoItemsLoading = $state(false);
-  let repoItemsError = $state<string | null>(null);
-  let repoStateFilter = $state<RepoTab>('open');
-  let repoSection = $state<RepoSection>('pulls');
-  let workflowRuns = $state<WorkflowRun[]>([]);
-  let workflowRunsLoading = $state(false);
-  let workflowRunsError = $state<string | null>(null);
-  let repoReadme = $state<RepoReadme | null>(null);
-  let repoReadmeLoading = $state(false);
+  /* All GitHub-tab state lives in `githubTabState` so it survives the
+     component being unmounted and remounted on every view switch.
+     Otherwise the user loses their selected repo / open file / chosen
+     section every time they leave and come back to the tab. */
 
-  // Code tab — GitHub-style file browser state. `repoCodeBranch` falls back
-  // to the repo's default branch when we first enter a repo. `repoCodeTree`
-  // holds the recursive tree (GitHub returns the whole tree flat); the
-  // breadcrumb `repoCodePath` decides which directory level is rendered.
-  let repoCodeBranches = $state<RepoBranch[]>([]);
-  let repoCodeBranchesLoading = $state(false);
-  let repoCodeBranch = $state<string>('');
-  let repoCodeTree = $state<TreeEntry[]>([]);
-  let repoCodeTreeLoading = $state(false);
-  let repoCodeTreeError = $state<string | null>(null);
-  let repoCodePath = $state<string>(''); // '' = repo root
-  let repoCodeFile = $state<FileBlob | null>(null);
-  let repoCodeFileLoading = $state(false);
-  let repoCodeFileError = $state<string | null>(null);
+  const repoPulls = $derived(githubTabState.repoItems.filter((i) => i.is_pull_request));
+  const repoIssues = $derived(githubTabState.repoItems.filter((i) => !i.is_pull_request));
 
-  let repoReleases = $state<Release[]>([]);
-  let repoReleasesLoading = $state(false);
-  let repoReleasesError = $state<string | null>(null);
-
-  // In-flight workflow rerun / cancel guards (keyed by run id).
-  let runBusy = $state<Set<number>>(new Set());
-
-  const repoPulls = $derived(repoItems.filter((i) => i.is_pull_request));
-  const repoIssues = $derived(repoItems.filter((i) => !i.is_pull_request));
-
-  // Lazy-load repos when Repositories view opens.
+  // Lazy-load githubTabState.repos when Repositories view opens.
   $effect(() => {
-    if (connectedGithub && !repos.length && !reposLoading) {
+    if (connectedGithub && !githubTabState.repos.length && !githubTabState.reposLoading) {
       void loadRepos();
     }
   });
@@ -123,9 +93,9 @@
   // disconnect, but the state now lives here.
   $effect(() => {
     if (!connectedGithub) {
-      repos = [];
-      selectedRepo = null;
-      repoItems = [];
+      githubTabState.repos = [];
+      githubTabState.selectedRepo = null;
+      githubTabState.repoItems = [];
     }
   });
 
@@ -138,10 +108,10 @@
     const nav = inboxState.pendingRepoNav;
     if (!nav || !connectedGithub) return;
     void (async () => {
-      if (!repos.length && !reposLoading) {
+      if (!githubTabState.repos.length && !githubTabState.reposLoading) {
         await loadRepos();
       }
-      const target = repos.find(
+      const target = githubTabState.repos.find(
         (r) =>
           r.owner.toLowerCase() === nav.owner.toLowerCase() &&
           r.name.toLowerCase() === nav.repo.toLowerCase()
@@ -160,127 +130,127 @@
   });
 
   async function loadRepos() {
-    reposLoading = true;
-    reposError = null;
+    githubTabState.reposLoading = true;
+    githubTabState.reposError = null;
     try {
-      repos = await invoke<Repository[]>('github_list_repos');
+      githubTabState.repos = await invoke<Repository[]>('github_list_repos');
     } catch (e) {
-      reposError = typeof e === 'string' ? e : String(e);
+      githubTabState.reposError = typeof e === 'string' ? e : String(e);
     } finally {
-      reposLoading = false;
+      githubTabState.reposLoading = false;
     }
   }
 
   async function openRepo(repo: Repository) {
-    selectedRepo = repo;
-    repoItems = [];
-    repoItemsError = null;
+    githubTabState.selectedRepo = repo;
+    githubTabState.repoItems = [];
+    githubTabState.repoItemsError = null;
     // Clear per-repo caches so we don't flash the previous repo's tree/file
     // through before fresh data lands.
-    repoReadme = null;
-    repoCodeBranches = [];
-    repoCodeBranch = repo.default_branch;
-    repoCodeTree = [];
-    repoCodeTreeError = null;
-    repoCodePath = '';
-    repoCodeFile = null;
-    repoCodeFileError = null;
-    workflowRuns = [];
-    repoReleases = [];
+    githubTabState.repoReadme = null;
+    githubTabState.repoCodeBranches = [];
+    githubTabState.repoCodeBranch = repo.default_branch;
+    githubTabState.repoCodeTree = [];
+    githubTabState.repoCodeTreeError = null;
+    githubTabState.repoCodePath = '';
+    githubTabState.repoCodeFile = null;
+    githubTabState.repoCodeFileError = null;
+    githubTabState.workflowRuns = [];
+    githubTabState.repoReleases = [];
     await loadRepoItems();
   }
 
   async function loadRepoItems() {
-    if (!selectedRepo) return;
-    repoItemsLoading = true;
-    repoItemsError = null;
+    if (!githubTabState.selectedRepo) return;
+    githubTabState.repoItemsLoading = true;
+    githubTabState.repoItemsError = null;
     try {
-      repoItems = await invoke<InboxItem[]>('github_list_repo_items', {
-        owner: selectedRepo.owner,
-        repo: selectedRepo.name,
-        state: repoStateFilter
+      githubTabState.repoItems = await invoke<InboxItem[]>('github_list_repo_items', {
+        owner: githubTabState.selectedRepo.owner,
+        repo: githubTabState.selectedRepo.name,
+        state: githubTabState.repoStateFilter
       });
     } catch (e) {
-      repoItemsError = typeof e === 'string' ? e : String(e);
+      githubTabState.repoItemsError = typeof e === 'string' ? e : String(e);
     } finally {
-      repoItemsLoading = false;
+      githubTabState.repoItemsLoading = false;
     }
   }
 
   async function loadWorkflowRuns() {
-    if (!selectedRepo) return;
-    workflowRunsLoading = true;
-    workflowRunsError = null;
+    if (!githubTabState.selectedRepo) return;
+    githubTabState.workflowRunsLoading = true;
+    githubTabState.workflowRunsError = null;
     try {
-      workflowRuns = await invoke<WorkflowRun[]>('github_list_workflow_runs', {
-        owner: selectedRepo.owner,
-        repo: selectedRepo.name
+      githubTabState.workflowRuns = await invoke<WorkflowRun[]>('github_list_workflow_runs', {
+        owner: githubTabState.selectedRepo.owner,
+        repo: githubTabState.selectedRepo.name
       });
     } catch (e) {
-      workflowRunsError = typeof e === 'string' ? e : String(e);
+      githubTabState.workflowRunsError = typeof e === 'string' ? e : String(e);
     } finally {
-      workflowRunsLoading = false;
+      githubTabState.workflowRunsLoading = false;
     }
   }
 
   async function loadRepoReadme() {
-    if (!selectedRepo) return;
-    repoReadmeLoading = true;
+    if (!githubTabState.selectedRepo) return;
+    githubTabState.repoReadmeLoading = true;
     try {
-      repoReadme = await invoke<RepoReadme | null>('github_get_readme', {
-        owner: selectedRepo.owner,
-        repo: selectedRepo.name
+      githubTabState.repoReadme = await invoke<RepoReadme | null>('github_get_readme', {
+        owner: githubTabState.selectedRepo.owner,
+        repo: githubTabState.selectedRepo.name
       });
     } catch {
-      repoReadme = null;
+      githubTabState.repoReadme = null;
     } finally {
-      repoReadmeLoading = false;
+      githubTabState.repoReadmeLoading = false;
     }
   }
 
   function selectRepoSection(s: RepoSection) {
-    repoSection = s;
-    if (s === 'actions' && !workflowRuns.length && !workflowRunsLoading) void loadWorkflowRuns();
+    githubTabState.repoSection = s;
+    if (s === 'actions' && !githubTabState.workflowRuns.length && !githubTabState.workflowRunsLoading) void loadWorkflowRuns();
     if (s === 'code') {
-      if (!repoReadme && !repoReadmeLoading) void loadRepoReadme();
-      if (!repoCodeBranches.length && !repoCodeBranchesLoading) void loadRepoBranches();
-      if (!repoCodeTree.length && !repoCodeTreeLoading) void loadRepoTree();
+      if (!githubTabState.repoReadme && !githubTabState.repoReadmeLoading) void loadRepoReadme();
+      if (!githubTabState.repoCodeBranches.length && !githubTabState.repoCodeBranchesLoading) void loadRepoBranches();
+      if (!githubTabState.repoCodeTree.length && !githubTabState.repoCodeTreeLoading) void loadRepoTree();
     }
-    if (s === 'releases' && !repoReleases.length && !repoReleasesLoading) void loadReleases();
+    if (s === 'releases' && !githubTabState.repoReleases.length && !githubTabState.repoReleasesLoading) void loadReleases();
   }
 
   async function loadRepoBranches() {
-    if (!selectedRepo) return;
-    repoCodeBranchesLoading = true;
+    if (!githubTabState.selectedRepo) return;
+    githubTabState.repoCodeBranchesLoading = true;
     try {
-      repoCodeBranches = await invoke<RepoBranch[]>('github_list_repo_branches', {
-        owner: selectedRepo.owner,
-        repo: selectedRepo.name
+      githubTabState.repoCodeBranches = await invoke<RepoBranch[]>('github_list_repo_branches', {
+        owner: githubTabState.selectedRepo.owner,
+        repo: githubTabState.selectedRepo.name
       });
-      if (!repoCodeBranch) repoCodeBranch = selectedRepo.default_branch;
+      if (!githubTabState.repoCodeBranch) githubTabState.repoCodeBranch = githubTabState.selectedRepo.default_branch;
     } catch (e) {
       console.error('github_list_repo_branches', e);
     } finally {
-      repoCodeBranchesLoading = false;
+      githubTabState.repoCodeBranchesLoading = false;
     }
   }
 
   async function loadRepoTree() {
-    if (!selectedRepo) return;
-    const ref = repoCodeBranch || selectedRepo.default_branch;
-    repoCodeTreeLoading = true;
-    repoCodeTreeError = null;
+    if (!githubTabState.selectedRepo) return;
+    const ref = githubTabState.repoCodeBranch || githubTabState.selectedRepo.default_branch;
+    githubTabState.repoCodeTreeLoading = true;
+    githubTabState.repoCodeTreeError = null;
     try {
-      repoCodeTree = await invoke<TreeEntry[]>('github_list_tree', {
-        owner: selectedRepo.owner,
-        repo: selectedRepo.name,
+      githubTabState.repoCodeTree = await invoke<TreeEntry[]>('github_list_tree', {
+        owner: githubTabState.selectedRepo.owner,
+        repo: githubTabState.selectedRepo.name,
         reference: ref
       });
     } catch (e) {
-      repoCodeTreeError = typeof e === 'string' ? e : String(e);
-      repoCodeTree = [];
+      githubTabState.repoCodeTreeError = typeof e === 'string' ? e : String(e);
+      githubTabState.repoCodeTree = [];
     } finally {
-      repoCodeTreeLoading = false;
+      githubTabState.repoCodeTreeLoading = false;
     }
   }
 
@@ -291,7 +261,7 @@
     const prefix = path ? path + '/' : '';
     const seen = new Set<string>();
     const out: TreeEntry[] = [];
-    for (const e of repoCodeTree) {
+    for (const e of githubTabState.repoCodeTree) {
       if (!e.path.startsWith(prefix)) continue;
       const tail = e.path.slice(prefix.length);
       if (!tail) continue;
@@ -316,39 +286,39 @@
   }
 
   async function openRepoFile(entry: TreeEntry) {
-    if (!selectedRepo || entry.kind !== 'blob') return;
-    const ref = repoCodeBranch || selectedRepo.default_branch;
-    repoCodeFileLoading = true;
-    repoCodeFileError = null;
+    if (!githubTabState.selectedRepo || entry.kind !== 'blob') return;
+    const ref = githubTabState.repoCodeBranch || githubTabState.selectedRepo.default_branch;
+    githubTabState.repoCodeFileLoading = true;
+    githubTabState.repoCodeFileError = null;
     try {
-      repoCodeFile = await invoke<FileBlob>('github_get_file_content', {
-        owner: selectedRepo.owner,
-        repo: selectedRepo.name,
+      githubTabState.repoCodeFile = await invoke<FileBlob>('github_get_file_content', {
+        owner: githubTabState.selectedRepo.owner,
+        repo: githubTabState.selectedRepo.name,
         path: entry.path,
         reference: ref
       });
     } catch (e) {
-      repoCodeFileError = typeof e === 'string' ? e : String(e);
-      repoCodeFile = null;
+      githubTabState.repoCodeFileError = typeof e === 'string' ? e : String(e);
+      githubTabState.repoCodeFile = null;
     } finally {
-      repoCodeFileLoading = false;
+      githubTabState.repoCodeFileLoading = false;
     }
   }
 
   function repoCodeCloseFile() {
-    repoCodeFile = null;
-    repoCodeFileError = null;
+    githubTabState.repoCodeFile = null;
+    githubTabState.repoCodeFileError = null;
   }
 
   function repoCodeNavigate(path: string) {
-    repoCodePath = path;
+    githubTabState.repoCodePath = path;
     repoCodeCloseFile();
   }
 
   function switchRepoCodeBranch(branch: string) {
-    if (branch === repoCodeBranch) return;
-    repoCodeBranch = branch;
-    repoCodePath = '';
+    if (branch === githubTabState.repoCodeBranch) return;
+    githubTabState.repoCodeBranch = branch;
+    githubTabState.repoCodePath = '';
     repoCodeCloseFile();
     void loadRepoTree();
   }
@@ -368,53 +338,53 @@
   }
 
   async function loadReleases() {
-    if (!selectedRepo) return;
-    repoReleasesLoading = true;
-    repoReleasesError = null;
+    if (!githubTabState.selectedRepo) return;
+    githubTabState.repoReleasesLoading = true;
+    githubTabState.repoReleasesError = null;
     try {
-      repoReleases = await invoke<Release[]>('github_list_releases', {
-        owner: selectedRepo.owner,
-        repo: selectedRepo.name
+      githubTabState.repoReleases = await invoke<Release[]>('github_list_releases', {
+        owner: githubTabState.selectedRepo.owner,
+        repo: githubTabState.selectedRepo.name
       });
     } catch (e) {
-      repoReleasesError = typeof e === 'string' ? e : String(e);
+      githubTabState.repoReleasesError = typeof e === 'string' ? e : String(e);
     } finally {
-      repoReleasesLoading = false;
+      githubTabState.repoReleasesLoading = false;
     }
   }
 
   async function rerunWorkflow(runId: number) {
-    if (!selectedRepo) return;
-    runBusy.add(runId); runBusy = new Set(runBusy);
+    if (!githubTabState.selectedRepo) return;
+    githubTabState.runBusy.add(runId); githubTabState.runBusy = new Set(githubTabState.runBusy);
     try {
       await invoke('github_rerun_workflow', {
-        owner: selectedRepo.owner,
-        repo: selectedRepo.name,
+        owner: githubTabState.selectedRepo.owner,
+        repo: githubTabState.selectedRepo.name,
         runId
       });
       // Give GitHub a moment then refresh.
       setTimeout(() => void loadWorkflowRuns(), 1200);
     } catch (e) {
-      workflowRunsError = typeof e === 'string' ? e : String(e);
+      githubTabState.workflowRunsError = typeof e === 'string' ? e : String(e);
     } finally {
-      runBusy.delete(runId); runBusy = new Set(runBusy);
+      githubTabState.runBusy.delete(runId); githubTabState.runBusy = new Set(githubTabState.runBusy);
     }
   }
 
   async function cancelWorkflow(runId: number) {
-    if (!selectedRepo) return;
-    runBusy.add(runId); runBusy = new Set(runBusy);
+    if (!githubTabState.selectedRepo) return;
+    githubTabState.runBusy.add(runId); githubTabState.runBusy = new Set(githubTabState.runBusy);
     try {
       await invoke('github_cancel_workflow', {
-        owner: selectedRepo.owner,
-        repo: selectedRepo.name,
+        owner: githubTabState.selectedRepo.owner,
+        repo: githubTabState.selectedRepo.name,
         runId
       });
       setTimeout(() => void loadWorkflowRuns(), 1200);
     } catch (e) {
-      workflowRunsError = typeof e === 'string' ? e : String(e);
+      githubTabState.workflowRunsError = typeof e === 'string' ? e : String(e);
     } finally {
-      runBusy.delete(runId); runBusy = new Set(runBusy);
+      githubTabState.runBusy.delete(runId); githubTabState.runBusy = new Set(githubTabState.runBusy);
     }
   }
 
@@ -426,7 +396,7 @@
   // actions (e.g. merging a PR via the modal flow) without knowing about the
   // underlying state.
   export function refreshItems() {
-    if (selectedRepo) void loadRepoItems();
+    if (githubTabState.selectedRepo) void loadRepoItems();
   }
 </script>
 
@@ -435,26 +405,26 @@
     <div class="empty">
       <Sigil size={56} />
       <h2 class="empty-title">Connect GitHub first</h2>
-      <p class="empty-sub">Your repos will appear here once GitHub is connected.</p>
+      <p class="empty-sub">Your githubTabState.repos will appear here once GitHub is connected.</p>
       <button class="btn btn--primary" onclick={() => (view = 'connections')}>Set up connections</button>
     </div>
   </section>
-{:else if !selectedRepo}
-  <section class="repos-view">
-    <div class="repos-header">
+{:else if !githubTabState.selectedRepo}
+  <section class="githubTabState.repos-view">
+    <div class="githubTabState.repos-header">
       <h1 class="view-title">GitHub</h1>
       <p class="view-sub">Your accessible repositories. Click one to browse its pull requests and issues.</p>
     </div>
-    <div class="repos-body">
-      {#if reposLoading}
-        <div class="tab-state">Loading repos…</div>
-      {:else if reposError}
-        <div class="tab-state tab-state--error">{reposError} <button class="link-inline" onclick={() => loadRepos()}>Retry</button></div>
-      {:else if repos.length === 0}
-        <div class="tab-state">No repos found.</div>
+    <div class="githubTabState.repos-body">
+      {#if githubTabState.reposLoading}
+        <div class="tab-state">Loading githubTabState.repos…</div>
+      {:else if githubTabState.reposError}
+        <div class="tab-state tab-state--error">{githubTabState.reposError} <button class="link-inline" onclick={() => loadRepos()}>Retry</button></div>
+      {:else if githubTabState.repos.length === 0}
+        <div class="tab-state">No githubTabState.repos found.</div>
       {:else}
-        <div class="repos-grid">
-          {#each repos as r (r.id)}
+        <div class="githubTabState.repos-grid">
+          {#each githubTabState.repos as r (r.id)}
             <button class="repo-card" onclick={() => openRepo(r)}>
               <div class="repo-card-head">
                 <span class="repo-name mono">{r.full_name}</span>
@@ -478,62 +448,62 @@
 {:else}
   <section class="repo-detail">
     <header class="repo-detail-head">
-      <button class="back-btn" onclick={() => { selectedRepo = null; repoItems = []; }}>
+      <button class="back-btn" onclick={() => { githubTabState.selectedRepo = null; githubTabState.repoItems = []; }}>
         <svg class="i i-sm" viewBox="0 0 24 24"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
-        All repos
+        All githubTabState.repos
       </button>
-      <div class="repo-detail-title mono">{selectedRepo.full_name}</div>
-      {#if selectedRepo.description}
-        <div class="repo-detail-desc">{selectedRepo.description}</div>
+      <div class="repo-detail-title mono">{githubTabState.selectedRepo.full_name}</div>
+      {#if githubTabState.selectedRepo.description}
+        <div class="repo-detail-desc">{githubTabState.selectedRepo.description}</div>
       {/if}
       <div style="flex:1"></div>
-      <button class="btn btn--ghost" onclick={() => openBrowser(selectedRepo!.html_url)}>
+      <button class="btn btn--ghost" onclick={() => openBrowser(githubTabState.selectedRepo!.html_url)}>
         <svg class="i i-sm" viewBox="0 0 24 24"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /><path d="M15 3h6v6M10 14 21 3" /></svg>
         Open on GitHub
       </button>
     </header>
 
     <div class="repo-sections">
-      <button class="repo-section-tab" class:active={repoSection === 'code'} onclick={() => selectRepoSection('code')}>
+      <button class="repo-section-tab" class:active={githubTabState.repoSection === 'code'} onclick={() => selectRepoSection('code')}>
         <svg class="i i-sm" viewBox="0 0 24 24"><path d="M16 18l6-6-6-6M8 6l-6 6 6 6" /></svg>
         Code
       </button>
-      <button class="repo-section-tab" class:active={repoSection === 'pulls'} onclick={() => selectRepoSection('pulls')}>
+      <button class="repo-section-tab" class:active={githubTabState.repoSection === 'pulls'} onclick={() => selectRepoSection('pulls')}>
         <svg class="i i-sm" viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="M6 8.5v7M8.5 6h7a3 3 0 0 1 3 3v6.5"/></svg>
         Pull requests
         {#if repoPulls.length}<span class="repo-section-count mono">{repoPulls.length}</span>{/if}
       </button>
-      <button class="repo-section-tab" class:active={repoSection === 'issues'} onclick={() => selectRepoSection('issues')}>
+      <button class="repo-section-tab" class:active={githubTabState.repoSection === 'issues'} onclick={() => selectRepoSection('issues')}>
         <svg class="i i-sm" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/></svg>
         Issues
         {#if repoIssues.length}<span class="repo-section-count mono">{repoIssues.length}</span>{/if}
       </button>
-      <button class="repo-section-tab" class:active={repoSection === 'actions'} onclick={() => selectRepoSection('actions')}>
+      <button class="repo-section-tab" class:active={githubTabState.repoSection === 'actions'} onclick={() => selectRepoSection('actions')}>
         <svg class="i i-sm" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3" /></svg>
         Actions
-        {#if workflowRuns.length}<span class="repo-section-count mono">{workflowRuns.length}</span>{/if}
+        {#if githubTabState.workflowRuns.length}<span class="repo-section-count mono">{githubTabState.workflowRuns.length}</span>{/if}
       </button>
-      <button class="repo-section-tab" class:active={repoSection === 'releases'} onclick={() => selectRepoSection('releases')}>
+      <button class="repo-section-tab" class:active={githubTabState.repoSection === 'releases'} onclick={() => selectRepoSection('releases')}>
         <svg class="i i-sm" viewBox="0 0 24 24"><path d="M20.59 13.41 13.42 20.58a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" /><line x1="7" y1="7" x2="7.01" y2="7" /></svg>
         Releases
-        {#if repoReleases.length}<span class="repo-section-count mono">{repoReleases.length}</span>{/if}
+        {#if githubTabState.repoReleases.length}<span class="repo-section-count mono">{githubTabState.repoReleases.length}</span>{/if}
       </button>
     </div>
 
-    {#if repoSection === 'code'}
+    {#if githubTabState.repoSection === 'code'}
       <!-- Pre-compute branch selector bits outside the dropdown. `{@const}`
            has to sit directly under a block tag, not inside arbitrary HTML
            — doing it here keeps the JSX clean. The branch dropdown surfaces
            the current branch explicitly as an option even when the API
            listing hasn't returned yet or doesn't contain it, so the trigger
            label always matches the actual selection. -->
-      {@const knownBranchNames = new Set(repoCodeBranches.map((b) => b.name))}
-      {@const currentBranch = repoCodeBranch || selectedRepo.default_branch}
+      {@const knownBranchNames = new Set(githubTabState.repoCodeBranches.map((b) => b.name))}
+      {@const currentBranch = githubTabState.repoCodeBranch || githubTabState.selectedRepo.default_branch}
       {@const branchOptions: DropdownOption<string>[] = [
         ...(currentBranch && !knownBranchNames.has(currentBranch)
           ? [{ value: currentBranch, label: currentBranch }]
           : []),
-        ...repoCodeBranches.map((b) => ({ value: b.name, label: b.name }))
+        ...githubTabState.repoCodeBranches.map((b) => ({ value: b.name, label: b.name }))
       ]}
       <div class="repo-code">
         <div class="repo-code-meta">
@@ -541,59 +511,59 @@
             value={currentBranch}
             options={branchOptions}
             onChange={(v) => switchRepoCodeBranch(v)}
-            disabled={repoCodeBranchesLoading && !repoCodeBranches.length}
+            disabled={githubTabState.repoCodeBranchesLoading && !githubTabState.repoCodeBranches.length}
             ariaLabel="Switch branch"
             placeholder="Pick branch"
           />
-          {#if selectedRepo.language}<span class="repo-code-chip">{selectedRepo.language}</span>{/if}
-          <span class="repo-code-chip">★ {selectedRepo.stargazers_count}</span>
-          <span class="repo-code-chip">issues {selectedRepo.open_issues_count}</span>
-          {#if selectedRepo.private}<span class="repo-code-chip repo-code-chip--warn">private</span>{/if}
-          {#if selectedRepo.fork}<span class="repo-code-chip">fork</span>{/if}
-          {#if selectedRepo.archived}<span class="repo-code-chip repo-code-chip--warn">archived</span>{/if}
+          {#if githubTabState.selectedRepo.language}<span class="repo-code-chip">{githubTabState.selectedRepo.language}</span>{/if}
+          <span class="repo-code-chip">★ {githubTabState.selectedRepo.stargazers_count}</span>
+          <span class="repo-code-chip">issues {githubTabState.selectedRepo.open_issues_count}</span>
+          {#if githubTabState.selectedRepo.private}<span class="repo-code-chip repo-code-chip--warn">private</span>{/if}
+          {#if githubTabState.selectedRepo.fork}<span class="repo-code-chip">fork</span>{/if}
+          {#if githubTabState.selectedRepo.archived}<span class="repo-code-chip repo-code-chip--warn">archived</span>{/if}
         </div>
 
         <!-- Breadcrumb. Root gets the repo name so users never lose
              orientation after drilling into deep paths. -->
         <div class="repo-path-bar mono">
           <button class="repo-crumb" onclick={() => repoCodeNavigate('')} title="Back to root">
-            {selectedRepo.name}
+            {githubTabState.selectedRepo.name}
           </button>
-          {#each repoCodeCrumbs(repoCodePath) as crumb (crumb.path)}
+          {#each repoCodeCrumbs(githubTabState.repoCodePath) as crumb (crumb.path)}
             <span class="repo-crumb-sep">/</span>
             <button class="repo-crumb" onclick={() => repoCodeNavigate(crumb.path)}>{crumb.name}</button>
           {/each}
-          {#if repoCodeFile}
+          {#if githubTabState.repoCodeFile}
             <span class="repo-crumb-sep">·</span>
             <button class="repo-crumb repo-crumb--back" onclick={repoCodeCloseFile}>← back to tree</button>
           {/if}
         </div>
 
-        {#if repoCodeFile}
+        {#if githubTabState.repoCodeFile}
           <div class="repo-file-viewer">
             <div class="repo-file-head mono">
-              <span>{repoCodeFile.path}</span>
-              <span class="repo-file-size">{formatBytes(repoCodeFile.size)}</span>
+              <span>{githubTabState.repoCodeFile.path}</span>
+              <span class="repo-file-size">{formatBytes(githubTabState.repoCodeFile.size)}</span>
             </div>
-            {#if repoCodeFileLoading}
+            {#if githubTabState.repoCodeFileLoading}
               <div class="tab-state">Loading file…</div>
-            {:else if !repoCodeFile.is_text}
+            {:else if !githubTabState.repoCodeFile.is_text}
               <div class="tab-state">Binary file — preview not available.</div>
-            {:else if /\.md$/i.test(repoCodeFile.path)}
+            {:else if /\.md$/i.test(githubTabState.repoCodeFile.path)}
               <div class="repo-readme-body">
-                <Markdown source={repoCodeFile.content} />
+                <Markdown source={githubTabState.repoCodeFile.content} />
               </div>
             {:else}
-              <pre class="repo-file-source mono">{repoCodeFile.content}</pre>
+              <pre class="repo-file-source mono">{githubTabState.repoCodeFile.content}</pre>
             {/if}
           </div>
-        {:else if repoCodeTreeLoading && !repoCodeTree.length}
+        {:else if githubTabState.repoCodeTreeLoading && !githubTabState.repoCodeTree.length}
           <div class="tab-state">Loading tree…</div>
-        {:else if repoCodeTreeError}
-          <div class="tab-state tab-state--error">{repoCodeTreeError} <button class="link-inline" onclick={() => loadRepoTree()}>Retry</button></div>
+        {:else if githubTabState.repoCodeTreeError}
+          <div class="tab-state tab-state--error">{githubTabState.repoCodeTreeError} <button class="link-inline" onclick={() => loadRepoTree()}>Retry</button></div>
         {:else}
           <div class="repo-tree-list">
-            {#each repoCodeEntriesAtPath(repoCodePath) as entry (entry.path)}
+            {#each repoCodeEntriesAtPath(githubTabState.repoCodePath) as entry (entry.path)}
               {@const name = entry.path.split('/').pop() ?? entry.path}
               {#if entry.kind === 'notice'}
                 <div class="tab-state">
@@ -605,7 +575,7 @@
                   <span class="repo-tree-name mono">{name}</span>
                 </button>
               {:else}
-                <button class="repo-tree-row" onclick={() => openRepoFile(entry)} disabled={repoCodeFileLoading}>
+                <button class="repo-tree-row" onclick={() => openRepoFile(entry)} disabled={githubTabState.repoCodeFileLoading}>
                   <svg class="i i-sm repo-tree-icon repo-tree-icon--file" viewBox="0 0 24 24"><path d="M14 3v4a1 1 0 0 0 1 1h4M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z"/></svg>
                   <span class="repo-tree-name mono">{name}</span>
                   {#if entry.size}<span class="repo-tree-size mono">{formatBytes(entry.size)}</span>{/if}
@@ -616,35 +586,35 @@
             {/each}
           </div>
 
-          {#if repoCodePath === '' && repoReadme}
+          {#if githubTabState.repoCodePath === '' && githubTabState.repoReadme}
             <div class="repo-readme">
-              <div class="repo-readme-head mono">{repoReadme.name}</div>
+              <div class="repo-readme-head mono">{githubTabState.repoReadme.name}</div>
               <div class="repo-readme-body">
-                <Markdown source={repoReadme.content} />
+                <Markdown source={githubTabState.repoReadme.content} />
               </div>
             </div>
           {/if}
         {/if}
       </div>
-    {:else if repoSection === 'actions'}
+    {:else if githubTabState.repoSection === 'actions'}
       <div class="repo-actions-head">
         <span class="view-sub">Recent workflow runs (last 30)</span>
         <div style="flex:1"></div>
-        <button class="icon-btn" onclick={() => loadWorkflowRuns()} title="Refresh" aria-label="Refresh" disabled={workflowRunsLoading}>
+        <button class="icon-btn" onclick={() => loadWorkflowRuns()} title="Refresh" aria-label="Refresh" disabled={githubTabState.workflowRunsLoading}>
           <svg class="i i-sm" viewBox="0 0 24 24"><path d="M21 12a9 9 0 0 1-9 9 9 9 0 0 1-8.5-6" /><path d="M3 12a9 9 0 0 1 9-9 9 9 0 0 1 8.5 6" /><polyline points="21 3 21 9 15 9" /><polyline points="3 21 3 15 9 15" /></svg>
         </button>
       </div>
       <div class="repo-items-list">
-        {#if workflowRunsLoading && !workflowRuns.length}
+        {#if githubTabState.workflowRunsLoading && !githubTabState.workflowRuns.length}
           <div class="tab-state">Loading workflow runs…</div>
-        {:else if workflowRunsError}
-          <div class="tab-state tab-state--error">{workflowRunsError} <button class="link-inline" onclick={() => loadWorkflowRuns()}>Retry</button></div>
-        {:else if workflowRuns.length === 0}
+        {:else if githubTabState.workflowRunsError}
+          <div class="tab-state tab-state--error">{githubTabState.workflowRunsError} <button class="link-inline" onclick={() => loadWorkflowRuns()}>Retry</button></div>
+        {:else if githubTabState.workflowRuns.length === 0}
           <div class="tab-state">No workflow runs yet.</div>
         {:else}
-          {#each workflowRuns as run (run.id)}
+          {#each githubTabState.workflowRuns as run (run.id)}
             {@const running = run.status === 'in_progress' || run.status === 'queued' || run.status === 'waiting' || run.status === 'pending'}
-            {@const isBusy = runBusy.has(run.id)}
+            {@const isBusy = githubTabState.runBusy.has(run.id)}
             <div class="repo-run-row-wrap">
               <button class="repo-item-row repo-run-row" onclick={() => openBrowser(run.html_url)}>
                 <span class="mini-tag run-status run-status--{run.conclusion ?? run.status}">{run.conclusion ?? run.status}</span>
@@ -674,26 +644,26 @@
       </div>
     {:else}
       <div class="repo-tabs">
-        <button class="repo-tab" class:active={repoStateFilter === 'open'} onclick={() => { repoStateFilter = 'open'; loadRepoItems(); }}>Open</button>
-        <button class="repo-tab" class:active={repoStateFilter === 'closed'} onclick={() => { repoStateFilter = 'closed'; loadRepoItems(); }}>Closed</button>
-        <button class="repo-tab" class:active={repoStateFilter === 'all'} onclick={() => { repoStateFilter = 'all'; loadRepoItems(); }}>All</button>
+        <button class="repo-tab" class:active={githubTabState.repoStateFilter === 'open'} onclick={() => { githubTabState.repoStateFilter = 'open'; loadRepoItems(); }}>Open</button>
+        <button class="repo-tab" class:active={githubTabState.repoStateFilter === 'closed'} onclick={() => { githubTabState.repoStateFilter = 'closed'; loadRepoItems(); }}>Closed</button>
+        <button class="repo-tab" class:active={githubTabState.repoStateFilter === 'all'} onclick={() => { githubTabState.repoStateFilter = 'all'; loadRepoItems(); }}>All</button>
         <div style="flex:1"></div>
-        <button class="icon-btn" onclick={() => loadRepoItems()} title="Refresh" aria-label="Refresh" disabled={repoItemsLoading}>
-          <svg class="i i-sm" viewBox="0 0 24 24" style="transform: rotate({repoItemsLoading ? 360 : 0}deg); transition: transform 0.6s;">
+        <button class="icon-btn" onclick={() => loadRepoItems()} title="Refresh" aria-label="Refresh" disabled={githubTabState.repoItemsLoading}>
+          <svg class="i i-sm" viewBox="0 0 24 24" style="transform: rotate({githubTabState.repoItemsLoading ? 360 : 0}deg); transition: transform 0.6s;">
             <path d="M21 12a9 9 0 0 1-9 9 9 9 0 0 1-8.5-6" /><path d="M3 12a9 9 0 0 1 9-9 9 9 0 0 1 8.5 6" />
             <polyline points="21 3 21 9 15 9" /><polyline points="3 21 3 15 9 15" />
           </svg>
         </button>
       </div>
 
-      {@const list = repoSection === 'pulls' ? repoPulls : repoIssues}
+      {@const list = githubTabState.repoSection === 'pulls' ? repoPulls : repoIssues}
       <div class="repo-items-list">
-        {#if repoItemsLoading && !repoItems.length}
+        {#if githubTabState.repoItemsLoading && !githubTabState.repoItems.length}
           <div class="tab-state">Loading…</div>
-        {:else if repoItemsError}
-          <div class="tab-state tab-state--error">{repoItemsError} <button class="link-inline" onclick={() => loadRepoItems()}>Retry</button></div>
+        {:else if githubTabState.repoItemsError}
+          <div class="tab-state tab-state--error">{githubTabState.repoItemsError} <button class="link-inline" onclick={() => loadRepoItems()}>Retry</button></div>
         {:else if list.length === 0}
-          <div class="tab-state">No {repoStateFilter} {repoSection === 'pulls' ? 'pull requests' : 'issues'}.</div>
+          <div class="tab-state">No {githubTabState.repoStateFilter} {githubTabState.repoSection === 'pulls' ? 'pull requests' : 'issues'}.</div>
         {:else}
           {#each list as item (item.id)}
             {@const stag = stateTag(item)}
@@ -777,11 +747,11 @@
   .mono { font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', monospace; }
 
   /* Repo-specific styles (moved wholesale from +page.svelte). */
-  .repos-view { overflow-y: auto; flex: 1 1 0; min-height: 0; }
-  .repos-header { padding: 48px 56px 20px; text-align: center; }
-  .repos-body { padding: 20px 56px 100px; max-width: 1100px; margin: 0 auto; width: 100%; }
+  .githubTabState.repos-view { overflow-y: auto; flex: 1 1 0; min-height: 0; }
+  .githubTabState.repos-header { padding: 48px 56px 20px; text-align: center; }
+  .githubTabState.repos-body { padding: 20px 56px 100px; max-width: 1100px; margin: 0 auto; width: 100%; }
 
-  .repos-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 10px; }
+  .githubTabState.repos-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 10px; }
   .repo-card {
     padding: 16px 18px;
     background: var(--bg-1); border: 1px solid var(--border-neutral);
