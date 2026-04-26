@@ -1,5 +1,6 @@
 <script lang="ts">
   import { modalsState, closeModal } from '$lib/state/modals.svelte';
+  import { connectionsMeta } from '$lib/data';
 
   interface Props {
     openBrowser: (url: string) => void | Promise<void>;
@@ -9,6 +10,7 @@
   let { openBrowser, claudeInstallUrl, onRefresh }: Props = $props();
 
   const m = $derived(modalsState.claudeStatus);
+  const claudeMeta = connectionsMeta.find((c) => c.id === 'claude')!;
 </script>
 
 {#if m}
@@ -23,7 +25,9 @@
   >
     <div class="modal modal-wide">
       <header class="modal-head">
-        <span class="conn-icon conn-icon--claude">C</span>
+        <span class="conn-icon conn-icon--claude conn-icon--svg">
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">{@html claudeMeta.iconSvg}</svg>
+        </span>
         <div>
           <div class="modal-title">Claude Code</div>
           <div class="modal-sub">Authentication managed by the <code class="mono">claude</code> CLI</div>

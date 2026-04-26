@@ -1,5 +1,6 @@
 <script lang="ts">
   import { modalsState, closeModal } from '$lib/state/modals.svelte';
+  import { connectionsMeta } from '$lib/data';
 
   interface Props {
     openBrowser: (url: string) => void | Promise<void>;
@@ -11,6 +12,7 @@
   let { openBrowser, cursorInstallUrl, onRefresh }: Props = $props();
 
   const m = $derived(modalsState.cursorStatus);
+  const cursorMeta = connectionsMeta.find((c) => c.id === 'cursor')!;
 </script>
 
 {#if m}
@@ -25,7 +27,9 @@
   >
     <div class="modal modal-wide">
       <header class="modal-head">
-        <span class="conn-icon conn-icon--cursor">Cr</span>
+        <span class="conn-icon conn-icon--cursor conn-icon--svg">
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">{@html cursorMeta.iconSvg}</svg>
+        </span>
         <div>
           <div class="modal-title">Cursor</div>
           <div class="modal-sub">Authentication managed by the <code class="mono">cursor-agent</code> CLI</div>

@@ -3101,7 +3101,9 @@
                 {#if meta?.iconSvg}
                   <span class="pill-icon {meta.iconClass}"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">{@html meta.iconSvg}</svg></span>
                 {:else if kind === 'editor'}
-                  <span class="pill-icon pill-icon--editor"><svg viewBox="0 0 24 24"><path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z"/></svg></span>
+                  <!-- Folder icon — matches the EditorView header so the
+                       Editor's identity is the same in pill / column / tab. -->
+                  <span class="pill-icon pill-icon--editor"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v11a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-7L10 5H5a2 2 0 0 0-2 2z"/></svg></span>
                 {/if}
                 <span class="pill-label">{label}</span>
                 {#if count > 0}

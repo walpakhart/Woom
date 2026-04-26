@@ -10,11 +10,14 @@
   import { inboxState } from '$lib/state/inbox.svelte';
   import type { Mention } from '$lib/types';
   import {
+    connectionsMeta,
     relativeTime,
     type ClaudeStatus,
     type ConnectionStatus,
     type CursorStatus
   } from '$lib/data';
+  const claudeMeta = connectionsMeta.find((c) => c.id === 'claude')!;
+  const cursorMeta = connectionsMeta.find((c) => c.id === 'cursor')!;
   import { shortPath, shortenFsPath, shortRemote } from '$lib/format';
   import {
     sessionsState,
@@ -655,9 +658,13 @@
   <div class="wb-col-resize" class:snap-flash={layoutState.snapFlashInstanceId === instanceId} role="separator" aria-orientation="vertical" onpointerdown={(e) => startResizeById(instanceId, e)}></div>
   <div class="inbox-brand">
     {#if kind === 'claude'}
-      <span class="source-mark" style="color: var(--accent-bright); background: rgba(16, 185, 129, 0.12); border-color: rgba(16, 185, 129, 0.3);">{brandInitial}</span>
+      <span class="brand-icon conn-icon--claude conn-icon--svg" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="currentColor">{@html claudeMeta.iconSvg}</svg>
+      </span>
     {:else}
-      <span class="source-mark" style="color: #c7a8ff; background: rgba(176, 153, 246, 0.14); border-color: rgba(176, 153, 246, 0.35);">{brandInitial}</span>
+      <span class="brand-icon conn-icon--cursor conn-icon--svg" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="currentColor">{@html cursorMeta.iconSvg}</svg>
+      </span>
     {/if}
     <span class="brand-word">{brandLabel}</span>
     {#if inst?.name}<span class="bench-name mono" title="Bench id — use this to link from elsewhere">{inst.name}</span>{/if}
