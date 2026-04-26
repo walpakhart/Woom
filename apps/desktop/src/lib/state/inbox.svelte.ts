@@ -60,9 +60,11 @@ export interface GithubFilters {
   customUser: string;
 }
 
-/** Sprint filter: numeric sprint id, `'backlog'` to restrict to `sprint is EMPTY`,
- *  or `null` for no sprint constraint at all. */
-export type JiraSprintFilter = number | 'backlog' | null;
+/** A single sprint scope: a numeric sprint id, OR the literal
+ *  `'backlog'` for `sprint is EMPTY`. The filter holds an array of
+ *  these — UI lets the user toggle multiple sprints (and/or backlog)
+ *  on at once. */
+export type SprintScope = number | 'backlog';
 
 export interface JiraFilters {
   projectKey: string | null;
@@ -73,7 +75,12 @@ export interface JiraFilters {
    *  board (sprints belong to a board) and is hidden / cleared
    *  otherwise. Empty array = no board filter ("All boards"). */
   boardIds: number[];
-  sprintId: JiraSprintFilter;
+  /** Selected sprints (or backlog). Multi-select within a single
+   *  board — JQL becomes `sprint IN (id1, id2)`, plus an
+   *  `OR sprint is EMPTY` if backlog is in the mix. Empty array =
+   *  no sprint filter ("Any sprint"). Cleared whenever the board
+   *  set changes since sprint ids are board-scoped. */
+  sprintIds: SprintScope[];
   /** Literal workflow status name (`"BLOCKED"`, `"In Review"`, …) or `null`
    *  for "Any". When `null`, JQL does NOT constrain by resolution either —
    *  really show every ticket assigned to the user. */
@@ -170,7 +177,7 @@ const DEFAULT_GH_FILTERS: GithubFilters = {
 const DEFAULT_JIRA_FILTERS: JiraFilters = {
   projectKey: null,
   boardIds: [],
-  sprintId: null,
+  sprintIds: [],
   statusName: null,
   search: ''
 };
@@ -196,10 +203,21 @@ function readJiraFilters(): JiraFilters {
     const raw = localStorage.getItem(JIRA_FILTERS_KEY);
     if (!raw) return { ...DEFAULT_JIRA_FILTERS };
     const parsed = JSON.parse(raw);
-    const sprintRaw = parsed.sprintId;
-    let sprintId: JiraSprintFilter = null;
-    if (typeof sprintRaw === 'number') sprintId = sprintRaw;
-    else if (sprintRaw === 'backlog') sprintId = 'backlog';
+    // Migrate legacy single-sprint persisted shape (sprintId: number |
+    // 'backlog' | null) into the new array shape (sprintIds: SprintScope[]).
+    // Old single-sprint users land with [sprintId], new payload format
+    // uses sprintIds directly.
+    const sprintIdsRaw = parsed.sprintIds;
+    let sprintIds: SprintScope[] = [];
+    if (Array.isArray(sprintIdsRaw)) {
+      sprintIds = sprintIdsRaw.filter(
+        (v): v is SprintScope => typeof v === 'number' || v === 'backlog'
+      );
+    } else if (typeof parsed.sprintId === 'number') {
+      sprintIds = [parsed.sprintId];
+    } else if (parsed.sprintId === 'backlog') {
+      sprintIds = ['backlog'];
+    }
     // New payload shape persists a literal status name (or null for "Any").
     // Old payloads used a 4-value category enum (`any|todo|in_progress|done`)
     // under `status` — we can't reliably map those to a specific workflow
@@ -222,7 +240,7 @@ function readJiraFilters(): JiraFilters {
     return {
       projectKey: typeof parsed.projectKey === 'string' ? parsed.projectKey : null,
       boardIds,
-      sprintId,
+      sprintIds,
       statusName,
       search: typeof parsed.search === 'string' ? parsed.search : ''
     };
@@ -680,12 +698,23 @@ export function buildJiraJql(
   }
   // Sprint clause is per-board; only meaningful with exactly one board
   // selected. Multi-board scope drops it (UI hides the sprint dropdown
-  // in that case too — see JiraColumn.svelte).
-  if (filters.boardIds.length <= 1) {
-    if (filters.sprintId === 'backlog') {
-      parts.push('sprint is EMPTY');
-    } else if (typeof filters.sprintId === 'number') {
-      parts.push(`sprint = ${filters.sprintId}`);
+  // in that case too — see JiraColumn.svelte). Multi-sprint within
+  // one board fans out: numeric ids → `sprint IN (...)`, plus an
+  // OR for backlog if it's in the mix.
+  if (filters.boardIds.length <= 1 && filters.sprintIds.length > 0) {
+    const numeric = filters.sprintIds.filter((s): s is number => typeof s === 'number');
+    const includeBacklog = filters.sprintIds.includes('backlog');
+    const subParts: string[] = [];
+    if (numeric.length === 1) {
+      subParts.push(`sprint = ${numeric[0]}`);
+    } else if (numeric.length > 1) {
+      subParts.push(`sprint IN (${numeric.join(', ')})`);
+    }
+    if (includeBacklog) subParts.push('sprint is EMPTY');
+    if (subParts.length === 1) {
+      parts.push(subParts[0]);
+    } else if (subParts.length > 1) {
+      parts.push(`(${subParts.join(' OR ')})`);
     }
   }
   if (filters.statusName) {
@@ -721,7 +750,7 @@ export async function refreshJiraInbox({ silent = false }: { silent?: boolean } 
     const usingDefault =
       !f.projectKey &&
       f.boardIds.length === 0 &&
-      f.sprintId == null &&
+      f.sprintIds.length === 0 &&
       f.statusName == null &&
       !f.search.trim() &&
       !inboxState.jiraAssigneeAny;

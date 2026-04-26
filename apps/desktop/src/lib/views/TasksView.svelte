@@ -90,7 +90,7 @@
     updateJiraFilters({
       projectKey: p.key,
       boardIds: [],
-      sprintId: null,
+      sprintIds: [],
       statusName: null
     });
     inboxState.jiraBoardOptions = [];
@@ -103,7 +103,7 @@
     updateJiraFilters({
       projectKey: null,
       boardIds: [],
-      sprintId: null,
+      sprintIds: [],
       statusName: null
     });
     inboxState.jiraBoardOptions = [];
@@ -133,7 +133,7 @@
   function onBoardChange(value: string) {
     const next = inboxState.jiraFilters.boardIds.slice();
     if (!value) {
-      updateJiraFilters({ boardIds: [], sprintId: null });
+      updateJiraFilters({ boardIds: [], sprintIds: [] });
       inboxState.jiraSprintOptions = [];
       return;
     }
@@ -141,25 +141,42 @@
     const idx = next.indexOf(id);
     if (idx >= 0) next.splice(idx, 1);
     else next.push(id);
-    updateJiraFilters({ boardIds: next, sprintId: null });
+    updateJiraFilters({ boardIds: next, sprintIds: [] });
     inboxState.jiraSprintOptions = [];
     if (next.length === 1) void loadJiraSprints(next[0]);
   }
   function removeBoard(id: number) {
     const next = inboxState.jiraFilters.boardIds.filter((b) => b !== id);
-    updateJiraFilters({ boardIds: next, sprintId: null });
+    updateJiraFilters({ boardIds: next, sprintIds: [] });
     inboxState.jiraSprintOptions = [];
     if (next.length === 1) void loadJiraSprints(next[0]);
   }
   function boardLabel(id: number): string {
     return inboxState.jiraBoardOptions.find((b) => b.id === id)?.name ?? `#${id}`;
   }
+  /** Multi-select sprint toggle (mirror of JiraColumn). Picking the
+   *  empty option clears the whole set; picking a sprint toggles its
+   *  presence in `sprintIds`. */
   function onSprintChange(value: string) {
-    let sprintId: number | 'backlog' | null;
-    if (value === '') sprintId = null;
-    else if (value === 'backlog') sprintId = 'backlog';
-    else sprintId = Number(value);
-    updateJiraFilters({ sprintId });
+    if (value === '') {
+      updateJiraFilters({ sprintIds: [] });
+      return;
+    }
+    const next = inboxState.jiraFilters.sprintIds.slice();
+    const sprint: number | 'backlog' = value === 'backlog' ? 'backlog' : Number(value);
+    const idx = next.indexOf(sprint);
+    if (idx >= 0) next.splice(idx, 1);
+    else next.push(sprint);
+    updateJiraFilters({ sprintIds: next });
+  }
+  function removeSprint(sprint: number | 'backlog') {
+    updateJiraFilters({
+      sprintIds: inboxState.jiraFilters.sprintIds.filter((s) => s !== sprint)
+    });
+  }
+  function sprintLabel(sprint: number | 'backlog'): string {
+    if (sprint === 'backlog') return 'Backlog';
+    return inboxState.jiraSprintOptions.find((s) => s.id === sprint)?.name ?? `#${sprint}`;
   }
   function onStatusChange(value: string) {
     updateJiraFilters({ statusName: value ? value : null });
@@ -168,12 +185,9 @@
     updateJiraFilters({ search: (e.target as HTMLInputElement).value });
   }
 
-  const sprintSelectValue = $derived.by(() => {
-    const s = inboxState.jiraFilters.sprintId;
-    if (s === 'backlog') return 'backlog';
-    if (typeof s === 'number') return String(s);
-    return '';
-  });
+  // Multi-select dropdown — value resets to '' so the placeholder
+  // reflects the count and the selection lives in chips below.
+  const sprintSelectValue = '';
 
   const boardOptions = $derived<DropdownOption<string>[]>([
     { value: '', label: 'All boards' },
@@ -312,7 +326,9 @@
             onChange={onSprintChange}
             onOpen={onSprintOpen}
             ariaLabel="Sprint"
-            placeholder={inboxState.jiraSprintOptionsLoading ? 'Loading…' : 'Any sprint'}
+            placeholder={inboxState.jiraFilters.sprintIds.length === 0
+              ? (inboxState.jiraSprintOptionsLoading ? 'Loading…' : 'Any sprint')
+              : '+ Add another sprint'}
             width="200px"
           />
         </div>
@@ -361,15 +377,26 @@
       </button>
     </div>
 
-    {#if inboxState.jiraFilters.boardIds.length > 0}
+    {#if inboxState.jiraFilters.boardIds.length > 0 || inboxState.jiraFilters.sprintIds.length > 0}
       <div class="board-chips">
-        <span class="board-chips-label">Boards:</span>
-        {#each inboxState.jiraFilters.boardIds as bid (bid)}
-          <button class="board-chip" onclick={() => removeBoard(bid)} title="Remove board">
-            <span class="board-chip-name">{boardLabel(bid)}</span>
-            <svg class="i i-sm" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>
-          </button>
-        {/each}
+        {#if inboxState.jiraFilters.boardIds.length > 0}
+          <span class="board-chips-label">Boards:</span>
+          {#each inboxState.jiraFilters.boardIds as bid (bid)}
+            <button class="board-chip" onclick={() => removeBoard(bid)} title="Remove board">
+              <span class="board-chip-name">{boardLabel(bid)}</span>
+              <svg class="i i-sm" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>
+            </button>
+          {/each}
+        {/if}
+        {#if inboxState.jiraFilters.sprintIds.length > 0}
+          <span class="board-chips-label">Sprints:</span>
+          {#each inboxState.jiraFilters.sprintIds as sid (typeof sid === 'string' ? sid : `s-${sid}`)}
+            <button class="board-chip board-chip--sprint" onclick={() => removeSprint(sid)} title="Remove sprint">
+              <span class="board-chip-name">{sprintLabel(sid)}</span>
+              <svg class="i i-sm" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>
+            </button>
+          {/each}
+        {/if}
       </div>
     {/if}
 
@@ -586,6 +613,11 @@
     transition: background 100ms;
   }
   .board-chip:hover { background: rgba(232, 163, 58, 0.18); color: var(--text-0); }
+  .board-chip--sprint {
+    background: rgba(91, 124, 250, 0.14);
+    border-color: rgba(91, 124, 250, 0.28);
+  }
+  .board-chip--sprint:hover { background: rgba(91, 124, 250, 0.22); }
   .board-chip-name { white-space: nowrap; max-width: 200px; overflow: hidden; text-overflow: ellipsis; }
   .board-chip .i-sm { width: 11px; height: 11px; opacity: 0.6; }
   .board-chip:hover .i-sm { opacity: 1; }

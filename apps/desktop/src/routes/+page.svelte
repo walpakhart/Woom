@@ -2679,7 +2679,11 @@
       description: '',
       assigneeAccountId: '',
       sprints: inboxState.jiraSprintOptions,
-      sprintId: typeof active.sprintId === 'number' ? active.sprintId : null,
+      // Default the new-issue sprint to the first numeric sprint scope
+      // selected in the filter (multi-select: a created issue can only
+      // live in one sprint, so pick the first; null falls through if
+      // the user only had backlog selected or nothing).
+      sprintId: active.sprintIds.find((s): s is number => typeof s === 'number') ?? null,
       busy: false,
       error: null
     });

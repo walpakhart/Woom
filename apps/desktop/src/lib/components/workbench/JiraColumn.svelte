@@ -85,7 +85,7 @@
     const projectKey = value ? value : null;
     // Picking a project invalidates the board/sprint/status choices — status
     // names are project-specific, so the cached list is stale too.
-    updateJiraFilters({ projectKey, boardIds: [], sprintId: null, statusName: null });
+    updateJiraFilters({ projectKey, boardIds: [], sprintIds: [], statusName: null });
     inboxState.jiraBoardOptions = [];
     inboxState.jiraSprintOptions = [];
     invalidateJiraStatuses();
@@ -100,7 +100,7 @@
   function onBoardChange(value: string) {
     const next = inboxState.jiraFilters.boardIds.slice();
     if (!value) {
-      updateJiraFilters({ boardIds: [], sprintId: null });
+      updateJiraFilters({ boardIds: [], sprintIds: [] });
       inboxState.jiraSprintOptions = [];
       return;
     }
@@ -108,14 +108,14 @@
     const idx = next.indexOf(id);
     if (idx >= 0) next.splice(idx, 1);
     else next.push(id);
-    updateJiraFilters({ boardIds: next, sprintId: null });
+    updateJiraFilters({ boardIds: next, sprintIds: [] });
     inboxState.jiraSprintOptions = [];
     if (next.length === 1) void loadJiraSprints(next[0]);
   }
 
   function removeBoard(id: number) {
     const next = inboxState.jiraFilters.boardIds.filter((b) => b !== id);
-    updateJiraFilters({ boardIds: next, sprintId: null });
+    updateJiraFilters({ boardIds: next, sprintIds: [] });
     inboxState.jiraSprintOptions = [];
     if (next.length === 1) void loadJiraSprints(next[0]);
   }
@@ -145,14 +145,33 @@
     return Array.from(groups.entries()).map(([project, items]) => ({ project, items }));
   });
 
-  // Sprint dropdown value is a string for wire stability (numeric ids and
-  // the `'backlog'` literal both coexist). Empty string = "any".
+  /** Multi-select sprint toggle. Same shape as `onBoardChange`:
+   *  picking the empty "Any sprint" option clears the whole set;
+   *  picking a real sprint toggles its presence in `sprintIds`.
+   *  Numeric ids and the `'backlog'` literal coexist so the dropdown
+   *  uses string values to stay wire-stable. */
   function onSprintChange(value: string) {
-    let sprintId: number | 'backlog' | null;
-    if (value === '') sprintId = null;
-    else if (value === 'backlog') sprintId = 'backlog';
-    else sprintId = Number(value);
-    updateJiraFilters({ sprintId });
+    if (value === '') {
+      updateJiraFilters({ sprintIds: [] });
+      return;
+    }
+    const next = inboxState.jiraFilters.sprintIds.slice();
+    const sprint: number | 'backlog' = value === 'backlog' ? 'backlog' : Number(value);
+    const idx = next.indexOf(sprint);
+    if (idx >= 0) next.splice(idx, 1);
+    else next.push(sprint);
+    updateJiraFilters({ sprintIds: next });
+  }
+
+  function removeSprint(sprint: number | 'backlog') {
+    updateJiraFilters({
+      sprintIds: inboxState.jiraFilters.sprintIds.filter((s) => s !== sprint)
+    });
+  }
+
+  function sprintLabel(sprint: number | 'backlog'): string {
+    if (sprint === 'backlog') return 'Backlog';
+    return inboxState.jiraSprintOptions.find((s) => s.id === sprint)?.name ?? `#${sprint}`;
   }
 
   function onStatusChange(value: string) {
@@ -164,12 +183,11 @@
     updateJiraFilters({ search: value });
   }
 
-  const sprintSelectValue = $derived.by(() => {
-    const s = inboxState.jiraFilters.sprintId;
-    if (s === 'backlog') return 'backlog';
-    if (typeof s === 'number') return String(s);
-    return '';
-  });
+  // Sprint dropdown is multi-select like Board — value resets to ''
+  // so the dropdown's placeholder reflects the current selection
+  // count. Actual selection lives in `sprintIds` and is rendered as
+  // chips below.
+  const sprintSelectValue = '';
 
   const projectOptions = $derived<DropdownOption<string>[]>([
     { value: '', label: 'All projects' },
@@ -294,17 +312,25 @@
               onChange={onSprintChange}
               onOpen={onSprintOpen}
               ariaLabel="Sprint"
-              placeholder={inboxState.jiraSprintOptionsLoading ? 'Loading…' : 'Any sprint'}
+              placeholder={inboxState.jiraFilters.sprintIds.length === 0
+                ? (inboxState.jiraSprintOptionsLoading ? 'Loading…' : 'Any sprint')
+                : '+ Add another sprint'}
               width="100%"
             />
           </div>
         {/if}
       </div>
-      {#if inboxState.jiraFilters.boardIds.length > 0}
+      {#if inboxState.jiraFilters.boardIds.length > 0 || inboxState.jiraFilters.sprintIds.length > 0}
         <div class="board-chips">
           {#each inboxState.jiraFilters.boardIds as bid (bid)}
             <button class="board-chip" onclick={() => removeBoard(bid)} title="Remove board">
               <span class="board-chip-name">{boardLabel(bid)}</span>
+              <svg class="i i-sm" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>
+            </button>
+          {/each}
+          {#each inboxState.jiraFilters.sprintIds as sid (typeof sid === 'string' ? sid : `s-${sid}`)}
+            <button class="board-chip board-chip--sprint" onclick={() => removeSprint(sid)} title="Remove sprint">
+              <span class="board-chip-name">{sprintLabel(sid)}</span>
               <svg class="i i-sm" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>
             </button>
           {/each}
@@ -493,6 +519,16 @@
   .board-chip:hover {
     background: rgba(232, 163, 58, 0.18);
     color: var(--text-0);
+  }
+  /* Sprint chips share the same shape as board chips but with a
+     cooler-toned background so the user can tell at a glance which
+     dimension a chip is in. */
+  .board-chip--sprint {
+    background: rgba(91, 124, 250, 0.14);
+    border-color: rgba(91, 124, 250, 0.28);
+  }
+  .board-chip--sprint:hover {
+    background: rgba(91, 124, 250, 0.22);
   }
   .board-chip-name { white-space: nowrap; max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
   .board-chip .i-sm { width: 11px; height: 11px; opacity: 0.6; }
