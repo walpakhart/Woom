@@ -3102,6 +3102,14 @@
                 {#if count > 0}
                   <span class="pill-count mono">{count}</span>
                 {/if}
+                {#if archived.length > 0}
+                  <span
+                    class="pill-count pill-count--archived mono"
+                    title={`${archived.length} archived — hover the menu to restore`}
+                  >
+                    {archived.length}
+                  </span>
+                {/if}
               </button>
               <button
                 class="pill-add"
@@ -3725,6 +3733,24 @@
     color: var(--text-1);
   }
   .pill-group.active .pill-count { background: var(--accent-soft); color: var(--accent-bright); }
+  /* Archived counter — dotted border + transparent fill so it reads as
+     "in storage, not running" next to the solid live counter. The
+     non-active fallback for `.pill-count` is `var(--bg-3)`; we override
+     it to transparent and replace with a dotted ring. */
+  .pill-count--archived {
+    background: transparent;
+    border: 1px dotted var(--text-mute);
+    color: var(--text-mute);
+    /* `border` adds 2px to width/height — shrink min-width to keep the
+       ring the same overall diameter as the live counter. */
+    min-width: 14px; height: 14px;
+    padding: 0 5px;
+  }
+  .pill-group.active .pill-count--archived {
+    background: transparent;
+    border-color: var(--accent-bright);
+    color: var(--accent-bright);
+  }
   .pill-add {
     display: inline-flex; align-items: center; justify-content: center;
     width: 26px;
