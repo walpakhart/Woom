@@ -82,7 +82,7 @@
   const repoPulls = $derived(githubTabState.repoItems.filter((i) => i.is_pull_request));
   const repoIssues = $derived(githubTabState.repoItems.filter((i) => !i.is_pull_request));
 
-  // Lazy-load githubTabState.repos when Repositories view opens.
+  // Lazy-load repos when Repositories view opens.
   $effect(() => {
     if (connectedGithub && !githubTabState.repos.length && !githubTabState.reposLoading) {
       void loadRepos();
@@ -405,25 +405,25 @@
     <div class="empty">
       <Sigil size={56} />
       <h2 class="empty-title">Connect GitHub first</h2>
-      <p class="empty-sub">Your githubTabState.repos will appear here once GitHub is connected.</p>
+      <p class="empty-sub">Your repos will appear here once GitHub is connected.</p>
       <button class="btn btn--primary" onclick={() => (view = 'connections')}>Set up connections</button>
     </div>
   </section>
 {:else if !githubTabState.selectedRepo}
-  <section class="githubTabState.repos-view">
-    <div class="githubTabState.repos-header">
+  <section class="repos-view">
+    <div class="repos-header">
       <h1 class="view-title">GitHub</h1>
       <p class="view-sub">Your accessible repositories. Click one to browse its pull requests and issues.</p>
     </div>
-    <div class="githubTabState.repos-body">
+    <div class="repos-body">
       {#if githubTabState.reposLoading}
-        <div class="tab-state">Loading githubTabState.repos…</div>
+        <div class="tab-state">Loading repos…</div>
       {:else if githubTabState.reposError}
         <div class="tab-state tab-state--error">{githubTabState.reposError} <button class="link-inline" onclick={() => loadRepos()}>Retry</button></div>
       {:else if githubTabState.repos.length === 0}
-        <div class="tab-state">No githubTabState.repos found.</div>
+        <div class="tab-state">No repos found.</div>
       {:else}
-        <div class="githubTabState.repos-grid">
+        <div class="repos-grid">
           {#each githubTabState.repos as r (r.id)}
             <button class="repo-card" onclick={() => openRepo(r)}>
               <div class="repo-card-head">
@@ -450,7 +450,7 @@
     <header class="repo-detail-head">
       <button class="back-btn" onclick={() => { githubTabState.selectedRepo = null; githubTabState.repoItems = []; }}>
         <svg class="i i-sm" viewBox="0 0 24 24"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
-        All githubTabState.repos
+        All repos
       </button>
       <div class="repo-detail-title mono">{githubTabState.selectedRepo.full_name}</div>
       {#if githubTabState.selectedRepo.description}
@@ -747,11 +747,11 @@
   .mono { font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', monospace; }
 
   /* Repo-specific styles (moved wholesale from +page.svelte). */
-  .githubTabState.repos-view { overflow-y: auto; flex: 1 1 0; min-height: 0; }
-  .githubTabState.repos-header { padding: 48px 56px 20px; text-align: center; }
-  .githubTabState.repos-body { padding: 20px 56px 100px; max-width: 1100px; margin: 0 auto; width: 100%; }
+  .repos-view { overflow-y: auto; flex: 1 1 0; min-height: 0; }
+  .repos-header { padding: 48px 56px 20px; text-align: center; }
+  .repos-body { padding: 20px 56px 100px; max-width: 1100px; margin: 0 auto; width: 100%; }
 
-  .githubTabState.repos-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 10px; }
+  .repos-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 10px; }
   .repo-card {
     padding: 16px 18px;
     background: var(--bg-1); border: 1px solid var(--border-neutral);

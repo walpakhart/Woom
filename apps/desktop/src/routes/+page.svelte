@@ -3077,7 +3077,7 @@
             <div
               class="pill-group"
               class:active={inCurrent}
-              class:dim={count === 0}
+              class:dim={count === 0 && archived.length === 0}
               class:has-menu={count > 0 || archived.length > 0}
               class:drag-over={pillDragOverKind === kind && pillDragOverInstance === null}
               class:drag-armed={pillDragOverKind === kind}
