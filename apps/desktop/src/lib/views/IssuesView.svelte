@@ -49,15 +49,18 @@
     }
   });
 
+  // Same `didAutoLoad`-style guard as SentryColumn: an empty success
+  // response would otherwise re-trigger this effect forever
+  // (items=[], loading=false, error=null is identical to the
+  // pre-load state). Refresh on project switch is handled by
+  // openProject directly.
+  let lastFetchedProjectKey = $state<string | null>(null);
   $effect(() => {
     if (!selectedProject) return;
-    if (
-      inboxState.sentryItems.length === 0 &&
-      !inboxState.sentryItemsLoading &&
-      !inboxState.sentryItemsError
-    ) {
-      void refreshSentryInbox({ silent: false });
-    }
+    if (lastFetchedProjectKey === selectedProject.slug) return;
+    if (inboxState.sentryItemsLoading) return;
+    lastFetchedProjectKey = selectedProject.slug;
+    void refreshSentryInbox({ silent: false });
   });
 
   function openProject(p: SentryProject) {

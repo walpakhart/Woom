@@ -49,17 +49,21 @@
   const inst = $derived(activeInstances().find((i) => i.id === instanceId));
   const order = $derived(activeInstances().findIndex((i) => i.id === instanceId));
 
-  // Auto-load on mount when connected. Subsequent refreshes are user-driven
-  // via the refresh button in the column header; no polling for now.
+  // Auto-load on mount when connected. The local `didAutoLoad` flag
+  // avoids an infinite refetch loop: without it, an empty success
+  // response (filters too restrictive, no issues match) would land
+  // with items=[], loading=false, error=null — exactly the same
+  // state as the pre-load condition, so the effect would fire
+  // refreshSentryInbox again, get empty again, repeat forever.
+  // Subsequent refreshes are user-driven via the column's refresh
+  // button or filter changes.
+  let didAutoLoad = $state(false);
   $effect(() => {
     if (sentryStatus.kind !== 'connected') return;
-    if (
-      inboxState.sentryItems.length === 0 &&
-      !inboxState.sentryItemsLoading &&
-      !inboxState.sentryItemsError
-    ) {
-      void refreshSentryInbox({ silent: false });
-    }
+    if (didAutoLoad) return;
+    if (inboxState.sentryItemsLoading) return;
+    didAutoLoad = true;
+    void refreshSentryInbox({ silent: false });
   });
 
   // Lazy-load project + env dropdowns the first time they're shown.
