@@ -357,7 +357,12 @@
           </div>
           <Splitter direction="vertical" persistKey="editor-left" initial={380} min={140} max={900}>
             {#snippet start()}
-              <FileTree rootPath={repoPath} selectedPath={activePath} onSelect={openFile} {gitStatusByPath} />
+              <FileTree
+                rootPath={repoPath}
+                selectedPath={diffTarget ? `${repoPath}/${diffTarget.path}` : activePath}
+                onSelect={openFile}
+                {gitStatusByPath}
+              />
             {/snippet}
             {#snippet end()}
               <GitPanel bind:this={gitPanel} repo={repoPath} onStatusChange={onGitStatusChange} onOpenDiff={openDiff} aiKind={linkedAiKind} />

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { setDragPayload } from '$lib/state/drag.svelte';
   import { attachDragChip } from '$lib/dragImage';
@@ -18,6 +19,11 @@
   let items = $state<Item[]>([]);
   let loading = $state(false);
   let error = $state<string | null>(null);
+  let treeContainer = $state<HTMLDivElement | null>(null);
+  // Path we last revealed — guards against re-running the expand-and-scroll
+  // dance on every reactive flicker (e.g. an unrelated state update). Reset
+  // when rootPath changes (new repo → forget what we revealed in the old).
+  let lastRevealed = $state('');
 
   /** Batch-check `paths` against the repo's gitignore rules. Returns a Set
       of ignored absolute paths. Silent on failure (non-git dir, transient
@@ -93,7 +99,48 @@
     ];
   }
 
-  $effect(() => { void loadRoot(); });
+  $effect(() => { void loadRoot(); lastRevealed = ''; });
+
+  /** Walk from `rootPath` down to `target`, expanding every parent
+   *  folder that's collapsed along the way. Top-down so each toggle's
+   *  freshly-fetched children become findable for the next iteration.
+   *  Top-level files (no nesting) and paths outside `rootPath` are
+   *  no-ops. After the tree settles we scroll the selected row into
+   *  view — same UX as VSCode's Reveal in Explorer. */
+  async function revealPath(target: string) {
+    if (!target || !rootPath) return;
+    if (!target.startsWith(rootPath + '/') && target !== rootPath) return;
+    const rel = target.slice(rootPath.length + 1);
+    const segments = rel.split('/').filter(Boolean);
+    let cur = rootPath;
+    // Expand every PARENT (skip the last segment — that's the target itself).
+    for (let i = 0; i < segments.length - 1; i++) {
+      cur = `${cur}/${segments[i]}`;
+      const idx = items.findIndex((it) => it.path === cur && it.is_dir);
+      // If a parent isn't in the tree yet, the previous toggle didn't
+      // produce it (might be hidden by a virtualised list later, or
+      // a race with rootPath reload). Bail rather than loop forever.
+      if (idx < 0) return;
+      if (!items[idx].expanded) {
+        await toggle(idx);
+      }
+    }
+    await tick();
+    const rowIdx = items.findIndex((it) => it.path === target);
+    if (rowIdx < 0 || !treeContainer) return;
+    const row = treeContainer.querySelectorAll('.tree-row')[rowIdx] as HTMLElement | undefined;
+    row?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }
+
+  /** Drive `revealPath` from the `selectedPath` prop. Skips no-op
+   *  re-runs (`lastRevealed === selectedPath`) so a brief unrelated
+   *  state churn doesn't re-walk the tree. */
+  $effect(() => {
+    if (!selectedPath || selectedPath === lastRevealed) return;
+    if (items.length === 0) return; // root not loaded yet — wait
+    lastRevealed = selectedPath;
+    void revealPath(selectedPath);
+  });
 
   function gitClass(code: string): string {
     switch (code) {
@@ -119,7 +166,7 @@
   }
 </script>
 
-<div class="tree">
+<div class="tree" bind:this={treeContainer}>
   {#if loading}<div class="tree-state">Loading…</div>{/if}
   {#if error}<div class="tree-state tree-error">{error}</div>{/if}
   {#each items as it, i (it.path)}
