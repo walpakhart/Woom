@@ -13,11 +13,11 @@
     loadSentryEnvironments,
     loadSentryProjects,
     openSentryFocus,
-    refreshSentryInbox,
-    scheduleSentryFilterRefresh
+    refreshSentryTabInbox,
+    scheduleSentryTabFilterRefresh
   } from '$lib/state/inbox.svelte';
 
-  type View = 'workbench' | 'repositories' | 'tasks' | 'issues' | 'rules' | 'connections' | 'settings';
+  type View = 'workbench' | 'githubTab' | 'jiraTab' | 'sentryTab' | 'rules' | 'connections' | 'settings';
 
   interface Props {
     sentryStatus: SentryStatus;
@@ -28,13 +28,16 @@
   let { sentryStatus, view = $bindable(), now }: Props = $props();
 
   // Drill-down model: zero projects selected = projects grid, one project
-  // selected = filtered issue list. Mirrors TasksView's projectKey pattern,
-  // but shares state with SentryColumn (a workbench bench picking a project
-  // also drives this view, and vice versa — that's intentional).
+  // selected = filtered issue list. Mirrors JiraTab's projectKey pattern.
+  // Issues tab keeps its own filter slice (`sentryTabProjects`,
+  // `sentryTabStatus`, etc.) so a project / status / level pick here
+  // does not yank the workbench SentryColumn out from under the user, and
+  // vice-versa. Project + environment OPTION caches stay shared since
+  // they're per-account static data, not user-picked filter state.
   const selectedProject = $derived<SentryProject | null>(
-    inboxState.sentryProjects.length === 1
+    inboxState.sentryTabProjects.length === 1
       ? inboxState.sentryProjectOptions.find(
-          (p) => p.slug === inboxState.sentryProjects[0]
+          (p) => p.slug === inboxState.sentryTabProjects[0]
         ) ?? null
       : null
   );
@@ -58,23 +61,24 @@
   $effect(() => {
     if (!selectedProject) return;
     if (lastFetchedProjectKey === selectedProject.slug) return;
-    if (inboxState.sentryItemsLoading) return;
+    if (inboxState.sentryTabItemsLoading) return;
     lastFetchedProjectKey = selectedProject.slug;
-    void refreshSentryInbox({ silent: false });
+    void refreshSentryTabInbox({ silent: false });
   });
 
   function openProject(p: SentryProject) {
-    inboxState.sentryProjects = [p.slug];
-    inboxState.sentryEnvironment = null;
+    inboxState.sentryTabProjects = [p.slug];
+    inboxState.sentryTabEnvironment = null;
     inboxState.sentryEnvironmentOptions = [];
+    scheduleSentryTabFilterRefresh();
     void loadSentryEnvironments();
-    void refreshSentryInbox({ silent: false });
   }
 
   function backToProjects() {
-    inboxState.sentryProjects = [];
-    inboxState.sentryEnvironment = null;
+    inboxState.sentryTabProjects = [];
+    inboxState.sentryTabEnvironment = null;
     inboxState.sentryEnvironmentOptions = [];
+    scheduleSentryTabFilterRefresh();
   }
 
   const envOpts = $derived<DropdownOption<string>[]>([
@@ -106,25 +110,29 @@
     { value: 'user', label: 'Users affected' }
   ];
 
+  /* Each filter pick goes through the schedule helper so the new
+     filter shape is both persisted (`forgehold:sentry-tab-filters:v1`)
+     and refreshed — the column has its own slice now and won't push
+     persisted state for us. */
   function pickEnvironment(name: string) {
-    inboxState.sentryEnvironment = name || null;
-    void refreshSentryInbox({ silent: true });
+    inboxState.sentryTabEnvironment = name || null;
+    scheduleSentryTabFilterRefresh();
   }
   function pickStatus(s: string) {
-    inboxState.sentryStatus = s as typeof inboxState.sentryStatus;
-    void refreshSentryInbox({ silent: true });
+    inboxState.sentryTabStatus = s as typeof inboxState.sentryTabStatus;
+    scheduleSentryTabFilterRefresh();
   }
   function pickLevel(l: string) {
-    inboxState.sentryLevel = l as typeof inboxState.sentryLevel;
-    void refreshSentryInbox({ silent: true });
+    inboxState.sentryTabLevel = l as typeof inboxState.sentryTabLevel;
+    scheduleSentryTabFilterRefresh();
   }
   function pickSort(s: string) {
-    inboxState.sentrySort = s as typeof inboxState.sentrySort;
-    void refreshSentryInbox({ silent: true });
+    inboxState.sentryTabSort = s as typeof inboxState.sentryTabSort;
+    scheduleSentryTabFilterRefresh();
   }
   function onSearchInput(e: Event) {
-    inboxState.sentrySearch = (e.target as HTMLInputElement).value;
-    scheduleSentryFilterRefresh();
+    inboxState.sentryTabSearch = (e.target as HTMLInputElement).value;
+    scheduleSentryTabFilterRefresh();
   }
 
   async function openBrowser(url: string) {
@@ -151,7 +159,7 @@
 {:else if !selectedProject}
   <section class="projects-view">
     <div class="projects-header">
-      <h1 class="view-title">Issues</h1>
+      <h1 class="view-title">Sentry</h1>
       <p class="view-sub">
         Sentry projects you're a member of. Pick one to browse its issues with
         live status, level and environment filters.
@@ -203,7 +211,7 @@
     <div class="project-filters">
       <div class="filter-cell">
         <Dropdown
-          value={inboxState.sentryStatus}
+          value={inboxState.sentryTabStatus}
           options={statusOpts}
           onChange={pickStatus}
           ariaLabel="Status"
@@ -212,7 +220,7 @@
       </div>
       <div class="filter-cell">
         <Dropdown
-          value={inboxState.sentryLevel}
+          value={inboxState.sentryTabLevel}
           options={levelOpts}
           onChange={pickLevel}
           ariaLabel="Level"
@@ -221,7 +229,7 @@
       </div>
       <div class="filter-cell">
         <Dropdown
-          value={inboxState.sentryEnvironment ?? ''}
+          value={inboxState.sentryTabEnvironment ?? ''}
           options={envOpts}
           onChange={pickEnvironment}
           ariaLabel="Environment"
@@ -231,7 +239,7 @@
       </div>
       <div class="filter-cell">
         <Dropdown
-          value={inboxState.sentrySort}
+          value={inboxState.sentryTabSort}
           options={sortOpts}
           onChange={pickSort}
           ariaLabel="Sort"
@@ -242,15 +250,15 @@
         class="filter-input"
         type="text"
         placeholder="Search title / tag:value…"
-        value={inboxState.sentrySearch}
+        value={inboxState.sentryTabSearch}
         oninput={onSearchInput}
-        onkeydown={(e) => { if (e.key === 'Enter') void refreshSentryInbox({ silent: false }); }}
+        onkeydown={(e) => { if (e.key === 'Enter') void refreshSentryTabInbox({ silent: false }); }}
         aria-label="Search Sentry issues"
       />
       <div style="flex:1"></div>
-      <span class="issues-count mono">{inboxState.sentryItems.length} issues</span>
-      <button class="icon-btn" onclick={() => refreshSentryInbox({ silent: true })} title="Refresh" aria-label="Refresh Sentry" disabled={inboxState.sentryItemsLoading}>
-        <svg class="i i-sm" viewBox="0 0 24 24" style="transform: rotate({inboxState.sentryItemsLoading ? 360 : 0}deg); transition: transform 0.6s;">
+      <span class="issues-count mono">{inboxState.sentryTabItems.length} issues</span>
+      <button class="icon-btn" onclick={() => refreshSentryTabInbox({ silent: true })} title="Refresh" aria-label="Refresh Sentry" disabled={inboxState.sentryTabItemsLoading}>
+        <svg class="i i-sm" viewBox="0 0 24 24" style="transform: rotate({inboxState.sentryTabItemsLoading ? 360 : 0}deg); transition: transform 0.6s;">
           <path d="M21 12a9 9 0 0 1-9 9 9 9 0 0 1-8.5-6" />
           <path d="M3 12a9 9 0 0 1 9-9 9 9 0 0 1 8.5 6" />
           <polyline points="21 3 21 9 15 9" />
@@ -260,17 +268,17 @@
     </div>
 
     <div class="issues-list">
-      {#if inboxState.sentryItemsLoading && inboxState.sentryItems.length === 0}
+      {#if inboxState.sentryTabItemsLoading && inboxState.sentryTabItems.length === 0}
         <div class="tab-state">Loading issues…</div>
-      {:else if inboxState.sentryItemsError}
+      {:else if inboxState.sentryTabItemsError}
         <div class="tab-state tab-state--error">
-          {inboxState.sentryItemsError}
-          <button class="link-inline" onclick={() => refreshSentryInbox({ silent: false })}>Retry</button>
+          {inboxState.sentryTabItemsError}
+          <button class="link-inline" onclick={() => refreshSentryTabInbox({ silent: false })}>Retry</button>
         </div>
-      {:else if inboxState.sentryItems.length === 0}
+      {:else if inboxState.sentryTabItems.length === 0}
         <div class="tab-state">No issues match the current filters.</div>
       {:else}
-        {#each inboxState.sentryItems as issue (issue.id)}
+        {#each inboxState.sentryTabItems as issue (issue.id)}
           <button class="issue-row" onclick={() => openSentryFocus(issue.id)}>
             <span class="mini-tag {sentryLevelClass(issue.level)}">{issue.level}</span>
             <span class="issue-id mono">{issue.short_id || issue.id}</span>

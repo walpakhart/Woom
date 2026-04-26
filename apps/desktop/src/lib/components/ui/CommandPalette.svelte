@@ -17,9 +17,9 @@
   import {
     inboxState,
     selectInboxItem,
-    updateJiraFilters,
+    updateJiraTabFilters,
     openSentryFocus,
-    scheduleSentryFilterRefresh
+    scheduleSentryTabFilterRefresh
   } from '$lib/state/inbox.svelte';
   import {
     layoutState,
@@ -66,9 +66,9 @@
 
   const VIEWS: { key: View; title: string; sub: string }[] = [
     { key: 'workbench', title: 'Workbench', sub: 'Active columns' },
-    { key: 'repositories', title: 'Repositories', sub: 'GitHub repos' },
-    { key: 'tasks', title: 'Tasks', sub: 'Jira board' },
-    { key: 'issues', title: 'Issues', sub: 'Sentry errors' },
+    { key: 'githubTab', title: 'GitHub', sub: 'Repositories' },
+    { key: 'jiraTab', title: 'Jira', sub: 'Issues / boards / projects' },
+    { key: 'sentryTab', title: 'Sentry', sub: 'Errors / events' },
     { key: 'rules', title: 'Rules', sub: 'Claude system prompts' },
     { key: 'connections', title: 'Connections', sub: 'GitHub / Jira / Sentry / etc.' },
     { key: 'settings', title: 'Settings', sub: '' }
@@ -211,7 +211,7 @@
               repo: repo.name,
               section: 'pulls'
             };
-            setView('repositories');
+            setView('githubTab');
             close();
           }
         }))
@@ -229,8 +229,11 @@
           subtitle: `Board · ${b.project_key ?? 'no project'}`,
           section: 'Jira boards',
           pick: () => {
-            updateJiraFilters({ boardIds: [b.id] });
-            setView('tasks');
+            /* Picking a board / project from the palette lands on the
+               Tasks tab, so we update the tab's filter slice (not the
+               column's — those are independent now). */
+            updateJiraTabFilters({ boardIds: [b.id] });
+            setView('jiraTab');
             close();
           }
         }))
@@ -248,8 +251,8 @@
           subtitle: `Project · ${p.key}`,
           section: 'Jira projects',
           pick: () => {
-            updateJiraFilters({ projectKey: p.key });
-            setView('tasks');
+            updateJiraTabFilters({ projectKey: p.key });
+            setView('jiraTab');
             close();
           }
         }))
@@ -267,9 +270,9 @@
           subtitle: `Sentry project · ${p.slug}`,
           section: 'Sentry projects',
           pick: () => {
-            inboxState.sentryProjects = [p.slug];
-            scheduleSentryFilterRefresh();
-            setView('issues');
+            inboxState.sentryTabProjects = [p.slug];
+            scheduleSentryTabFilterRefresh();
+            setView('sentryTab');
             close();
           }
         }))
@@ -294,43 +297,63 @@
         }))
     );
 
-    // 10. Jira issues
-    push(
-      inboxState.jiraItems
-        .filter((item) => matches(item.summary, item.key))
-        .map((item) => ({
-          key: `j:${item.id}`,
-          badge: 'J',
-          badgeKind: 'jira' as const,
-          title: item.summary,
-          subtitle: item.key,
-          section: 'Jira issues',
-          pick: () => {
-            inboxState.jiraFocusKey = item.key;
-            setView('workbench');
-            close();
-          }
-        }))
-    );
+    // 10. Jira issues — searches column items + tasks-tab items
+    //     (independent slices since the recent decoupling), deduped
+    //     by id so an issue loaded by both doesn't appear twice.
+    {
+      const seen = new Set<string>();
+      const merged: typeof inboxState.jiraItems = [];
+      for (const it of [...inboxState.jiraItems, ...inboxState.jiraTabItems]) {
+        if (seen.has(it.id)) continue;
+        seen.add(it.id);
+        merged.push(it);
+      }
+      push(
+        merged
+          .filter((item) => matches(item.summary, item.key))
+          .map((item) => ({
+            key: `j:${item.id}`,
+            badge: 'J',
+            badgeKind: 'jira' as const,
+            title: item.summary,
+            subtitle: item.key,
+            section: 'Jira issues',
+            pick: () => {
+              inboxState.jiraFocusKey = item.key;
+              setView('workbench');
+              close();
+            }
+          }))
+      );
+    }
 
-    // 11. Sentry issues
-    push(
-      inboxState.sentryItems
-        .filter((item) => matches(item.title, item.short_id))
-        .map((item) => ({
-          key: `s:${item.id}`,
-          badge: 'St',
-          badgeKind: 'sentry' as const,
-          title: item.title,
-          subtitle: item.short_id,
-          section: 'Sentry issues',
-          pick: () => {
-            openSentryFocus(item.id);
-            setView('workbench');
-            close();
-          }
-        }))
-    );
+    // 11. Sentry issues — same column + issues-tab merge.
+    {
+      const seen = new Set<string>();
+      const merged: typeof inboxState.sentryItems = [];
+      for (const it of [...inboxState.sentryItems, ...inboxState.sentryTabItems]) {
+        if (seen.has(it.id)) continue;
+        seen.add(it.id);
+        merged.push(it);
+      }
+      push(
+        merged
+          .filter((item) => matches(item.title, item.short_id))
+          .map((item) => ({
+            key: `s:${item.id}`,
+            badge: 'St',
+            badgeKind: 'sentry' as const,
+            title: item.title,
+            subtitle: item.short_id,
+            section: 'Sentry issues',
+            pick: () => {
+              openSentryFocus(item.id);
+              setView('workbench');
+              close();
+            }
+          }))
+      );
+    }
 
     return r;
   });

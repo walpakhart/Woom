@@ -12,9 +12,9 @@
   import RulesView from '$lib/views/RulesView.svelte';
   import ConnectionsView from '$lib/views/ConnectionsView.svelte';
   import SettingsView from '$lib/views/SettingsView.svelte';
-  import RepositoriesView from '$lib/views/RepositoriesView.svelte';
-  import TasksView from '$lib/views/TasksView.svelte';
-  import IssuesView from '$lib/views/IssuesView.svelte';
+  import GithubTab from '$lib/views/GithubTab.svelte';
+  import JiraTab from '$lib/views/JiraTab.svelte';
+  import SentryTab from '$lib/views/SentryTab.svelte';
   import CommandPalette from '$lib/components/ui/CommandPalette.svelte';
   import ModalsRoot from '$lib/components/modals/ModalsRoot.svelte';
   import GithubColumn from '$lib/components/workbench/GithubColumn.svelte';
@@ -133,7 +133,7 @@
   } from '$lib/data';
   import { basename, formatToolUse, isImagePath, truncInline } from '$lib/format';
 
-  type View = 'workbench' | 'repositories' | 'tasks' | 'issues' | 'rules' | 'connections' | 'settings';
+  type View = 'workbench' | 'githubTab' | 'jiraTab' | 'sentryTab' | 'rules' | 'connections' | 'settings';
   type DetailTab = 'conversation' | 'commits' | 'files' | 'reviews' | 'checks';
 
   // View & layout state
@@ -173,7 +173,7 @@
   // commit modal, …) not just the inbox. The inbox store reads it as a prop.
   let now = $state(Date.now());
 
-  // Repositories state lives in RepositoriesView now; parent keeps a handle
+  // Repositories state lives in GithubTab now; parent keeps a handle
   // via `bind:this` so cross-cutting actions (e.g. merging a PR) can refresh
   // the repo items list.
   let repositoriesView = $state<{ refreshItems: () => void } | null>(null);
@@ -1708,8 +1708,8 @@
         const repo = str('repo');
         const section = str('section') || 'pulls';
         if (!owner || !repo) return;
-        view = 'repositories';
-        // RepositoriesView watches this slot and clears it after opening.
+        view = 'githubTab';
+        // GithubTab watches this slot and clears it after opening.
         inboxState.pendingRepoNav = { owner, repo, section };
         return;
       }
@@ -2296,7 +2296,7 @@
       inbox store) fires alongside. */
   async function reloadDetailAndLists() {
     await reloadDetailAndListsCore();
-    // Ask RepositoriesView to refresh its list if a repo is currently open
+    // Ask GithubTab to refresh its list if a repo is currently open
     // (merge/close/comment flows need to see the new state reflected there).
     repositoriesView?.refreshItems();
   }
@@ -2583,7 +2583,7 @@
     } catch (e) {
       notifyError(e, { title: 'GitHub disconnect failed' });
     }
-    // Repo state is owned by RepositoriesView — it wipes itself via its
+    // Repo state is owned by GithubTab — it wipes itself via its
     // `$effect` on `connectedGithub` becoming false.
   }
 
@@ -3297,8 +3297,8 @@
         </div>
       {/if}
 
-    {:else if view === 'repositories'}
-      <RepositoriesView
+    {:else if view === 'githubTab'}
+      <GithubTab
         bind:this={repositoriesView}
         {connectedGithub}
         {now}
@@ -3320,16 +3320,16 @@
         {mergeDisabled}
       />
 
-    {:else if view === 'tasks'}
-      <TasksView
+    {:else if view === 'jiraTab'}
+      <JiraTab
         {jiraStatus}
         bind:view
         {now}
         onOpenCreateIssue={openJiraCreateIssue}
       />
 
-    {:else if view === 'issues'}
-      <IssuesView
+    {:else if view === 'sentryTab'}
+      <SentryTab
         {sentryStatus}
         bind:view
         {now}

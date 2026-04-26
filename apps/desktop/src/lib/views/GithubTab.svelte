@@ -21,7 +21,7 @@
   import { formatBytes } from '$lib/format';
   import { inboxState } from '$lib/state/inbox.svelte';
 
-  type View = 'workbench' | 'repositories' | 'tasks' | 'rules' | 'connections' | 'settings';
+  type View = 'workbench' | 'githubTab' | 'jiraTab' | 'rules' | 'connections' | 'settings';
   type DetailTab = 'conversation' | 'commits' | 'files' | 'reviews' | 'checks';
   type RepoSection = 'code' | 'pulls' | 'issues' | 'actions' | 'releases';
   type RepoTab = 'open' | 'closed' | 'all';
@@ -442,8 +442,8 @@
 {:else if !selectedRepo}
   <section class="repos-view">
     <div class="repos-header">
-      <h1 class="view-title">Repositories</h1>
-      <p class="view-sub">Your accessible repos on GitHub. Click one to browse its pull requests and issues.</p>
+      <h1 class="view-title">GitHub</h1>
+      <p class="view-sub">Your accessible repositories. Click one to browse its pull requests and issues.</p>
     </div>
     <div class="repos-body">
       {#if reposLoading}
@@ -715,7 +715,7 @@
 {/if}
 
 <!-- GithubFocusOverlay is mounted globally at the page root (in
-     `+page.svelte`). RepositoriesView no longer owns its own copy. -->
+     `+page.svelte`). GithubTab no longer owns its own copy. -->
 
 <style>
   /* Shared layout helpers — duplicated from +page.svelte so the component is

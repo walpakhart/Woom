@@ -17,11 +17,11 @@
     loadJiraSprints,
     loadJiraStatuses,
     openUserPicker,
-    refreshJiraInbox,
-    updateJiraFilters
+    refreshJiraTabInbox,
+    updateJiraTabFilters
   } from '$lib/state/inbox.svelte';
 
-  type View = 'workbench' | 'repositories' | 'rules' | 'connections' | 'settings' | 'tasks';
+  type View = 'workbench' | 'githubTab' | 'rules' | 'connections' | 'settings' | 'jiraTab';
 
   interface Props {
     jiraStatus: JiraStatus;
@@ -32,20 +32,21 @@
 
   let { jiraStatus, view = $bindable(), now, onOpenCreateIssue }: Props = $props();
 
-  // Resolve the project object for the active filter. Shared with the
-  // workbench JiraColumn via `inboxState.jiraFilters.projectKey` — picking a
-  // project here persists into the workbench column too, same way a repo
-  // selection in RepositoriesView is a separate local state but the inbox
-  // column shares the rest of the filter slice.
+  // Resolve the project object for the active filter. Tasks tab keeps
+  // its own filter slice (`inboxState.jiraTabFilters`) so picking a
+  // project / board / status here doesn't yank the workbench JiraColumn
+  // out from under the user — and vice-versa. Project options
+  // (`jiraProjectOptions`) are still shared because they're per-account
+  // static data, not user-picked filter state.
   const selectedProject = $derived<JiraProject | null>(
-    inboxState.jiraFilters.projectKey
+    inboxState.jiraTabFilters.projectKey
       ? inboxState.jiraProjectOptions.find(
-          (p) => p.key === inboxState.jiraFilters.projectKey
+          (p) => p.key === inboxState.jiraTabFilters.projectKey
         ) ?? null
       : null
   );
 
-  // Pulled from inboxState.jiraFilters.projectKey but not-yet-resolved means
+  // Pulled from inboxState.jiraTabFilters.projectKey but not-yet-resolved means
   // we still need to load the project list to render either the grid or the
   // hydrated detail header. Either way: trigger `loadJiraProjects` on mount.
   $effect(() => {
@@ -60,7 +61,7 @@
 
   // First time a project is in scope, make sure we have board/status lookups
   // ready so the filters render populated on open — matches the UX in
-  // RepositoriesView where branches load the moment you enter a repo.
+  // GithubTab where branches load the moment you enter a repo.
   // ALSO triggers when the user has persisted board/sprint selections
   // from a previous session: without the option lists, chips would
   // show fallback `#71` / `#1617` labels instead of real names.
@@ -72,7 +73,7 @@
     ) {
       void loadJiraBoards(selectedProject.key);
     }
-    const f = inboxState.jiraFilters;
+    const f = inboxState.jiraTabFilters;
     if (
       f.boardIds.length === 1 &&
       f.sprintIds.length > 0 &&
@@ -90,16 +91,16 @@
   $effect(() => {
     if (!selectedProject) return;
     if (
-      inboxState.jiraItems.length === 0 &&
-      !inboxState.jiraItemsLoading &&
-      !inboxState.jiraItemsError
+      inboxState.jiraTabItems.length === 0 &&
+      !inboxState.jiraTabItemsLoading &&
+      !inboxState.jiraTabItemsError
     ) {
-      void refreshJiraInbox();
+      void refreshJiraTabInbox();
     }
   });
 
   function openProject(p: JiraProject) {
-    updateJiraFilters({
+    updateJiraTabFilters({
       projectKey: p.key,
       boardIds: [],
       sprintIds: [],
@@ -112,7 +113,7 @@
   }
 
   function backToProjects() {
-    updateJiraFilters({
+    updateJiraTabFilters({
       projectKey: null,
       boardIds: [],
       sprintIds: [],
@@ -125,17 +126,17 @@
 
   function onBoardOpen() {
     if (!inboxState.jiraBoardOptions.length) {
-      void loadJiraBoards(inboxState.jiraFilters.projectKey);
+      void loadJiraBoards(inboxState.jiraTabFilters.projectKey);
     }
   }
   function onSprintOpen() {
-    const ids = inboxState.jiraFilters.boardIds;
+    const ids = inboxState.jiraTabFilters.boardIds;
     if (ids.length === 1 && !inboxState.jiraSprintOptions.length) {
       void loadJiraSprints(ids[0]);
     }
   }
   function onStatusOpen() {
-    void loadJiraStatuses(inboxState.jiraFilters.projectKey);
+    void loadJiraStatuses(inboxState.jiraTabFilters.projectKey);
   }
 
   /** Mirror of JiraColumn's multi-select handler — see that file's
@@ -143,9 +144,9 @@
    *  one project so multi-board here mostly means picking sprints
    *  from multiple boards within that project. */
   function onBoardChange(value: string) {
-    const next = inboxState.jiraFilters.boardIds.slice();
+    const next = inboxState.jiraTabFilters.boardIds.slice();
     if (!value) {
-      updateJiraFilters({ boardIds: [], sprintIds: [] });
+      updateJiraTabFilters({ boardIds: [], sprintIds: [] });
       inboxState.jiraSprintOptions = [];
       return;
     }
@@ -153,13 +154,13 @@
     const idx = next.indexOf(id);
     if (idx >= 0) next.splice(idx, 1);
     else next.push(id);
-    updateJiraFilters({ boardIds: next, sprintIds: [] });
+    updateJiraTabFilters({ boardIds: next, sprintIds: [] });
     inboxState.jiraSprintOptions = [];
     if (next.length === 1) void loadJiraSprints(next[0]);
   }
   function removeBoard(id: number) {
-    const next = inboxState.jiraFilters.boardIds.filter((b) => b !== id);
-    updateJiraFilters({ boardIds: next, sprintIds: [] });
+    const next = inboxState.jiraTabFilters.boardIds.filter((b) => b !== id);
+    updateJiraTabFilters({ boardIds: next, sprintIds: [] });
     inboxState.jiraSprintOptions = [];
     if (next.length === 1) void loadJiraSprints(next[0]);
   }
@@ -171,19 +172,19 @@
    *  presence in `sprintIds`. */
   function onSprintChange(value: string) {
     if (value === '') {
-      updateJiraFilters({ sprintIds: [] });
+      updateJiraTabFilters({ sprintIds: [] });
       return;
     }
-    const next = inboxState.jiraFilters.sprintIds.slice();
+    const next = inboxState.jiraTabFilters.sprintIds.slice();
     const sprint: number | 'backlog' = value === 'backlog' ? 'backlog' : Number(value);
     const idx = next.indexOf(sprint);
     if (idx >= 0) next.splice(idx, 1);
     else next.push(sprint);
-    updateJiraFilters({ sprintIds: next });
+    updateJiraTabFilters({ sprintIds: next });
   }
   function removeSprint(sprint: number | 'backlog') {
-    updateJiraFilters({
-      sprintIds: inboxState.jiraFilters.sprintIds.filter((s) => s !== sprint)
+    updateJiraTabFilters({
+      sprintIds: inboxState.jiraTabFilters.sprintIds.filter((s) => s !== sprint)
     });
   }
   function sprintLabel(sprint: number | 'backlog'): string {
@@ -191,10 +192,10 @@
     return inboxState.jiraSprintOptions.find((s) => s.id === sprint)?.name ?? `#${sprint}`;
   }
   function onStatusChange(value: string) {
-    updateJiraFilters({ statusName: value ? value : null });
+    updateJiraTabFilters({ statusName: value ? value : null });
   }
   function onSearchInput(e: Event) {
-    updateJiraFilters({ search: (e.target as HTMLInputElement).value });
+    updateJiraTabFilters({ search: (e.target as HTMLInputElement).value });
   }
 
   // Multi-select dropdown — value resets to '' so the placeholder
@@ -253,7 +254,7 @@
 {:else if !selectedProject}
   <section class="projects-view">
     <div class="projects-header">
-      <h1 class="view-title">Tasks</h1>
+      <h1 class="view-title">Jira</h1>
       <p class="view-sub">
         Jira projects on <span class="mono">{jiraStatus.user.workspace}</span>.
         Pick a project to browse its issues — filters, search and status
@@ -320,7 +321,7 @@
              as a clear-everything button. -->
         <Dropdown
           value=""
-          selectedValues={inboxState.jiraFilters.boardIds.map(String)}
+          selectedValues={inboxState.jiraTabFilters.boardIds.map(String)}
           options={boardOptions}
           onChange={onBoardChange}
           onOpen={onBoardOpen}
@@ -329,11 +330,11 @@
           width="200px"
         />
       </div>
-      {#if inboxState.jiraFilters.boardIds.length === 1}
+      {#if inboxState.jiraTabFilters.boardIds.length === 1}
         <div class="filter-cell">
           <Dropdown
             value=""
-            selectedValues={inboxState.jiraFilters.sprintIds.map((s) => typeof s === 'string' ? s : String(s))}
+            selectedValues={inboxState.jiraTabFilters.sprintIds.map((s) => typeof s === 'string' ? s : String(s))}
             options={sprintOptions}
             onChange={onSprintChange}
             onOpen={onSprintOpen}
@@ -345,7 +346,7 @@
       {/if}
       <div class="filter-cell">
         <Dropdown
-          value={inboxState.jiraFilters.statusName ?? ''}
+          value={inboxState.jiraTabFilters.statusName ?? ''}
           options={statusOptions}
           onChange={onStatusChange}
           onOpen={onStatusOpen}
@@ -358,7 +359,7 @@
         class="filter-input"
         type="text"
         placeholder="Search summary/description…"
-        value={inboxState.jiraFilters.search}
+        value={inboxState.jiraTabFilters.search}
         oninput={onSearchInput}
         aria-label="Search Jira issues"
       />
@@ -376,9 +377,9 @@
         <svg class="i i-sm" viewBox="0 0 24 24" style="color: var(--text-2)"><path d="m6 9 6 6 6-6"/></svg>
       </button>
       <div style="flex:1"></div>
-      <span class="issues-count mono">{inboxState.jiraItems.length} issues</span>
-      <button class="icon-btn" onclick={() => refreshJiraInbox()} title="Refresh" aria-label="Refresh Jira" disabled={inboxState.jiraItemsLoading}>
-        <svg class="i i-sm" viewBox="0 0 24 24" style="transform: rotate({inboxState.jiraItemsLoading ? 360 : 0}deg); transition: transform 0.6s;">
+      <span class="issues-count mono">{inboxState.jiraTabItems.length} issues</span>
+      <button class="icon-btn" onclick={() => refreshJiraTabInbox()} title="Refresh" aria-label="Refresh Jira" disabled={inboxState.jiraTabItemsLoading}>
+        <svg class="i i-sm" viewBox="0 0 24 24" style="transform: rotate({inboxState.jiraTabItemsLoading ? 360 : 0}deg); transition: transform 0.6s;">
           <path d="M21 12a9 9 0 0 1-9 9 9 9 0 0 1-8.5-6" />
           <path d="M3 12a9 9 0 0 1 9-9 9 9 0 0 1 8.5 6" />
           <polyline points="21 3 21 9 15 9" />
@@ -388,17 +389,17 @@
     </div>
 
 <div class="issues-list">
-      {#if inboxState.jiraItemsLoading && inboxState.jiraItems.length === 0}
+      {#if inboxState.jiraTabItemsLoading && inboxState.jiraTabItems.length === 0}
         <div class="tab-state">Loading issues…</div>
-      {:else if inboxState.jiraItemsError}
+      {:else if inboxState.jiraTabItemsError}
         <div class="tab-state tab-state--error">
-          {inboxState.jiraItemsError}
-          <button class="link-inline" onclick={() => refreshJiraInbox()}>Retry</button>
+          {inboxState.jiraTabItemsError}
+          <button class="link-inline" onclick={() => refreshJiraTabInbox()}>Retry</button>
         </div>
-      {:else if inboxState.jiraItems.length === 0}
+      {:else if inboxState.jiraTabItems.length === 0}
         <div class="tab-state">No issues match the current filters.</div>
       {:else}
-        {#each inboxState.jiraItems as j (j.id)}
+        {#each inboxState.jiraTabItems as j (j.id)}
           <button class="issue-row" onclick={() => (inboxState.jiraFocusKey = j.key)}>
             <span class="mini-tag {jiraStatusClass(j.status_category)}">{j.status.toLowerCase()}</span>
             <span class="issue-id mono">{j.key}</span>
@@ -416,7 +417,7 @@
 <!-- JiraDetailPane slide-over is mounted globally at the page root. -->
 
 <style>
-  /* Shared layout helpers — mirrored from RepositoriesView so Tasks feels at
+  /* Shared layout helpers — mirrored from GithubTab so Tasks feels at
      home next to Repositories (same titles, tab-state colors, mono font). */
   .full-center { flex: 1; display: flex; align-items: center; justify-content: center; padding: 40px; }
   .empty { display: flex; flex-direction: column; align-items: center; gap: 16px; text-align: center; max-width: 420px; }
@@ -477,7 +478,7 @@
 
   .mono { font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', monospace; }
 
-  /* Projects grid — parallel to RepositoriesView.repos-* for cross-view
+  /* Projects grid — parallel to GithubTab.repos-* for cross-view
      consistency. */
   .projects-view { overflow-y: auto; flex: 1 1 0; min-height: 0; }
   .projects-header { padding: 48px 56px 20px; text-align: center; }
@@ -524,7 +525,7 @@
   .project-card-hint { font-size: 11px; color: var(--text-mute); }
   .project-card:hover .project-card-hint { color: var(--accent-bright); }
 
-  /* Project detail — mirrors RepositoriesView.repo-detail. */
+  /* Project detail — mirrors GithubTab.repo-detail. */
   .project-detail {
     display: flex; flex-direction: column; overflow: hidden;
     flex: 1 1 0; min-height: 0; height: 100%;

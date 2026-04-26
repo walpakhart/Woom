@@ -2,7 +2,7 @@
   import Sigil from '$lib/components/ui/Sigil.svelte';
   import type { ConnectionStatus } from '$lib/data';
 
-  type View = 'workbench' | 'repositories' | 'tasks' | 'issues' | 'rules' | 'connections' | 'settings';
+  type View = 'workbench' | 'githubTab' | 'jiraTab' | 'sentryTab' | 'rules' | 'connections' | 'settings';
 
   interface Props {
     view: View;
@@ -28,13 +28,13 @@
       <svg class="i" viewBox="0 0 24 24"><path d="M4 6h16M4 12h10M4 18h16" /></svg>
       {#if inboxCount > 0}<span class="rail-badge">{inboxCount}</span>{/if}
     </button>
-    <button class="rail-btn" class:active={view === 'repositories'} data-tooltip="Repositories" onclick={() => (view = 'repositories')} aria-label="Repositories">
+    <button class="rail-btn" class:active={view === 'githubTab'} data-tooltip="GitHub" onclick={() => (view = 'githubTab')} aria-label="GitHub">
       <svg class="i" viewBox="0 0 24 24"><path d="M3 7v11a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-7L10 5H5a2 2 0 0 0-2 2z" /></svg>
     </button>
-    <button class="rail-btn" class:active={view === 'tasks'} data-tooltip="Tasks" onclick={() => (view = 'tasks')} aria-label="Tasks">
+    <button class="rail-btn" class:active={view === 'jiraTab'} data-tooltip="Jira" onclick={() => (view = 'jiraTab')} aria-label="Jira">
       <svg class="i" viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="2" /><path d="M9 3v2h6V3" /><path d="M8 11h8M8 15h6" /></svg>
     </button>
-    <button class="rail-btn" class:active={view === 'issues'} data-tooltip="Issues (Sentry)" onclick={() => (view = 'issues')} aria-label="Issues">
+    <button class="rail-btn" class:active={view === 'sentryTab'} data-tooltip="Sentry" onclick={() => (view = 'sentryTab')} aria-label="Sentry">
       <svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/></svg>
     </button>
     <button class="rail-btn" class:active={view === 'rules'} data-tooltip="Rules" onclick={() => (view = 'rules')} aria-label="Rules">

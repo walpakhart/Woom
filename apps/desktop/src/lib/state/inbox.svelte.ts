@@ -91,6 +91,12 @@ export interface JiraFilters {
 const GITHUB_FILTERS_KEY = 'forgehold:github-filters:v1';
 const JIRA_FILTERS_KEY = 'forgehold:jira-filters:v1';
 const SENTRY_FILTERS_KEY = 'forgehold:sentry-filters:v1';
+/* Tabs (JiraTab / SentryTab) keep their own filter slice so changing
+   a board / project / status in the dedicated tab doesn't yank the
+   workbench column out from under the user (and vice-versa). Each tab
+   persists separately so a reload restores both states independently. */
+const JIRA_TAB_FILTERS_KEY = 'forgehold:jira-tab-filters:v1';
+const SENTRY_TAB_FILTERS_KEY = 'forgehold:sentry-tab-filters:v1';
 
 interface SentryFiltersPersisted {
   search: string;
@@ -261,6 +267,107 @@ function persistJiraFilters() {
   } catch {/* ignore */}
 }
 
+/* Tabs persist under their own keys so the column / tab stories stay
+   independent across reloads. The body migrates the same way as the
+   shared key — `readJiraFilters` already handles legacy field shapes. */
+function readJiraTabFilters(): JiraFilters {
+  const orig = JIRA_FILTERS_KEY; // no-op; just keeping the symbol live
+  void orig;
+  try {
+    const raw = localStorage.getItem(JIRA_TAB_FILTERS_KEY);
+    if (!raw) return { ...DEFAULT_JIRA_FILTERS };
+    const parsed = JSON.parse(raw);
+    const sprintIdsRaw = parsed.sprintIds;
+    let sprintIds: SprintScope[] = [];
+    if (Array.isArray(sprintIdsRaw)) {
+      sprintIds = sprintIdsRaw.filter(
+        (v): v is SprintScope => typeof v === 'number' || v === 'backlog'
+      );
+    }
+    const boardIdsRaw = parsed.boardIds;
+    let boardIds: number[] = [];
+    if (Array.isArray(boardIdsRaw)) {
+      boardIds = boardIdsRaw.filter((n): n is number => typeof n === 'number');
+    }
+    return {
+      projectKey: typeof parsed.projectKey === 'string' ? parsed.projectKey : null,
+      boardIds,
+      sprintIds,
+      statusName:
+        typeof parsed.statusName === 'string' && parsed.statusName.trim()
+          ? parsed.statusName
+          : null,
+      search: typeof parsed.search === 'string' ? parsed.search : ''
+    };
+  } catch {
+    return { ...DEFAULT_JIRA_FILTERS };
+  }
+}
+
+function persistJiraTabFilters() {
+  try {
+    localStorage.setItem(
+      JIRA_TAB_FILTERS_KEY,
+      JSON.stringify(inboxState.jiraTabFilters)
+    );
+  } catch {/* ignore */}
+}
+
+function readSentryTabFilters(): SentryFiltersPersisted {
+  try {
+    const raw = localStorage.getItem(SENTRY_TAB_FILTERS_KEY);
+    if (!raw) return { ...DEFAULT_SENTRY_FILTERS };
+    const parsed = JSON.parse(raw) as Partial<SentryFiltersPersisted>;
+    return {
+      search: typeof parsed.search === 'string' ? parsed.search : '',
+      status:
+        parsed.status === 'unresolved' ||
+        parsed.status === 'resolved' ||
+        parsed.status === 'ignored' ||
+        parsed.status === 'all'
+          ? parsed.status
+          : 'unresolved',
+      level:
+        parsed.level === 'all' ||
+        parsed.level === 'fatal' ||
+        parsed.level === 'error' ||
+        parsed.level === 'warning' ||
+        parsed.level === 'info' ||
+        parsed.level === 'debug'
+          ? parsed.level
+          : 'all',
+      projects: Array.isArray(parsed.projects)
+        ? parsed.projects.filter((p): p is string => typeof p === 'string')
+        : [],
+      environment: typeof parsed.environment === 'string' ? parsed.environment : null,
+      sort:
+        parsed.sort === 'date' ||
+        parsed.sort === 'new' ||
+        parsed.sort === 'priority' ||
+        parsed.sort === 'freq' ||
+        parsed.sort === 'user'
+          ? parsed.sort
+          : 'date'
+    };
+  } catch {
+    return { ...DEFAULT_SENTRY_FILTERS };
+  }
+}
+
+function persistSentryTabFilters() {
+  try {
+    const payload: SentryFiltersPersisted = {
+      search: inboxState.sentryTabSearch,
+      status: inboxState.sentryTabStatus,
+      level: inboxState.sentryTabLevel,
+      projects: inboxState.sentryTabProjects,
+      environment: inboxState.sentryTabEnvironment,
+      sort: inboxState.sentryTabSort
+    };
+    localStorage.setItem(SENTRY_TAB_FILTERS_KEY, JSON.stringify(payload));
+  } catch {/* ignore */}
+}
+
 export const inboxState = $state<{
   // GitHub inbox (involves-me list)
   items: InboxItem[];
@@ -354,13 +461,36 @@ export const inboxState = $state<{
       changes so a stale event id doesn't follow you to another issue. */
   sentryFocusEventId: string | null;
 
+  // ---- JiraTab (Jira tab) — independent slice ----
+  // Mirrors the column-side jira* shape but lives behind the Tasks
+  // top-level view so changing a project / board / status in the tab
+  // doesn't snap the column out from under the user. Each slice
+  // persists & refreshes separately. Dropdown option caches
+  // (`jiraProjectOptions`, `jiraBoardOptions`, etc.) ARE shared since
+  // they're per-account static data, not user-picked filter state.
+  jiraTabFilters: JiraFilters;
+  jiraTabItems: JiraItem[];
+  jiraTabItemsLoading: boolean;
+  jiraTabItemsError: string | null;
+
+  // ---- SentryTab (Sentry tab) — independent slice ----
+  sentryTabSearch: string;
+  sentryTabStatus: 'unresolved' | 'resolved' | 'ignored' | 'all';
+  sentryTabLevel: 'all' | 'fatal' | 'error' | 'warning' | 'info' | 'debug';
+  sentryTabProjects: string[];
+  sentryTabEnvironment: string | null;
+  sentryTabSort: 'date' | 'new' | 'priority' | 'freq' | 'user';
+  sentryTabItems: SentryIssue[];
+  sentryTabItemsLoading: boolean;
+  sentryTabItemsError: string | null;
+
   // ---- App-navigation channel (driven by `mcp__app__*` tools) ----
-  // RepositoriesView watches `pendingRepoNav` and, when set, opens the
+  // GithubTab watches `pendingRepoNav` and, when set, opens the
   // requested repo on the requested section, then nulls it back out. We
   // can't call into the view component directly because state is owned
   // there; this reactive channel lets the agent-driven navigation
   // tools land cleanly without a circular dep. Section is a hint —
-  // RepositoriesView validates against its own RepoSection union.
+  // GithubTab validates against its own RepoSection union.
   pendingRepoNav: { owner: string; repo: string; section: string } | null;
 }>({
   items: [],
@@ -417,6 +547,26 @@ export const inboxState = $state<{
   sentryEnvironmentOptionsLoading: false,
   sentryFocusId: null,
   sentryFocusEventId: null,
+  // Tasks tab Jira slice
+  jiraTabFilters: readJiraTabFilters(),
+  jiraTabItems: [],
+  jiraTabItemsLoading: false,
+  jiraTabItemsError: null,
+  // Issues tab Sentry slice
+  ...(() => {
+    const f = readSentryTabFilters();
+    return {
+      sentryTabSearch: f.search,
+      sentryTabStatus: f.status,
+      sentryTabLevel: f.level,
+      sentryTabProjects: f.projects,
+      sentryTabEnvironment: f.environment,
+      sentryTabSort: f.sort
+    };
+  })(),
+  sentryTabItems: [],
+  sentryTabItemsLoading: false,
+  sentryTabItemsError: null,
   pendingRepoNav: null
 });
 
@@ -544,7 +694,7 @@ export function closeFocusItem() {
 
 /** j/k keyboard nav through the current inbox list. No-ops if there's no
     focus item or the current focus isn't in the list (e.g. it came from
-    RepositoriesView). */
+    GithubTab). */
 export function moveSelection(delta: number) {
   if (!inboxState.items.length || !inboxState.focusItem) return;
   const idx = inboxState.items.findIndex((i) => i.id === inboxState.focusItem!.id);
@@ -780,6 +930,50 @@ export function updateJiraFilters(patch: Partial<JiraFilters>) {
   jiraFilterDebounce = setTimeout(() => void refreshJiraInbox({ silent: true }), 300);
 }
 
+let jiraTabFilterDebounce: ReturnType<typeof setTimeout> | null = null;
+
+/* JiraTab mirror of refreshJiraInbox — same JQL builder, same backend
+   call, but reads `jiraTabFilters` and writes to `jiraTabItems` so
+   the Tasks tab and the Jira column don't trample each other's lists. */
+export async function refreshJiraTabInbox(
+  { silent = false }: { silent?: boolean } = {}
+) {
+  if (!silent) inboxState.jiraTabItemsLoading = true;
+  inboxState.jiraTabItemsError = null;
+  try {
+    const f = inboxState.jiraTabFilters;
+    const usingDefault =
+      !f.projectKey &&
+      f.boardIds.length === 0 &&
+      f.sprintIds.length === 0 &&
+      f.statusName == null &&
+      !f.search.trim() &&
+      !inboxState.jiraAssigneeAny;
+    if (usingDefault) {
+      inboxState.jiraTabItems = await invoke<JiraItem[]>('jira_list_inbox_for', {
+        assigneeAccountId: inboxState.jiraAssignee?.account_id ?? null
+      });
+    } else {
+      const jql = buildJiraJql(f, inboxState.jiraAssignee, inboxState.jiraAssigneeAny);
+      inboxState.jiraTabItems = await invoke<JiraItem[]>('jira_search', { jql });
+    }
+  } catch (e) {
+    inboxState.jiraTabItemsError = typeof e === 'string' ? e : String(e);
+  } finally {
+    inboxState.jiraTabItemsLoading = false;
+  }
+}
+
+export function updateJiraTabFilters(patch: Partial<JiraFilters>) {
+  inboxState.jiraTabFilters = { ...inboxState.jiraTabFilters, ...patch };
+  persistJiraTabFilters();
+  if (jiraTabFilterDebounce) clearTimeout(jiraTabFilterDebounce);
+  jiraTabFilterDebounce = setTimeout(
+    () => void refreshJiraTabInbox({ silent: true }),
+    300
+  );
+}
+
 export async function loadJiraProjects() {
   if (inboxState.jiraProjectOptions.length || inboxState.jiraProjectOptionsLoading) return;
   inboxState.jiraProjectOptionsLoading = true;
@@ -966,6 +1160,50 @@ export function scheduleSentryFilterRefresh() {
   persistSentryFilters();
   if (sentryFilterDebounce) clearTimeout(sentryFilterDebounce);
   sentryFilterDebounce = setTimeout(() => void refreshSentryInbox({ silent: true }), 250);
+}
+
+/* SentryTab (Sentry tab) mirror — same query builder, separate
+   filter state + items list so the tab and column don't share. */
+export function buildSentryTabQuery(): string {
+  const parts: string[] = [];
+  const { sentryTabStatus, sentryTabLevel, sentryTabSearch } = inboxState;
+  if (sentryTabStatus !== 'all') parts.push(`is:${sentryTabStatus}`);
+  if (sentryTabLevel !== 'all') parts.push(`level:${sentryTabLevel}`);
+  const search = sentryTabSearch.trim();
+  if (search) parts.push(search);
+  return parts.join(' ');
+}
+
+let sentryTabFilterDebounce: ReturnType<typeof setTimeout> | null = null;
+
+export async function refreshSentryTabInbox(
+  { silent = false }: { silent?: boolean } = {}
+) {
+  if (!silent) inboxState.sentryTabItemsLoading = true;
+  inboxState.sentryTabItemsError = null;
+  try {
+    const items = await invoke<SentryIssue[]>('sentry_list_issues', {
+      query: buildSentryTabQuery() || null,
+      projectSlugs: inboxState.sentryTabProjects,
+      environment: inboxState.sentryTabEnvironment,
+      sort: inboxState.sentryTabSort,
+      limit: 50
+    });
+    inboxState.sentryTabItems = items;
+  } catch (e) {
+    inboxState.sentryTabItemsError = typeof e === 'string' ? e : String(e);
+  } finally {
+    inboxState.sentryTabItemsLoading = false;
+  }
+}
+
+export function scheduleSentryTabFilterRefresh() {
+  persistSentryTabFilters();
+  if (sentryTabFilterDebounce) clearTimeout(sentryTabFilterDebounce);
+  sentryTabFilterDebounce = setTimeout(
+    () => void refreshSentryTabInbox({ silent: true }),
+    250
+  );
 }
 
 export async function loadSentryProjects() {
