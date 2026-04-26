@@ -201,6 +201,13 @@ export async function executePr(
       ok: true,
       summary: `PR opened: ${action.title}\n${url}`
     });
+    // Auto-dismiss successful PR cards too — without this, a chained
+    // commit→PR continuation would re-include the done PR card in
+    // every subsequent recap (recentActionSummaries filters by status,
+    // not recency), giving the agent an ever-growing "things you
+    // already did" list. Keep the URL visible briefly so the user
+    // sees it before it clears.
+    setTimeout(() => removeAction(sessionId, actionId), 6000);
   } catch (e) {
     const msg = asMessage(e);
     updateAction(sessionId, actionId, { status: 'error', result: msg });

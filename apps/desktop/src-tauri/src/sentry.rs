@@ -339,20 +339,38 @@ pub async fn get_issue(
 /// issue id. Pure pass-through when the input is already numeric.
 /// Used by every endpoint that takes an issue id since the agent
 /// often hands us short-ids straight from search results.
+///
+/// Edge cases we handle:
+/// - empty / whitespace → fast-fail, don't hit `…/shortids//`
+/// - already-numeric → pass through, no network round-trip
+/// - the `"latest"` event-id alias mistakenly passed as an issue id
+///   (Sentry's REST API uses `latest` as an alias for the most-recent
+///   *event*, not an issue) → fast-fail with a readable message
+/// - URL-encode both the org slug and the short id so a slug with
+///   non-ASCII or a malformed id with a `/` doesn't inject a bonus
+///   path segment.
 pub async fn resolve_to_numeric_id(
     creds: &SentryCredentials,
     issue_id: &str,
 ) -> Result<String, String> {
     let trimmed = issue_id.trim();
+    if trimmed.is_empty() {
+        return Err("empty issue id".to_string());
+    }
+    if trimmed.eq_ignore_ascii_case("latest") {
+        return Err("\"latest\" is an event-id alias, not an issue id".to_string());
+    }
     // Already numeric → no lookup needed.
-    if !trimmed.is_empty() && trimmed.chars().all(|c| c.is_ascii_digit()) {
+    if trimmed.chars().all(|c| c.is_ascii_digit()) {
         return Ok(trimmed.to_string());
     }
     let client = http();
     // `shortids/{short_id}/` returns the group object with `id` (numeric).
     let url = format!(
         "{}/api/0/organizations/{}/shortids/{}/",
-        creds.host, creds.organization_slug, trimmed
+        creds.host,
+        urlencoding::encode(&creds.organization_slug),
+        urlencoding::encode(trimmed)
     );
     let resp = client
         .get(&url)

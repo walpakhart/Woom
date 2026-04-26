@@ -2119,6 +2119,15 @@
     dispatchAction(sessionId, action, appendAssistantDelta, onActionResolved);
   }
 
+  /** Per-session re-entry guard. Two cards finishing in the same
+   *  microtask both pass the `stillBusy=false` check above (Svelte
+   *  state writes aren't synchronous gates) and would each fire
+   *  `continueAgentTurn`, so the agent gets the same recap twice and
+   *  produces a duplicate turn. The Set tracks "continuation already
+   *  fired for this batch" — entries are cleared when continueAgentTurn
+   *  finishes (in finally) so the next user-initiated batch can fire. */
+  const continuationInFlight = new Set<string>();
+
   /** Called by every executeXxx after the action ran. If the session
    *  was awaiting approval AND no other actions are still pending,
    *  fire a follow-up agent turn with the result baked in. */
@@ -2136,6 +2145,8 @@
       (a) => a.status === 'pending' || a.status === 'executing'
     );
     if (stillBusy) return;
+    if (continuationInFlight.has(sessionId)) return;
+    continuationInFlight.add(sessionId);
     updateSession(sessionId, { awaitingApproval: false });
     // Compose a recap of every action that ran since the last user turn.
     // For a single action it's just the one summary; for a batch the
@@ -2166,7 +2177,14 @@
    *  results already render visibly in the transcript. */
   async function continueAgentTurn(sessionId: string, prompt: string) {
     const sess = sessionsState.list.find((s) => s.id === sessionId);
-    if (!sess || sess.sending) return;
+    if (!sess || sess.sending) {
+      // Bail without firing the turn but still release the guard so
+      // a future approval batch can continue. Otherwise a stuck
+      // continuationInFlight entry would silently swallow the next
+      // auto-resume.
+      continuationInFlight.delete(sessionId);
+      return;
+    }
     updateSession(sessionId, { sending: true });
     appendSessionMessage(sessionId, {
       role: 'assistant',
@@ -2214,6 +2232,13 @@
       if (!streamed) {
         replaceLastAssistant(sessionId, finalReply || '(empty response)');
       }
+      // One-shot recap consumed — clear so it doesn't re-inject on every
+      // subsequent turn. (Same as sendClaudeMessage's success path —
+      // missing this caused the recap to live forever after an
+      // auto-continuation chain that included a propose_switch_cwd.)
+      if (sess.cwdSwitchRecap) {
+        patch.cwdSwitchRecap = null;
+      }
       // Mark awaitingApproval again if the continuation also added
       // pending action cards — chains of commit → PR are common.
       const sessAfter2 = sessionsState.list.find((s) => s.id === sessionId);
@@ -2222,17 +2247,32 @@
       updateSession(sessionId, patch);
     } catch (e) {
       const msg = typeof e === 'string' ? e : String(e);
-      replaceLastAssistant(
-        sessionId,
-        `**${sess.agentKind === 'cursor' ? 'Cursor' : 'Claude'} failed:** ${msg}`
-      );
+      const cancelled = msg.toLowerCase().includes('cancelled');
+      const agentLabel = sess.agentKind === 'cursor' ? 'Cursor' : 'Claude';
+      if (cancelled) {
+        appendSessionMessage(sessionId, {
+          role: 'system',
+          content: 'Cancelled.',
+          at: new Date().toISOString()
+        });
+      } else {
+        replaceLastAssistant(sessionId, `**${agentLabel} failed:** ${msg}`);
+        if (appHasFocus()) {
+          notifyError(e, { title: `${agentLabel} run failed` });
+        } else {
+          notifyClaudeRunComplete({
+            agentLabel,
+            sessionTitle: sess.title || 'Untitled chat',
+            ok: false,
+            durationMs: Date.now() - runStartedAt
+          });
+        }
+      }
     }
     stopThinkingTimer();
     updateSession(sessionId, { sending: false });
+    continuationInFlight.delete(sessionId);
     void scrollChatBottom();
-    // Best-effort — keeps the session-store invariant consistent if
-    // an error message-bubble was just stamped.
-    void runStartedAt;
   }
 
   // ---- Claude stub flow ----
