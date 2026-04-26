@@ -314,10 +314,14 @@
   }
   .source-mark svg { width: 12px; height: 12px; color: currentColor; }
   .sentry-mark { color: #f88f74; background: rgba(248, 143, 116, 0.12); border-color: rgba(248, 143, 116, 0.3); }
+  /* Sized to match Jira's `new-issue-btn` / GitHub's `new-pr-btn`
+     (~22-23px tall) so the brand-bar row height is identical across
+     all three columns. */
   .refresh-btn {
-    width: 26px; height: 26px; border-radius: 6px;
+    width: 22px; height: 22px; border-radius: 6px;
     display: inline-flex; align-items: center; justify-content: center;
     color: var(--text-2); background: transparent; cursor: pointer;
+    border: 1px solid var(--border-neutral-hi);
   }
   .refresh-btn:hover { background: var(--bg-2); color: var(--text-0); }
   .refresh-btn .spin { animation: spin 0.8s linear infinite; }
