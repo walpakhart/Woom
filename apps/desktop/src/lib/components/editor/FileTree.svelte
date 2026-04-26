@@ -3,6 +3,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import { setDragPayload } from '$lib/state/drag.svelte';
   import { attachDragChip } from '$lib/dragImage';
+  import { iconFor } from '$lib/components/editor/fileIcons';
 
   interface Entry { name: string; path: string; is_dir: boolean; size: number; }
   interface Item { name: string; path: string; is_dir: boolean; depth: number; expanded: boolean; ignored: boolean; }
@@ -198,9 +199,17 @@
         {#if it.is_dir}
           <svg class="i i-sm" viewBox="0 0 24 24" style="transform: rotate({it.expanded ? 90 : 0}deg)"><path d="M9 6l6 6-6 6" /></svg>
         {:else}
-          <span class="tree-dot"></span>
+          <span class="tree-chevron-pad"></span>
         {/if}
       </span>
+      {#snippet typeIcon()}
+        {@const icon = iconFor(it.name, it.is_dir, it.expanded)}
+        <svg class="tree-icon" viewBox="0 0 24 24" aria-hidden="true">
+          <path d={icon.d}/>
+          {#if icon.d2}<path d={icon.d2}/>{/if}
+        </svg>
+      {/snippet}
+      {@render typeIcon()}
       <span class="tree-name mono">{it.name}</span>
       {#if !it.is_dir && gitStatusByPath[it.path]}
         {@const code = gitStatusByPath[it.path]}
@@ -237,7 +246,24 @@
     color: var(--text-2);
   }
   .tree-chevron :global(svg) { width: 11px; height: 11px; transition: transform 120ms ease; }
-  .tree-dot { width: 3px; height: 3px; border-radius: 50%; background: var(--text-mute); }
+  .tree-chevron-pad { width: 11px; height: 11px; }
+  /* Type icon — drawn from `fileIcons.ts` SVG paths. Stroke-only,
+     monochrome, takes its colour from the row text so dimmed /
+     ignored rows fade out together with their label. */
+  .tree-icon {
+    width: 14px; height: 14px;
+    flex-shrink: 0;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    color: var(--text-2);
+    opacity: 0.85;
+  }
+  .tree-row.dir .tree-icon { color: var(--text-1); opacity: 1; }
+  .tree-row.selected .tree-icon { color: var(--accent-bright); }
+  .tree-row.ignored .tree-icon { color: var(--text-mute); opacity: 0.55; }
   .tree-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
   .tree-git {
     font-size: 10px; font-weight: 600;

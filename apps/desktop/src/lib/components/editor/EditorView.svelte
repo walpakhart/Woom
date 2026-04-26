@@ -6,12 +6,30 @@
   import Editor from '$lib/components/editor/Editor.svelte';
   import FileTree from '$lib/components/editor/FileTree.svelte';
   import GitPanel from '$lib/components/editor/GitPanel.svelte';
+  import HistoryPanel from '$lib/components/editor/HistoryPanel.svelte';
   import DiffView from '$lib/components/editor/DiffView.svelte';
   import Splitter from '$lib/components/ui/Splitter.svelte';
   import { notifyError } from '$lib/state/toaster.svelte';
 
   const ROOT_STORAGE_KEY = 'forgehold:editor:root';
   const TABS_STORAGE_KEY = 'forgehold:editor:tabs';
+  const SIDEBAR_TAB_KEY = 'forgehold:editor:sidebar-tab';
+
+  /* Sidebar mode — VSCode-style tabs at the bottom of the explorer.
+     "Work tree" shows just the file browser; "Git" shows the staging /
+     commit panel + history of recent commits. Persisted across reloads
+     so the user lands back on whichever pane they had open. */
+  type SidebarTab = 'workTree' | 'git';
+  let sidebarTab = $state<SidebarTab>(
+    (localStorage.getItem(SIDEBAR_TAB_KEY) as SidebarTab) || 'workTree'
+  );
+  $effect(() => {
+    localStorage.setItem(SIDEBAR_TAB_KEY, sidebarTab);
+  });
+
+  /* Bumped after every commit / push / pull / branch switch so the
+     HistoryPanel inside the Git tab re-fetches automatically. */
+  let gitChangeCount = $state(0);
 
   interface Props {
     /** Two-way bound to the parent so Claude sessions can pick up the repo
@@ -355,19 +373,58 @@
               <svg class="i i-sm" viewBox="0 0 24 24"><path d="M3 7v11a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-7L10 5H5a2 2 0 0 0-2 2z" /></svg>
             </button>
           </div>
-          <Splitter direction="vertical" persistKey="editor-left" initial={380} min={140} max={900}>
-            {#snippet start()}
+          <!-- Sidebar body: tabbed between the file tree and the git
+               pane. Tabs sit at the bottom (VSCode panel style) so the
+               content fills upward from there. -->
+          <div class="ev-sidebar-body">
+            {#if sidebarTab === 'workTree'}
               <FileTree
                 rootPath={repoPath}
                 selectedPath={diffTarget ? `${repoPath}/${diffTarget.path}` : activePath}
                 onSelect={openFile}
                 {gitStatusByPath}
               />
-            {/snippet}
-            {#snippet end()}
-              <GitPanel bind:this={gitPanel} repo={repoPath} onStatusChange={onGitStatusChange} onOpenDiff={openDiff} aiKind={linkedAiKind} />
-            {/snippet}
-          </Splitter>
+            {:else}
+              <Splitter direction="vertical" persistKey="editor-git-tab" initial={300} min={140} max={900}>
+                {#snippet start()}
+                  <GitPanel
+                    bind:this={gitPanel}
+                    repo={repoPath}
+                    onStatusChange={(files) => { onGitStatusChange(files); gitChangeCount += 1; }}
+                    onOpenDiff={openDiff}
+                    aiKind={linkedAiKind}
+                  />
+                {/snippet}
+                {#snippet end()}
+                  <HistoryPanel repo={repoPath} refreshKey={gitChangeCount} />
+                {/snippet}
+              </Splitter>
+            {/if}
+          </div>
+          <div class="ev-sidebar-tabs" role="tablist">
+            <button
+              class="ev-sidebar-tab"
+              class:active={sidebarTab === 'workTree'}
+              role="tab"
+              aria-selected={sidebarTab === 'workTree'}
+              onclick={() => (sidebarTab = 'workTree')}
+              title="File explorer"
+            >
+              <svg class="i i-sm" viewBox="0 0 24 24"><path d="M3 7v11a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-7L10 5H5a2 2 0 0 0-2 2z"/></svg>
+              <span>Work tree</span>
+            </button>
+            <button
+              class="ev-sidebar-tab"
+              class:active={sidebarTab === 'git'}
+              role="tab"
+              aria-selected={sidebarTab === 'git'}
+              onclick={() => (sidebarTab = 'git')}
+              title="Staging, commit, and history"
+            >
+              <svg class="i i-sm" viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M6 8.5v7M8.5 6h4a3 3 0 0 1 3 3v.5"/></svg>
+              <span>Git</span>
+            </button>
+          </div>
         </aside>
       {/snippet}
       {#snippet end()}
@@ -550,6 +607,33 @@
     border: 1px solid rgba(232, 163, 58, 0.22);
   }
   .ev-link-menu-name { font-size: 11.5px; color: var(--text-2); }
+
+  /* Sidebar body fills the remaining vertical space — tabs sit pinned
+     at the bottom under it so the active pane gets the maximum room. */
+  .ev-sidebar-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .ev-sidebar-tabs {
+    display: flex; align-items: stretch;
+    border-top: 1px solid var(--border-neutral);
+    background: var(--bg-2);
+    flex-shrink: 0;
+  }
+  .ev-sidebar-tab {
+    flex: 1;
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    padding: 7px 8px;
+    font-size: 11px; font-weight: 500;
+    color: var(--text-2);
+    background: transparent; border: none; cursor: pointer;
+    border-top: 2px solid transparent;
+    transition: all 120ms;
+  }
+  .ev-sidebar-tab:hover { color: var(--text-0); background: var(--bg-1); }
+  .ev-sidebar-tab.active {
+    color: var(--accent-bright);
+    background: var(--bg-1);
+    border-top-color: var(--accent);
+  }
+  .ev-sidebar-tab :global(svg) { width: 12px; height: 12px; }
 
   .ev-main { flex: 1; display: flex; flex-direction: column; min-width: 0; height: 100%; min-height: 0; }
   .ev-tabbar {
