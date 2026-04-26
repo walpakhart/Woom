@@ -169,7 +169,11 @@
     </span>
     <span class="brand-word">Sentry</span>
     {#if inst?.name}<span class="bench-name mono" title="Bench id">{inst.name}</span>{/if}
-    <div style="flex: 1"></div>
+    {#if sentryStatus.kind === 'connected'}
+      <span class="brand-sub mono" title={sentryStatus.user.organization_name}>
+        {sentryStatus.user.organization_slug}
+      </span>
+    {/if}
     <button
       class="refresh-btn"
       onclick={() => void refreshSentryInbox({ silent: true })}

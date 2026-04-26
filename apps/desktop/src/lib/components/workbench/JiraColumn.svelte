@@ -55,14 +55,23 @@
     onOpenCreateIssue
   }: Props = $props();
 
-  // After a reload, persisted board/sprint selections come back but the
-  // option lists themselves are still empty (lazy-loaded on dropdown
-  // open). That makes chips fall back to `#71` / `#1617` instead of
-  // real names. Force-fetch them on mount when the user has any
-  // persisted selection so the chips populate immediately.
+  // After a reload, persisted project / board / sprint selections all
+  // come back but their option lists are still empty (lazy-loaded on
+  // dropdown open). The Dropdown then can't find an option matching
+  // the persisted value, so it falls back to the placeholder
+  // ("All projects" / "All boards" / "Any sprint") even though a real
+  // selection is active. Force-fetch every option list whose
+  // selection is non-empty so the trigger labels and chip names
+  // populate immediately on first render.
   $effect(() => {
     if (jiraStatus.kind !== 'connected') return;
     const f = inboxState.jiraFilters;
+    if (
+      inboxState.jiraProjectOptions.length === 0 &&
+      !inboxState.jiraProjectOptionsLoading
+    ) {
+      void loadJiraProjects();
+    }
     if (
       f.boardIds.length > 0 &&
       inboxState.jiraBoardOptions.length === 0 &&
