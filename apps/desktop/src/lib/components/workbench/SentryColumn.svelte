@@ -164,7 +164,7 @@
   <div class="wb-col-resize" class:snap-flash={layoutState.snapFlashInstanceId === instanceId} role="separator" aria-orientation="vertical" onpointerdown={(e) => startResizeById(instanceId, e)}></div>
 
   <div class="inbox-brand">
-    <span class="source-mark conn-icon--sentry" aria-hidden="true">
+    <span class="brand-icon conn-icon--sentry conn-icon--svg" aria-hidden="true">
       <svg viewBox="0 0 24 24" fill="currentColor">{@html sentryMeta.iconSvg}</svg>
     </span>
     <span class="brand-word">Sentry</span>
@@ -312,7 +312,9 @@
     min-height: 53px;
   }
   .brand-word { font-size: 14px; font-weight: 600; color: var(--text-0); letter-spacing: -0.01em; }
-  .bench-name { font-size: 11px; color: var(--text-2); }
+  /* Inbox-item source-mark (small "St" badge inside each issue card) —
+     brand-bar icon now uses the shared .brand-icon class so it matches
+     Jira / GitHub one-for-one. */
   .source-mark {
     width: 22px; height: 22px; border-radius: 5px;
     display: inline-flex; align-items: center; justify-content: center;
