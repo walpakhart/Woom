@@ -20,10 +20,15 @@
   import {
     inboxState,
     invalidateJiraStatuses,
+    jiraFiltersFor,
+    jiraItemsErrorFor,
+    jiraItemsFor,
+    jiraItemsLoadingFor,
     loadJiraBoards,
     loadJiraProjects,
     loadJiraSprints,
     loadJiraStatuses,
+    refreshJiraInbox,
     updateJiraFilters
   } from '$lib/state/inbox.svelte';
 
@@ -55,6 +60,26 @@
     onOpenCreateIssue
   }: Props = $props();
 
+  /* Per-instance state lookups — `filters` / `items` / `itemsLoading` /
+     `itemsError` shadow what used to be `filters` /
+     `.jiraItems` / etc. Two JiraColumn instances on the same workbench
+     each get their own slot, keyed by `instanceId`. */
+  const filters = $derived(jiraFiltersFor(instanceId));
+  const items = $derived(jiraItemsFor(instanceId));
+  const itemsLoading = $derived(jiraItemsLoadingFor(instanceId));
+  const itemsError = $derived(jiraItemsErrorFor(instanceId));
+
+  /* Auto-load on first mount when this column has nothing yet. */
+  $effect(() => {
+    if (jiraStatus.kind !== 'connected') return;
+    if (
+      inboxState.jiraItemsByInstance[instanceId] === undefined &&
+      !itemsLoading
+    ) {
+      void refreshJiraInbox(instanceId, { silent: true });
+    }
+  });
+
   // After a reload, persisted project / board / sprint selections all
   // come back but their option lists are still empty (lazy-loaded on
   // dropdown open). The Dropdown then can't find an option matching
@@ -65,7 +90,7 @@
   // populate immediately on first render.
   $effect(() => {
     if (jiraStatus.kind !== 'connected') return;
-    const f = inboxState.jiraFilters;
+    const f = filters;
     if (
       inboxState.jiraProjectOptions.length === 0 &&
       !inboxState.jiraProjectOptionsLoading
@@ -98,28 +123,28 @@
 
   function onBoardOpen() {
     if (!inboxState.jiraBoardOptions.length) {
-      void loadJiraBoards(inboxState.jiraFilters.projectKey);
+      void loadJiraBoards(filters.projectKey);
     }
   }
 
   function onSprintOpen() {
     // Sprint scope is per-board: only meaningful with exactly one
     // board selected. Multi-board / no-board hides the dropdown.
-    const ids = inboxState.jiraFilters.boardIds;
+    const ids = filters.boardIds;
     if (ids.length === 1 && !inboxState.jiraSprintOptions.length) {
       void loadJiraSprints(ids[0]);
     }
   }
 
   function onStatusOpen() {
-    void loadJiraStatuses(inboxState.jiraFilters.projectKey);
+    void loadJiraStatuses(filters.projectKey);
   }
 
   function onProjectChange(value: string) {
     const projectKey = value ? value : null;
     // Picking a project invalidates the board/sprint/status choices — status
     // names are project-specific, so the cached list is stale too.
-    updateJiraFilters({ projectKey, boardIds: [], sprintIds: [], statusName: null });
+    updateJiraFilters(instanceId, { projectKey, boardIds: [], sprintIds: [], statusName: null });
     inboxState.jiraBoardOptions = [];
     inboxState.jiraSprintOptions = [];
     invalidateJiraStatuses();
@@ -132,9 +157,9 @@
    *  filter is cleared whenever the board set changes since sprints
    *  belong to a single board. */
   function onBoardChange(value: string) {
-    const next = inboxState.jiraFilters.boardIds.slice();
+    const next = filters.boardIds.slice();
     if (!value) {
-      updateJiraFilters({ boardIds: [], sprintIds: [] });
+      updateJiraFilters(instanceId, { boardIds: [], sprintIds: [] });
       inboxState.jiraSprintOptions = [];
       return;
     }
@@ -142,14 +167,14 @@
     const idx = next.indexOf(id);
     if (idx >= 0) next.splice(idx, 1);
     else next.push(id);
-    updateJiraFilters({ boardIds: next, sprintIds: [] });
+    updateJiraFilters(instanceId, { boardIds: next, sprintIds: [] });
     inboxState.jiraSprintOptions = [];
     if (next.length === 1) void loadJiraSprints(next[0]);
   }
 
   function removeBoard(id: number) {
-    const next = inboxState.jiraFilters.boardIds.filter((b) => b !== id);
-    updateJiraFilters({ boardIds: next, sprintIds: [] });
+    const next = filters.boardIds.filter((b) => b !== id);
+    updateJiraFilters(instanceId, { boardIds: next, sprintIds: [] });
     inboxState.jiraSprintOptions = [];
     if (next.length === 1) void loadJiraSprints(next[0]);
   }
@@ -168,9 +193,9 @@
    *  key prefix (`DEVOPS-414` → `DEVOPS`) since `JiraItem` doesn't
    *  carry the field directly. */
   const groupedJiraItems = $derived.by(() => {
-    if (inboxState.jiraFilters.boardIds.length <= 1) return null;
-    const groups = new Map<string, typeof inboxState.jiraItems>();
-    for (const item of inboxState.jiraItems) {
+    if (filters.boardIds.length <= 1) return null;
+    const groups = new Map<string, typeof items>();
+    for (const item of items) {
       const proj = (item.key.split('-')[0] ?? 'OTHER').toUpperCase();
       const arr = groups.get(proj) ?? [];
       arr.push(item);
@@ -186,20 +211,20 @@
    *  uses string values to stay wire-stable. */
   function onSprintChange(value: string) {
     if (value === '') {
-      updateJiraFilters({ sprintIds: [] });
+      updateJiraFilters(instanceId, { sprintIds: [] });
       return;
     }
-    const next = inboxState.jiraFilters.sprintIds.slice();
+    const next = filters.sprintIds.slice();
     const sprint: number | 'backlog' = value === 'backlog' ? 'backlog' : Number(value);
     const idx = next.indexOf(sprint);
     if (idx >= 0) next.splice(idx, 1);
     else next.push(sprint);
-    updateJiraFilters({ sprintIds: next });
+    updateJiraFilters(instanceId, { sprintIds: next });
   }
 
   function removeSprint(sprint: number | 'backlog') {
-    updateJiraFilters({
-      sprintIds: inboxState.jiraFilters.sprintIds.filter((s) => s !== sprint)
+    updateJiraFilters(instanceId, {
+      sprintIds: filters.sprintIds.filter((s) => s !== sprint)
     });
   }
 
@@ -209,12 +234,12 @@
   }
 
   function onStatusChange(value: string) {
-    updateJiraFilters({ statusName: value ? value : null });
+    updateJiraFilters(instanceId, { statusName: value ? value : null });
   }
 
   function onSearchInput(e: Event) {
     const value = (e.target as HTMLInputElement).value;
-    updateJiraFilters({ search: value });
+    updateJiraFilters(instanceId, { search: value });
   }
 
   // Sprint dropdown is multi-select like Board — value resets to ''
@@ -301,7 +326,7 @@
       <div class="filter-row">
         <div class="filter-cell">
           <Dropdown
-            value={inboxState.jiraFilters.projectKey ?? ''}
+            value={filters.projectKey ?? ''}
             options={projectOptions}
             onChange={onProjectChange}
             onOpen={onProjectOpen}
@@ -310,8 +335,8 @@
             width="100%"
           />
         </div>
-        <button class="icon-btn" onclick={onRefreshJiraInbox} title="Refresh" aria-label="Refresh Jira" disabled={inboxState.jiraItemsLoading}>
-          <svg class="i i-sm" viewBox="0 0 24 24" style="transform: rotate({inboxState.jiraItemsLoading ? 360 : 0}deg); transition: transform 0.6s;">
+        <button class="icon-btn" onclick={onRefreshJiraInbox} title="Refresh" aria-label="Refresh Jira" disabled={itemsLoading}>
+          <svg class="i i-sm" viewBox="0 0 24 24" style="transform: rotate({itemsLoading ? 360 : 0}deg); transition: transform 0.6s;">
             <path d="M21 12a9 9 0 0 1-9 9 9 9 0 0 1-8.5-6" />
             <path d="M3 12a9 9 0 0 1 9-9 9 9 0 0 1 8.5 6" />
             <polyline points="21 3 21 9 15 9" />
@@ -329,7 +354,7 @@
                stays open so the user can pick several. -->
           <Dropdown
             value=""
-            selectedValues={inboxState.jiraFilters.boardIds.map(String)}
+            selectedValues={filters.boardIds.map(String)}
             options={boardOptions}
             onChange={onBoardChange}
             onOpen={onBoardOpen}
@@ -338,11 +363,11 @@
             width="100%"
           />
         </div>
-        {#if inboxState.jiraFilters.boardIds.length === 1}
+        {#if filters.boardIds.length === 1}
           <div class="filter-cell">
             <Dropdown
               value=""
-              selectedValues={inboxState.jiraFilters.sprintIds.map((s) => typeof s === 'string' ? s : String(s))}
+              selectedValues={filters.sprintIds.map((s) => typeof s === 'string' ? s : String(s))}
               options={sprintOptions}
               onChange={onSprintChange}
               onOpen={onSprintOpen}
@@ -356,7 +381,7 @@
       <div class="filter-row">
         <div class="filter-cell">
           <Dropdown
-            value={inboxState.jiraFilters.statusName ?? ''}
+            value={filters.statusName ?? ''}
             options={statusOptions}
             onChange={onStatusChange}
             onOpen={onStatusOpen}
@@ -371,7 +396,7 @@
           class="filter-input"
           type="text"
           placeholder="Search summary/description…"
-          value={inboxState.jiraFilters.search}
+          value={filters.search}
           oninput={onSearchInput}
           aria-label="Search Jira issues"
         />
@@ -391,18 +416,18 @@
       <svg class="i i-sm" viewBox="0 0 24 24" style="color: var(--text-2)"><path d="m6 9 6 6 6-6"/></svg>
     </button>
     <div class="inbox-controls">
-      <span class="inbox-count mono">{inboxState.jiraItems.length} issues</span>
+      <span class="inbox-count mono">{items.length} issues</span>
     </div>
   </div>
   <div class="inbox-list">
-    {#if inboxState.jiraItemsLoading && inboxState.jiraItems.length === 0}
+    {#if itemsLoading && items.length === 0}
       <div class="inbox-state">Loading…</div>
-    {:else if inboxState.jiraItemsError}
+    {:else if itemsError}
       <div class="inbox-state inbox-state--error">
-        {inboxState.jiraItemsError}
+        {itemsError}
         <button class="link-inline" onclick={onRefreshJiraInbox}>Retry</button>
       </div>
-    {:else if inboxState.jiraItems.length === 0}
+    {:else if items.length === 0}
       <div class="inbox-state">
         {#if inboxState.jiraAssigneeAny}
           No open issues match the current filters.
@@ -448,7 +473,7 @@
         {/each}
       {/each}
     {:else}
-      {#each inboxState.jiraItems as j (j.id)}
+      {#each items as j (j.id)}
         <div
           class="inbox-item"
           draggable="true"

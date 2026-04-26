@@ -462,8 +462,15 @@
       const q = mentionQuery;
       const out: { cand: MentionCandidate; s: number }[] = [];
 
+      /* Walk every Jira / GitHub / Sentry column's loaded items —
+         post per-instance refactor each column has its own list, but
+         @-mention candidates draw from anything the user has open. */
+      const allJiraItems = Object.values(inboxState.jiraItemsByInstance).flat();
+      const allGhItems = Object.values(inboxState.itemsByInstance).flat();
+      const allSentryItems = Object.values(inboxState.sentryItemsByInstance).flat();
+
       // Jira issues — externalId is the key (e.g. DEVOPS-437).
-      for (const j of inboxState.jiraItems) {
+      for (const j of allJiraItems) {
         const s = Math.max(score(j.key, q), score(j.summary, q));
         if (s < 0) continue;
         out.push({
@@ -479,7 +486,7 @@
 
       // GitHub issues/PRs — externalId is `#<number>` for @mention parity
       // with how the Markdown renderer styles them.
-      for (const it of inboxState.items) {
+      for (const it of allGhItems) {
         const id = `#${it.number}`;
         const s = Math.max(score(id, q), score(it.title, q));
         if (s < 0) continue;
@@ -498,7 +505,7 @@
       // `sentryBody` is the compact context block stitched into the Mention
       // so Claude can answer "what's @CATALOG-API-76?" without an MCP
       // round-trip for the basics.
-      for (const it of inboxState.sentryItems) {
+      for (const it of allSentryItems) {
         const s = Math.max(score(it.short_id, q), score(it.title, q));
         if (s < 0) continue;
         const bodyParts: string[] = [];

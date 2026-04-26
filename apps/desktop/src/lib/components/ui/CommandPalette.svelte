@@ -13,7 +13,7 @@
      A picked row dispatches the right action (setView, goToInstance,
      updateXFilters, openFocus…) and closes the palette. */
 
-  import { externalId } from '$lib/data';
+  import { externalId, type InboxItem, type JiraItem, type SentryIssue } from '$lib/data';
   import {
     inboxState,
     selectInboxItem,
@@ -278,32 +278,50 @@
         }))
     );
 
-    // 9. GitHub PRs/issues (loaded inbox)
-    push(
-      inboxState.items
-        .filter((item) => matches(item.title, externalId(item)))
-        .map((item) => ({
-          key: `gh:${item.id}`,
-          badge: 'GH',
-          badgeKind: 'github' as const,
-          title: item.title,
-          subtitle: externalId(item),
-          section: 'GitHub items',
-          pick: () => {
-            selectInboxItem(item.id);
-            setView('workbench');
-            close();
-          }
-        }))
-    );
+    // 9. GitHub PRs/issues — merge across every column instance + dedupe
+    //     by id since the same PR can appear in two columns.
+    {
+      const seen = new Set<number>();
+      const merged: InboxItem[] = [];
+      for (const list of Object.values(inboxState.itemsByInstance)) {
+        for (const it of list) {
+          if (seen.has(it.id)) continue;
+          seen.add(it.id);
+          merged.push(it);
+        }
+      }
+      push(
+        merged
+          .filter((item) => matches(item.title, externalId(item)))
+          .map((item) => ({
+            key: `gh:${item.id}`,
+            badge: 'GH',
+            badgeKind: 'github' as const,
+            title: item.title,
+            subtitle: externalId(item),
+            section: 'GitHub items',
+            pick: () => {
+              selectInboxItem(item.id);
+              setView('workbench');
+              close();
+            }
+          }))
+      );
+    }
 
-    // 10. Jira issues — searches column items + tasks-tab items
-    //     (independent slices since the recent decoupling), deduped
-    //     by id so an issue loaded by both doesn't appear twice.
+    // 10. Jira issues — merge across every column instance + the tab
+    //     slice, deduped by id.
     {
       const seen = new Set<string>();
-      const merged: typeof inboxState.jiraItems = [];
-      for (const it of [...inboxState.jiraItems, ...inboxState.jiraTabItems]) {
+      const merged: JiraItem[] = [];
+      for (const list of Object.values(inboxState.jiraItemsByInstance)) {
+        for (const it of list) {
+          if (seen.has(it.id)) continue;
+          seen.add(it.id);
+          merged.push(it);
+        }
+      }
+      for (const it of inboxState.jiraTabItems) {
         if (seen.has(it.id)) continue;
         seen.add(it.id);
         merged.push(it);
@@ -327,11 +345,19 @@
       );
     }
 
-    // 11. Sentry issues — same column + issues-tab merge.
+    // 11. Sentry issues — merge across every column instance + the tab
+    //     slice, deduped by id.
     {
       const seen = new Set<string>();
-      const merged: typeof inboxState.sentryItems = [];
-      for (const it of [...inboxState.sentryItems, ...inboxState.sentryTabItems]) {
+      const merged: SentryIssue[] = [];
+      for (const list of Object.values(inboxState.sentryItemsByInstance)) {
+        for (const it of list) {
+          if (seen.has(it.id)) continue;
+          seen.add(it.id);
+          merged.push(it);
+        }
+      }
+      for (const it of inboxState.sentryTabItems) {
         if (seen.has(it.id)) continue;
         seen.add(it.id);
         merged.push(it);

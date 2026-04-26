@@ -16,7 +16,12 @@
     loadSentryProjects,
     openSentryFocus,
     refreshSentryInbox,
-    scheduleSentryFilterRefresh
+    scheduleSentryFilterRefresh,
+    sentryFiltersFor,
+    sentryItemsErrorFor,
+    sentryItemsFor,
+    sentryItemsLoadingFor,
+    setSentryFilters
   } from '$lib/state/inbox.svelte';
   import ColumnControls from '$lib/components/workbench/ColumnControls.svelte';
   import Dropdown, { type DropdownOption } from '$lib/components/ui/Dropdown.svelte';
@@ -49,21 +54,23 @@
   const inst = $derived(activeInstances().find((i) => i.id === instanceId));
   const order = $derived(activeInstances().findIndex((i) => i.id === instanceId));
 
-  // Auto-load on mount when connected. The local `didAutoLoad` flag
-  // avoids an infinite refetch loop: without it, an empty success
-  // response (filters too restrictive, no issues match) would land
-  // with items=[], loading=false, error=null — exactly the same
-  // state as the pre-load condition, so the effect would fire
-  // refreshSentryInbox again, get empty again, repeat forever.
-  // Subsequent refreshes are user-driven via the column's refresh
-  // button or filter changes.
-  let didAutoLoad = $state(false);
+  /* Per-instance state. Two SentryColumn instances each get their
+     own filter / item slot keyed by instanceId. */
+  const filters = $derived(sentryFiltersFor(instanceId));
+  const items = $derived(sentryItemsFor(instanceId));
+  const itemsLoading = $derived(sentryItemsLoadingFor(instanceId));
+  const itemsError = $derived(sentryItemsErrorFor(instanceId));
+
+  /* Auto-load on first mount when connected and this column has no slot
+     yet (empty results aren't undefined → won't loop forever). */
   $effect(() => {
     if (sentryStatus.kind !== 'connected') return;
-    if (didAutoLoad) return;
-    if (inboxState.sentryItemsLoading) return;
-    didAutoLoad = true;
-    void refreshSentryInbox({ silent: false });
+    if (
+      inboxState.sentryItemsByInstance[instanceId] === undefined &&
+      !itemsLoading
+    ) {
+      void refreshSentryInbox(instanceId, { silent: false });
+    }
   });
 
   // Lazy-load project + env dropdowns the first time they're shown.
@@ -115,35 +122,39 @@
     { value: 'user', label: 'Users affected' }
   ];
 
-  // Selection helpers — wrap mutations + debounced refresh so filter
-  // changes feel instant but we don't spam the API on every keystroke.
+  /* Filter pick helpers — patch this column's filter slice via
+     `setSentryFilters` and trigger a debounced + persisted refresh. */
   function pickProject(slug: string) {
-    inboxState.sentryProjects = slug === '__all__' ? [] : [slug];
-    void loadSentryEnvironments();
-    void refreshSentryInbox({ silent: true });
+    setSentryFilters(instanceId, { projects: slug === '__all__' ? [] : [slug] });
+    void loadSentryEnvironments(slug === '__all__' ? undefined : slug);
+    scheduleSentryFilterRefresh(instanceId);
   }
   function pickEnvironment(name: string) {
-    inboxState.sentryEnvironment = name || null;
-    void refreshSentryInbox({ silent: true });
+    setSentryFilters(instanceId, { environment: name || null });
+    scheduleSentryFilterRefresh(instanceId);
   }
   function pickStatus(s: string) {
-    inboxState.sentryStatus = s as typeof inboxState.sentryStatus;
-    void refreshSentryInbox({ silent: true });
+    setSentryFilters(instanceId, { status: s as SentryFiltersStatus });
+    scheduleSentryFilterRefresh(instanceId);
   }
   function pickLevel(l: string) {
-    inboxState.sentryLevel = l as typeof inboxState.sentryLevel;
-    void refreshSentryInbox({ silent: true });
+    setSentryFilters(instanceId, { level: l as SentryFiltersLevel });
+    scheduleSentryFilterRefresh(instanceId);
   }
   function pickSort(s: string) {
-    inboxState.sentrySort = s as typeof inboxState.sentrySort;
-    void refreshSentryInbox({ silent: true });
+    setSentryFilters(instanceId, { sort: s as SentryFiltersSort });
+    scheduleSentryFilterRefresh(instanceId);
   }
   function onSearchInput(e: Event) {
-    inboxState.sentrySearch = (e.target as HTMLInputElement).value;
-    scheduleSentryFilterRefresh();
+    setSentryFilters(instanceId, { search: (e.target as HTMLInputElement).value });
+    scheduleSentryFilterRefresh(instanceId);
   }
 
-  const projectValue = $derived(inboxState.sentryProjects[0] ?? '__all__');
+  type SentryFiltersStatus = 'unresolved' | 'resolved' | 'ignored' | 'all';
+  type SentryFiltersLevel = 'all' | 'fatal' | 'error' | 'warning' | 'info' | 'debug';
+  type SentryFiltersSort = 'date' | 'new' | 'priority' | 'freq' | 'user';
+
+  const projectValue = $derived(filters.projects[0] ?? '__all__');
 
   // Truncate long error titles for the card. Two-line clamp via CSS,
   // but we still hard-truncate the meta line.
@@ -176,12 +187,12 @@
     {/if}
     <button
       class="refresh-btn"
-      onclick={() => void refreshSentryInbox({ silent: true })}
-      disabled={inboxState.sentryItemsLoading}
+      onclick={() => void refreshSentryInbox(instanceId, { silent: true })}
+      disabled={itemsLoading}
       title="Refresh"
       aria-label="Refresh"
     >
-      <svg class="i i-sm" viewBox="0 0 24 24" class:spin={inboxState.sentryItemsLoading}>
+      <svg class="i i-sm" viewBox="0 0 24 24" class:spin={itemsLoading}>
         <path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5"/>
       </svg>
     </button>
@@ -199,7 +210,7 @@
         width="100%"
       />
       <Dropdown
-        value={inboxState.sentryEnvironment ?? ''}
+        value={filters.environment ?? ''}
         options={envOpts}
         onChange={pickEnvironment}
         ariaLabel="Environment"
@@ -209,21 +220,21 @@
     </div>
     <div class="filter-row three-col">
       <Dropdown
-        value={inboxState.sentryStatus}
+        value={filters.status}
         options={statusOpts}
         onChange={pickStatus}
         ariaLabel="Status"
         width="100%"
       />
       <Dropdown
-        value={inboxState.sentryLevel}
+        value={filters.level}
         options={levelOpts}
         onChange={pickLevel}
         ariaLabel="Level"
         width="100%"
       />
       <Dropdown
-        value={inboxState.sentrySort}
+        value={filters.sort}
         options={sortOpts}
         onChange={pickSort}
         ariaLabel="Sort"
@@ -233,9 +244,9 @@
     <input
       class="filter-search mono"
       type="search"
-      value={inboxState.sentrySearch}
+      value={filters.search}
       oninput={onSearchInput}
-      onkeydown={(e) => { if (e.key === 'Enter') { void refreshSentryInbox({ silent: false }); } }}
+      onkeydown={(e) => { if (e.key === 'Enter') { void refreshSentryInbox(instanceId, { silent: false }); } }}
       placeholder="search… (free text or `tag:value`)"
       aria-label="Sentry search query"
     />
@@ -245,17 +256,17 @@
   <div class="inbox-list">
     {#if sentryStatus.kind !== 'connected'}
       <div class="inbox-state">Sentry isn't connected.</div>
-    {:else if inboxState.sentryItemsLoading && inboxState.sentryItems.length === 0}
+    {:else if itemsLoading && items.length === 0}
       <div class="inbox-state">Loading…</div>
-    {:else if inboxState.sentryItemsError}
+    {:else if itemsError}
       <div class="inbox-state inbox-state--error">
-        {inboxState.sentryItemsError}
-        <button class="link-inline" onclick={() => void refreshSentryInbox({ silent: false })}>Retry</button>
+        {itemsError}
+        <button class="link-inline" onclick={() => void refreshSentryInbox(instanceId, { silent: false })}>Retry</button>
       </div>
-    {:else if inboxState.sentryItems.length === 0}
+    {:else if items.length === 0}
       <div class="inbox-state">No issues match the current query.</div>
     {:else}
-      {#each inboxState.sentryItems as issue (issue.id)}
+      {#each items as issue (issue.id)}
         <div
           class="inbox-item sentry-item"
           draggable="true"

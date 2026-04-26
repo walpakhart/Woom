@@ -22,8 +22,13 @@
   } from '$lib/state/layout.svelte';
   import ColumnControls from '$lib/components/workbench/ColumnControls.svelte';
   import {
+    githubErrorFor,
+    githubFiltersFor,
+    githubItemsFor,
+    githubLoadingFor,
     inboxState,
     loadGithubRepoOptions,
+    refreshInbox,
     updateGithubFilters,
     type GithubFilterMode
   } from '$lib/state/inbox.svelte';
@@ -90,7 +95,26 @@
     onOpenCreatePr
   }: Props = $props();
 
-  const grouped = $derived(groupByTime(inboxState.items, now));
+  /* Per-instance state lookups — two GithubColumn instances each get
+     their own filter / item slot so picking a different repo on column
+     A doesn't reload column B. */
+  const filters = $derived(githubFiltersFor(instanceId));
+  const items = $derived(githubItemsFor(instanceId));
+  const loading = $derived(githubLoadingFor(instanceId));
+  const error = $derived(githubErrorFor(instanceId));
+
+  /* Auto-load on first mount when this column has nothing yet. */
+  $effect(() => {
+    if (githubStatus.kind !== 'connected') return;
+    if (
+      inboxState.itemsByInstance[instanceId] === undefined &&
+      !loading
+    ) {
+      void refreshInbox(instanceId, { silent: true });
+    }
+  });
+
+  const grouped = $derived(groupByTime(items, now));
 
   // Filter mode options — label + the corresponding GitHub search qualifier
   // key (mirrored in `buildGithubQuery`).
@@ -110,21 +134,21 @@
   }
 
   function onModeChange(value: GithubFilterMode) {
-    updateGithubFilters({ mode: value });
+    updateGithubFilters(instanceId, { mode: value });
   }
 
   function onRepoChange(value: string) {
-    updateGithubFilters({ repo: value ? value : null });
+    updateGithubFilters(instanceId, { repo: value ? value : null });
   }
 
   function onSearchInput(e: Event) {
     const value = (e.target as HTMLInputElement).value;
-    updateGithubFilters({ search: value });
+    updateGithubFilters(instanceId, { search: value });
   }
 
   function onCustomUserInput(e: Event) {
     const value = (e.target as HTMLInputElement).value;
-    updateGithubFilters({ customUser: value });
+    updateGithubFilters(instanceId, { customUser: value });
   }
 
   const modeOptions = $derived<DropdownOption<GithubFilterMode>[]>(
@@ -185,7 +209,7 @@
       <div class="filter-row">
         <div class="filter-cell">
           <Dropdown
-            value={inboxState.githubFilters.mode}
+            value={filters.mode}
             options={modeOptions}
             onChange={onModeChange}
             ariaLabel="Filter mode"
@@ -194,7 +218,7 @@
         </div>
         <div class="filter-cell">
           <Dropdown
-            value={inboxState.githubFilters.repo ?? ''}
+            value={filters.repo ?? ''}
             options={repoOptions}
             onChange={onRepoChange}
             onOpen={onRepoOpen}
@@ -203,8 +227,8 @@
             width="100%"
           />
         </div>
-        <button class="icon-btn" onclick={onRefreshInbox} title="Refresh" aria-label="Refresh" disabled={inboxState.loading}>
-          <svg class="i i-sm" viewBox="0 0 24 24" style="transform: rotate({inboxState.loading ? 360 : 0}deg); transition: transform 0.6s;">
+        <button class="icon-btn" onclick={onRefreshInbox} title="Refresh" aria-label="Refresh" disabled={loading}>
+          <svg class="i i-sm" viewBox="0 0 24 24" style="transform: rotate({loading ? 360 : 0}deg); transition: transform 0.6s;">
             <path d="M21 12a9 9 0 0 1-9 9 9 9 0 0 1-8.5-6" />
             <path d="M3 12a9 9 0 0 1 9-9 9 9 0 0 1 8.5 6" />
             <polyline points="21 3 21 9 15 9" />
@@ -217,18 +241,18 @@
           class="filter-input"
           type="text"
           placeholder="Search…"
-          value={inboxState.githubFilters.search}
+          value={filters.search}
           oninput={onSearchInput}
           aria-label="Search GitHub issues"
         />
       </div>
-      {#if inboxState.githubFilters.mode === 'user'}
+      {#if filters.mode === 'user'}
         <div class="filter-row">
           <input
             class="filter-input"
             type="text"
             placeholder="GitHub username (e.g. octocat)"
-            value={inboxState.githubFilters.customUser}
+            value={filters.customUser}
             oninput={onCustomUserInput}
             aria-label="Custom user login"
           />
@@ -236,18 +260,18 @@
       {/if}
     </div>
     <div class="inbox-controls">
-      <span class="inbox-count mono">{inboxState.items.length} items</span>
+      <span class="inbox-count mono">{items.length} items</span>
     </div>
   </div>
   <div class="inbox-list">
-    {#if inboxState.loading && inboxState.items.length === 0}
+    {#if loading && items.length === 0}
       <div class="inbox-state">Loading inbox…</div>
-    {:else if inboxState.error}
+    {:else if error}
       <div class="inbox-state inbox-state--error">
-        {inboxState.error}
+        {error}
         <button class="link-inline" onclick={onRefreshInbox}>Retry</button>
       </div>
-    {:else if inboxState.items.length === 0}
+    {:else if items.length === 0}
       <div class="inbox-state">No open items involving you.</div>
     {:else}
       {#each [['today', grouped.today, 'Today'], ['yesterday', grouped.yesterday, 'Yesterday'], ['earlier', grouped.earlier, 'Earlier']] as [key, list, label] (key)}

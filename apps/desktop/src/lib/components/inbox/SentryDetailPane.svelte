@@ -109,13 +109,20 @@
     try {
       const updated = await invoke<SentryIssue>('sentry_set_status', { issueId, status });
       issue = updated;
-      const idx = inboxState.sentryItems.findIndex((i) => i.id === issueId);
-      if (idx >= 0) {
-        inboxState.sentryItems = [
-          ...inboxState.sentryItems.slice(0, idx),
-          updated,
-          ...inboxState.sentryItems.slice(idx + 1)
-        ];
+      /* Patch every Sentry column's items list — issue ids are global,
+         the same record can appear in multiple columns when their
+         filters overlap. Each list re-renders with the new status
+         tag without waiting for a server refresh. */
+      for (const id of Object.keys(inboxState.sentryItemsByInstance)) {
+        const list = inboxState.sentryItemsByInstance[id];
+        const idx = list.findIndex((i: SentryIssue) => i.id === issueId);
+        if (idx >= 0) {
+          inboxState.sentryItemsByInstance[id] = [
+            ...list.slice(0, idx),
+            updated,
+            ...list.slice(idx + 1)
+          ];
+        }
       }
       notify({ kind: 'success', title: `Marked ${label}d`, ttlMs: 1800 });
     } catch (e) {

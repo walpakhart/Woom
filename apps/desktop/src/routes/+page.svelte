@@ -79,6 +79,9 @@
     refreshInbox,
     refreshJiraInbox,
     refreshSentryInbox,
+    refreshAllInboxes,
+    refreshAllJiraInboxes,
+    refreshAllSentryInboxes,
     resetSentryInbox,
     loadDetail,
     reloadDetailAndLists as reloadDetailAndListsCore,
@@ -158,9 +161,9 @@
       appLocked = false;
       // Now that we're allowed through, pull connection status + inboxes.
       await refreshAllStatus();
-      if (connectedGithub) void refreshInbox();
-      if (connectedJira) void refreshJiraInbox();
-      if (connectedSentry) void refreshSentryInbox();
+      if (connectedGithub) void refreshAllInboxes();
+      if (connectedJira) void refreshAllJiraInboxes();
+      if (connectedSentry) void refreshAllSentryInboxes();
     } catch (e) {
       biometryError = typeof e === 'string' ? e : String(e);
     } finally {
@@ -570,8 +573,8 @@
     if (connectedGithub) {
       if (!refreshInterval) {
         refreshInterval = setInterval(() => {
-          void refreshInbox({ silent: true });
-          if (connectedJira) void refreshJiraInbox({ silent: true });
+          void refreshAllInboxes({ silent: true });
+          if (connectedJira) void refreshAllJiraInboxes({ silent: true });
         }, 60_000);
       }
     } else {
@@ -584,14 +587,24 @@
   });
 
   $effect(() => {
-    if (connectedJira && inboxState.jiraItems.length === 0 && !inboxState.jiraItemsLoading) {
-      void refreshJiraInbox({ silent: true });
-    } else if (!connectedJira) {
+    /* Auto-load Jira on connect for any column that hasn't fetched yet
+       (per-instance state means each column owns its own list). */
+    if (connectedJira) {
+      const empty = Object.values(inboxState.jiraItemsByInstance).every(
+        (list) => list.length === 0
+      );
+      const idle = Object.values(inboxState.jiraItemsLoadingByInstance).every(
+        (loading) => !loading
+      );
+      if (empty && idle) {
+        void refreshAllJiraInboxes({ silent: true });
+      }
+    } else {
       // Only wipe the issue list on transient disconnects — keep the
       // user-picked assignee so reconnecting doesn't silently jump back to
       // "me". `resetJiraInbox` below is used by the explicit disconnect
       // button which *does* clear the assignee.
-      inboxState.jiraItems = [];
+      inboxState.jiraItemsByInstance = {};
     }
   });
 
@@ -2538,7 +2551,7 @@
       });
       closeModal('sentryConnect');
       await refreshSentryStatus();
-      void refreshSentryInbox();
+      void refreshAllSentryInboxes();
     } catch (e) {
       patchModal('sentryConnect', { busy: false, error: typeof e === 'string' ? e : String(e) });
     }
@@ -2567,7 +2580,7 @@
       const user = await invoke<GithubUser>('github_connect_pat', { token });
       connectionsState.github = { kind: 'connected', user };
       closeModal('pat');
-      await refreshInbox();
+      await refreshAllInboxes();
       view = 'workbench';
     } catch (e) {
       patchModal('pat', { busy: false, error: typeof e === 'string' ? e : String(e) });
@@ -2668,7 +2681,13 @@
   // ---- Jira Create Issue ----
 
   async function openJiraCreateIssue() {
-    const active = inboxState.jiraFilters;
+    /* Pull defaults from the FIRST jira column's filter — no perfect
+       answer with multiple columns, but most setups have one and the
+       user expects the new-issue dialog to pre-fill from "the" column. */
+    const firstId = Object.keys(inboxState.jiraFiltersByInstance)[0];
+    const active = firstId
+      ? inboxState.jiraFiltersByInstance[firstId]
+      : { projectKey: null, sprintIds: [] as (number | 'backlog')[] };
     openModal('jiraCreate', {
       projectKey: active.projectKey ?? '',
       projects: inboxState.jiraProjectOptions,
@@ -2737,11 +2756,18 @@
         assigneeAccountId: assigneeAccountId.trim() || null,
         sprintId
       });
-      // Optimistically push the new issue onto the current list, then refresh
-      // to pick up server-side ordering.
-      inboxState.jiraItems = [created, ...inboxState.jiraItems];
+      // Optimistically push the new issue onto every jira column's list,
+      // then refresh to pick up server-side ordering. Each column will
+      // re-fetch with its own filter — the optimistic prepend just hides
+      // the round-trip latency.
+      for (const id of Object.keys(inboxState.jiraItemsByInstance)) {
+        inboxState.jiraItemsByInstance[id] = [
+          created,
+          ...inboxState.jiraItemsByInstance[id]
+        ];
+      }
       closeModal('jiraCreate');
-      void refreshJiraInbox({ silent: true });
+      void refreshAllJiraInboxes({ silent: true });
     } catch (e) {
       patchModal('jiraCreate', { busy: false, error: typeof e === 'string' ? e : String(e) });
     }
@@ -2750,7 +2776,12 @@
   // ---- GitHub Create PR ----
 
   async function openGithubCreatePr() {
-    const activeRepo = inboxState.githubFilters.repo;
+    /* Pull repo default from the first GitHub column's filter, same
+       trade-off as openJiraCreateIssue. */
+    const firstId = Object.keys(inboxState.githubFiltersByInstance)[0];
+    const activeRepo = firstId
+      ? inboxState.githubFiltersByInstance[firstId].repo
+      : null;
     openModal('githubCreatePr', {
       repo: activeRepo ?? '',
       repos: inboxState.githubRepoOptions.map((r) => ({
@@ -2915,11 +2946,13 @@
         draft
       });
       closeModal('githubCreatePr');
-      // Optimistically push onto inbox and open focus pane.
-      inboxState.items = [created, ...inboxState.items];
+      // Optimistically push onto every github column and open focus pane.
+      for (const id of Object.keys(inboxState.itemsByInstance)) {
+        inboxState.itemsByInstance[id] = [created, ...inboxState.itemsByInstance[id]];
+      }
       openFocusItem(created);
       view = 'workbench';
-      void refreshInbox({ silent: true });
+      void refreshAllInboxes({ silent: true });
     } catch (e) {
       patchModal('githubCreatePr', { busy: false, error: typeof e === 'string' ? e : String(e) });
     }
@@ -2957,7 +2990,7 @@
 <div id="app" class:is-dragging={dragState.payload !== null}>
   <Rail
     bind:view
-    inboxCount={inboxState.items.length}
+    inboxCount={Object.values(inboxState.itemsByInstance).reduce((sum, list) => sum + list.length, 0)}
     {anythingConnected}
     {statusLoading}
     {githubStatus}
@@ -3133,7 +3166,7 @@
                 {tab}
                 {actionBusy}
                 onSelectInboxItem={selectInboxItem}
-                onRefreshInbox={() => refreshInbox()}
+                onRefreshInbox={() => refreshInbox(inst.id)}
                 onOpenPalette={() => (paletteOpen = true)}
                 {onDragStart}
                 {onDragEnd}
@@ -3160,7 +3193,7 @@
                 {jiraStatus}
                 {now}
                 onOpenUserPicker={openUserPicker}
-                onRefreshJiraInbox={() => refreshJiraInbox()}
+                onRefreshJiraInbox={() => refreshJiraInbox(inst.id)}
                 {onDragStart}
                 {onDragEnd}
                 {onCardMouseDown}
@@ -3400,7 +3433,7 @@
         issueKey={inboxState.jiraFocusKey}
         {now}
         onClose={() => (inboxState.jiraFocusKey = null)}
-        onStatusChange={() => void refreshJiraInbox({ silent: true })}
+        onStatusChange={() => void refreshAllJiraInboxes({ silent: true })}
       />
     </div>
   </div>

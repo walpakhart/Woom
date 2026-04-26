@@ -33,6 +33,7 @@ import type {
   SentryProject
 } from '$lib/data';
 import { closeModal, modalsState, openModal, patchModal } from '$lib/state/modals.svelte';
+import { listInstancesOfKind, registerInstanceRemovedHook } from '$lib/state/layout.svelte';
 
 // ---- GitHub filter state ----
 //
@@ -88,9 +89,12 @@ export interface JiraFilters {
   search: string;
 }
 
-const GITHUB_FILTERS_KEY = 'forgehold:github-filters:v1';
-const JIRA_FILTERS_KEY = 'forgehold:jira-filters:v1';
-const SENTRY_FILTERS_KEY = 'forgehold:sentry-filters:v1';
+/* Per-column-instance filter persistence — one key per source, payload
+   is `Record<instanceId, FilterShape>`. Each column owns one entry,
+   `cleanupInstanceState` drops the entry when the instance is closed. */
+const GH_COL_FILTERS_KEY = 'forgehold:github-col-filters-by-instance:v1';
+const JIRA_COL_FILTERS_KEY = 'forgehold:jira-col-filters-by-instance:v1';
+const SENTRY_COL_FILTERS_KEY = 'forgehold:sentry-col-filters-by-instance:v1';
 /* Tabs (JiraTab / SentryTab) keep their own filter slice so changing
    a board / project / status in the dedicated tab doesn't yank the
    workbench column out from under the user (and vice-versa). Each tab
@@ -116,61 +120,40 @@ const DEFAULT_SENTRY_FILTERS: SentryFiltersPersisted = {
   sort: 'date'
 };
 
-function readSentryFilters(): SentryFiltersPersisted {
-  try {
-    const raw = localStorage.getItem(SENTRY_FILTERS_KEY);
-    if (!raw) return { ...DEFAULT_SENTRY_FILTERS };
-    const parsed = JSON.parse(raw) as Partial<SentryFiltersPersisted>;
-    return {
-      search: typeof parsed.search === 'string' ? parsed.search : '',
-      status:
-        parsed.status === 'unresolved' ||
-        parsed.status === 'resolved' ||
-        parsed.status === 'ignored' ||
-        parsed.status === 'all'
-          ? parsed.status
-          : 'unresolved',
-      level:
-        parsed.level === 'all' ||
-        parsed.level === 'fatal' ||
-        parsed.level === 'error' ||
-        parsed.level === 'warning' ||
-        parsed.level === 'info' ||
-        parsed.level === 'debug'
-          ? parsed.level
-          : 'all',
-      projects: Array.isArray(parsed.projects)
-        ? parsed.projects.filter((p): p is string => typeof p === 'string')
-        : [],
-      environment: typeof parsed.environment === 'string' ? parsed.environment : null,
-      sort:
-        parsed.sort === 'date' ||
-        parsed.sort === 'new' ||
-        parsed.sort === 'priority' ||
-        parsed.sort === 'freq' ||
-        parsed.sort === 'user'
-          ? parsed.sort
-          : 'date'
-    };
-  } catch {
-    return { ...DEFAULT_SENTRY_FILTERS };
-  }
-}
-
-function persistSentryFilters() {
-  try {
-    const payload: SentryFiltersPersisted = {
-      search: inboxState.sentrySearch,
-      status: inboxState.sentryStatus,
-      level: inboxState.sentryLevel,
-      projects: inboxState.sentryProjects,
-      environment: inboxState.sentryEnvironment,
-      sort: inboxState.sentrySort
-    };
-    localStorage.setItem(SENTRY_FILTERS_KEY, JSON.stringify(payload));
-  } catch {
-    /* quota / SSR: ignore */
-  }
+function normalizeSentryFilters(raw: unknown): SentryFiltersPersisted {
+  if (typeof raw !== 'object' || !raw) return { ...DEFAULT_SENTRY_FILTERS };
+  const parsed = raw as Partial<SentryFiltersPersisted>;
+  return {
+    search: typeof parsed.search === 'string' ? parsed.search : '',
+    status:
+      parsed.status === 'unresolved' ||
+      parsed.status === 'resolved' ||
+      parsed.status === 'ignored' ||
+      parsed.status === 'all'
+        ? parsed.status
+        : 'unresolved',
+    level:
+      parsed.level === 'all' ||
+      parsed.level === 'fatal' ||
+      parsed.level === 'error' ||
+      parsed.level === 'warning' ||
+      parsed.level === 'info' ||
+      parsed.level === 'debug'
+        ? parsed.level
+        : 'all',
+    projects: Array.isArray(parsed.projects)
+      ? parsed.projects.filter((p): p is string => typeof p === 'string')
+      : [],
+    environment: typeof parsed.environment === 'string' ? parsed.environment : null,
+    sort:
+      parsed.sort === 'date' ||
+      parsed.sort === 'new' ||
+      parsed.sort === 'priority' ||
+      parsed.sort === 'freq' ||
+      parsed.sort === 'user'
+        ? parsed.sort
+        : 'date'
+  };
 }
 
 const DEFAULT_GH_FILTERS: GithubFilters = {
@@ -188,82 +171,126 @@ const DEFAULT_JIRA_FILTERS: JiraFilters = {
   search: ''
 };
 
-function readGhFilters(): GithubFilters {
+function normalizeGhFilters(raw: unknown): GithubFilters {
+  if (typeof raw !== 'object' || !raw) return { ...DEFAULT_GH_FILTERS };
+  const parsed = raw as Record<string, unknown>;
+  return {
+    mode:
+      typeof parsed.mode === 'string'
+        ? (parsed.mode as GithubFilters['mode'])
+        : 'involving',
+    repo: typeof parsed.repo === 'string' ? parsed.repo : null,
+    search: typeof parsed.search === 'string' ? parsed.search : '',
+    customUser: typeof parsed.customUser === 'string' ? parsed.customUser : ''
+  };
+}
+
+function normalizeJiraFilters(raw: unknown): JiraFilters {
+  if (typeof raw !== 'object' || !raw) return { ...DEFAULT_JIRA_FILTERS };
+  const parsed = raw as Record<string, unknown>;
+  const sprintIdsRaw = parsed.sprintIds;
+  let sprintIds: SprintScope[] = [];
+  if (Array.isArray(sprintIdsRaw)) {
+    sprintIds = sprintIdsRaw.filter(
+      (v): v is SprintScope => typeof v === 'number' || v === 'backlog'
+    );
+  } else if (typeof parsed.sprintId === 'number') {
+    sprintIds = [parsed.sprintId];
+  } else if (parsed.sprintId === 'backlog') {
+    sprintIds = ['backlog'];
+  }
+  const statusName =
+    typeof parsed.statusName === 'string' && parsed.statusName.trim()
+      ? parsed.statusName
+      : null;
+  const boardIdsRaw = parsed.boardIds;
+  let boardIds: number[] = [];
+  if (Array.isArray(boardIdsRaw)) {
+    boardIds = boardIdsRaw.filter((n): n is number => typeof n === 'number');
+  } else if (typeof parsed.boardId === 'number') {
+    boardIds = [parsed.boardId];
+  }
+  return {
+    projectKey: typeof parsed.projectKey === 'string' ? parsed.projectKey : null,
+    boardIds,
+    sprintIds,
+    statusName,
+    search: typeof parsed.search === 'string' ? parsed.search : ''
+  };
+}
+
+function readGhFiltersByInstance(): Record<string, GithubFilters> {
   try {
-    const raw = localStorage.getItem(GITHUB_FILTERS_KEY);
-    if (!raw) return { ...DEFAULT_GH_FILTERS };
+    const raw = localStorage.getItem(GH_COL_FILTERS_KEY);
+    if (!raw) return {};
     const parsed = JSON.parse(raw);
-    return {
-      mode: typeof parsed.mode === 'string' ? parsed.mode : 'involving',
-      repo: typeof parsed.repo === 'string' ? parsed.repo : null,
-      search: typeof parsed.search === 'string' ? parsed.search : '',
-      customUser: typeof parsed.customUser === 'string' ? parsed.customUser : ''
-    };
+    if (typeof parsed !== 'object' || !parsed) return {};
+    const out: Record<string, GithubFilters> = {};
+    for (const [id, f] of Object.entries(parsed)) {
+      out[id] = normalizeGhFilters(f);
+    }
+    return out;
   } catch {
-    return { ...DEFAULT_GH_FILTERS };
+    return {};
   }
 }
 
-function readJiraFilters(): JiraFilters {
+function readJiraFiltersByInstance(): Record<string, JiraFilters> {
   try {
-    const raw = localStorage.getItem(JIRA_FILTERS_KEY);
-    if (!raw) return { ...DEFAULT_JIRA_FILTERS };
+    const raw = localStorage.getItem(JIRA_COL_FILTERS_KEY);
+    if (!raw) return {};
     const parsed = JSON.parse(raw);
-    // Migrate legacy single-sprint persisted shape (sprintId: number |
-    // 'backlog' | null) into the new array shape (sprintIds: SprintScope[]).
-    // Old single-sprint users land with [sprintId], new payload format
-    // uses sprintIds directly.
-    const sprintIdsRaw = parsed.sprintIds;
-    let sprintIds: SprintScope[] = [];
-    if (Array.isArray(sprintIdsRaw)) {
-      sprintIds = sprintIdsRaw.filter(
-        (v): v is SprintScope => typeof v === 'number' || v === 'backlog'
-      );
-    } else if (typeof parsed.sprintId === 'number') {
-      sprintIds = [parsed.sprintId];
-    } else if (parsed.sprintId === 'backlog') {
-      sprintIds = ['backlog'];
+    if (typeof parsed !== 'object' || !parsed) return {};
+    const out: Record<string, JiraFilters> = {};
+    for (const [id, f] of Object.entries(parsed)) {
+      out[id] = normalizeJiraFilters(f);
     }
-    // New payload shape persists a literal status name (or null for "Any").
-    // Old payloads used a 4-value category enum (`any|todo|in_progress|done`)
-    // under `status` — we can't reliably map those to a specific workflow
-    // status per project, so just drop the legacy field and reset to "Any".
-    const statusName =
-      typeof parsed.statusName === 'string' && parsed.statusName.trim()
-        ? parsed.statusName
-        : null;
-    // Migrate legacy single-board persisted shape (`boardId: number | null`)
-    // into the new array shape (`boardIds: number[]`). Array form is
-    // preferred — old single-board users land with [boardId], everyone
-    // else with [].
-    const boardIdsRaw = parsed.boardIds;
-    let boardIds: number[] = [];
-    if (Array.isArray(boardIdsRaw)) {
-      boardIds = boardIdsRaw.filter((n): n is number => typeof n === 'number');
-    } else if (typeof parsed.boardId === 'number') {
-      boardIds = [parsed.boardId];
-    }
-    return {
-      projectKey: typeof parsed.projectKey === 'string' ? parsed.projectKey : null,
-      boardIds,
-      sprintIds,
-      statusName,
-      search: typeof parsed.search === 'string' ? parsed.search : ''
-    };
+    return out;
   } catch {
-    return { ...DEFAULT_JIRA_FILTERS };
+    return {};
+  }
+}
+
+function readSentryFiltersByInstance(): Record<string, SentryFiltersPersisted> {
+  try {
+    const raw = localStorage.getItem(SENTRY_COL_FILTERS_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (typeof parsed !== 'object' || !parsed) return {};
+    const out: Record<string, SentryFiltersPersisted> = {};
+    for (const [id, f] of Object.entries(parsed)) {
+      out[id] = normalizeSentryFilters(f);
+    }
+    return out;
+  } catch {
+    return {};
   }
 }
 
 function persistGhFilters() {
   try {
-    localStorage.setItem(GITHUB_FILTERS_KEY, JSON.stringify(inboxState.githubFilters));
+    localStorage.setItem(
+      GH_COL_FILTERS_KEY,
+      JSON.stringify(inboxState.githubFiltersByInstance)
+    );
   } catch {/* ignore */}
 }
 
 function persistJiraFilters() {
   try {
-    localStorage.setItem(JIRA_FILTERS_KEY, JSON.stringify(inboxState.jiraFilters));
+    localStorage.setItem(
+      JIRA_COL_FILTERS_KEY,
+      JSON.stringify(inboxState.jiraFiltersByInstance)
+    );
+  } catch {/* ignore */}
+}
+
+function persistSentryFilters() {
+  try {
+    localStorage.setItem(
+      SENTRY_COL_FILTERS_KEY,
+      JSON.stringify(inboxState.sentryFiltersByInstance)
+    );
   } catch {/* ignore */}
 }
 
@@ -271,8 +298,6 @@ function persistJiraFilters() {
    independent across reloads. The body migrates the same way as the
    shared key — `readJiraFilters` already handles legacy field shapes. */
 function readJiraTabFilters(): JiraFilters {
-  const orig = JIRA_FILTERS_KEY; // no-op; just keeping the symbol live
-  void orig;
   try {
     const raw = localStorage.getItem(JIRA_TAB_FILTERS_KEY);
     if (!raw) return { ...DEFAULT_JIRA_FILTERS };
@@ -369,14 +394,14 @@ function persistSentryTabFilters() {
 }
 
 export const inboxState = $state<{
-  // GitHub inbox (involves-me list)
-  items: InboxItem[];
-  loading: boolean;
-  error: string | null;
-
-  // GitHub filter state (mode / repo / search). Persisted to localStorage
-  // under `forgehold:github-filters:v1`.
-  githubFilters: GithubFilters;
+  // ---- GitHub inbox — per-column-instance ----
+  // Each GithubColumn keeps its own filter / item / loading / error slot.
+  // Persisted as one Record under
+  // `forgehold:github-col-filters-by-instance:v1`.
+  itemsByInstance: Record<string, InboxItem[]>;
+  loadingByInstance: Record<string, boolean>;
+  errorByInstance: Record<string, string | null>;
+  githubFiltersByInstance: Record<string, GithubFilters>;
   /** Cached repo list for the repo-scope dropdown. Lazily populated. */
   githubRepoOptions: { owner: string; name: string; full_name: string }[];
   githubRepoOptionsLoading: boolean;
@@ -401,20 +426,27 @@ export const inboxState = $state<{
   detailError: string | null;
   expandedFiles: Set<string>;
 
-  // Jira inbox
-  jiraItems: JiraItem[];
-  jiraItemsLoading: boolean;
-  jiraItemsError: string | null;
+  // ---- Jira inbox — per-column-instance ----
+  // Two JiraColumn instances on the same workbench (or across workbenches)
+  // each get their own filter / item / loading / error slot, keyed by
+  // PanelInstance.id, so changing a board on column A doesn't reload
+  // column B. Filters persist as one Record under
+  // `forgehold:jira-col-filters-by-instance:v1`. When an instance is
+  // removed (closed / moved), `cleanupInstanceState` (registered with
+  // `registerInstanceRemovedHook`) drops its slots so abandoned ids
+  // don't pile up in localStorage.
+  jiraItemsByInstance: Record<string, JiraItem[]>;
+  jiraItemsLoadingByInstance: Record<string, boolean>;
+  jiraItemsErrorByInstance: Record<string, string | null>;
+  jiraFiltersByInstance: Record<string, JiraFilters>;
+
   // Selected assignee to filter by. `null` + `jiraAssigneeAny=false` ⇒
   // authenticated account ("Me"). When `jiraAssigneeAny=true`, no assignee
   // constraint at all — show tickets for everyone in the workspace/scope.
+  // Stays global — applies to every Jira column equally and is a "who am I
+  // looking at" knob, not a per-board view filter.
   jiraAssignee: JiraUserSummary | null;
   jiraAssigneeAny: boolean;
-
-  // Jira project/board/sprint filters. Persisted to localStorage under
-  // `forgehold:jira-filters:v1`. Dropdown options are loaded lazily on
-  // first-open so the column stays cheap when you don't touch filters.
-  jiraFilters: JiraFilters;
   jiraProjectOptions: JiraProject[];
   jiraProjectOptionsLoading: boolean;
   jiraBoardOptions: JiraBoard[];
@@ -432,21 +464,14 @@ export const inboxState = $state<{
   // issue key, not by InboxItem shape).
   jiraFocusKey: string | null;
 
-  // Sentry inbox — issue list + filter dimensions. The filter state mirrors
-  // Sentry's own UI: status (is:unresolved | is:resolved | is:ignored),
-  // level (error/warning/info/debug/fatal), per-project scope (multi),
-  // environment, sort key, free-text search. Filters compose into a single
-  // `query` plus `project` + `environment` URL params on each refresh.
-  sentryItems: SentryIssue[];
-  sentryItemsLoading: boolean;
-  sentryItemsError: string | null;
-  /** Free-text search bar value (joined with structured filters at refresh). */
-  sentrySearch: string;
-  sentryStatus: 'unresolved' | 'resolved' | 'ignored' | 'all';
-  sentryLevel: 'all' | 'fatal' | 'error' | 'warning' | 'info' | 'debug';
-  sentryProjects: string[];
-  sentryEnvironment: string | null;
-  sentrySort: 'date' | 'new' | 'priority' | 'freq' | 'user';
+  // ---- Sentry inbox — per-column-instance ----
+  // Same per-instance shape as Jira: each SentryColumn keeps its own
+  // filter and item slots so two Sentry columns on the same workbench can
+  // browse different projects / levels / environments simultaneously.
+  sentryItemsByInstance: Record<string, SentryIssue[]>;
+  sentryItemsLoadingByInstance: Record<string, boolean>;
+  sentryItemsErrorByInstance: Record<string, string | null>;
+  sentryFiltersByInstance: Record<string, SentryFiltersPersisted>;
   /** Project / env dropdown source data. */
   sentryProjectOptions: SentryProject[];
   sentryProjectOptionsLoading: boolean;
@@ -493,10 +518,11 @@ export const inboxState = $state<{
   // GithubTab validates against its own RepoSection union.
   pendingRepoNav: { owner: string; repo: string; section: string } | null;
 }>({
-  items: [],
-  loading: false,
-  error: null,
-  githubFilters: readGhFilters(),
+  // GitHub per-instance — hydrated from localStorage at boot
+  itemsByInstance: {},
+  loadingByInstance: {},
+  errorByInstance: {},
+  githubFiltersByInstance: readGhFiltersByInstance(),
   githubRepoOptions: [],
   githubRepoOptionsLoading: false,
   focusItem: null,
@@ -511,12 +537,13 @@ export const inboxState = $state<{
   detailLoading: false,
   detailError: null,
   expandedFiles: new Set(),
-  jiraItems: [],
-  jiraItemsLoading: false,
-  jiraItemsError: null,
+  // Jira per-instance
+  jiraItemsByInstance: {},
+  jiraItemsLoadingByInstance: {},
+  jiraItemsErrorByInstance: {},
+  jiraFiltersByInstance: readJiraFiltersByInstance(),
   jiraAssignee: null,
   jiraAssigneeAny: false,
-  jiraFilters: readJiraFilters(),
   jiraProjectOptions: [],
   jiraProjectOptionsLoading: false,
   jiraBoardOptions: [],
@@ -527,20 +554,11 @@ export const inboxState = $state<{
   jiraStatusOptionsLoading: false,
   jiraStatusOptionsProjectKey: undefined,
   jiraFocusKey: null,
-  sentryItems: [],
-  sentryItemsLoading: false,
-  sentryItemsError: null,
-  ...(() => {
-    const f = readSentryFilters();
-    return {
-      sentrySearch: f.search,
-      sentryStatus: f.status,
-      sentryLevel: f.level,
-      sentryProjects: f.projects,
-      sentryEnvironment: f.environment,
-      sentrySort: f.sort
-    };
-  })(),
+  // Sentry per-instance
+  sentryItemsByInstance: {},
+  sentryItemsLoadingByInstance: {},
+  sentryItemsErrorByInstance: {},
+  sentryFiltersByInstance: readSentryFiltersByInstance(),
   sentryProjectOptions: [],
   sentryProjectOptionsLoading: false,
   sentryEnvironmentOptions: [],
@@ -571,8 +589,30 @@ export const inboxState = $state<{
 });
 
 let userPickerDebounce: ReturnType<typeof setTimeout> | null = null;
-let githubFilterDebounce: ReturnType<typeof setTimeout> | null = null;
-let jiraFilterDebounce: ReturnType<typeof setTimeout> | null = null;
+/* Filter debounces are now per-instance (see githubFilterDebounces /
+   jiraFilterDebounces / sentryFilterDebounces Maps below) so column A
+   typing in its search box doesn't cancel column B's pending refresh. */
+
+/* Drop a closed column's state slots so abandoned instance ids don't
+   pile up across reloads. layoutState fires this hook before it removes
+   the instance from the workbench, so we still have the id we need. */
+registerInstanceRemovedHook((id) => {
+  delete inboxState.itemsByInstance[id];
+  delete inboxState.loadingByInstance[id];
+  delete inboxState.errorByInstance[id];
+  delete inboxState.githubFiltersByInstance[id];
+  delete inboxState.jiraItemsByInstance[id];
+  delete inboxState.jiraItemsLoadingByInstance[id];
+  delete inboxState.jiraItemsErrorByInstance[id];
+  delete inboxState.jiraFiltersByInstance[id];
+  delete inboxState.sentryItemsByInstance[id];
+  delete inboxState.sentryItemsLoadingByInstance[id];
+  delete inboxState.sentryItemsErrorByInstance[id];
+  delete inboxState.sentryFiltersByInstance[id];
+  persistGhFilters();
+  persistJiraFilters();
+  persistSentryFilters();
+});
 
 // ---- GitHub inbox ----
 
@@ -624,39 +664,74 @@ export function setGithubMeLogin(login: string | null) {
   githubMeLogin = login;
 }
 
-export async function refreshInbox({ silent = false }: { silent?: boolean } = {}) {
-  if (!silent) inboxState.loading = true;
-  inboxState.error = null;
+/* Per-instance filter accessors. Reads return a frozen default if the
+   slot doesn't exist yet (e.g. the column just mounted) — first write
+   creates the entry. Items / loading / error follow the same pattern. */
+export function githubFiltersFor(instanceId: string): GithubFilters {
+  return inboxState.githubFiltersByInstance[instanceId] ?? DEFAULT_GH_FILTERS;
+}
+export function githubItemsFor(instanceId: string): InboxItem[] {
+  return inboxState.itemsByInstance[instanceId] ?? [];
+}
+export function githubLoadingFor(instanceId: string): boolean {
+  return inboxState.loadingByInstance[instanceId] ?? false;
+}
+export function githubErrorFor(instanceId: string): string | null {
+  return inboxState.errorByInstance[instanceId] ?? null;
+}
+
+export async function refreshInbox(
+  instanceId: string,
+  { silent = false }: { silent?: boolean } = {}
+) {
+  if (!silent) inboxState.loadingByInstance[instanceId] = true;
+  inboxState.errorByInstance[instanceId] = null;
   try {
-    // If the filters are the default (everything unset, mode=involving), use
-    // the dedicated `github_list_inbox` endpoint to preserve its exact
-    // behavior (matches the `search_involves_me` call signature). Otherwise
-    // fall through to the more general `github_search_inbox`.
-    const f = inboxState.githubFilters;
+    const f = githubFiltersFor(instanceId);
     const usingDefault =
       f.mode === 'involving' && !f.repo && !f.search.trim() && !f.customUser.trim();
     if (usingDefault) {
-      inboxState.items = await invoke<InboxItem[]>('github_list_inbox');
+      inboxState.itemsByInstance[instanceId] = await invoke<InboxItem[]>(
+        'github_list_inbox'
+      );
     } else {
       const q = buildGithubQuery(f, githubMeLogin);
-      inboxState.items = await invoke<InboxItem[]>('github_search_inbox', { query: q });
+      inboxState.itemsByInstance[instanceId] = await invoke<InboxItem[]>(
+        'github_search_inbox',
+        { query: q }
+      );
     }
-    // Intentionally do NOT auto-select an item — selection must be
-    // explicit (click), otherwise polling re-opens the slide-over.
   } catch (e) {
-    inboxState.error = typeof e === 'string' ? e : String(e);
+    inboxState.errorByInstance[instanceId] = typeof e === 'string' ? e : String(e);
   } finally {
-    inboxState.loading = false;
+    inboxState.loadingByInstance[instanceId] = false;
   }
 }
 
-/** Patch the GitHub filter state, persist it, and re-run the search with a
- *  300 ms debounce so typing in the search box doesn't spam the API. */
-export function updateGithubFilters(patch: Partial<GithubFilters>) {
-  inboxState.githubFilters = { ...inboxState.githubFilters, ...patch };
+/** Refresh every GitHub column on every workbench. Used by page-level
+ *  handlers (bootstrap on connect, after a PR is created, etc.) that
+ *  don't have a specific instanceId in scope. */
+export async function refreshAllInboxes(opts: { silent?: boolean } = {}) {
+  const ids = listInstancesOfKind('github').map((i) => i.id);
+  await Promise.all(ids.map((id) => refreshInbox(id, opts)));
+}
+
+const githubFilterDebounces: Map<string, ReturnType<typeof setTimeout>> = new Map();
+
+/** Patch this column's filter state, persist it, and re-run the search
+ *  with a 300 ms debounce so typing in the search box doesn't spam. */
+export function updateGithubFilters(instanceId: string, patch: Partial<GithubFilters>) {
+  inboxState.githubFiltersByInstance[instanceId] = {
+    ...githubFiltersFor(instanceId),
+    ...patch
+  };
   persistGhFilters();
-  if (githubFilterDebounce) clearTimeout(githubFilterDebounce);
-  githubFilterDebounce = setTimeout(() => void refreshInbox({ silent: true }), 300);
+  const t = githubFilterDebounces.get(instanceId);
+  if (t) clearTimeout(t);
+  githubFilterDebounces.set(
+    instanceId,
+    setTimeout(() => void refreshInbox(instanceId, { silent: true }), 300)
+  );
 }
 
 export async function loadGithubRepoOptions() {
@@ -677,9 +752,19 @@ export async function loadGithubRepoOptions() {
   }
 }
 
+/* Resolve `id` against every column's items list — item ids are
+   process-global (GitHub returns the same numeric id everywhere), so
+   the FIRST instance to have the item wins. Used by the palette and
+   agent-driven nav, neither of which knows which column the user
+   wants to focus. */
 export function selectInboxItem(id: number) {
-  const item = inboxState.items.find((i) => i.id === id);
-  if (item) inboxState.focusItem = item;
+  for (const list of Object.values(inboxState.itemsByInstance)) {
+    const item = list.find((i) => i.id === id);
+    if (item) {
+      inboxState.focusItem = item;
+      return;
+    }
+  }
 }
 
 /** Open an InboxItem in the focus pane. Does NOT switch views — callers are
@@ -692,15 +777,19 @@ export function closeFocusItem() {
   inboxState.focusItem = null;
 }
 
-/** j/k keyboard nav through the current inbox list. No-ops if there's no
-    focus item or the current focus isn't in the list (e.g. it came from
-    GithubTab). */
+/** j/k keyboard nav through the inbox list of whichever GitHub column
+    holds the focused item. No-ops if there's no focus item or the
+    focus isn't in any column's list (e.g. it came from GithubTab). */
 export function moveSelection(delta: number) {
-  if (!inboxState.items.length || !inboxState.focusItem) return;
-  const idx = inboxState.items.findIndex((i) => i.id === inboxState.focusItem!.id);
-  if (idx < 0) return;
-  const next = Math.max(0, Math.min(inboxState.items.length - 1, idx + delta));
-  inboxState.focusItem = inboxState.items[next];
+  if (!inboxState.focusItem) return;
+  const focusId = inboxState.focusItem.id;
+  for (const list of Object.values(inboxState.itemsByInstance)) {
+    const idx = list.findIndex((i) => i.id === focusId);
+    if (idx < 0) continue;
+    const next = Math.max(0, Math.min(list.length - 1, idx + delta));
+    inboxState.focusItem = list[next];
+    return;
+  }
 }
 
 // ---- Detail shelf (PR / issue metadata on focus-change) ----
@@ -791,7 +880,7 @@ async function loadPrChecks(owner: string, repo: string, sha: string) {
     list so the item's state/updated_at freshens everywhere it's shown. */
 export async function reloadDetailAndLists() {
   await loadDetail();
-  await refreshInbox({ silent: true });
+  await refreshAllInboxes({ silent: true });
 }
 
 export function toggleFile(filename: string) {
@@ -890,13 +979,28 @@ export function buildJiraJql(
   return `${parts.join(' AND ')} ORDER BY updated DESC`;
 }
 
-export async function refreshJiraInbox({ silent = false }: { silent?: boolean } = {}) {
-  if (!silent) inboxState.jiraItemsLoading = true;
-  inboxState.jiraItemsError = null;
+/* Per-instance Jira accessors. */
+export function jiraFiltersFor(instanceId: string): JiraFilters {
+  return inboxState.jiraFiltersByInstance[instanceId] ?? DEFAULT_JIRA_FILTERS;
+}
+export function jiraItemsFor(instanceId: string): JiraItem[] {
+  return inboxState.jiraItemsByInstance[instanceId] ?? [];
+}
+export function jiraItemsLoadingFor(instanceId: string): boolean {
+  return inboxState.jiraItemsLoadingByInstance[instanceId] ?? false;
+}
+export function jiraItemsErrorFor(instanceId: string): string | null {
+  return inboxState.jiraItemsErrorByInstance[instanceId] ?? null;
+}
+
+export async function refreshJiraInbox(
+  instanceId: string,
+  { silent = false }: { silent?: boolean } = {}
+) {
+  if (!silent) inboxState.jiraItemsLoadingByInstance[instanceId] = true;
+  inboxState.jiraItemsErrorByInstance[instanceId] = null;
   try {
-    const f = inboxState.jiraFilters;
-    // "Any" assignee can't use the specific-account fast path — it needs the
-    // no-assignee-clause JQL route. Same for non-default filters.
+    const f = jiraFiltersFor(instanceId);
     const usingDefault =
       !f.projectKey &&
       f.boardIds.length === 0 &&
@@ -904,30 +1008,47 @@ export async function refreshJiraInbox({ silent = false }: { silent?: boolean } 
       f.statusName == null &&
       !f.search.trim() &&
       !inboxState.jiraAssigneeAny;
-    // Fast path: preserve the old single-shot `jira_list_inbox_for` call
-    // when the user hasn't touched the new filters. Backend is equivalent
-    // but this keeps the wire format identical to what shipped before.
     if (usingDefault) {
-      inboxState.jiraItems = await invoke<JiraItem[]>('jira_list_inbox_for', {
-        assigneeAccountId: inboxState.jiraAssignee?.account_id ?? null
-      });
+      inboxState.jiraItemsByInstance[instanceId] = await invoke<JiraItem[]>(
+        'jira_list_inbox_for',
+        { assigneeAccountId: inboxState.jiraAssignee?.account_id ?? null }
+      );
     } else {
       const jql = buildJiraJql(f, inboxState.jiraAssignee, inboxState.jiraAssigneeAny);
-      inboxState.jiraItems = await invoke<JiraItem[]>('jira_search', { jql });
+      inboxState.jiraItemsByInstance[instanceId] = await invoke<JiraItem[]>(
+        'jira_search',
+        { jql }
+      );
     }
   } catch (e) {
-    inboxState.jiraItemsError = typeof e === 'string' ? e : String(e);
+    inboxState.jiraItemsErrorByInstance[instanceId] =
+      typeof e === 'string' ? e : String(e);
   } finally {
-    inboxState.jiraItemsLoading = false;
+    inboxState.jiraItemsLoadingByInstance[instanceId] = false;
   }
 }
 
-/** Patch Jira filter state, persist, and re-run the search (debounced 300 ms). */
-export function updateJiraFilters(patch: Partial<JiraFilters>) {
-  inboxState.jiraFilters = { ...inboxState.jiraFilters, ...patch };
+export async function refreshAllJiraInboxes(opts: { silent?: boolean } = {}) {
+  const ids = listInstancesOfKind('jira').map((i) => i.id);
+  await Promise.all(ids.map((id) => refreshJiraInbox(id, opts)));
+}
+
+const jiraFilterDebounces: Map<string, ReturnType<typeof setTimeout>> = new Map();
+
+/** Patch one column's Jira filter state, persist all instances, and
+ *  re-run that column's search (debounced 300 ms). */
+export function updateJiraFilters(instanceId: string, patch: Partial<JiraFilters>) {
+  inboxState.jiraFiltersByInstance[instanceId] = {
+    ...jiraFiltersFor(instanceId),
+    ...patch
+  };
   persistJiraFilters();
-  if (jiraFilterDebounce) clearTimeout(jiraFilterDebounce);
-  jiraFilterDebounce = setTimeout(() => void refreshJiraInbox({ silent: true }), 300);
+  const t = jiraFilterDebounces.get(instanceId);
+  if (t) clearTimeout(t);
+  jiraFilterDebounces.set(
+    instanceId,
+    setTimeout(() => void refreshJiraInbox(instanceId, { silent: true }), 300)
+  );
 }
 
 let jiraTabFilterDebounce: ReturnType<typeof setTimeout> | null = null;
@@ -1075,7 +1196,7 @@ export async function selectAssignee(u: JiraUserSummary | null) {
   inboxState.jiraAssignee = u;
   inboxState.jiraAssigneeAny = false;
   closeModal('userPicker');
-  await refreshJiraInbox();
+  await refreshAllJiraInboxes();
 }
 
 /** Drop the assignee constraint entirely — show tickets for everyone in the
@@ -1084,7 +1205,7 @@ export async function selectAnyAssignee() {
   inboxState.jiraAssignee = null;
   inboxState.jiraAssigneeAny = true;
   closeModal('userPicker');
-  await refreshJiraInbox();
+  await refreshAllJiraInboxes();
 }
 
 // ---- Disconnect resets ----
@@ -1103,12 +1224,16 @@ export function openSentryFocus(id: string | null, eventId: string | null = null
 }
 
 export function resetGithubInbox() {
-  inboxState.items = [];
+  inboxState.itemsByInstance = {};
+  inboxState.loadingByInstance = {};
+  inboxState.errorByInstance = {};
   inboxState.focusItem = null;
 }
 
 export function resetJiraInbox() {
-  inboxState.jiraItems = [];
+  inboxState.jiraItemsByInstance = {};
+  inboxState.jiraItemsLoadingByInstance = {};
+  inboxState.jiraItemsErrorByInstance = {};
   inboxState.jiraAssignee = null;
   inboxState.jiraAssigneeAny = false;
   inboxState.jiraStatusOptions = [];
@@ -1117,49 +1242,87 @@ export function resetJiraInbox() {
 
 // ---- Sentry inbox ----
 
-/** Compose the `query=` string from the current structured filter state.
- *  Empty status/level slots translate to "no qualifier" (Sentry default
- *  matches everything when no `is:` is present). Free-text search is
- *  appended last so terms like `User-Agent` aren't parsed as a column. */
-export function buildSentryQuery(): string {
+/* Per-instance Sentry accessors. Filter state lives as a single
+   SentryFiltersPersisted blob per instance (search/status/level/
+   projects/environment/sort all together) since they're refreshed in
+   one network call. */
+export function sentryFiltersFor(instanceId: string): SentryFiltersPersisted {
+  return inboxState.sentryFiltersByInstance[instanceId] ?? DEFAULT_SENTRY_FILTERS;
+}
+export function sentryItemsFor(instanceId: string): SentryIssue[] {
+  return inboxState.sentryItemsByInstance[instanceId] ?? [];
+}
+export function sentryItemsLoadingFor(instanceId: string): boolean {
+  return inboxState.sentryItemsLoadingByInstance[instanceId] ?? false;
+}
+export function sentryItemsErrorFor(instanceId: string): string | null {
+  return inboxState.sentryItemsErrorByInstance[instanceId] ?? null;
+}
+
+export function setSentryFilters(
+  instanceId: string,
+  patch: Partial<SentryFiltersPersisted>
+) {
+  inboxState.sentryFiltersByInstance[instanceId] = {
+    ...sentryFiltersFor(instanceId),
+    ...patch
+  };
+}
+
+/** Compose the `query=` string from this column's structured filter
+ *  state. Empty status/level slots translate to "no qualifier" (Sentry
+ *  default matches everything when no `is:` is present). */
+export function buildSentryQuery(instanceId: string): string {
   const parts: string[] = [];
-  const { sentryStatus, sentryLevel, sentrySearch } = inboxState;
-  if (sentryStatus !== 'all') parts.push(`is:${sentryStatus}`);
-  if (sentryLevel !== 'all') parts.push(`level:${sentryLevel}`);
-  const search = sentrySearch.trim();
+  const f = sentryFiltersFor(instanceId);
+  if (f.status !== 'all') parts.push(`is:${f.status}`);
+  if (f.level !== 'all') parts.push(`level:${f.level}`);
+  const search = f.search.trim();
   if (search) parts.push(search);
   return parts.join(' ');
 }
 
-let sentryFilterDebounce: ReturnType<typeof setTimeout> | null = null;
+const sentryFilterDebounces: Map<string, ReturnType<typeof setTimeout>> = new Map();
 
-export async function refreshSentryInbox({ silent = false }: { silent?: boolean } = {}) {
-  if (!silent) inboxState.sentryItemsLoading = true;
-  inboxState.sentryItemsError = null;
+export async function refreshSentryInbox(
+  instanceId: string,
+  { silent = false }: { silent?: boolean } = {}
+) {
+  if (!silent) inboxState.sentryItemsLoadingByInstance[instanceId] = true;
+  inboxState.sentryItemsErrorByInstance[instanceId] = null;
   try {
+    const f = sentryFiltersFor(instanceId);
     const items = await invoke<SentryIssue[]>('sentry_list_issues', {
-      query: buildSentryQuery() || null,
-      projectSlugs: inboxState.sentryProjects,
-      environment: inboxState.sentryEnvironment,
-      sort: inboxState.sentrySort,
+      query: buildSentryQuery(instanceId) || null,
+      projectSlugs: f.projects,
+      environment: f.environment,
+      sort: f.sort,
       limit: 50
     });
-    inboxState.sentryItems = items;
+    inboxState.sentryItemsByInstance[instanceId] = items;
   } catch (e) {
-    inboxState.sentryItemsError = typeof e === 'string' ? e : String(e);
+    inboxState.sentryItemsErrorByInstance[instanceId] =
+      typeof e === 'string' ? e : String(e);
   } finally {
-    inboxState.sentryItemsLoading = false;
+    inboxState.sentryItemsLoadingByInstance[instanceId] = false;
   }
 }
 
-/** Schedule a debounced refresh after a filter change (250ms). Avoids
- *  hammering the API while the user types in the search box. Also
- *  persists the new filter shape to localStorage so the user comes back
- *  to the same view after restart (mirrors Jira / GitHub behavior). */
-export function scheduleSentryFilterRefresh() {
+export async function refreshAllSentryInboxes(opts: { silent?: boolean } = {}) {
+  const ids = listInstancesOfKind('sentry').map((i) => i.id);
+  await Promise.all(ids.map((id) => refreshSentryInbox(id, opts)));
+}
+
+/** Schedule a debounced refresh after a filter change (250ms). Persists
+ *  every instance's filters to one localStorage entry. */
+export function scheduleSentryFilterRefresh(instanceId: string) {
   persistSentryFilters();
-  if (sentryFilterDebounce) clearTimeout(sentryFilterDebounce);
-  sentryFilterDebounce = setTimeout(() => void refreshSentryInbox({ silent: true }), 250);
+  const t = sentryFilterDebounces.get(instanceId);
+  if (t) clearTimeout(t);
+  sentryFilterDebounces.set(
+    instanceId,
+    setTimeout(() => void refreshSentryInbox(instanceId, { silent: true }), 250)
+  );
 }
 
 /* SentryTab (Sentry tab) mirror — same query builder, separate
@@ -1218,12 +1381,19 @@ export async function loadSentryProjects() {
   }
 }
 
-/** Pull environments for whatever projects are currently selected. With
- *  no project picked we fall back to the first member-project so the
- *  dropdown isn't empty. */
-export async function loadSentryEnvironments() {
+/** Pull environments for the given project slug. Caller passes the
+ *  slug explicitly so each column can load its own picked project's
+ *  envs without depending on a single global "selected project". With
+ *  no slug provided we fall back to the first member-project so the
+ *  dropdown isn't empty.
+ *
+ *  Note: `sentryEnvironmentOptions` is still a single shared list — two
+ *  Sentry columns picking different projects will see whichever project
+ *  loaded last. Per-project env caches were too much surface for a
+ *  lightly-used dropdown; revisit if it actually bites. */
+export async function loadSentryEnvironments(projectSlug?: string) {
   const slug =
-    inboxState.sentryProjects[0] ??
+    projectSlug ??
     inboxState.sentryProjectOptions.find((p) => p.is_member)?.slug ??
     inboxState.sentryProjectOptions[0]?.slug ??
     null;
@@ -1245,7 +1415,8 @@ export async function loadSentryEnvironments() {
 }
 
 export function resetSentryInbox() {
-  inboxState.sentryItems = [];
-  inboxState.sentryItemsError = null;
+  inboxState.sentryItemsByInstance = {};
+  inboxState.sentryItemsLoadingByInstance = {};
+  inboxState.sentryItemsErrorByInstance = {};
   inboxState.sentryFocusId = null;
 }
