@@ -3,7 +3,8 @@
     layoutState,
     movePanelById,
     closePanelById,
-    moveInstanceToWorkbench
+    moveInstanceToWorkbench,
+    archiveInstance
   } from '$lib/state/layout.svelte';
   import { notify } from '$lib/state/toaster.svelte';
   import { attachDragChip } from '$lib/dragImage';
@@ -150,10 +151,20 @@
     </div>
   {/if}
   <button
+    class="wb-col-ctl"
+    onclick={() => archiveInstance(instanceId)}
+    aria-label="Archive column"
+    title="Archive — removes from workbench, keeps filters and chats. Restore from the kind pill."
+  >
+    <svg class="i i-sm" viewBox="0 0 24 24">
+      <path d="M3 7h18M5 7v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7M9 11h6"/>
+    </svg>
+  </button>
+  <button
     class="wb-col-ctl wb-col-ctl--close"
     onclick={() => closePanelById(instanceId)}
-    aria-label="Hide column"
-    title="Hide"
+    aria-label="Close column"
+    title="Close — drops filters and orphans linked sessions"
   >
     <svg class="i i-sm" viewBox="0 0 24 24"><path d="M6 6l12 12M6 18L18 6"/></svg>
   </button>

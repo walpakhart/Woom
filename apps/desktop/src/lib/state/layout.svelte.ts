@@ -90,10 +90,25 @@ function pickInstanceName(): string {
  *  workbench column. Mutate via `layoutState.workbenches[i].instances.push(...)`,
  *  don't destructure. `instances` is a live getter pointing at the active
  *  workbench so existing single-workbench code keeps working. */
+/** Snapshot kept when the user archives an instance — instance is
+ *  detached from its workbench but its identity (and everything keyed
+ *  off `instance.id` in inboxState / sessionsState) is preserved so
+ *  unarchive restores it exactly where it was, with all its filters /
+ *  items / chats intact. `originalIndex` is the position in
+ *  `workbenches[wb].instances` at the moment of archive — restore
+ *  inserts at that index, clamped to the current length. */
+export type ArchivedInstance = {
+  inst: PanelInstance;
+  originalWorkbenchId: string;
+  originalIndex: number;
+  archivedAt: number;
+};
+
 export const layoutState = $state<{
   workbenches: Workbench[];
   activeWorkbenchId: string;
   snapFlashInstanceId: string | null;
+  archivedInstances: ArchivedInstance[];
 }>({
   workbenches: [
     {
@@ -103,7 +118,8 @@ export const layoutState = $state<{
     }
   ],
   activeWorkbenchId: '',
-  snapFlashInstanceId: null
+  snapFlashInstanceId: null,
+  archivedInstances: []
 });
 // Seed activeWorkbenchId after initialization (can't reference `workbenches` inside the literal).
 layoutState.activeWorkbenchId = layoutState.workbenches[0].id;
@@ -137,7 +153,8 @@ export function persistPanelState() {
       STORAGE_WORKBENCHES_V1,
       JSON.stringify({
         workbenches: layoutState.workbenches,
-        activeId: layoutState.activeWorkbenchId
+        activeId: layoutState.activeWorkbenchId,
+        archived: layoutState.archivedInstances
       })
     );
   } catch {
@@ -185,7 +202,11 @@ export function restorePanelState() {
     // Preferred path: v3 workbenches.
     const w = localStorage.getItem(STORAGE_WORKBENCHES_V1);
     if (w) {
-      const parsed = JSON.parse(w) as { workbenches?: Workbench[]; activeId?: string };
+      const parsed = JSON.parse(w) as {
+        workbenches?: Workbench[];
+        activeId?: string;
+        archived?: ArchivedInstance[];
+      };
       if (Array.isArray(parsed.workbenches) && parsed.workbenches.length > 0) {
         const cleaned: Workbench[] = parsed.workbenches
           .map((wb) => ({
@@ -216,6 +237,36 @@ export function restorePanelState() {
           layoutState.workbenches = cleaned;
           const activeExists = cleaned.find((wb) => wb.id === parsed.activeId);
           layoutState.activeWorkbenchId = activeExists ? activeExists.id : cleaned[0].id;
+          /* Restore archive list — same filtering as instances above so a
+             corrupt entry doesn't poison the rest. */
+          if (Array.isArray(parsed.archived)) {
+            layoutState.archivedInstances = parsed.archived
+              .filter(
+                (a): a is ArchivedInstance =>
+                  !!a &&
+                  !!a.inst &&
+                  typeof a.inst.id === 'string' &&
+                  typeof a.inst.kind === 'string' &&
+                  DEFAULT_PANEL_ORDER.includes(a.inst.kind as PanelKind) &&
+                  typeof a.inst.width === 'number' &&
+                  typeof a.originalWorkbenchId === 'string' &&
+                  typeof a.originalIndex === 'number'
+              )
+              .map((a) => ({
+                inst: {
+                  id: a.inst.id,
+                  kind: a.inst.kind,
+                  width: Math.max(280, Math.min(2000, a.inst.width)),
+                  name:
+                    typeof (a.inst as { name?: string }).name === 'string'
+                      ? (a.inst as { name: string }).name
+                      : ''
+                },
+                originalWorkbenchId: a.originalWorkbenchId,
+                originalIndex: Math.max(0, a.originalIndex),
+                archivedAt: typeof a.archivedAt === 'number' ? a.archivedAt : 0
+              }));
+          }
           ensureAllInstancesNamed();
           return;
         }
@@ -332,6 +383,90 @@ export function closePanelById(id: string) {
       return;
     }
   }
+}
+
+/** Archive an instance — detach it from its workbench but keep its
+ *  identity + per-instance state (filters, items, chats) intact. The
+ *  user can restore it later from the kind-pill menu and it'll go back
+ *  to the same workbench / position it was at. Falls back to the
+ *  current workbench if the original was deleted in the meantime.
+ *
+ *  Crucially we do NOT call `onInstanceRemoved` here — that hook drops
+ *  the inboxState slots (and orphans sessions). Archive is the
+ *  opposite intent. Only `closePanelById` fires the cleanup hook. */
+export function archiveInstance(id: string) {
+  for (const wb of layoutState.workbenches) {
+    const idx = wb.instances.findIndex((i) => i.id === id);
+    if (idx < 0) continue;
+    const inst = wb.instances[idx];
+    layoutState.archivedInstances = [
+      ...layoutState.archivedInstances,
+      { inst, originalWorkbenchId: wb.id, originalIndex: idx, archivedAt: Date.now() }
+    ];
+    wb.instances = [...wb.instances.slice(0, idx), ...wb.instances.slice(idx + 1)];
+    persistPanelState();
+    return;
+  }
+}
+
+/** Restore an archived instance. Default target is the original
+ *  workbench at the original index; if that workbench was deleted, we
+ *  fall back to `fallbackWorkbenchId` (or the active workbench if
+ *  none was given). For singleton kinds (github / jira / sentry) the
+ *  target must not already host one of the same kind — caller surfaces
+ *  the conflict. Returns true on success, false if blocked. */
+export function unarchiveInstance(id: string, fallbackWorkbenchId?: string): boolean {
+  const idx = layoutState.archivedInstances.findIndex((a) => a.inst.id === id);
+  if (idx < 0) return false;
+  const archived = layoutState.archivedInstances[idx];
+  const target =
+    layoutState.workbenches.find((w) => w.id === archived.originalWorkbenchId) ??
+    layoutState.workbenches.find(
+      (w) => w.id === (fallbackWorkbenchId ?? layoutState.activeWorkbenchId)
+    ) ??
+    layoutState.workbenches[0];
+  if (!target) return false;
+  if (
+    (archived.inst.kind === 'github' ||
+      archived.inst.kind === 'jira' ||
+      archived.inst.kind === 'sentry') &&
+    target.instances.some((i) => i.kind === archived.inst.kind)
+  ) {
+    return false;
+  }
+  const insertAt = Math.min(Math.max(0, archived.originalIndex), target.instances.length);
+  target.instances = [
+    ...target.instances.slice(0, insertAt),
+    archived.inst,
+    ...target.instances.slice(insertAt)
+  ];
+  layoutState.archivedInstances = [
+    ...layoutState.archivedInstances.slice(0, idx),
+    ...layoutState.archivedInstances.slice(idx + 1)
+  ];
+  persistPanelState();
+  return true;
+}
+
+/** Archived instances of a given kind, newest-first, with the original
+ *  workbench name resolved (or "Workbench gone" when the workbench was
+ *  deleted between archive and now). Used by the pill menu to render
+ *  greyed-out rows beside the live ones. */
+export function listArchivedOfKind(
+  kind: PanelKind
+): { id: string; name: string; originalWorkbenchName: string; archivedAt: number }[] {
+  return layoutState.archivedInstances
+    .filter((a) => a.inst.kind === kind)
+    .slice()
+    .sort((a, b) => b.archivedAt - a.archivedAt)
+    .map((a) => ({
+      id: a.inst.id,
+      name: a.inst.name,
+      originalWorkbenchName:
+        layoutState.workbenches.find((w) => w.id === a.originalWorkbenchId)?.name ??
+        'Workbench gone',
+      archivedAt: a.archivedAt
+    }));
 }
 
 /** Move the instance left (-1) or right (+1) within its workbench. */

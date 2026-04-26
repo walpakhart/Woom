@@ -37,6 +37,8 @@
     activeWorkbench,
     firstInstanceOfKind,
     listInstancesOfKind,
+    listArchivedOfKind,
+    unarchiveInstance,
     goToInstance,
     moveInstanceToWorkbench,
     registerInstanceRemovedHook
@@ -3069,13 +3071,14 @@
         <div class="wb-bar">
           {#snippet pill(kind: PanelKind, label: string, meta: typeof connectionsMeta[number] | undefined)}
             {@const insts = listInstancesOfKind(kind)}
+            {@const archived = listArchivedOfKind(kind)}
             {@const count = insts.length}
             {@const inCurrent = insts.some((i) => i.workbenchId === layoutState.activeWorkbenchId)}
             <div
               class="pill-group"
               class:active={inCurrent}
               class:dim={count === 0}
-              class:has-menu={count > 0}
+              class:has-menu={count > 0 || archived.length > 0}
               class:drag-over={pillDragOverKind === kind && pillDragOverInstance === null}
               class:drag-armed={pillDragOverKind === kind}
               ondragenter={(e) => onPillDragEnter(e, kind, null)}
@@ -3108,7 +3111,7 @@
               >
                 <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
               </button>
-              {#if count > 0}
+              {#if count > 0 || archived.length > 0}
                 <div class="pill-menu" role="menu">
                   <div class="pill-menu-head">{label} · {count} {count === 1 ? 'column' : 'columns'}</div>
                   {#each insts as inst (inst.id)}
@@ -3129,6 +3132,34 @@
                       <span class="pill-menu-wb mono" title="Workbench">{inst.workbenchName}</span>
                     </button>
                   {/each}
+                  {#if archived.length > 0}
+                    <div class="pill-menu-head pill-menu-head--archive">Archived · {archived.length}</div>
+                    {#each archived as a (a.id)}
+                      <div class="pill-menu-item pill-menu-item--archived" role="presentation">
+                        <span class="pill-menu-dot"></span>
+                        <span class="pill-menu-name mono">{a.name}</span>
+                        <span class="pill-menu-wb mono" title="Originally on this workbench">{a.originalWorkbenchName}</span>
+                        <button
+                          class="pill-menu-restore"
+                          title="Restore — back to original workbench, or current if it was deleted"
+                          aria-label="Restore"
+                          onclick={(e) => {
+                            e.stopPropagation();
+                            const ok = unarchiveInstance(a.id, layoutState.activeWorkbenchId);
+                            if (!ok) {
+                              notify({
+                                kind: 'warning',
+                                title: "Couldn't restore column",
+                                body: 'A column of this kind already exists here — only one allowed per workbench.'
+                              });
+                            }
+                          }}
+                        >
+                          <svg class="i i-sm" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5"/></svg>
+                        </button>
+                      </div>
+                    {/each}
+                  {/if}
                 </div>
               {/if}
             </div>
@@ -3811,6 +3842,31 @@
     border: 1px solid var(--border-neutral);
     flex-shrink: 0;
   }
+
+  /* Archived block — sits below the live columns, separator above. */
+  .pill-menu-head--archive {
+    margin-top: 6px;
+    color: var(--text-mute);
+  }
+  .pill-menu-item--archived {
+    /* Inactive look: dim text, no hover highlight on the row itself
+       (only the restore button is interactive). */
+    opacity: 0.55;
+    cursor: default;
+  }
+  .pill-menu-item--archived:hover { background: transparent; color: var(--text-1); }
+  .pill-menu-restore {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 22px; height: 22px; border-radius: 5px;
+    color: var(--text-2); background: transparent; border: none; cursor: pointer;
+    flex-shrink: 0;
+    transition: all 120ms;
+  }
+  .pill-menu-restore:hover {
+    background: var(--accent-soft);
+    color: var(--accent-bright);
+  }
+  .pill-menu-item--archived:hover .pill-menu-restore { opacity: 1; }
 
   .wb-columns {
     flex: 1;
