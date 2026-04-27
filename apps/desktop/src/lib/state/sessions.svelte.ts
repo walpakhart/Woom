@@ -5,6 +5,7 @@
 
 import type { ClaudeAction, ClaudeMessage, ClaudeSession, Mention } from '$lib/types';
 import { notify } from '$lib/state/toaster.svelte';
+import { isImagePath } from '$lib/format';
 
 export const SESSIONS_STORAGE_KEY = 'forgehold:claude-sessions:v1';
 export const RULES_STORAGE_KEY = 'forgehold:claude-rules:v1';
@@ -367,16 +368,15 @@ export function updateSession(id: string, patch: Partial<ClaudeSession>) {
 }
 
 /** Attach an array of absolute filesystem paths as file-mentions to the given
-    session. Appends `@<token>` tokens to the input (mirrors the drop-from-
-    FileTree flow) and skips paths already referenced by externalId. Called
-    from the composer's + button (AgentColumn) and from the OS drag-drop
-    listener (+page.svelte).
+    session. Called from the composer's + button (AgentColumn) and from the
+    OS drag-drop listener (+page.svelte). Skips paths already referenced.
 
-    Token policy — the thing the user sees in their message:
-      • path inside the session cwd → relative path (`scripts/build.sh`)
-      • path outside cwd → just the basename (`Gemini_Generated_Image.png`)
-    The absolute path lives in `mention.body` so the backend prompt still
-    has the full context, but the chat transcript stays readable. */
+    Two attachment shapes depending on the file kind:
+      • Image (png/jpg/…): mention only — no `@token` in input. Renders as a
+        thumbnail chip strip above the composer (see AgentColumn). Path can
+        contain spaces without breaking the inline @-parser.
+      • Anything else: mention + `@token` in input. Token is the cwd-relative
+        path when inside cwd, otherwise just the basename. */
 export function attachPathsToSession(sessionId: string, paths: string[]): number {
   const s = sessionsState.list.find((x) => x.id === sessionId);
   if (!s || paths.length === 0) return 0;
@@ -389,14 +389,18 @@ export function attachPathsToSession(sessionId: string, paths: string[]): number
     const trimmed = p.endsWith('/') ? p.slice(0, -1) : p;
     const slash = trimmed.lastIndexOf('/');
     const name = slash >= 0 ? trimmed.slice(slash + 1) : trimmed;
-    // Outside-of-cwd files get a short-name token so the input isn't
-    // polluted with absolute paths like /Users/me/Downloads/foo.png.
-    const token = rel ?? name;
+    const isImage = isImagePath(p);
+    // For images, externalId is the absolute path so two drops of the same
+    // file dedupe even when basenames collide across folders. The chip
+    // strip uses the path directly via convertFileSrc anyway.
+    const token = isImage ? p : (rel ?? name);
     if (existing.has(token)) continue;
     existing.add(token);
     fresh.push({ source: 'file', externalId: token, title: name, body: p, isDir: false });
-    const sep = input && !input.endsWith(' ') ? ' ' : '';
-    input = input + sep + '@' + token + ' ';
+    if (!isImage) {
+      const sep = input && !input.endsWith(' ') ? ' ' : '';
+      input = input + sep + '@' + token + ' ';
+    }
   }
   if (fresh.length === 0) return 0;
   updateSession(sessionId, { input, mentions: [...s.mentions, ...fresh] });

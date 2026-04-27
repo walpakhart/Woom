@@ -5,7 +5,7 @@
   import Markdown from '$lib/components/ui/Markdown.svelte';
   import ClaudeActionCard from '$lib/components/workbench/ClaudeActionCard.svelte';
   import Dropdown, { type DropdownOption } from '$lib/components/ui/Dropdown.svelte';
-  import { invoke } from '@tauri-apps/api/core';
+  import { invoke, convertFileSrc } from '@tauri-apps/api/core';
   import { open as openDialog } from '@tauri-apps/plugin-dialog';
   import { inboxState } from '$lib/state/inbox.svelte';
   import type { Mention } from '$lib/types';
@@ -18,7 +18,7 @@
   } from '$lib/data';
   const claudeMeta = connectionsMeta.find((c) => c.id === 'claude')!;
   const cursorMeta = connectionsMeta.find((c) => c.id === 'cursor')!;
-  import { shortPath, shortenFsPath, shortRemote } from '$lib/format';
+  import { shortPath, shortenFsPath, shortRemote, isImagePath } from '$lib/format';
   import {
     sessionsState,
     updateSession,
@@ -918,6 +918,7 @@
     </div>
   {:else}
     {@const sess = activeSess}
+    {@const imageMentions = sess.mentions.filter((m) => m.source === 'file' && !m.isDir && !!m.body && isImagePath(m.body))}
     <div class="claude-chat">
 
       <div class="chat-messages" bind:this={sessionsState.scrollEls[instanceId]}>
@@ -1106,9 +1107,29 @@
         </div>
       {/if}
 
-      <!-- attach-row chips removed: the `@token` highlighted inline in the
-           composer is the canonical indicator that a file is attached. -->
-
+      <!-- Image attachments don't get an inline `@token` (the path can have
+           spaces and the user can't see what's attached either way), so they
+           render as thumbnail chips here. Non-image file mentions stay
+           inline as `@token`. -->
+      {#if imageMentions.length > 0}
+        <div class="attach-row">
+          {#each imageMentions as m (m.externalId)}
+            <div class="attach-chip attach-chip--image" title={m.body ?? m.title}>
+              <img class="attach-thumb" src={convertFileSrc(m.body!)} alt="" loading="lazy" />
+              <span class="attach-name">{m.title}</span>
+              <button
+                type="button"
+                class="attach-remove"
+                onclick={() => removeMention(m.externalId)}
+                aria-label="Remove attachment"
+                title="Remove"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+              </button>
+            </div>
+          {/each}
+        </div>
+      {/if}
 
       <form class="chat-input" onsubmit={(e) => { e.preventDefault(); focusLocalSession(sess.id); onSendClaudeMessage(); }}>
         <button
@@ -1195,7 +1216,7 @@
           <button
             type="submit"
             class="chat-send"
-            disabled={!sess.input.trim()}
+            disabled={!sess.input.trim() && sess.mentions.length === 0}
             aria-label="Send"
           >
             <svg class="i" viewBox="0 0 24 24"><path d="M22 2 11 13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>

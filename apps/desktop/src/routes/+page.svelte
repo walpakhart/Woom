@@ -1293,7 +1293,11 @@
 
   async function sendClaudeMessage() {
     const s = activeSession;
-    if (!s || !s.input.trim() || s.sending) return;
+    if (!s || s.sending) return;
+    // Allow send with empty text as long as there's at least one attachment —
+    // dropping just an image with no extra prompt is a valid "look at this"
+    // turn (Claude reads it via the path baked into the prompt context).
+    if (!s.input.trim() && s.mentions.length === 0) return;
     const text = s.input.trim();
     const id = s.id;
     appendSessionMessage(id, { role: 'user', content: text, at: new Date().toISOString() });
@@ -1336,9 +1340,13 @@
             const abs = m.body ?? m.externalId;
             const kind = m.isDir ? 'directory' : isImagePath(abs) ? 'image' : 'file';
             const hint = kind === 'image'
-              ? `This is an image — use the Read tool with its absolute path to view it inline.`
+              ? `This is an image attached by the user — use the Read tool with its absolute path to view it inline.`
               : `You have Read / Glob / Grep tools — use them to inspect this ${kind} when relevant.`;
-            return `Referenced ${kind}: @${m.externalId}\nAbsolute path: ${abs}\n${hint}`;
+            // Images don't get an inline @token in the input (externalId is
+            // the abs path, not a typeable handle), so we identify them by
+            // title + path rather than the @-mention syntax.
+            const label = kind === 'image' ? `Attached ${kind}: ${m.title}` : `Referenced ${kind}: @${m.externalId}`;
+            return `${label}\nAbsolute path: ${abs}\n${hint}`;
           }
           return `@${m.externalId} — ${m.title}` + (m.body ? `\n\n${m.body}` : '');
         })
@@ -3609,19 +3617,38 @@
     border-radius: 6px 6px 0 0;
     font-size: 12px; font-weight: 500;
     color: var(--text-2);
-    background: transparent;
+    background: var(--bg-1);
     cursor: pointer;
-    border: 1px solid transparent;
+    /* Visible outline on every tab so the tab strip reads as a row of
+       clickable pills, not text. Active state gets a stronger border +
+       accent under-line; hover bumps the contrast a notch. */
+    border: 1px solid var(--border-neutral);
     border-bottom: none;
     transition: all 120ms;
     flex-shrink: 0;
     max-width: 200px;
+    position: relative;
   }
-  .wb-tab:hover { color: var(--text-0); background: var(--bg-1); }
+  .wb-tab:hover {
+    color: var(--text-0);
+    background: var(--bg-2);
+    border-color: var(--border-hi);
+  }
   .wb-tab.active {
     color: var(--text-0);
-    background: var(--bg-1);
-    border-color: var(--border-neutral);
+    background: var(--bg-0);
+    border-color: var(--border-hi);
+    box-shadow: var(--shadow-1);
+  }
+  /* Accent under-line on the active tab — sits flush with the tab-strip
+     bottom border so the tab "owns" that section of the strip. */
+  .wb-tab.active::after {
+    content: '';
+    position: absolute;
+    left: 0; right: 0; bottom: -1px;
+    height: 2px;
+    background: var(--accent);
+    border-radius: 1px 1px 0 0;
   }
   /* Drag-over highlight when the user is moving a column onto this tab. */
   .wb-tab.drag-over {
