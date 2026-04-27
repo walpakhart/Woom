@@ -11,15 +11,22 @@ export const SESSIONS_STORAGE_KEY = 'forgehold:claude-sessions:v1';
 export const RULES_STORAGE_KEY = 'forgehold:claude-rules:v1';
 export const EDITOR_STATE_STORAGE_KEY = 'forgehold:editor-state:v1';
 
-function loadStoredEditorState(): Record<string, { repoPath: string }> {
+function loadStoredEditorState(): Record<
+  string,
+  { repoPath: string; pendingOpenFile?: string | null }
+> {
   if (typeof localStorage === 'undefined') return {};
   try {
     const raw = localStorage.getItem(EDITOR_STATE_STORAGE_KEY);
     if (!raw) return {};
     const parsed = JSON.parse(raw) as Record<string, unknown>;
-    const out: Record<string, { repoPath: string }> = {};
+    const out: Record<string, { repoPath: string; pendingOpenFile?: string | null }> = {};
     for (const [k, v] of Object.entries(parsed)) {
       if (v && typeof v === 'object' && typeof (v as { repoPath?: unknown }).repoPath === 'string') {
+        // Intentionally drop `pendingOpenFile` on rehydrate. It's a
+        // one-shot signal from the diff card to the editor; persisting
+        // it would cause the editor to silently re-open a stale file
+        // every reload.
         out[k] = { repoPath: (v as { repoPath: string }).repoPath };
       }
     }
@@ -150,9 +157,14 @@ export const sessionsState = $state<{
   // User-authored rules/preferences appended to Claude's system prompt on
   // every turn via `--append-system-prompt`. Edited in the Rules view.
   userRules: string;
-  // Per-column-instance editor state (repoPath shown in that Editor column).
-  // Keyed by PanelInstance.id.
-  editorInstanceState: Record<string, { repoPath: string }>;
+  // Per-column-instance editor state (repoPath shown in that Editor column,
+  // plus a transient `pendingOpenFile` that any source — diff card, MCP
+  // tool, future "go to file" UI — can set to ask EditorView to focus a
+  // specific file. Keyed by PanelInstance.id.
+  editorInstanceState: Record<
+    string,
+    { repoPath: string; pendingOpenFile?: string | null }
+  >;
 }>({
   list: __initial.sessions,
   activeIds: {
@@ -269,20 +281,72 @@ export function persistRulesEffect() {
  *  remembers its open folder across reloads. Without this, the
  *  agent-driven `set_editor_repo_path` (and the manual user-side path
  *  picker) would visually revert on every restart even though sessions
- *  themselves persist their cwd. */
+ *  themselves persist their cwd.
+ *
+ *  Strips the transient `pendingOpenFile` field on save — that's a
+ *  one-shot signal between the diff card and EditorView; persisting it
+ *  would cause the editor to silently re-open a stale file on every
+ *  reload. The serialized shape stays {repoPath} only. */
 export function persistEditorInstanceStateEffect() {
   $effect(() => {
     if (typeof localStorage === 'undefined') return;
     try {
-      localStorage.setItem(
-        EDITOR_STATE_STORAGE_KEY,
-        JSON.stringify(sessionsState.editorInstanceState)
-      );
+      const stripped: Record<string, { repoPath: string }> = {};
+      for (const [k, v] of Object.entries(sessionsState.editorInstanceState)) {
+        stripped[k] = { repoPath: v.repoPath };
+      }
+      localStorage.setItem(EDITOR_STATE_STORAGE_KEY, JSON.stringify(stripped));
     } catch {
       // Quota / SSR / private mode: silent. Editor path won't survive a
       // restart in that environment, but it's recoverable by re-picking.
     }
   });
+}
+
+/** Ask the editor instance `instanceId` to open `filePath` as its active
+ *  tab. EditorView watches this slot via $effect and consumes it on the
+ *  next reactive tick (calling `consumeEditorOpenFile` to clear the
+ *  signal so subsequent identical clicks still re-trigger).
+ *
+ *  Idempotent if the slot is missing — we lazily create it (matches the
+ *  pattern EditorColumn uses on mount). The caller is responsible for
+ *  ensuring `instanceId` actually points to an editor column; if it
+ *  doesn't, the signal sits in state forever. In practice the diff card
+ *  resolves a real instanceId via `findInstanceAnywhere` before
+ *  calling. */
+export function requestEditorOpenFile(instanceId: string, filePath: string): void {
+  if (!filePath) return;
+  const slot = sessionsState.editorInstanceState[instanceId];
+  if (!slot) {
+    sessionsState.editorInstanceState[instanceId] = { repoPath: '', pendingOpenFile: filePath };
+    return;
+  }
+  // Reassign the slot so Svelte's reactive proxy catches the mutation —
+  // direct field assignment on a deeply-nested $state object can miss
+  // when the object reference is preserved across writes. The spread
+  // also ensures consume sees a fresh write even when the same path is
+  // requested twice in a row (otherwise the value-equality check would
+  // skip the second click).
+  sessionsState.editorInstanceState = {
+    ...sessionsState.editorInstanceState,
+    [instanceId]: { ...slot, pendingOpenFile: filePath }
+  };
+}
+
+/** Pop the pending file path off the editor's slot. Returns the path
+ *  that was set (or undefined if there's no signal). Intended to be
+ *  called from EditorView's $effect right after it forwards the value
+ *  into its internal `openFile`. Always clears the slot so the next
+ *  request re-triggers, even if it's the same path. */
+export function consumeEditorOpenFile(instanceId: string): string | undefined {
+  const slot = sessionsState.editorInstanceState[instanceId];
+  const pending = slot?.pendingOpenFile;
+  if (!pending) return undefined;
+  sessionsState.editorInstanceState = {
+    ...sessionsState.editorInstanceState,
+    [instanceId]: { ...slot, pendingOpenFile: null }
+  };
+  return pending;
 }
 
 // ---- Handlers ----
@@ -653,6 +717,10 @@ export function appendEditEvent(
     oldText: string;
     newText: string;
     isCreate: boolean;
+    /** True for cursor's deletion tool. Mutually exclusive with
+     *  `isCreate`. The card flips Revert→Restore semantics; sessions
+     *  state stores it verbatim so EditDiffCard can branch on it. */
+    isDelete?: boolean;
     /** True for `Write` — full-file overwrite. Picks `revert_write`
      *  semantics over `revert_edit` (full rewrite vs unique-substring
      *  replace), and changes the card's verb. Defaults to false. */
@@ -660,7 +728,10 @@ export function appendEditEvent(
     /** Initial status. Edit/MultiEdit emit fully-formed events so they
      *  start at `applied`. Write events arrive with a placeholder
      *  `oldText` and finish loading once `git show HEAD:<file>` returns
-     *  — they should start at `loading`. */
+     *  — they should start at `loading`. Delete events normally start
+     *  at `applied` (cursor hands us prevContent inline) but fall back
+     *  to `loading` when prevContent is missing and we have to git-
+     *  show-backfill, same as Write. */
     status?: 'loading' | 'applied';
   }
 ) {
@@ -680,6 +751,7 @@ export function appendEditEvent(
       oldText: ev.oldText,
       newText: ev.newText,
       isCreate: ev.isCreate,
+      isDelete: ev.isDelete ?? false,
       wholeFile: ev.wholeFile ?? false,
       status: ev.status ?? 'applied'
     };

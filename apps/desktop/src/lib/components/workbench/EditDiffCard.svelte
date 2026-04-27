@@ -21,8 +21,9 @@
      <div> rows. */
 
   import { invoke } from '@tauri-apps/api/core';
-  import { updateEditEvent } from '$lib/state/sessions.svelte';
+  import { sessionsState, updateEditEvent } from '$lib/state/sessions.svelte';
   import { notifyError } from '$lib/state/toaster.svelte';
+  import { openFileInEditor } from '$lib/services/editorNavigation';
 
   interface Props {
     sessionId: string;
@@ -31,6 +32,12 @@
     oldText: string;
     newText: string;
     isCreate: boolean;
+    /** True when the agent deleted the file — flips the card's verb
+     *  to "deleted", swaps the Revert action for Restore (re-creates
+     *  the file from `oldText`), and swaps Reapply for Re-delete.
+     *  Mutually exclusive with `isCreate`. Defaults to false for
+     *  Edit/Write events. */
+    isDelete?: boolean;
     /** True for `Write` (full-file overwrite) — picks `revert_write`
      *  semantics + a "Wrote" verb. False for Edit / MultiEdit. */
     wholeFile: boolean;
@@ -44,6 +51,7 @@
     oldText,
     newText,
     isCreate,
+    isDelete = false,
     wholeFile,
     status,
     note
@@ -103,11 +111,64 @@
     return segs.length <= 2 ? filePath : `…/${segs.slice(-2).join('/')}`;
   });
 
+  /** Editor column we should prefer when the user clicks the file
+   *  path. Reads the session's `linkedToEditorInstanceId` directly
+   *  from sessionsState — `findInstanceAnywhere` happens later inside
+   *  `openFileInEditor` so we don't need to depend on layout state
+   *  reactively here (one less dep, fewer re-runs). When the session
+   *  isn't linked, the helper falls back to "first editor in active
+   *  workbench" or spawns a new editor column. */
+  const preferEditorInstanceId = $derived.by(() => {
+    const sess = sessionsState.list.find((s) => s.id === sessionId);
+    return sess?.linkedToEditorInstanceId ?? null;
+  });
+
+  /** Click on the file path (or its icon — the whole left side acts
+   *  like a link). Surfaces the file in the linked-or-first editor.
+   *  Stops propagation so the surrounding header div doesn't also
+   *  toggle the expand state — clicking a path should open the file,
+   *  not flip the diff visibility. */
+  async function handleOpenFile(ev: MouseEvent | KeyboardEvent) {
+    ev.stopPropagation();
+    if (busy) return;
+    try {
+      await openFileInEditor(filePath, {
+        preferInstanceId: preferEditorInstanceId
+      });
+    } catch (e) {
+      notifyError(e, { title: `Could not open ${shortPath}` });
+    }
+  }
+
+  /** Toggle the diff body. Used both by the chevron click and by a
+   *  background click on the header (keep the "click anywhere to
+   *  expand" feel without making the path button-in-button HTML). */
+  function toggleExpand() {
+    expanded = !expanded;
+  }
+
+  function onHeaderKeydown(ev: KeyboardEvent) {
+    if (ev.key === 'Enter' || ev.key === ' ') {
+      ev.preventDefault();
+      toggleExpand();
+    }
+  }
+
   async function handleRevert() {
     if (busy) return;
     busy = true;
     try {
-      if (wholeFile) {
+      if (isDelete) {
+        // The agent deleted the file; "Revert" here means **Restore**
+        // it from the captured `oldText` (cursor's `prevContent` or a
+        // git-HEAD backfill). The Tauri side refuses if the file
+        // already exists at the path — we don't want to clobber a
+        // file the user manually re-created or another tool wrote.
+        await invoke('restore_deleted_file', {
+          filePath,
+          prevContent: oldText
+        });
+      } else if (wholeFile) {
         // `Write`: rewrite the full file (or delete it if the agent
         // created it from nothing). The Tauri side validates current
         // content matches `newText` so we don't trample post-Write
@@ -129,7 +190,9 @@
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       updateEditEvent(sessionId, toolId, { status: 'error', note: msg });
-      notifyError(e, { title: `Revert failed for ${shortPath}` });
+      notifyError(e, {
+        title: `${isDelete ? 'Restore' : 'Revert'} failed for ${shortPath}`
+      });
     } finally {
       busy = false;
     }
@@ -139,12 +202,20 @@
    *  reuse `revert_edit`'s safety checks (it only knows "replace one
    *  literal occurrence with another", which is exactly what we need
    *  either direction). For Write, rewrite the file with `newText`
-   *  (re-creating it if Revert deleted it). */
+   *  (re-creating it if Revert deleted it). For Delete, "Reapply" means
+   *  re-delete the file we just restored — `redelete_file` validates
+   *  the on-disk content still matches `prevContent` before removing
+   *  so the user doesn't lose any post-restore edits. */
   async function handleReapply() {
     if (busy) return;
     busy = true;
     try {
-      if (wholeFile) {
+      if (isDelete) {
+        await invoke('redelete_file', {
+          filePath,
+          prevContent: oldText
+        });
+      } else if (wholeFile) {
         if (isCreate) {
           // Revert deleted the file. Reapply re-creates it with the
           // original Write content. Bypass `revert_write` since its
@@ -173,42 +244,78 @@
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       updateEditEvent(sessionId, toolId, { status: 'error', note: msg });
-      notifyError(e, { title: `Reapply failed for ${shortPath}` });
+      notifyError(e, {
+        title: `${isDelete ? 'Re-delete' : 'Reapply'} failed for ${shortPath}`
+      });
     } finally {
       busy = false;
     }
   }
 </script>
 
-<div class="edit-card" class:edit-card--reverted={status === 'reverted'} class:edit-card--error={status === 'error'} class:edit-card--loading={status === 'loading'}>
-  <button
+<div
+  class="edit-card"
+  class:edit-card--reverted={status === 'reverted'}
+  class:edit-card--error={status === 'error'}
+  class:edit-card--loading={status === 'loading'}
+  class:edit-card--delete={isDelete && status === 'applied'}
+>
+  <!-- Header is a role=button div, NOT a <button>, so the inner
+       file-path button is HTML-valid (button-in-button is not).
+       Clicking the header toggles the diff; clicking the path opens
+       the file in the editor. The chevron's rotation tracks `expanded`
+       so the affordance is still "this row toggles". -->
+  <div
     class="edit-head"
-    onclick={() => (expanded = !expanded)}
+    role="button"
+    tabindex="0"
     aria-expanded={expanded}
     title={expanded ? 'Collapse diff' : 'Show diff'}
+    onclick={toggleExpand}
+    onkeydown={onHeaderKeydown}
   >
     <svg class="i i-sm edit-chevron" class:edit-chevron--open={expanded} viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg>
-    <span class="edit-icon" aria-hidden="true">
-      {#if isCreate}
-        <svg viewBox="0 0 24 24" width="14" height="14"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
-      {:else}
-        <svg viewBox="0 0 24 24" width="14" height="14"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="m18.5 2.5 3 3L12 15l-4 1 1-4z"/></svg>
-      {/if}
-    </span>
-    <span class="edit-path mono">{shortPath}</span>
+    <!--
+      File path + icon is a single button so the whole "icon + name"
+      target is one click zone (Cursor-style). stopPropagation in
+      handleOpenFile keeps the header's expand toggle from firing on
+      the same click.
+    -->
+    <button
+      type="button"
+      class="edit-path-btn"
+      onclick={handleOpenFile}
+      title={`Open ${filePath} in editor`}
+    >
+      <span class="edit-icon" aria-hidden="true">
+        {#if isDelete}
+          <!-- Trash icon for deletions — destructive action signal. -->
+          <svg viewBox="0 0 24 24" width="14" height="14"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/></svg>
+        {:else if isCreate}
+          <!-- Document-with-plus icon for new files — additive signal. -->
+          <svg viewBox="0 0 24 24" width="14" height="14"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
+        {:else}
+          <!-- Pencil icon for edits — neutral "we changed something" signal. -->
+          <svg viewBox="0 0 24 24" width="14" height="14"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="m18.5 2.5 3 3L12 15l-4 1 1-4z"/></svg>
+        {/if}
+      </span>
+      <span class="edit-path mono">{shortPath}</span>
+    </button>
     <span class="edit-stats mono">
       <span class="edit-add">+{stats.add}</span>
       <span class="edit-del">−{stats.del}</span>
     </span>
     <span class="edit-status">
       {#if status === 'loading'}loading…
+      {:else if status === 'reverted' && isDelete}restored
       {:else if status === 'reverted'}reverted
       {:else if status === 'error'}error
+      {:else if isDelete}deleted
       {:else if wholeFile && isCreate}created
       {:else if wholeFile}wrote
       {:else}applied{/if}
     </span>
-  </button>
+  </div>
 
   {#if expanded}
     <div class="edit-body mono">
@@ -235,19 +342,37 @@
            backfill resolves. -->
       <button class="btn btn--ghost btn--small" disabled>Loading diff…</button>
     {:else if status === 'applied'}
+      <!-- Restore re-creates a deleted file from prevContent;
+           Revert undoes an Edit/Write. Same handler, different verb
+           drives the right Tauri command branch via `isDelete`. -->
       <button class="btn btn--ghost btn--small" onclick={handleRevert} disabled={busy}>
-        {busy ? 'Reverting…' : 'Revert'}
+        {#if busy}
+          {isDelete ? 'Restoring…' : 'Reverting…'}
+        {:else}
+          {isDelete ? 'Restore' : 'Revert'}
+        {/if}
       </button>
       <button class="btn btn--ghost btn--small" onclick={() => (expanded = false)} disabled={busy}>
         Keep
       </button>
     {:else if status === 'reverted'}
+      <!-- After Restore the file is back; "Re-delete" sends it
+           away again (with safety check on current contents). For
+           Edit/Write/Create reverts this is a normal Reapply. -->
       <button class="btn btn--ghost btn--small" onclick={handleReapply} disabled={busy}>
-        {busy ? 'Reapplying…' : 'Reapply'}
+        {#if busy}
+          {isDelete ? 'Re-deleting…' : 'Reapplying…'}
+        {:else}
+          {isDelete ? 'Re-delete' : 'Reapply'}
+        {/if}
       </button>
     {:else if status === 'error'}
       <button class="btn btn--ghost btn--small" onclick={handleRevert} disabled={busy}>
-        {busy ? 'Retrying…' : 'Retry revert'}
+        {#if busy}
+          Retrying…
+        {:else}
+          {isDelete ? 'Retry restore' : 'Retry revert'}
+        {/if}
       </button>
     {/if}
   </div>
@@ -265,6 +390,15 @@
   .edit-card--reverted { opacity: 0.72; }
   .edit-card--error { border-color: rgba(212, 102, 74, 0.5); }
   .edit-card--loading { opacity: 0.85; }
+  /* Slight red wash on the header of a fresh deletion so the user
+     spots "this card is a destructive op" at a glance, before they
+     even read the status label. Doesn't apply once reverted (file's
+     back; the card is no longer "scary"). */
+  .edit-card--delete .edit-icon { color: var(--error); }
+  .edit-card--delete .edit-status {
+    color: var(--error);
+    background: rgba(212, 102, 74, 0.1);
+  }
 
   .edit-head {
     display: flex; align-items: center; gap: 8px;
@@ -277,6 +411,13 @@
     color: var(--text-1);
   }
   .edit-head:hover { background: var(--bg-2); }
+  .edit-head:focus-visible {
+    /* Keyboard-only focus ring — mouse clicks don't show it (matches
+       native button behavior). The header is role=button so we owe the
+       user *some* focus indicator. */
+    outline: 2px solid var(--accent, #6faE88);
+    outline-offset: -2px;
+  }
   .edit-chevron {
     transition: transform 140ms;
     color: var(--text-2);
@@ -284,8 +425,37 @@
   .edit-chevron--open { transform: rotate(90deg); }
   .edit-icon { display: inline-flex; align-items: center; color: var(--text-2); }
   .edit-icon svg { stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-  .edit-path {
+  /* The clickable file-path target. Visually flat by default — looks
+     like the rest of the header — but the path gains a subtle
+     underline + accent tint on hover so the affordance reads as "this
+     opens the file". */
+  .edit-path-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
     flex: 1;
+    min-width: 0; /* let .edit-path's ellipsis kick in */
+    padding: 0;
+    margin: 0;
+    background: transparent;
+    border: 0;
+    cursor: pointer;
+    color: inherit;
+    text-align: left;
+    font: inherit;
+  }
+  .edit-path-btn:hover .edit-path {
+    color: var(--accent, #6faE88);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+  .edit-path-btn:hover .edit-icon { color: var(--accent, #6faE88); }
+  .edit-path-btn:focus-visible {
+    outline: 2px solid var(--accent, #6faE88);
+    outline-offset: 2px;
+    border-radius: 3px;
+  }
+  .edit-path {
     color: var(--text-0);
     font-size: 12px;
     overflow: hidden;

@@ -6,7 +6,7 @@
 //!   The sidecar's tools don't actually mutate the UI from here — they
 //!   can't reach the running Forgehold process. Instead, each tool
 //!   validates its arguments and returns a confirmation string. The
-//!   Forgehold frontend's stream parser (`src/lib/stream/claudeStream.ts`)
+//!   Forgehold frontend's stream parser (`src/lib/stream/agentStream.ts`)
 //!   sees the corresponding `mcp__app__*` tool_use event in Claude's
 //!   stream-json output and performs the navigation directly via its
 //!   already-reactive Svelte state. So the round-trip is:

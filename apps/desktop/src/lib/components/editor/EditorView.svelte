@@ -226,7 +226,12 @@
     }
   }
 
-  function openFile(path: string) {
+  /** Add `path` as a tab and activate it. Exported so EditorColumn
+   *  can drive the editor from outside in response to
+   *  `editorInstanceState.pendingOpenFile` signals (the diff card's
+   *  clickable file path, future "go to file" UIs). Idempotent —
+   *  re-clicking on an already-open tab just re-focuses it. */
+  export function openFile(path: string) {
     diffTarget = null; // leaving diff mode
     if (!tabs.includes(path)) tabs = [...tabs, path];
     activePath = path;

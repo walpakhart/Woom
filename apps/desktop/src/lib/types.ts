@@ -39,19 +39,25 @@ export type Workbench = {
 export type MessageEvent =
   | { kind: 'text'; body: string }
   | { kind: 'trace'; segments: string[] }
-  /** Inline diff card for an Edit/Write/MultiEdit tool call. Renders as a
-   *  collapsed file pill that expands to a unified diff with Keep / Revert
-   *  buttons — same UX pattern as Cursor's chat. We intercept the tool call
-   *  *after* the agent has already mutated the file (Claude/cursor-agent
-   *  CLIs don't expose a pre-tool hook), so the visual state always starts
-   *  at `applied`. The status flips to `reverted` if the user undoes the
-   *  change, or `error` if the revert itself failed (e.g. the file moved).
+  /** Inline diff card for an Edit/Write/MultiEdit/Delete tool call. Renders
+   *  as a collapsed file pill that expands to a unified diff with Keep /
+   *  Revert (or Restore for deletions) buttons — same UX pattern as
+   *  Cursor's chat. We intercept the tool call *after* the agent has
+   *  already mutated the file (Claude/cursor-agent CLIs don't expose a
+   *  pre-tool hook), so the visual state always starts at `applied`.
+   *  The status flips to `reverted` if the user undoes the change, or
+   *  `error` if the revert itself failed (e.g. the file moved).
    *
-   *  `oldText` is the literal `old_string` from the Edit (or empty for
-   *  Write to a new file). `newText` is `new_string` for Edit / `content`
-   *  for Write — what now lives in the file. `isCreate` distinguishes "this
-   *  edited an existing file" from "this created the file from nothing"
-   *  so revert can choose between rewriting and deleting. */
+   *  Three flavours, distinguished by the `isCreate` / `isDelete` flags:
+   *    - Default (both false): edit / write of an existing file.
+   *      `oldText` is the prior contents, `newText` what's there now.
+   *    - `isCreate=true`: Write created a brand-new file. `oldText` is
+   *      empty and Revert deletes the file.
+   *    - `isDelete=true`: file was deleted. `oldText` is the captured
+   *      prior contents (from cursor's `prevContent` or `git show
+   *      HEAD:`), `newText` is empty, and "Revert" is rendered as
+   *      "Restore" — it re-creates the file. Mutually exclusive with
+   *      `isCreate`. */
   | {
       kind: 'edit';
       toolId: string;
@@ -59,25 +65,33 @@ export type MessageEvent =
       oldText: string;
       newText: string;
       isCreate: boolean;
+      /** True when the tool call removed the file. Mutually exclusive
+       *  with `isCreate`. The card flips Revert → Restore (re-creates
+       *  the file from `oldText`) and Reapply → Re-delete. Defaults to
+       *  false for edit/write events. */
+      isDelete?: boolean;
       /** True when the agent called `Write` (full-file overwrite) rather
        *  than `Edit` / `MultiEdit` (in-place substitution). Different
        *  revert semantics — Edit does `replace(newText, oldText)` once,
        *  Write does `fs::write(filePath, oldText)` (or `remove_file` if
        *  `isCreate`). The card UI also picks a different verb ("Wrote"
-       *  vs "Edited"). */
+       *  vs "Edited"). Always true for `isDelete` events (the inverse
+       *  of "delete this file" is a full rewrite). */
       wholeFile: boolean;
       /** Diff card's lifecycle state.
-       *    - `loading` — Write event was just pushed; we're awaiting the
-       *      async `git show HEAD:<file>` that fetches the pre-agent
-       *      version. The card renders a placeholder so the user
-       *      doesn't see a flash of "+N" without context.
+       *    - `loading` — Write/Delete event was just pushed; we're
+       *      awaiting the async `git show HEAD:<file>` that fetches the
+       *      pre-agent version (used as a fallback when the CLI didn't
+       *      hand us `prevContent`). The card renders a placeholder so
+       *      the user doesn't see a flash of "+N" / "−N" without
+       *      context.
        *    - `applied` — change is on disk and the diff is fully
        *      populated. Default state for Edit/MultiEdit (no async
        *      fetch needed).
-       *    - `reverted` — user clicked Revert; the inverse write
-       *      succeeded.
-       *    - `error` — Revert (or the git fetch) failed. `note` carries
-       *      the message. */
+       *    - `reverted` — user clicked Revert / Restore; the inverse
+       *      write (or re-create) succeeded.
+       *    - `error` — Revert / Restore (or the git fetch) failed.
+       *      `note` carries the message. */
       status: 'loading' | 'applied' | 'reverted' | 'error';
       /** Optional explanation when `status === 'error'` — surfaced on the
        *  card so the user understands why Revert didn't apply. */

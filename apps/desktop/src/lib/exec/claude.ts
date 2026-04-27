@@ -9,7 +9,7 @@
 
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import { handleStreamEvent } from '$lib/stream/claudeStream';
+import { handleStreamEvent } from '$lib/stream/agentStream';
 
 export interface AgentRunRequest {
   sessionId: string;
@@ -60,7 +60,7 @@ export interface AgentRunRequest {
   onTraceDelta?: (sessionId: string, segment: string) => void;
   /** Called when the agent invokes a `mcp__app__*` UI-navigation tool.
    *  Threaded through to the stream handler — see
-   *  `ClaudeStreamHandlers.onAppNavigation`. Optional. */
+   *  `AgentStreamHandlers.onAppNavigation`. Optional. */
   onAppNavigation?: (
     sessionId: string,
     name: string,

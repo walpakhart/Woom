@@ -10,7 +10,11 @@
     activeInstances,
     findInstanceAnywhere
   } from '$lib/state/layout.svelte';
-  import { sessionsState, updateSession } from '$lib/state/sessions.svelte';
+  import {
+    sessionsState,
+    updateSession,
+    consumeEditorOpenFile
+  } from '$lib/state/sessions.svelte';
 
   interface Props {
     instanceId: string;
@@ -108,6 +112,31 @@
     }
   });
 
+  // EditorView reference — wired via bind:this so we can call its
+  // public `openFile(path)` method when an external source (the diff
+  // card's clickable file path) requests we focus a file. Without this,
+  // setting `pendingOpenFile` in state would have no consumer.
+  let editorView = $state<{ openFile: (path: string) => void } | null>(null);
+
+  // pendingOpenFile signal → editorView.openFile. Drained immediately
+  // via `consumeEditorOpenFile` so the next request (even for the same
+  // path) re-fires; without that, a user clicking the same diff card
+  // path twice in a row would only register the first click.
+  //
+  // Guarded on `editorView` because mount order isn't deterministic
+  // relative to the first signal — a fast click on a freshly-spawned
+  // editor column could race the bind:this assignment. The next change
+  // to pendingOpenFile (or the next mount tick) re-runs this effect,
+  // so a missed first signal isn't a permanent bug — just a one-tick
+  // delay. (`requestEditorOpenFile` always reassigns the slot, even
+  // for identical paths, so the effect re-evaluates.)
+  $effect(() => {
+    const pending = sessionsState.editorInstanceState[instanceId]?.pendingOpenFile;
+    if (!pending || !editorView) return;
+    editorView.openFile(pending);
+    consumeEditorOpenFile(instanceId);
+  });
+
   const inst = $derived(activeInstances().find((i) => i.id === instanceId));
   const order = $derived(activeInstances().findIndex((i) => i.id === instanceId));
 </script>
@@ -128,7 +157,7 @@
     <span class="brand-word">Editor</span>
     {#if inst?.name}<span class="bench-name mono" title="Bench id">{inst.name}</span>{/if}
   </div>
-  <EditorView bind:repoPath {agentInstances} {linkedAgents} {onLinkToAgent} onUnlinkAgent={unlinkSession} />
+  <EditorView bind:this={editorView} bind:repoPath {agentInstances} {linkedAgents} {onLinkToAgent} onUnlinkAgent={unlinkSession} />
 </section>
 
 <style>

@@ -159,6 +159,27 @@ pub fn ls_files(repo: &str) -> Vec<String> {
         .collect()
 }
 
+/// True iff `rel_path` (repo-relative) is tracked in the index of `repo`.
+/// Used as a safety guardrail before destructive operations (e.g. `Revert`
+/// on a Write card with `isCreate=true`): if the front-end thinks "agent
+/// just created this", but git knows about the path, the FE's backfill
+/// silently failed and removing the file would clobber committed work.
+///
+/// Implemented via `git ls-files --error-unmatch -- <path>`: exits 0 iff
+/// the path is in the index, otherwise non-zero. Cheaper than `cat-file`
+/// or `log -1` because it doesn't touch object storage. Returns false on
+/// any error (not-a-repo, git missing, …) so callers see "not tracked"
+/// and fall through to their default branch — the caller decides how
+/// strict it wants to be about ambiguous results.
+pub fn is_tracked(repo: &str, rel_path: &str) -> bool {
+    if repo.is_empty() || rel_path.is_empty() {
+        return false;
+    }
+    let mut cmd = git(repo);
+    cmd.args(["ls-files", "--error-unmatch", "--", rel_path]);
+    cmd.output().map(|o| o.status.success()).unwrap_or(false)
+}
+
 /// Return the subset of `paths` that are gitignored by this repo. Uses
 /// `git check-ignore --stdin -z` so behavior matches exactly what `git add`
 /// would skip (nested .gitignore + .git/info/exclude + global ignore all

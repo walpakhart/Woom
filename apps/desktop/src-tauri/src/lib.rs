@@ -188,6 +188,8 @@ pub fn run() {
             fs_write_bytes,
             revert_edit,
             revert_write,
+            restore_deleted_file,
+            redelete_file,
             app_data_dir,
             set_window_zoom,
             fs_list_dir,
@@ -211,6 +213,7 @@ pub fn run() {
             git_repo_info,
             git_diff,
             git_show,
+            pre_write_baseline,
             git_commit_and_push,
             git_create_pr,
             git_gh_cli_available,
@@ -1165,6 +1168,41 @@ fn revert_write(
         );
     }
     if isCreate {
+        // Safety guardrail before destruction: the FE marks `isCreate=true`
+        // optimistically when its backfill (`git show HEAD:<file>`) couldn't
+        // recover the pre-state. Two failure modes silently slipped through
+        // before this check:
+        //   • `git_repo_root(filePath)` was called with the *file* path, not
+        //     a directory — git rejects that, the backfill threw, and the
+        //     card stayed `isCreate=true`. Revert then deleted committed
+        //     files (lost README.md case).
+        //   • `git_show` returned empty for any non-HEAD reason (encoding,
+        //     LFS, partial clone, …) and we couldn't tell "new file" apart
+        //     from "tracked file we failed to read".
+        // Resolution: if git knows about the path, refuse the delete and
+        // surface a clear error. The user can then either revert manually
+        // (knowing the agent did clobber a tracked file) or accept the
+        // current contents.
+        let parent = path
+            .parent()
+            .and_then(|p| p.to_str())
+            .filter(|s| !s.is_empty())
+            .unwrap_or(".");
+        if let Ok(repo_root) = git::repo_root(parent) {
+            if !repo_root.is_empty() {
+                let rel = path
+                    .strip_prefix(&repo_root)
+                    .ok()
+                    .and_then(|p| p.to_str())
+                    .unwrap_or("");
+                if !rel.is_empty() && git::is_tracked(&repo_root, rel) {
+                    return Err(format!(
+                        "refusing to delete '{}': it's tracked in git, so the agent didn't actually create it — our pre-Write baseline lookup failed and we'd be wiping committed content. Restore manually with `git restore -- {}`.",
+                        rel, rel
+                    ));
+                }
+            }
+        }
         // Inverse of "Write created this file" is "remove the file".
         // Skip directory cleanup — the agent might have created
         // `a/b/c.txt` deep in a fresh tree, but we don't know which
@@ -1174,6 +1212,69 @@ fn revert_write(
     } else {
         fs::write_file(&filePath, &oldText)
     }
+}
+
+/// Restore a file that the agent deleted, using the `prev_content` we
+/// captured at deletion time (cursor-agent's `result.success.prevContent`,
+/// or a `git show HEAD:<file>` fallback for tracked files). Inverse of
+/// `Delete`; the EditDiffCard's "Restore" button calls this.
+///
+/// Refuses if a file already exists at the path. Two reasons:
+///   1. The user might have manually re-created the file (or another
+///      tool did). Silently overwriting destroys their work.
+///   2. The agent might have deleted-then-re-created in a single turn
+///      (a refactor that moves contents elsewhere). The first event's
+///      Restore would clobber the second event's work.
+/// Refusing forces the user to investigate, which is correct given
+/// we have no way to verify the absent state still holds.
+///
+/// `fs::write_file` creates parent dirs if missing — so restoring a
+/// nested path under a now-empty directory tree works (the agent might
+/// have deleted `a/b/c.txt` and `a/b/`'s siblings; we re-mkdir `a/b/`).
+#[tauri::command]
+fn restore_deleted_file(
+    #[allow(non_snake_case)] filePath: String,
+    #[allow(non_snake_case)] prevContent: String,
+) -> Result<(), String> {
+    use std::path::Path;
+    let path = Path::new(&filePath);
+    if path.exists() {
+        return Err(
+            "a file already exists at this path — refusing to overwrite. Delete it manually first if you want to restore.".into()
+        );
+    }
+    fs::write_file(&filePath, &prevContent)
+}
+
+/// Re-delete a previously-restored file. The user clicked "Restore" on
+/// a Delete card (flipping it to `reverted`), then changed their mind
+/// and clicked "Re-delete". Inverse of `restore_deleted_file`.
+///
+/// Verifies the on-disk contents still equal `prev_content` before
+/// removing. If something modified the file after restore (the user
+/// edited it; a later turn touched it), refuses to delete — the safe
+/// default is to keep work the user might care about. Surfacing the
+/// error lets the diff card flip to `error` state with a usable note,
+/// so the user can choose to manually delete or to abandon the
+/// re-delete.
+#[tauri::command]
+fn redelete_file(
+    #[allow(non_snake_case)] filePath: String,
+    #[allow(non_snake_case)] prevContent: String,
+) -> Result<(), String> {
+    use std::path::Path;
+    let path = Path::new(&filePath);
+    if !path.exists() {
+        return Err("file is already gone — nothing to delete".into());
+    }
+    let current = fs::read_file(&filePath)?;
+    if current != prevContent {
+        return Err(
+            "the file's contents have drifted since restore — refusing to delete blindly. Edit, save, or remove the file manually if you want to discard changes."
+                .into(),
+        );
+    }
+    std::fs::remove_file(path).map_err(|e| format!("failed to delete file: {}", e))
 }
 
 #[tauri::command]
@@ -1309,6 +1410,72 @@ fn git_log(repo: String, limit: u32) -> Result<Vec<GitCommitEntry>, String> {
 #[tauri::command]
 fn git_repo_root(path: String) -> Result<String, String> {
     git::repo_root(&path)
+}
+
+/// Resolve the pre-write baseline for `file_path` in a single round-trip.
+///
+/// Replaces the FE's previous "git_repo_root + git_show" pair, which had
+/// two latent bugs:
+///   1. `git_repo_root` was called with a *file* path, not a directory.
+///      `git -C <file>` rejects with ENOTDIR — the call threw, the FE's
+///      catch fell through to "isCreate=true", and Revert silently
+///      deleted committed files. Here we always resolve the repo from
+///      the file's parent directory.
+///   2. The FE couldn't tell "tracked but not at HEAD" apart from
+///      "untracked / new file" — both produced an empty `oldText`, both
+///      stayed `isCreate=true`. We expose `tracked` explicitly so the FE
+///      can mark the card as a modify (not a create) even when HEAD has
+///      no version of the path (e.g. file was just staged, or in a fresh
+///      repo).
+///
+/// Returns:
+///   • `repo_root`: empty when `file_path` isn't inside any git worktree.
+///   • `old_text`:  HEAD-version of the file ("" if absent at HEAD or
+///                  outside any repo).
+///   • `tracked`:   true iff the file is in the index right now. Used as
+///                  the authoritative "did this file pre-exist before
+///                  the agent's Write" signal.
+#[derive(serde::Serialize)]
+struct PreWriteBaseline {
+    repo_root: String,
+    old_text: String,
+    tracked: bool,
+}
+
+#[tauri::command]
+fn pre_write_baseline(#[allow(non_snake_case)] filePath: String) -> PreWriteBaseline {
+    use std::path::Path;
+    let path = Path::new(&filePath);
+    // Resolve repo from the file's *parent directory*. `git -C <dir>` is
+    // the only shape that works; `git -C <file>` errors. If parent is
+    // missing (e.g. weird absolute root), fall back to "." which lets
+    // git use the process cwd.
+    let parent = path
+        .parent()
+        .and_then(|p| p.to_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(".");
+    let repo_root = git::repo_root(parent).unwrap_or_default();
+    if repo_root.is_empty() {
+        return PreWriteBaseline {
+            repo_root: String::new(),
+            old_text: String::new(),
+            tracked: false,
+        };
+    }
+    let rel = path
+        .strip_prefix(&repo_root)
+        .ok()
+        .and_then(|p| p.to_str())
+        .map(String::from)
+        .unwrap_or_else(|| filePath.clone());
+    let old_text = git::show(&repo_root, "HEAD", &rel).unwrap_or_default();
+    let tracked = git::is_tracked(&repo_root, &rel);
+    PreWriteBaseline {
+        repo_root,
+        old_text,
+        tracked,
+    }
 }
 
 #[tauri::command]

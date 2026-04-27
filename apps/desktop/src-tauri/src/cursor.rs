@@ -588,13 +588,22 @@ fn normalize_event(raw: &str) -> Vec<serde_json::Value> {
         //     dropped to avoid double-pills.
         "tool_call" => {
             let subtype = v.get("subtype").and_then(|s| s.as_str()).unwrap_or("");
-            let is_edit_write = v
+            // Same reasoning as edit/write: `started` doesn't have the
+            // pre-deletion file body, only `completed` does (in
+            // `result.success.prevContent`). Without that field we can't
+            // offer Restore — we'd just have a path. So we wait for the
+            // post-tool event and treat the missing-prevContent case as
+            // a degraded "show pill, no Restore" path inside the diff
+            // card layer.
+            let is_file_mutation = v
                 .get("tool_call")
                 .and_then(|tc| tc.as_object())
                 .is_some_and(|o| {
-                    o.contains_key("editToolCall") || o.contains_key("writeToolCall")
+                    o.contains_key("editToolCall")
+                        || o.contains_key("writeToolCall")
+                        || o.contains_key("deleteToolCall")
                 });
-            let want = if is_edit_write { "completed" } else { "started" };
+            let want = if is_file_mutation { "completed" } else { "started" };
             if subtype == want {
                 normalize_tool_call(&v).into_iter().collect()
             } else {
@@ -873,7 +882,7 @@ fn extract_tool_shape(tc: &serde_json::Value) -> (String, serde_json::Value) {
         // Cursor's file-mutation tools: `editToolCall` and `writeToolCall`.
         //
         // We re-shape into Claude's `Write` input (`{file_path, content}`)
-        // so the frontend's Write handler in claudeStream.ts produces an
+        // so the frontend's Write handler in agentStream.ts produces an
         // inline EditDiffCard with the same apply/revert UX users get
         // for Claude. Without this the card path never triggers and
         // Cursor edits show only as text.
@@ -889,6 +898,14 @@ fn extract_tool_shape(tc: &serde_json::Value) -> (String, serde_json::Value) {
         //      nothing if cursor ever emits a started-only event.
         // (normalize_event filters edit/write to completed-only, so
         // afterFullFileContent should always be available in practice.)
+        //
+        // We also opportunistically pluck `beforeFullFileContent` (or any
+        // pre-state shape cursor may add later) and forward it as
+        // `prev_content`. agentStream.ts's Write handler uses it as the
+        // exact pre-agent baseline — no `git show HEAD:` round-trip, no
+        // misclassification of "modify" as "create" when the lookup
+        // fails. Empty string ⇒ field absent, FE falls back to git
+        // backfill exactly as before.
         if key == "editToolCall" || key == "writeToolCall" {
             let args = payload.get("args").and_then(|a| a.as_object());
             let success = payload
@@ -906,29 +923,69 @@ fn extract_tool_shape(tc: &serde_json::Value) -> (String, serde_json::Value) {
                 .or_else(|| args.and_then(|a| a.get("streamContent")))
                 .and_then(|c| c.as_str())
                 .unwrap_or("");
+            let prev = success
+                .and_then(|s| {
+                    s.get("beforeFullFileContent")
+                        .or_else(|| s.get("prevContent"))
+                        .or_else(|| s.get("priorContent"))
+                        .or_else(|| s.get("originalContent"))
+                })
+                .and_then(|c| c.as_str())
+                .unwrap_or("");
             if !path.is_empty() {
                 return (
                     "Write".into(),
-                    json!({ "file_path": path, "content": content }),
+                    json!({
+                        "file_path": path,
+                        "content": content,
+                        "prev_content": prev,
+                    }),
                 );
             }
         }
-        // Cursor's deletion tool: `deleteToolCall`. There's no diff to
-        // render (file's gone, nothing to apply/revert against), so we
-        // surface it as a trace pill via formatToolUse — frontend's
-        // generic mcp-shaped renderer hits the `path` field and shows
-        // "_deleted /path/to/file_". A future revision could keep
-        // `result.success.prevContent` to offer a one-click restore,
-        // but EditDiffCard's current model doesn't have a "deleted"
-        // variant; leaving as a pill for now.
+        // Cursor's deletion tool: `deleteToolCall`. We surface it as a
+        // dedicated `Delete` tool name with a `prev_content` payload so
+        // agentStream.ts can ship an EditDiffCard with an "isDelete"
+        // flag — same Keep/Restore UX users get for Edit/Write reverts.
+        //
+        // Source-of-truth for `prev_content`:
+        //   1. `result.success.prevContent` — the pre-deletion file
+        //      body. Only present on `completed` events. ALWAYS
+        //      preferred when available (most accurate; reflects the
+        //      exact moment-of-deletion state, including any uncommitted
+        //      changes the user had).
+        //   2. (none) — degrades the card to a "deleted" pill with
+        //      empty content. The frontend then has the option to
+        //      backfill via `git show HEAD:<file>` for tracked files,
+        //      same fallback path Write uses.
+        // (normalize_event filters delete to completed-only, so
+        // `prevContent` should be available in practice; we still
+        // tolerate its absence to keep the card path robust against
+        // future cursor-agent shape changes.)
         if key == "deleteToolCall" {
             let args = payload.get("args").and_then(|a| a.as_object());
+            let success = payload
+                .get("result")
+                .and_then(|r| r.get("success"))
+                .and_then(|s| s.as_object());
             let path = args
-                .and_then(|a| a.get("path"))
+                .and_then(|a| a.get("path").or_else(|| a.get("file_path")))
+                .or_else(|| success.and_then(|s| s.get("path")))
                 .and_then(|p| p.as_str())
                 .unwrap_or("");
+            let prev = success
+                .and_then(|s| {
+                    s.get("prevContent")
+                        .or_else(|| s.get("beforeFullFileContent"))
+                        .or_else(|| s.get("content"))
+                })
+                .and_then(|c| c.as_str())
+                .unwrap_or("");
             if !path.is_empty() {
-                return ("Delete".into(), json!({ "file_path": path }));
+                return (
+                    "Delete".into(),
+                    json!({ "file_path": path, "prev_content": prev }),
+                );
             }
         }
         if key.ends_with("ToolCall") {

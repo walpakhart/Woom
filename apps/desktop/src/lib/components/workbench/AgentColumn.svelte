@@ -1369,6 +1369,7 @@
                           oldText={ev.oldText}
                           newText={ev.newText}
                           isCreate={ev.isCreate}
+                          isDelete={ev.isDelete ?? false}
                           wholeFile={ev.wholeFile ?? false}
                           status={ev.status}
                           note={ev.note}

@@ -1615,7 +1615,7 @@
     void scrollChatBottom();
   }
 
-  // Streaming-event dispatch lives in `$lib/stream/claudeStream.ts`. The
+  // Streaming-event dispatch lives in `$lib/stream/agentStream.ts`. The
   // caller here just forwards assistant text deltas to the chat (session
   // store + scroll-to-bottom is the only DOM-coupled bit).
   function appendAssistantDelta(sessionId: string, delta: string) {
