@@ -18,5 +18,15 @@ export default defineConfig(async () => ({
     watch: {
       ignored: ['**/src-tauri/**']
     }
+  },
+  // Vitest config — pure-TS unit tests for the lib/ utilities
+  // (cost math, token formatting, context-window helpers, etc).
+  // No DOM, no Svelte components — those would need a separate
+  // jsdom environment and a Svelte test plugin; today we only test
+  // the parts that don't depend on either.
+  test: {
+    include: ['src/**/*.{test,spec}.ts'],
+    environment: 'node',
+    globals: false
   }
 }));
