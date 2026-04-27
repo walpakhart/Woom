@@ -99,14 +99,18 @@ export async function revertAllPendingEdits(
   return { reverted, failed, total: pending.length };
 }
 
-/** Mark every currently-pending edit as user-acknowledged so the bulk
- *  bar's count drops to zero without touching disk. The cards stay
- *  `applied` and keep their per-card Revert / Reapply buttons — Keep
- *  is a "stop reminding me" affordance, not a state change. */
+/** Mark every currently-pending edit as `kept`. Disk is untouched —
+ *  the file already has the agent's `newText`; we just record the
+ *  user's "I'm OK with this" decision so the bulk bar's count drops
+ *  and the per-card buttons swap to a single "Unkeep" affordance.
+ *
+ *  Mirror of `revertAllPendingEdits` (which transitions cards to
+ *  `reverted` and gives them "Reapply"). Together the two states give
+ *  the user a clear, undoable verdict on every change. */
 export function keepAllPendingEdits(sessionId: string): number {
   const pending = getPendingEditEvents(sessionId);
   for (const ev of pending) {
-    updateEditEvent(sessionId, ev.toolId, { acknowledged: true });
+    updateEditEvent(sessionId, ev.toolId, { status: 'kept', note: undefined });
   }
   return pending.length;
 }

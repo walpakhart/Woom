@@ -9,7 +9,8 @@
   import HistoryPanel from '$lib/components/editor/HistoryPanel.svelte';
   import DiffView from '$lib/components/editor/DiffView.svelte';
   import Splitter from '$lib/components/ui/Splitter.svelte';
-  import { notifyError } from '$lib/state/toaster.svelte';
+  import { notify, notifyError } from '$lib/state/toaster.svelte';
+  import { applyRangeToAgent } from '$lib/services/applyToAgent';
 
   const ROOT_STORAGE_KEY = 'forgehold:editor:root';
   const TABS_STORAGE_KEY = 'forgehold:editor:tabs';
@@ -79,6 +80,98 @@
   let watchUnlisten: UnlistenFn | null = null;
   let gitStatusByPath = $state<Record<string, string>>({});
   let diffTarget = $state<{ path: string; staged: boolean } | null>(null);
+
+  /* Live line range of the user's selection in CodeMirror, mirrored
+     up from <Editor> via `onSelectionChange`. `null` means the
+     selection collapsed to a caret — nothing to "apply to" yet, so
+     the bar stays hidden. Reset whenever the active file or diff
+     mode changes; the new <Editor> instance starts with a fresh
+     (caret) selection but doesn't fire `onSelectionChange` for the
+     initial state, hence the explicit reset below. */
+  let selection = $state<{ startLine: number; endLine: number } | null>(null);
+
+  $effect(() => {
+    activePath;
+    diffTarget;
+    selection = null;
+  });
+
+  /* Resolve "Apply to <agent>" buttons for the current selection.
+     - 0 linked agents → empty (the bar still shows the selection
+       range with a hint to link an agent).
+     - 1 agent of a given kind → label is just the kind ("Claude" /
+       "Cursor"). Two distinct kinds yields two short buttons.
+     - 2+ agents of the same kind → suffix the column name so the
+       user can tell e.g. Claude · Mona-Lisa apart from Claude ·
+       Da-Vinci. We never drop the kind label even when one column
+       is unique within its kind, because the user might mentally
+       group "all Claudes" / "all Cursors" and expect consistent
+       prefixing. */
+  type ApplyBtn = {
+    sessionId: string;
+    agentInstanceId: string;
+    label: string;
+    kind: 'claude' | 'cursor';
+  };
+  const applyButtons = $derived.by<ApplyBtn[]>(() => {
+    if (linkedAgents.length === 0) return [];
+    const byKind: Record<'claude' | 'cursor', typeof linkedAgents> = {
+      claude: [],
+      cursor: []
+    };
+    for (const a of linkedAgents) byKind[a.kind].push(a);
+    const out: ApplyBtn[] = [];
+    for (const k of ['claude', 'cursor'] as const) {
+      const group = byKind[k];
+      if (group.length === 0) continue;
+      const kindLabel = k === 'claude' ? 'Claude' : 'Cursor';
+      if (group.length === 1) {
+        out.push({
+          sessionId: group[0].sessionId,
+          agentInstanceId: group[0].agentInstanceId,
+          kind: k,
+          label: kindLabel
+        });
+      } else {
+        for (const a of group) {
+          out.push({
+            sessionId: a.sessionId,
+            agentInstanceId: a.agentInstanceId,
+            kind: k,
+            label: `${kindLabel} · ${a.name}`
+          });
+        }
+      }
+    }
+    return out;
+  });
+
+  function selectionRangeText(): string {
+    if (!selection) return '';
+    return selection.startLine === selection.endLine
+      ? `${selection.startLine}`
+      : `${selection.startLine}-${selection.endLine}`;
+  }
+
+  function handleApplyTo(btn: ApplyBtn) {
+    if (!selection || !activePath) return;
+    const r = applyRangeToAgent({
+      sessionId: btn.sessionId,
+      agentInstanceId: btn.agentInstanceId,
+      filePath: activePath,
+      startLine: selection.startLine,
+      endLine: selection.endLine
+    });
+    if (!r.ok || !r.token) {
+      notifyError(new Error('Could not pin selection — session not found.'));
+      return;
+    }
+    notify({
+      kind: 'info',
+      title: `Pinned to ${btn.label}`,
+      body: `@${r.token}`
+    });
+  }
 
   interface FileStatus { path: string; code: string; staged: boolean; unstaged: boolean; }
   interface GitStatusPayload {
@@ -489,8 +582,47 @@
                   path={activePath}
                   {onDirty}
                   onSaved={onFileSaved}
+                  onSelectionChange={(sel) => (selection = sel)}
                 />
               {/key}
+              {#if selection && !diffTarget}
+                <!-- Floating "Apply to <agent>" bar. Sits at the bottom
+                     of the editor area as an overlay so showing it
+                     doesn't reflow the CodeMirror viewport (the user's
+                     selected lines stay where they were). One button
+                     per linked agent — labels disambiguate via
+                     `Kind · ColumnName` only when there's more than
+                     one of that kind, so the common 1-Claude case
+                     stays a clean "Apply to Claude". -->
+                <div class="ev-apply-bar" role="toolbar" aria-label="Apply selection to agent">
+                  <span class="ev-apply-bar-label">
+                    <svg class="i i-sm" viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M4 7h16M4 12h10M4 17h16" />
+                    </svg>
+                    <span class="mono">{relToRepo(activePath)}:{selectionRangeText()}</span>
+                  </span>
+                  <div class="ev-apply-bar-actions">
+                    {#if applyButtons.length === 0}
+                      <span class="ev-apply-bar-hint">Link an agent column to apply selections.</span>
+                    {:else}
+                      {#each applyButtons as btn (btn.sessionId)}
+                        <button
+                          class="ev-apply-btn"
+                          class:claude={btn.kind === 'claude'}
+                          class:cursor={btn.kind === 'cursor'}
+                          onclick={() => handleApplyTo(btn)}
+                          title={`Pin @${relToRepo(activePath)}:${selectionRangeText()} to ${btn.label}'s composer`}
+                        >
+                          <svg class="i i-sm" viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M5 12h12M13 6l6 6-6 6" />
+                          </svg>
+                          <span>Apply to {btn.label}</span>
+                        </button>
+                      {/each}
+                    {/if}
+                  </div>
+                </div>
+              {/if}
             {/if}
           </div>
         </main>
@@ -673,7 +805,59 @@
     flex-shrink: 0;
   }
 
-  .ev-editor-wrap { flex: 1; min-height: 0; }
+  .ev-editor-wrap { flex: 1; min-height: 0; position: relative; }
+
+  /* Floating "Apply to <agent>" bar, anchored to the bottom of the
+     editor area. Absolute so it overlays the last few CodeMirror
+     lines instead of pushing them off-screen — the bar only appears
+     while a real range selection is live, so the overlay-vs-reflow
+     tradeoff favours not jiggling the viewport mid-action. */
+  .ev-apply-bar {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    background: var(--bg-2);
+    border-top: 1px solid var(--border-neutral);
+    padding: 6px 12px;
+    display: flex; align-items: center; gap: 12px;
+    z-index: 5;
+    box-shadow: 0 -6px 16px -10px rgba(0, 0, 0, 0.4);
+    flex-wrap: wrap;
+  }
+  .ev-apply-bar-label {
+    display: inline-flex; align-items: center; gap: 6px;
+    color: var(--text-1); font-size: 11.5px;
+    min-width: 0;
+  }
+  .ev-apply-bar-label .mono {
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    max-width: 280px;
+    color: var(--text-0);
+  }
+  .ev-apply-bar-actions {
+    display: inline-flex; align-items: center; gap: 6px;
+    flex-wrap: wrap;
+    margin-left: auto;
+  }
+  .ev-apply-bar-hint {
+    font-size: 11.5px; color: var(--text-2);
+  }
+  .ev-apply-btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 10px;
+    border-radius: 5px;
+    background: var(--bg-3);
+    border: 1px solid var(--border-neutral);
+    color: var(--text-0);
+    font-size: 12px; font-weight: 500;
+    cursor: pointer;
+    transition: background 100ms, border-color 100ms;
+  }
+  .ev-apply-btn:hover { background: var(--accent-soft); border-color: var(--accent); }
+  .ev-apply-btn :global(svg) { width: 12px; height: 12px; opacity: 0.85; }
+  /* Keep the kind hint subtle but present — a 2px left accent stripe
+     in the agent's family colour. Helps the user pick the right
+     button at a glance when both Claude and Cursor are linked. */
+  .ev-apply-btn.claude { border-left-width: 2px; border-left-color: var(--accent); }
+  .ev-apply-btn.cursor { border-left-width: 2px; border-left-color: var(--text-1); }
 
   .ev-error {
     position: absolute;

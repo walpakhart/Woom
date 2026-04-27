@@ -42,7 +42,7 @@
     /** True for `Write` (full-file overwrite) — picks `revert_write`
      *  semantics + a "Wrote" verb. False for Edit / MultiEdit. */
     wholeFile: boolean;
-    status: 'loading' | 'applied' | 'reverted' | 'error';
+    status: 'loading' | 'applied' | 'kept' | 'reverted' | 'error';
     note?: string;
   }
   let {
@@ -241,12 +241,22 @@
   }
 
   /** "Keep" on a card — same gesture as "Keep all" on the bulk bar but
-   *  scoped to one event. Marks the card as user-acknowledged so the
-   *  bar's count drops, then collapses the diff body. We deliberately
-   *  don't change `status` (Revert / Reapply must stay reachable). */
+   *  scoped to one event. Flips status `applied → kept`. Disk is
+   *  untouched (the agent's write is already there); only the card UI
+   *  changes: status pill becomes "kept" and the Revert/Keep pair
+   *  collapses to a single "Unkeep" affordance. Symmetrical to
+   *  Revert (which goes `applied → reverted` and offers "Reapply"). */
   function handleKeep() {
-    updateEditEvent(sessionId, toolId, { acknowledged: true });
+    updateEditEvent(sessionId, toolId, { status: 'kept', note: undefined });
     expanded = false;
+  }
+
+  /** "Unkeep" — undo a Keep. Pure state change (no Tauri call) since
+   *  Keep didn't touch disk either. Returns the card to `applied` so
+   *  Revert/Keep are reachable again and the bulk bar picks it back
+   *  up. Mirrors how Reapply undoes a Revert. */
+  function handleUnkeep() {
+    updateEditEvent(sessionId, toolId, { status: 'applied', note: undefined });
   }
 
   /** Reapply after a Revert: undo the undo. For Edit, swap the args and
@@ -307,6 +317,7 @@
 <div
   class="edit-card"
   class:edit-card--reverted={status === 'reverted'}
+  class:edit-card--kept={status === 'kept'}
   class:edit-card--error={status === 'error'}
   class:edit-card--loading={status === 'loading'}
   class:edit-card--delete={isDelete && status === 'applied'}
@@ -360,6 +371,7 @@
       {#if status === 'loading'}loading…
       {:else if status === 'reverted' && isDelete}restored
       {:else if status === 'reverted'}reverted
+      {:else if status === 'kept'}kept
       {:else if status === 'error'}error
       {:else if isDelete}deleted
       {:else if wholeFile && isCreate}created
@@ -426,6 +438,15 @@
           {isDelete ? 'Re-delete' : 'Reapply'}
         {/if}
       </button>
+    {:else if status === 'kept'}
+      <!-- User explicitly approved this change. Disk is untouched
+           (still `newText`); the only undo path is "Unkeep", which
+           flips status back to `applied` so Revert / Keep are
+           reachable again and the bulk bar picks it up.
+           Symmetrical to Reapply on a `reverted` card. -->
+      <button class="btn btn--ghost btn--small" onclick={handleUnkeep} disabled={busy}>
+        Unkeep
+      </button>
     {:else if status === 'error'}
       <button class="btn btn--ghost btn--small" onclick={handleRevert} disabled={busy}>
         {#if busy}
@@ -448,6 +469,13 @@
     font-size: 12.5px;
   }
   .edit-card--reverted { opacity: 0.72; }
+  /* Kept cards stay full-opacity so the user can still read the diff,
+     but a thin accent stripe on the left signals "you've explicitly
+     OK'd this" — distinct from the "neutral grey" of an un-decided
+     card and from the dimmed `reverted` look. */
+  .edit-card--kept {
+    border-left: 2px solid var(--accent-bright);
+  }
   .edit-card--error { border-color: rgba(212, 102, 74, 0.5); }
   .edit-card--loading { opacity: 0.85; }
   /* Slight red wash on the header of a fresh deletion so the user

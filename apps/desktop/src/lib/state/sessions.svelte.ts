@@ -461,6 +461,68 @@ export function updateSession(id: string, patch: Partial<ClaudeSession>) {
   sessionsState.list = sessionsState.list.map((s) => (s.id === id ? { ...s, ...patch } : s));
 }
 
+/** Attach a specific line range of a file as a `@path:start-end` mention
+ *  to the session's composer. Used by the editor's "Apply to <agent>"
+ *  bar so the user can pin a selection to an agent without typing the
+ *  range manually.
+ *
+ *  Token shape:
+ *    • Range:  `@<rel-or-basename>:<startLine>-<endLine>`  (e.g. `@src/foo.ts:45-67`)
+ *    • Single: `@<rel-or-basename>:<line>`                 (when start === end)
+ *
+ *  Storage:
+ *    • One Mention per token: `externalId = <token>` (without the `@`),
+ *      `body = absolute path`, `title = <basename>:<startLine>-<endLine>`.
+ *      Different ranges of the same file produce distinct mentions
+ *      (their tokens differ), so re-clicking "Apply to" on an
+ *      adjusted selection adds a NEW pin instead of clobbering.
+ *    • Token is appended to `input` with a leading-space guard so the
+ *      backdrop's `@[^\s]+` regex tokenises it as a single highlight.
+ *
+ *  Returns the token (without `@`) so the caller can chain it (e.g.
+ *  toast "Pinned src/foo.ts:45-67 to Claude · Mona-Lisa"). Returns
+ *  null if the session doesn't exist. */
+export function attachLineRangeMention(
+  sessionId: string,
+  filePath: string,
+  startLine: number,
+  endLine: number
+): string | null {
+  const s = sessionsState.list.find((x) => x.id === sessionId);
+  if (!s) return null;
+  const lo = Math.min(startLine, endLine);
+  const hi = Math.max(startLine, endLine);
+  const rangeSuffix = lo === hi ? `:${lo}` : `:${lo}-${hi}`;
+
+  const rel =
+    s.cwd && filePath.startsWith(s.cwd + '/') ? filePath.slice(s.cwd.length + 1) : null;
+  const trimmed = filePath.endsWith('/') ? filePath.slice(0, -1) : filePath;
+  const slash = trimmed.lastIndexOf('/');
+  const name = slash >= 0 ? trimmed.slice(slash + 1) : trimmed;
+  const baseToken = rel ?? name;
+  const token = `${baseToken}${rangeSuffix}`;
+
+  const existing = new Set(s.mentions.map((m) => m.externalId));
+  let nextInput = s.input;
+  let nextMentions = s.mentions;
+  if (!existing.has(token)) {
+    const sep = nextInput && !nextInput.endsWith(' ') ? ' ' : '';
+    nextInput = nextInput + sep + '@' + token + ' ';
+    nextMentions = [
+      ...s.mentions,
+      {
+        source: 'file',
+        externalId: token,
+        title: `${name}${rangeSuffix}`,
+        body: filePath,
+        isDir: false
+      }
+    ];
+  }
+  updateSession(sessionId, { input: nextInput, mentions: nextMentions });
+  return token;
+}
+
 /** Attach an array of absolute filesystem paths as file-mentions to the given
     session. Called from the composer's + button (AgentColumn) and from the
     OS drag-drop listener (+page.svelte). Skips paths already referenced.
@@ -780,11 +842,10 @@ export function updateEditEvent(
   sessionId: string,
   toolId: string,
   patch: {
-    status?: 'loading' | 'applied' | 'reverted' | 'error';
+    status?: 'loading' | 'applied' | 'kept' | 'reverted' | 'error';
     note?: string;
     oldText?: string;
     isCreate?: boolean;
-    acknowledged?: boolean;
   }
 ) {
   sessionsState.list = sessionsState.list.map((s) => {
@@ -801,9 +862,7 @@ export function updateEditEvent(
           status: patch.status ?? e.status,
           note: patch.note !== undefined ? patch.note : e.note,
           oldText: patch.oldText !== undefined ? patch.oldText : e.oldText,
-          isCreate: patch.isCreate !== undefined ? patch.isCreate : e.isCreate,
-          acknowledged:
-            patch.acknowledged !== undefined ? patch.acknowledged : e.acknowledged
+          isCreate: patch.isCreate !== undefined ? patch.isCreate : e.isCreate
         };
       });
       if (!mTouched) return m;
@@ -815,17 +874,16 @@ export function updateEditEvent(
   });
 }
 
-/** All edit events in `sessionId` that are still "live" — applied to
- *  disk and not yet acknowledged or reverted by the user. Drives the
- *  bulk-action bar's count and its Keep all / Revert all targets.
+/** All edit events in `sessionId` whose status is still `applied` —
+ *  the change is on disk and the user hasn't decided what to do with
+ *  it yet (Keep moves to `kept`, Revert moves to `reverted`). Drives
+ *  the bulk-action bar's count and its Keep all / Revert all targets.
  *
  *  Returns the events themselves (not just IDs) because the bulk
  *  handlers need `filePath`, `oldText`, `newText`, `wholeFile`,
  *  `isCreate`, and `isDelete` to dispatch the right Tauri command —
  *  same shape `EditDiffCard.svelte`'s individual handler uses. Order
- *  matches chat order so a user clicking "Revert all" undoes from
- *  most-recent backwards is implementation-detail; here we keep
- *  source order and let the caller decide. */
+ *  matches chat order. */
 export function getPendingEditEvents(
   sessionId: string
 ): Array<
@@ -839,7 +897,6 @@ export function getPendingEditEvents(
     for (const e of m.events) {
       if (e.kind !== 'edit') continue;
       if (e.status !== 'applied') continue;
-      if (e.acknowledged) continue;
       out.push(e);
     }
   }

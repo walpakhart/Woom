@@ -87,22 +87,21 @@ export type MessageEvent =
        *      context.
        *    - `applied` — change is on disk and the diff is fully
        *      populated. Default state for Edit/MultiEdit (no async
-       *      fetch needed).
+       *      fetch needed). The "pending changes" bar above the
+       *      composer counts cards in this state.
+       *    - `kept` — user explicitly approved the change ("Keep" on
+       *      the card or "Keep all" on the bar). Disk is unchanged
+       *      (still `newText`); the card swaps Revert/Keep for an
+       *      "Unkeep" button that flips back to `applied`. Symmetrical
+       *      to `reverted` so the user can always undo their decision.
        *    - `reverted` — user clicked Revert / Restore; the inverse
-       *      write (or re-create) succeeded.
+       *      write (or re-create) succeeded. Card shows "Reapply".
        *    - `error` — Revert / Restore (or the git fetch) failed.
        *      `note` carries the message. */
-      status: 'loading' | 'applied' | 'reverted' | 'error';
+      status: 'loading' | 'applied' | 'kept' | 'reverted' | 'error';
       /** Optional explanation when `status === 'error'` — surfaced on the
        *  card so the user understands why Revert didn't apply. */
       note?: string;
-      /** True once the user has explicitly approved this change (clicked
-       *  "Keep" on the card itself or "Keep all" on the bulk-action bar).
-       *  Distinct from `status`: the change is still `applied` on disk,
-       *  but the card no longer counts toward the "N pending changes"
-       *  bar above the composer. We use a flag rather than a separate
-       *  status so Reapply / Revert remain available afterwards. */
-      acknowledged?: boolean;
     };
 
 /** Token-accounting snapshot from a single Claude API call. Each

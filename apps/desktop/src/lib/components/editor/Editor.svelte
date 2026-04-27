@@ -12,8 +12,14 @@
     path: string;
     onDirty?: (dirty: boolean) => void;
     onSaved?: (path: string) => void;
+    /** Fires whenever the user's selection changes. Reports the line
+     *  range (1-based, inclusive) of the primary selection, or `null`
+     *  when the selection collapses to a caret. EditorView uses this
+     *  to surface an "Apply to …" bar with the selected range pinned
+     *  as a `@path:start-end` mention on a linked agent's composer. */
+    onSelectionChange?: (sel: { startLine: number; endLine: number } | null) => void;
   }
-  let { path, onDirty, onSaved }: Props = $props();
+  let { path, onDirty, onSaved, onSelectionChange }: Props = $props();
 
   let editorEl: HTMLDivElement;
   let view: EditorView | null = null;
@@ -60,6 +66,32 @@
                 if (d !== dirty) {
                   dirty = d;
                   onDirty?.(d);
+                }
+              }
+              // Selection-change → bubble up the line range so the
+              // parent can surface "Apply to <agent>" affordances. We
+              // only fire when the selection actually changes (CM
+              // re-fires this listener for unrelated reasons too) and
+              // collapse caret-only selections to `null` so the parent
+              // doesn't have to special-case "is this a real range".
+              if (u.selectionSet || u.docChanged) {
+                if (onSelectionChange) {
+                  const sel = u.state.selection.main;
+                  if (sel.from === sel.to) {
+                    onSelectionChange(null);
+                  } else {
+                    const startLine = u.state.doc.lineAt(sel.from).number;
+                    // CodeMirror selections are exclusive at `to` — a
+                    // line-end selection lands on the next line's
+                    // first column, which would over-report by one.
+                    // Snap back to the previous line in that case.
+                    const rawEndLine = u.state.doc.lineAt(sel.to).number;
+                    const endLine =
+                      rawEndLine > startLine && sel.to === u.state.doc.line(rawEndLine).from
+                        ? rawEndLine - 1
+                        : rawEndLine;
+                    onSelectionChange({ startLine, endLine });
+                  }
                 }
               }
             })

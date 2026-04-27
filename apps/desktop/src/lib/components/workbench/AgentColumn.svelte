@@ -245,11 +245,12 @@
       : 0
   );
 
-  // Diff cards still on disk that the user hasn't acknowledged or
-  // reverted yet. Drives the bulk-action bar above the composer
-  // (Keep all / Revert all). Recomputes on every sessionsState
-  // change because `getPendingEditEvents` walks `sessionsState.list`
-  // — Svelte 5's reactivity tracks that read.
+  // Diff cards in `applied` status — the agent's change is on disk
+  // but the user hasn't decided yet (Keep would flip them to `kept`,
+  // Revert to `reverted`). Drives the bulk-action bar above the
+  // composer. Recomputes on every sessionsState change because
+  // `getPendingEditEvents` walks `sessionsState.list` and Svelte 5's
+  // reactivity tracks that read.
   const pendingEdits = $derived(
     activeSess ? getPendingEditEvents(activeSess.id) : []
   );
@@ -284,10 +285,10 @@
     }
   }
 
-  /** Acknowledge every pending edit for the active session in one go.
-   *  Doesn't touch disk — just clears the bar by stamping
-   *  `acknowledged: true` on each event. The cards stay applied with
-   *  Revert / Reapply still reachable. */
+  /** Flip every pending edit to `kept` in one go. Doesn't touch disk
+   *  (the agent's writes are already there); only the cards' UI
+   *  changes — pill turns to "kept", buttons collapse to a single
+   *  "Unkeep" affordance, and the bar's count drops to zero. */
   function handleKeepAllPending() {
     if (!activeSess || bulkActionBusy) return;
     keepAllPendingEdits(activeSess.id);
@@ -1547,14 +1548,14 @@
         </div>
       {/if}
 
-      <!-- Bulk-action bar for un-acknowledged diff cards. Surfaces only
-           while there are still cards in `applied` state that the user
-           hasn't dismissed via Keep / Revert. Rendered as a top strip of
-           the composer block (same bg-1 + border-top as `.attach-row` /
-           `.chat-input`) so the bar visually fuses with whatever is
-           below — no floating pill, no air gap. Visual order follows
-           time: bar = "the agent's last changes still need a verdict",
-           attach-row = "what you'll send next". -->
+      <!-- Bulk-action bar for un-decided diff cards. Surfaces only
+           while there are still cards in `applied` status that the user
+           hasn't flipped to `kept` or `reverted`. Rendered as a top
+           strip of the composer block (same bg-1 + border-top as
+           `.attach-row` / `.chat-input`) so the bar visually fuses with
+           whatever is below — no floating pill, no air gap. Visual
+           order follows time: bar = "the agent's last changes still
+           need a verdict", attach-row = "what you'll send next". -->
       {#if pendingEdits.length > 0}
         <div class="pending-edits-bar" transition:slide={{ duration: 160, easing: cubicOut }}>
           <span class="pending-edits-count" aria-live="polite">
@@ -2015,8 +2016,8 @@
     animation: pulse 1.4s ease-in-out infinite;
   }
 
-  /* Bulk-action bar for un-acknowledged diff cards. Visually a header
-     strip for the composer block — same `bg-1` and `border-top` as
+  /* Bulk-action bar for un-decided diff cards. Visually a header strip
+     for the composer block — same `bg-1` and `border-top` as
      `.attach-row` and `.chat-input` below, so the three stack into one
      continuous panel without gaps. NO side margin / border-radius: a
      floating pill would read as "loose card" when no attach-row is

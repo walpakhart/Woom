@@ -1,0 +1,60 @@
+/** "Apply to <agent>" plumbing for the editor's selection bar.
+ *
+ *  When the user highlights lines in the editor and clicks "Apply to
+ *  Claude · Mona-Lisa", three things must happen in lockstep so the
+ *  affordance feels like one action:
+ *
+ *    1. Pin the range as a `@path:start-end` mention on the target
+ *       session's composer (so the agent sees what the user is
+ *       referring to).
+ *    2. Make that session the active tab in its column (otherwise
+ *       the mention lands on a session the user can't currently see
+ *       in the workbench).
+ *    3. Scroll the agent column into view in the workbench so the
+ *       composer is visible after the click — the editor and the
+ *       chat are usually side-by-side, but the user might have a
+ *       multi-column setup where the target column is offscreen.
+ *
+ *  Bundling those three calls here keeps the editor's selection-bar
+ *  component a thin view layer, mirrors how `editorNavigation.ts`
+ *  centralises "open this file" so the diff card and selection bar
+ *  don't drift, and gives a single place to extend later (e.g.
+ *  auto-focus the composer textarea, append a templated prompt). */
+
+import {
+  attachLineRangeMention,
+  setActiveSessionInColumn
+} from '$lib/state/sessions.svelte';
+import { scrollInstanceIntoView } from '$lib/state/layout.svelte';
+
+export interface ApplyRangeArgs {
+  sessionId: string;
+  agentInstanceId: string;
+  filePath: string;
+  startLine: number;
+  endLine: number;
+}
+
+/** Result is returned (instead of toast'd here) so the caller can
+ *  decide between an in-line confirmation and a global toast — the
+ *  selection bar uses the latter, but a future "Apply to all" command
+ *  could batch results and toast once. */
+export interface ApplyRangeResult {
+  ok: boolean;
+  /** The bare token without the `@` (e.g. `src/foo.ts:45-67`) so the
+   *  caller can include it in a confirmation toast. */
+  token: string | null;
+}
+
+export function applyRangeToAgent(args: ApplyRangeArgs): ApplyRangeResult {
+  const token = attachLineRangeMention(
+    args.sessionId,
+    args.filePath,
+    args.startLine,
+    args.endLine
+  );
+  if (!token) return { ok: false, token: null };
+  setActiveSessionInColumn(args.agentInstanceId, args.sessionId);
+  void scrollInstanceIntoView(args.agentInstanceId);
+  return { ok: true, token };
+}
