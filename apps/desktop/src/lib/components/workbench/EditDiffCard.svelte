@@ -103,6 +103,65 @@
     return { add, del };
   });
 
+  /* Render a hunked, git-diff-style view: only show changed lines plus
+     N lines of surrounding context, with `…` separators between hunks
+     for skipped runs of unchanged content.
+     Why we do this for *both* Edit and Write cards:
+       • Claude's Edit gives us a tight (old_string, new_string) pair so
+         `lineDiff` already produces something compact — applying the
+         hunk filter is a no-op there (every same-line is within 3 of a
+         change).
+       • Cursor's editToolCall is a full-file overwrite, so without
+         hunking we'd render every untouched line of a 200-line README
+         even when the agent only added two lines at the bottom. That
+         was the "why is the whole file in the diff card" complaint.
+     CONTEXT_LINES = 3 matches the git default users intuit. We also
+     show skipped-count in the separator (`… 95 lines …`) so the user
+     knows roughly how much was hidden — useful for trust ("did you
+     actually only change two lines, or 50 buried in the middle?"). */
+  const CONTEXT_LINES = 3;
+  type DiffEntry = DiffLine | { kind: 'sep'; skipped: number };
+  const hunked = $derived.by<DiffEntry[]>(() => {
+    if (diff.length === 0) return [];
+    const keep = new Array<boolean>(diff.length).fill(false);
+    for (let i = 0; i < diff.length; i++) {
+      if (diff[i].kind === 'add' || diff[i].kind === 'del') {
+        const lo = Math.max(0, i - CONTEXT_LINES);
+        const hi = Math.min(diff.length - 1, i + CONTEXT_LINES);
+        for (let j = lo; j <= hi; j++) keep[j] = true;
+      }
+    }
+    const out: DiffEntry[] = [];
+    let skipped = 0;
+    let emittedAny = false;
+    for (let i = 0; i < diff.length; i++) {
+      if (keep[i]) {
+        if (skipped > 0 && emittedAny) {
+          out.push({ kind: 'sep', skipped });
+        } else if (skipped > 0 && !emittedAny) {
+          // Leading skip — also worth signalling so users see "this
+          // file has more content above the change", not "the diff
+          // starts at line 1".
+          out.push({ kind: 'sep', skipped });
+        }
+        skipped = 0;
+        out.push(diff[i]);
+        emittedAny = true;
+      } else if (emittedAny) {
+        skipped++;
+      } else {
+        skipped++;
+      }
+    }
+    // Trailing skip (lines after the last change) — surface it for
+    // symmetry with the leading skip; "… 12 lines …" at the end is
+    // tidier than the diff just stopping mid-file.
+    if (skipped > 0 && emittedAny) {
+      out.push({ kind: 'sep', skipped });
+    }
+    return out;
+  });
+
   /** Last 2 path segments — same convention `formatToolUse` uses for
    *  read/write hints. Keeps long absolute paths from blowing out the
    *  pill width while still anchoring the user to "which file". */
@@ -319,13 +378,22 @@
 
   {#if expanded}
     <div class="edit-body mono">
-      {#each diff as line, i (i)}
-        <div class="edit-line edit-line--{line.kind}">
-          <span class="edit-line-marker">
-            {#if line.kind === 'add'}+{:else if line.kind === 'del'}−{:else}{' '}{/if}
-          </span>
-          <span class="edit-line-text">{line.text || ' '}</span>
-        </div>
+      {#each hunked as entry, i (i)}
+        {#if entry.kind === 'sep'}
+          <div class="edit-line edit-line--sep" aria-label="hidden context">
+            <span class="edit-line-marker">…</span>
+            <span class="edit-line-text">
+              … {entry.skipped} unchanged {entry.skipped === 1 ? 'line' : 'lines'} …
+            </span>
+          </div>
+        {:else}
+          <div class="edit-line edit-line--{entry.kind}">
+            <span class="edit-line-marker">
+              {#if entry.kind === 'add'}+{:else if entry.kind === 'del'}−{:else}{' '}{/if}
+            </span>
+            <span class="edit-line-text">{entry.text || ' '}</span>
+          </div>
+        {/if}
       {/each}
     </div>
   {/if}
@@ -512,6 +580,15 @@
   .edit-line--del { background: rgba(212, 102, 74, 0.12); color: var(--text-1); }
   .edit-line--del .edit-line-marker { color: var(--error); }
   .edit-line--same { color: var(--text-2); }
+  /* Hunk gap — visually subdued so the eye skips past it to the next
+     real change, but still readable enough to confirm the line count. */
+  .edit-line--sep {
+    color: var(--text-mute);
+    background: rgba(127, 127, 127, 0.04);
+    font-style: italic;
+    user-select: none;
+  }
+  .edit-line--sep .edit-line-marker { color: var(--text-mute); }
 
   .edit-note {
     padding: 6px 10px;
