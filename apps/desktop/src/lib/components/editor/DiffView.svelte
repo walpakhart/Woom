@@ -7,8 +7,9 @@
   import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
   import { syntaxHighlighting, defaultHighlightStyle, bracketMatching, foldGutter } from '@codemirror/language';
   import { MergeView } from '@codemirror/merge';
-  import { oneDark } from '@codemirror/theme-one-dark';
   import { languageFor } from '$lib/components/editor/codemirrorLang';
+  import { editorThemeExtension } from '$lib/components/editor/editorTheme';
+  import { themeState } from '$lib/state/theme.svelte';
 
   interface Props {
     repo: string;
@@ -33,7 +34,7 @@
       syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
       history(),
       keymap.of([...defaultKeymap, ...historyKeymap]),
-      oneDark,
+      editorThemeExtension(themeState.name),
       languageFor(p),
       EditorState.readOnly.of(true),
       EditorView.editable.of(false),
@@ -97,8 +98,12 @@
 
   $effect(() => {
     void load();
+    /* MergeView doesn't expose its inner EditorViews for compartment-
+       reconfigure, so we just rebuild the whole diff when any
+       reactive dep flips — including the app theme so the diff
+       re-renders with the new editor palette. */
     // eslint-disable-next-line @typescript-eslint/no-unused-expressions
-    repo; path; staged;
+    repo; path; staged; themeState.name;
   });
 
   onDestroy(() => merge?.destroy());

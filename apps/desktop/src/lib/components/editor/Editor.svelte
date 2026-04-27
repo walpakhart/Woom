@@ -3,9 +3,10 @@
   import { EditorView, basicSetup } from 'codemirror';
   import { EditorState, Compartment } from '@codemirror/state';
   import { keymap } from '@codemirror/view';
-  import { oneDark } from '@codemirror/theme-one-dark';
   import { invoke } from '@tauri-apps/api/core';
   import { languageFor } from '$lib/components/editor/codemirrorLang';
+  import { editorThemeExtension } from '$lib/components/editor/editorTheme';
+  import { themeState } from '$lib/state/theme.svelte';
 
   interface Props {
     path: string;
@@ -23,6 +24,11 @@
   let dirty = $state(false);
 
   const languageCompartment = new Compartment();
+  /* Theme lives in its own compartment so we can swap CodeMirror's
+     editor theme without rebuilding the EditorState. Reactive
+     $effect below dispatches a `reconfigure` whenever the user flips
+     the app palette in Settings. */
+  const themeCompartment = new Compartment();
 
   async function load(p: string) {
     if (!p || p === lastLoadedPath) return;
@@ -42,7 +48,7 @@
           doc: contents,
           extensions: [
             basicSetup,
-            oneDark,
+            themeCompartment.of(editorThemeExtension(themeState.name)),
             languageCompartment.of(languageFor(p)),
             keymap.of([
               { key: 'Mod-s', run: (v) => { void save(v); return true; } }
@@ -94,6 +100,17 @@
 
   $effect(() => {
     void load(path);
+  });
+
+  /* Re-configure the theme compartment when the user flips palette.
+     `view?.dispatch` is a no-op when the editor isn't mounted yet,
+     so this is safe at any time. */
+  $effect(() => {
+    const name = themeState.name;
+    if (!view) return;
+    view.dispatch({
+      effects: themeCompartment.reconfigure(editorThemeExtension(name))
+    });
   });
 
   onDestroy(() => view?.destroy());

@@ -3,11 +3,14 @@
   import { invoke } from '@tauri-apps/api/core';
   import { openUrl } from '@tauri-apps/plugin-opener';
   import { EditorView, basicSetup } from 'codemirror';
-  import { EditorState } from '@codemirror/state';
-  import { oneDark } from '@codemirror/theme-one-dark';
+  import { EditorState, Compartment } from '@codemirror/state';
   import type { FileBlob, RepoBranch, RepoCommit, TreeEntry } from '$lib/data';
   import { languageFor } from '$lib/components/editor/codemirrorLang';
+  import { editorThemeExtension } from '$lib/components/editor/editorTheme';
+  import { themeState } from '$lib/state/theme.svelte';
   import Markdown from '$lib/components/ui/Markdown.svelte';
+
+  const themeCompartment = new Compartment();
 
   interface Props {
     owner: string;
@@ -144,7 +147,7 @@
         doc: blob.content,
         extensions: [
           basicSetup,
-          oneDark,
+          themeCompartment.of(editorThemeExtension(themeState.name)),
           languageFor(blob.path),
           EditorState.readOnly.of(true),
           EditorView.editable.of(false),
@@ -153,6 +156,17 @@
       })
     });
   }
+
+  /* Reactive theme swap — same pattern as Editor.svelte. Reconfigures
+     the theme compartment in-place when the user flips palette,
+     without rebuilding the read-only viewer. */
+  $effect(() => {
+    const name = themeState.name;
+    if (!viewer) return;
+    viewer.dispatch({
+      effects: themeCompartment.reconfigure(editorThemeExtension(name))
+    });
+  });
 
   onDestroy(() => viewer?.destroy());
 
