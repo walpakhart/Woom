@@ -463,7 +463,7 @@ impl Gh {
     }
 
     #[tool(
-        description = "Search GitHub pull requests across one or more repos / orgs. Returns id, number, repo, title, state (open/closed/merged), author, draft flag, created/updated, url. Use this when the user wants to find PRs by keyword, ticket id, author, label, or status — e.g. \"find merged PRs that mention DEVOPS-414\" → `is:pr is:merged DEVOPS-414`. Pass full GitHub search syntax. \n\nIMPORTANT — make ONE focused query, do not iterate. GitHub's search returns all matching PRs across orgs/repos in a single call (sort by updated, paginate up to 100). Do NOT re-run the same intent with different `org:` / `repo:` / `is:draft` / `state:` scopes — that re-pays the entire conversation context for the same answer. Examples:\n  - \"my open PRs\" → ONE call: `is:pr author:<user> state:open sort:updated-desc` (then group by repo in your reply).\n  - \"PRs mentioning DEVOPS-414\" → ONE call: `is:pr DEVOPS-414`.\nOnly broaden / narrow if the first result was empty or clearly missed the user's intent."
+        description = "Search GitHub pull requests across repos / orgs. Returns id, number, repo, title, state, author, draft flag, dates, url. Pass full GitHub search syntax (e.g. `is:pr is:merged DEVOPS-414`). One call covers all matches across orgs/repos — see the search-discipline block in your system context for canonical patterns."
     )]
     async fn search_prs(
         &self,
@@ -478,7 +478,7 @@ impl Gh {
     }
 
     #[tool(
-        description = "Search GitHub issues across one or more repos / orgs. Same syntax as search_prs but defaults to `is:issue`. Use to find tickets by label, milestone, mention, or full-text — e.g. \"open issues with label:bug touched in the last week\" → `is:issue is:open label:bug updated:>2025-04-18`.\n\nIMPORTANT — make ONE focused query, do not iterate. Same discipline as search_prs: a single call returns all matches across orgs/repos. Do NOT re-run with different scopes (`org:` / `repo:` / `state:`) — that re-pays the entire conversation context for the same answer."
+        description = "Search GitHub issues across repos / orgs. Same syntax as search_prs but defaults to `is:issue` (e.g. `is:issue is:open label:bug updated:>2025-04-18`). One call covers all matches — see the search-discipline block in your system context."
     )]
     async fn search_issues(
         &self,

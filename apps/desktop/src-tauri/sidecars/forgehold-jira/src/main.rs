@@ -203,7 +203,7 @@ impl Jira {
     }
 
     #[tool(
-        description = "Search Jira issues with JQL. Returns a compact list (key, summary, status, assignee, updated).\n\nIMPORTANT — make ONE focused JQL query, do not iterate. JQL is expressive enough to combine project, status, assignee, sprint, and full-text in a single call (e.g. `project = DEVOPS AND status != Done AND assignee = currentUser() ORDER BY updated DESC`). Do NOT re-run with broader/narrower scopes — that re-pays the entire conversation context for the same answer. Examples:\n  - \"my open tickets\" → ONE call: `assignee = currentUser() AND resolution = Unresolved ORDER BY updated DESC`.\n  - \"DEVOPS tickets in current sprint\" → ONE call: `project = DEVOPS AND sprint in openSprints() ORDER BY rank`.\n  - \"who's working on auth\" → ONE call: `text ~ \\\"auth\\\" AND status != Done`.\nOnly broaden / narrow if the first result was empty or clearly missed the user's intent."
+        description = "Search Jira issues with JQL. Returns a compact list (key, summary, status, assignee, updated). JQL combines project / status / assignee / sprint / full-text in one call — see the search-discipline block in your system context for canonical patterns."
     )]
     async fn search(
         &self,
@@ -1070,8 +1070,18 @@ fn format_search(v: &serde_json::Value, workspace: &str) -> String {
     if issues.is_empty() {
         return "No issues matched.".into();
     }
+    // Keep the per-issue line as compact as possible: the agent re-feeds
+    // this whole payload on every subsequent turn, so each saved char
+    // pays out N times. We drop the per-row browse URL (the agent can
+    // build it from `key` + the workspace hint at the top) and trim the
+    // ISO timestamp to YYYY-MM-DD (the time/ms aren't useful for triage).
     let mut out = String::new();
-    out.push_str(&format!("{} issue(s):\n", issues.len()));
+    out.push_str(&format!(
+        "{} issue(s) on {} (browse: https://{}/browse/<KEY>):\n",
+        issues.len(),
+        workspace,
+        workspace,
+    ));
     for i in issues {
         let key = i.get("key").and_then(|k| k.as_str()).unwrap_or("?");
         let fields = i.get("fields").cloned().unwrap_or(serde_json::Value::Null);
@@ -1082,16 +1092,18 @@ fn format_search(v: &serde_json::Value, workspace: &str) -> String {
             .and_then(|s| s.as_str())
             .unwrap_or("?");
         let assignee = user_name(fields.get("assignee"));
-        let updated = fields.get("updated").and_then(|s| s.as_str()).unwrap_or("");
+        let updated = fields
+            .get("updated")
+            .and_then(|s| s.as_str())
+            .map(|s| s.split('T').next().unwrap_or(s).to_string())
+            .unwrap_or_default();
         out.push_str(&format!(
-            "- {} [{}] {} (assignee: {}, updated: {})\n  https://{}/browse/{}\n",
+            "- {} [{}] {} ({}, {})\n",
             key,
             status,
             summary,
             assignee.as_deref().unwrap_or("—"),
             updated,
-            workspace,
-            key,
         ));
     }
     out
