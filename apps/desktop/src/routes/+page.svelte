@@ -22,6 +22,9 @@
   import SentryColumn from '$lib/components/workbench/SentryColumn.svelte';
   import AgentColumn from '$lib/components/workbench/AgentColumn.svelte';
   import EditorColumn from '$lib/components/workbench/EditorColumn.svelte';
+  import { buildAgentAppContext } from '$lib/services/agentContext';
+  import { applySessionCwd } from '$lib/services/sessionCwd';
+  import { runCompactSession as runCompactSessionService } from '$lib/services/agentCompact';
   import {
     layoutState,
     persistPanelState,
@@ -219,117 +222,6 @@
     }
   }
 
-  /** Update an agent session's cwd safely. Both Claude CLI and cursor-agent
-   *  scope conversations by *project directory* (cwd-derived), so resuming
-   *  an old session id under a new cwd fails ("No conversation found with
-   *  session ID …"). When the cwd actually changes:
-   *    - Stash the current uuid under the old cwd in `cwdUuids` (only if
-   *      it has a real CLI-side conversation, i.e. `claudeResumable`).
-   *      This lets a future return to that cwd resume the original chat.
-   *    - Look up the new cwd in the map. If we've been there before,
-   *      restore that uuid and resume — full CLI memory of the prior
-   *      thread, no recap needed.
-   *    - Otherwise mint a fresh uuid for the new project AND snapshot
-   *      the recent UI conversation into `cwdSwitchRecap` so the next
-   *      turn's system prompt can prime the fresh CLI session with what
-   *      was just being discussed. Without that the agent would lose
-   *      conversational context every time the user moves between repos.
-   *  `breakLink: true` also unlinks from the editor (used by manual user
-   *  actions like `pickCwd`). */
-  function applySessionCwd(
-    sessionId: string,
-    newCwd: string | null,
-    opts: { breakLink?: boolean } = {}
-  ) {
-    const sess = sessionsState.list.find((s) => s.id === sessionId);
-    if (!sess) return;
-    const oldCwd = sess.cwd ?? null;
-    const cwdChanged = (oldCwd ?? '') !== (newCwd ?? '');
-    const patch: Partial<ClaudeSession> = { cwd: newCwd };
-    if (cwdChanged) {
-      // Stash departing cwd's uuid (only if it's a live CLI conversation).
-      const map = { ...sess.cwdUuids };
-      if (oldCwd && sess.claudeResumable) {
-        map[oldCwd] = sess.claudeUuid;
-      }
-      const restoreUuid = newCwd ? map[newCwd] : null;
-      if (restoreUuid) {
-        // Returning to a project we've been in before — resume its
-        // conversation so the CLI side has full memory of THIS project's
-        // history. But still inject a recap describing what was discussed
-        // in OTHER projects since we left this one — the user may have
-        // worked on things in B that are relevant when returning to A.
-        // The CLI's resumed conversation has no knowledge of B's turns;
-        // the recap fills that gap.
-        patch.claudeUuid = restoreUuid;
-        patch.claudeResumable = true;
-        patch.cwdSwitchRecap = buildCwdSwitchRecap(sess, oldCwd, newCwd, { resumed: true });
-      } else {
-        // Fresh project. New uuid, prime with recap of recent chatter so
-        // the brand-new CLI conversation has continuity.
-        patch.claudeUuid = genUuid();
-        patch.claudeResumable = false;
-        patch.cwdSwitchRecap = buildCwdSwitchRecap(sess, oldCwd, newCwd, { resumed: false });
-      }
-      patch.cwdUuids = map;
-    }
-    if (opts.breakLink) {
-      patch.linkedToEditor = false;
-      patch.linkedToEditorInstanceId = null;
-    }
-    updateSession(sessionId, patch);
-  }
-
-  /** Snapshot the last few user/assistant exchanges into a self-contained
-   *  prose block, injected into the next turn's system prompt. Two
-   *  flavours, both feeding off the same unified `sess.messages` history
-   *  (which spans every cwd the session has visited):
-   *    - `resumed: false` — fresh CLI conversation in a brand-new
-   *      project. The CLI side has zero memory; the recap primes it
-   *      with what was just being discussed.
-   *    - `resumed: true` — returning to a project we've been in before.
-   *      The CLI's resumed conversation already remembers THIS
-   *      project's prior turns, but knows nothing of what was
-   *      discussed elsewhere since we left. Recap fills that gap so
-   *      cross-project work bleeds over (e.g. "we figured X in repo B
-   *      that affects A").
-   *  Each message is truncated to ~800 chars to bound the token cost.
-   *  Returns null when there's nothing meaningful to recap. */
-  function buildCwdSwitchRecap(
-    sess: ClaudeSession,
-    oldCwd: string | null,
-    newCwd: string | null,
-    opts: { resumed: boolean }
-  ): string | null {
-    const meaningful = sess.messages.filter(
-      (m) => (m.role === 'user' || m.role === 'assistant') && m.content.trim().length > 0
-    );
-    if (meaningful.length === 0) return null;
-    const recent = meaningful.slice(-6);
-    const lines: string[] = [];
-    if (opts.resumed) {
-      lines.push("You're returning to a project you've been in before. Your CLI session here resumes with full memory of this project's prior chat. While you were elsewhere, the user had these other exchanges — they may relate to work here, or not:");
-    } else {
-      lines.push('Your cwd just changed mid-conversation. The CLI you run on uses a fresh session in the new project, so you have no memory of prior turns from its perspective. Forgehold preserved the last few exchanges below for continuity:');
-    }
-    if (oldCwd) lines.push(`- Previous cwd: ${oldCwd}`);
-    if (newCwd) lines.push(`- ${opts.resumed ? 'Now back in' : 'New cwd'}: ${newCwd}`);
-    lines.push('');
-    lines.push('Recent exchanges (oldest → newest):');
-    for (const m of recent) {
-      const role = m.role === 'user' ? 'User' : 'You (assistant)';
-      const text = m.content.trim();
-      const trimmed = text.length > 800 ? `${text.slice(0, 799)}…` : text;
-      lines.push(`${role}: ${trimmed}`);
-    }
-    lines.push('');
-    if (opts.resumed) {
-      lines.push("Continue from your remembered context. If anything from the cross-project chatter above touches the work in this repo, weave it in.");
-    } else {
-      lines.push("Continue from there with the new cwd in mind. The old project's files are no longer your working tree — if the user asks to keep working on the prior thread, your tools (Read/Write/Bash) are now scoped to the new project.");
-    }
-    return lines.join('\n');
-  }
 
   // ---- Drag autoscroll for card DnD (Jira/GitHub → Claude column) ----
   // When the user grabs a card and drags it toward an off-screen column,
@@ -1476,45 +1368,16 @@
     thinkingStartedAt = null;
   }
 
-  /** Fork-compact a Claude session: ask the live CLI session to summarise
-   *  itself, mint a fresh session UUID, seed it with the summary, swap
-   *  the session over so the next turn resumes the new compacted thread.
-   *  See `claude::compact_session` (Rust) for the two-shot details. We
-   *  surface the summary in chat as a system message so the user can
-   *  audit what the new session was seeded with. */
+  // Thin wrapper around `runCompactSessionService` so the AgentColumn
+  // prop binding (`onCompactSession={runCompactSession}`) keeps the
+  // same shape while the body lives in `lib/services/agentCompact.ts`.
+  // Threads through the two component-local pieces: `editorRepoPath`
+  // ($derived reactive) and `scrollChatBottom` (DOM-coupled).
   async function runCompactSession(sessionId: string): Promise<void> {
-    const s = sessionsState.list.find((x) => x.id === sessionId);
-    if (!s) return;
-    const newUuid = genUuid();
-    const cwd = s.worktreePath || s.cwd
-      || (s.linkedToEditor && s.linkedToEditorInstanceId
-        ? sessionsState.editorInstanceState[s.linkedToEditorInstanceId]?.repoPath ?? null
-        : null)
-      || editorRepoPath
-      || null;
-    const result = await invoke<{ new_uuid: string; summary: string }>(
-      'claude_compact_session',
-      {
-        oldClaudeUuid: s.claudeUuid,
-        newClaudeUuid: newUuid,
-        cwd,
-        claudeModel: s.claudeModel
-      }
-    );
-    // Swap the session over to the new uuid + reset context-window
-    // counter (the new session starts with just the summary, so its
-    // first turn's context size will be small).
-    updateSession(sessionId, {
-      claudeUuid: result.new_uuid,
-      claudeResumable: true,
-      lastContextSize: 0
+    await runCompactSessionService(sessionId, {
+      editorRepoPath,
+      scrollChatBottom
     });
-    appendSessionMessage(sessionId, {
-      role: 'system',
-      content: `Compacted earlier conversation. New session seeded with this summary:\n\n${result.summary}`,
-      at: new Date().toISOString()
-    });
-    void scrollChatBottom();
   }
 
   async function sendClaudeMessage() {
@@ -1746,178 +1609,6 @@
   function appendAssistantDelta(sessionId: string, delta: string) {
     appendToLastAssistant(sessionId, delta);
     void scrollChatBottom();
-  }
-
-  /** Build the per-turn app-context string we hand the agent as a system-
-   *  prompt suffix. Lists every workbench's instances by name + id, with
-   *  the editor's open path / agent's cwd, and editor↔agent links. Tells
-   *  the agent which instance/session it's running in so "switch myself"
-   *  has a meaning, and which sibling instances exist so it knows whether
-   *  to add a NEW one or just change an existing one's path.
-   *
-   *  Re-derived on every turn from `layoutState` + `sessionsState` so it's
-   *  always current.
-   *
-   *  Ordering rule (matters for prompt-cache): everything static lives at
-   *  the top, the variable workbench-layout block comes LAST. Claude's
-   *  cache keys off a prefix, so a stable header + tool guide on top
-   *  means the kilobytes of instructions get cached across turns and
-   *  only the trailing layout snapshot is fresh on each call. Same logic
-   *  applies to cursor-agent's backend caching. */
-  function buildAgentAppContext(callingSessionId: string): string {
-    const lines: string[] = [];
-
-    // ── Static section: header + navigation tool guide. Same bytes on
-    // every turn (modulo a Forgehold deploy) so prompt caches eat it.
-    lines.push(
-      'You are running inside Forgehold, a desktop app where the user has '
-        + 'organised work into workbenches (tabs of side-by-side columns). '
-        + 'You can navigate the UI directly via the `mcp__app__*` tools.'
-    );
-    lines.push('');
-    lines.push(
-      'When the user asks to "switch the editor and claude", "open this '
-        + 'repo in editor", "switch myself to /path", etc — DO NOT add a new '
-        + 'column. Use these tools on existing instances:'
-    );
-    lines.push(
-      '  - `mcp__app__set_editor_repo_path` — change an editor\'s open '
-        + 'folder. Pass `instance_name` (the art-name like "Sagrada-Familia") '
-        + 'or `instance_id`. If the editor has linked agents, their cwd '
-        + 'auto-follows — see the `linked_agents=[…]` field on each editor '
-        + 'in the workbench layout below. So if your column is in '
-        + '`linked_agents` of the editor you\'re moving, you DON\'T need a '
-        + 'separate set_agent_cwd for yourself — the link handles it.'
-    );
-    lines.push(
-      '  - `mcp__app__set_agent_cwd` — change an agent session\'s cwd. '
-        + 'Pass `instance_name`/`instance_id`, or `target=self` for yourself. '
-        + 'For yourself, the change takes effect on your NEXT turn. The '
-        + 'editor↔agent link is NEVER broken by this call — only by the '
-        + 'user clicking "Unlink" in the UI.'
-    );
-    lines.push(
-      '  - `mcp__app__list_instances` — re-list the current state if you '
-        + 'think this preamble is stale.'
-    );
-    lines.push(
-      'Only use `mcp__app__add_workbench_instance` when the user explicitly '
-        + 'says "add", "new", "another" — not for "switch" / "open in".'
-    );
-    lines.push('');
-    lines.push(
-      'Approval cards: `set_editor_repo_path` and `set_agent_cwd` execute '
-        + 'immediately when the USER asked you to switch — no approval card. '
-        + 'If you want to PROACTIVELY suggest a switch (the user didn\'t '
-        + 'ask but you think they should), use `mcp__github__propose_switch_cwd` '
-        + 'instead — that one queues an approval card.'
-    );
-
-    // Tool-iteration discipline. Empirically the biggest token-burn we
-    // see on Forgehold isn't the system prompt — it's the agent
-    // re-running near-identical search queries 5–10 times across
-    // GitHub/Jira/Sentry/memory to "be thorough", then re-paying the
-    // entire conversation history on every round-trip. One focused
-    // query returns the same data and costs 1/Nth of the limit. This
-    // block lives in the static cached prefix, so it costs ~140 tokens
-    // once per session and saves multiple thousand tokens per
-    // "list my PRs" / "find issues mentioning X" / "show recent
-    // errors" turn.
-    lines.push('');
-    lines.push(
-      'Search/list discipline (applies to ALL data sources). When the '
-        + 'user asks for a list, lookup, or "show me my X" — make ONE '
-        + 'focused query, then narrow only if the result needs '
-        + 'filtering. Do NOT iterate variations of the same intent '
-        + '(running the same search with `org:` then without, with '
-        + '`is:draft` then `state:open`, with different JQL scopes, '
-        + 'etc.). The data sources already return all matches in one '
-        + 'call; iterating just re-pays the entire conversation '
-        + 'context for the same answer. Concrete patterns:\n'
-        + '  - GitHub "my open PRs" → ONE `mcp__github__search_prs` '
-        + 'with `is:pr author:<user> state:open sort:updated-desc`. '
-        + 'Group by repo in your reply.\n'
-        + '  - GitHub "PR #N details" → ONE `mcp__github__get_pr` '
-        + '(it has title/state/branches/body). Add `get_pr_diff` / '
-        + '`get_pr_files` / `get_pr_comments` ONLY if the user asks '
-        + 'about diff/files/discussion respectively.\n'
-        + '  - Jira "my tickets" / "open in DEVOPS" → ONE '
-        + '`mcp__jira__search` with a single JQL: '
-        + '`assignee = currentUser() AND resolution = Unresolved` '
-        + 'or `project = DEVOPS AND status != Done`. JQL handles '
-        + 'AND/OR/IN — combine, don\'t iterate.\n'
-        + '  - Sentry "recent errors" / "crashes about X" → ONE '
-        + '`mcp__sentry__search_issues` with combined filters '
-        + '(`is:unresolved level:error project:foo`).\n'
-        + '  - Memory recall → ONE `mcp__memory__memory_search` with '
-        + 'multi-word query (FTS handles synonyms). If null on the '
-        + 'first try, the memory genuinely isn\'t there.\n'
-        + 'If the first call returns an empty result, narrowing then '
-        + 'is free — but never broaden after a hit. Pagination > '
-        + 're-querying.'
-    );
-
-    // ── Variable section: workbench layout snapshot + one-shot
-    // cwd-switch recap. Re-derived every turn so cache-busting bytes
-    // live here exclusively. Keep the section delimiter so the agent
-    // can visually parse where the current state begins.
-    const calling = sessionsState.list.find((s) => s.id === callingSessionId);
-    const callingInstanceId = calling?.columnInstanceId ?? null;
-
-    lines.push('');
-    lines.push('---');
-    lines.push('Current workbench layout (refreshed on every turn):');
-
-    // One-shot recap if the user just switched the agent's cwd. Cleared
-    // after the turn ships (in sendClaudeMessage's success path).
-    if (calling?.cwdSwitchRecap) {
-      lines.push('');
-      lines.push(calling.cwdSwitchRecap);
-    }
-
-    for (const wb of layoutState.workbenches) {
-      const isActive = wb.id === layoutState.activeWorkbenchId;
-      lines.push('');
-      lines.push(`Workbench "${wb.name}"${isActive ? ' (ACTIVE)' : ''} — id ${wb.id}:`);
-      if (wb.instances.length === 0) {
-        lines.push('  (no columns)');
-        continue;
-      }
-      for (const inst of wb.instances) {
-        const meta: string[] = [`kind=${inst.kind}`, `name=${inst.name}`, `id=${inst.id}`];
-        if (inst.kind === 'editor') {
-          const path = sessionsState.editorInstanceState[inst.id]?.repoPath ?? '';
-          meta.push(`repo_path=${path || '(none)'}`);
-          // Show what agent sessions are linked to this editor.
-          const linked = sessionsState.list
-            .filter((s) => s.linkedToEditor && s.linkedToEditorInstanceId === inst.id)
-            .map((s) => s.title || s.id.slice(0, 6));
-          if (linked.length) meta.push(`linked_agents=[${linked.join(', ')}]`);
-        }
-        if (inst.kind === 'claude' || inst.kind === 'cursor') {
-          // Find the active session bound to this column.
-          const sessId = sessionsState.activeByInstance[inst.id] ?? null;
-          const sess = sessId ? sessionsState.list.find((s) => s.id === sessId) : null;
-          if (sess) {
-            const effCwd = sess.worktreePath || sess.cwd
-              || (sess.linkedToEditor && sess.linkedToEditorInstanceId
-                ? sessionsState.editorInstanceState[sess.linkedToEditorInstanceId]?.repoPath
-                : null)
-              || '(inherits from editor or no cwd)';
-            meta.push(`session=${sess.title || sess.id.slice(0, 6)}`);
-            meta.push(`cwd=${effCwd}`);
-            if (sess.linkedToEditor && sess.linkedToEditorInstanceId) {
-              const link = wb.instances.find((i) => i.id === sess.linkedToEditorInstanceId);
-              if (link) meta.push(`linked_to_editor=${link.name}`);
-            }
-          }
-        }
-        const isYou = inst.id === callingInstanceId;
-        lines.push(`  - ${meta.join(', ')}${isYou ? '  ← THIS IS YOU' : ''}`);
-      }
-    }
-
-    return lines.join('\n');
   }
 
   /** Forgehold-app MCP navigation: the agent calls `mcp__app__open_jira_issue`
