@@ -2869,6 +2869,8 @@
       summary: '',
       description: '',
       assigneeAccountId: '',
+      assignees: [],
+      assigneesLoading: false,
       sprints: inboxState.jiraSprintOptions,
       // Default the new-issue sprint to the first numeric sprint scope
       // selected in the filter (multi-select: a created issue can only
@@ -2897,21 +2899,40 @@
 
   async function onJiraCreateProjectChange(key: string) {
     if (!modalsState.jiraCreate) return;
-    patchModal('jiraCreate', { projectKey: key, issueTypes: [] });
+    // Project change wipes assignee — accountId is project-scoped (a user
+    // assignable in PROJECTA may not exist as an option in PROJECTB), so
+    // resetting avoids carrying a stale id forward.
+    patchModal('jiraCreate', {
+      projectKey: key,
+      issueTypes: [],
+      assignees: [],
+      assigneeAccountId: ''
+    });
     if (!key) return;
-    try {
-      const types = await invoke<JiraIssueType[]>('jira_list_issue_types', { projectKey: key });
-      const m = modalsState.jiraCreate;
-      if (!m) return;
-      // Keep a sensible default issue type name — prefer whatever the user
-      // already had picked if it's still valid, otherwise first type from
-      // the API, otherwise hard-coded "Task".
-      const preserved = types.find((t) => t.name === m.issueTypeName);
-      const nextName = preserved ? preserved.name : types[0]?.name ?? 'Task';
-      patchModal('jiraCreate', { issueTypes: types, issueTypeName: nextName });
-    } catch {
-      // ignore — modal falls back to hardcoded Task/Bug/Story
-    }
+    // Issue types + assignable users in parallel — both keyed off the
+    // project. Failures are swallowed because the modal still works with
+    // the hardcoded fallback (Task/Bug/Story) and an unassigned issue.
+    void (async () => {
+      try {
+        const types = await invoke<JiraIssueType[]>('jira_list_issue_types', { projectKey: key });
+        const m = modalsState.jiraCreate;
+        if (!m) return;
+        const preserved = types.find((t) => t.name === m.issueTypeName);
+        const nextName = preserved ? preserved.name : types[0]?.name ?? 'Task';
+        patchModal('jiraCreate', { issueTypes: types, issueTypeName: nextName });
+      } catch {/* fallback to hardcoded list */}
+    })();
+    void (async () => {
+      patchModal('jiraCreate', { assigneesLoading: true });
+      try {
+        const users = await invoke<JiraUserSummary[]>('jira_list_assignable_users', { projectKey: key });
+        // Stable A→Z sort by displayName so the dropdown is scannable.
+        users.sort((a, b) => a.display_name.localeCompare(b.display_name));
+        patchModal('jiraCreate', { assignees: users, assigneesLoading: false });
+      } catch {
+        patchModal('jiraCreate', { assigneesLoading: false });
+      }
+    })();
   }
 
   async function submitJiraCreate() {

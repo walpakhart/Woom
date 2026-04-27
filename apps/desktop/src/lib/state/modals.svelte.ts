@@ -118,6 +118,9 @@ export interface JiraCreateModalState {
   summary: string;
   description: string;
   assigneeAccountId: string;
+  /** Project-scoped assignable users; refetched when project changes. */
+  assignees: JiraUserSummary[];
+  assigneesLoading: boolean;
   sprints: JiraSprint[];
   sprintId: number | null;
   busy: boolean;

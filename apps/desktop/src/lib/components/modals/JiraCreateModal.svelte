@@ -38,6 +38,21 @@
         ]
       : []
   );
+  // "Unassigned" + the project-scoped assignable list. Email goes into the
+  // dropdown's `hint` slot (faded right-aligned) so the displayName stays
+  // the primary identifier.
+  const assigneeOpts = $derived<DropdownOption<string>[]>(
+    m
+      ? [
+          { value: '', label: 'Unassigned' },
+          ...m.assignees.map((u) => ({
+            value: u.account_id,
+            label: u.display_name,
+            hint: u.email_address ?? undefined
+          }))
+        ]
+      : []
+  );
 
   const canSubmit = $derived(
     !!m && !m.busy && m.projectKey.trim().length > 0 && m.issueTypeName.trim().length > 0 && m.summary.trim().length > 0
@@ -115,14 +130,19 @@
         </label>
         <div class="grid-2">
           <label class="field">
-            <span class="field-label">Assignee account id (optional)</span>
-            <input
-              class="field-input mono"
-              type="text"
+            <span class="field-label">Assignee</span>
+            <Dropdown
               value={m.assigneeAccountId}
-              oninput={(e) => patchModal('jiraCreate', { assigneeAccountId: (e.currentTarget as HTMLInputElement).value })}
-              placeholder="leave blank to unassign"
-              disabled={m.busy}
+              options={assigneeOpts}
+              onChange={(v) => patchModal('jiraCreate', { assigneeAccountId: v })}
+              disabled={m.busy || !m.projectKey}
+              ariaLabel="Assignee"
+              placeholder={m.assigneesLoading
+                ? 'Loading users…'
+                : m.projectKey
+                  ? 'Unassigned'
+                  : 'Select project first'}
+              width="100%"
             />
           </label>
           <label class="field">

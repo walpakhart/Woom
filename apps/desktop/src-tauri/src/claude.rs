@@ -548,6 +548,7 @@ fn build_mcp_config(session_id: &str) -> Option<(PathBuf, Vec<String>)> {
         allowed.push("mcp__jira__add_comment".into());
         allowed.push("mcp__jira__transition_issue".into());
         allowed.push("mcp__jira__list_projects".into());
+        allowed.push("mcp__jira__create_issue".into());
     }
 
     if let Some(gh) = build_github_server() {

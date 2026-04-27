@@ -99,6 +99,33 @@ struct ListProjectsParams {
     limit: Option<u32>,
 }
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct CreateIssueParams {
+    /// Project key, e.g. "DEVOPS". Call list_projects first if you need to
+    /// translate a human project name into its key.
+    project_key: String,
+    /// Issue type name as it appears in Jira (case-insensitive: "Task",
+    /// "Bug", "Story", "Sub-task", "Epic", or any custom type the project
+    /// has). Defaults to "Task" when omitted.
+    #[serde(default)]
+    issue_type: Option<String>,
+    /// One-line summary (the ticket title).
+    summary: String,
+    /// Optional plain-text description. Wrapped as a single ADF paragraph;
+    /// keep formatting simple — line breaks become hard breaks.
+    #[serde(default)]
+    description: Option<String>,
+    /// Optional assignee Atlassian accountId. Use list_assignable_users
+    /// (TODO: future tool) or get_issue on a similar ticket to find one.
+    /// Omit (or pass null) to leave unassigned.
+    #[serde(default)]
+    assignee_account_id: Option<String>,
+    /// Optional sprint id (numeric). The issue is created first, then
+    /// added to the sprint via a follow-up Agile API call.
+    #[serde(default)]
+    sprint_id: Option<u64>,
+}
+
 #[tool_router]
 impl Jira {
     fn new(creds: Creds) -> anyhow::Result<Self> {
@@ -177,6 +204,36 @@ impl Jira {
             Err(e) => Err(ErrorData::internal_error(e.to_string(), None)),
         }
     }
+
+    #[tool(
+        description = "Create a new Jira issue. Required: project_key + summary. Optional: issue_type (default Task), description (plain text — wrapped as one ADF paragraph), assignee_account_id, sprint_id (numeric — the issue is added to the sprint via a follow-up Agile API call after the create succeeds). Returns the new issue key + browse URL. Use this whenever the user asks to file/open/create a ticket."
+    )]
+    async fn create_issue(
+        &self,
+        Parameters(CreateIssueParams {
+            project_key,
+            issue_type,
+            summary,
+            description,
+            assignee_account_id,
+            sprint_id,
+        }): Parameters<CreateIssueParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        match self
+            .do_create_issue(
+                &project_key,
+                issue_type.as_deref().unwrap_or("Task"),
+                &summary,
+                description.as_deref(),
+                assignee_account_id.as_deref(),
+                sprint_id,
+            )
+            .await
+        {
+            Ok(text) => Ok(CallToolResult::success(vec![Content::text(text)])),
+            Err(e) => Err(ErrorData::internal_error(e.to_string(), None)),
+        }
+    }
 }
 
 #[tool_handler]
@@ -192,7 +249,8 @@ impl ServerHandler for Jira {
              - list_projects(query?) — discover project keys when the user mentions a project by partial name.\n\n\
              WRITE:\n\
              - add_comment(key, body) — post a comment. Use for status updates / handoffs / documenting findings.\n\
-             - transition_issue(key, to, comment?) — move workflow state. Pass the human name (e.g. \"In Review\") or transition id.\n\n\
+             - transition_issue(key, to, comment?) — move workflow state. Pass the human name (e.g. \"In Review\") or transition id.\n\
+             - create_issue(project_key, summary, issue_type?, description?, assignee_account_id?, sprint_id?) — file a new ticket. Default issue_type is Task. The user typically gives you a project name; call list_projects(query) first to translate it to a key. Returns the new issue key + URL.\n\n\
              Match GitHub semantics: read-only ops are auto-approved; mutation ops should be called only when the user explicitly asks for them."
                 .to_string(),
         );
@@ -399,6 +457,118 @@ impl Jira {
             "Transitioned {} → {} (id {}).",
             key, transition_name, transition_id
         ))
+    }
+
+    async fn do_create_issue(
+        &self,
+        project_key: &str,
+        issue_type: &str,
+        summary: &str,
+        description: Option<&str>,
+        assignee_account_id: Option<&str>,
+        sprint_id: Option<u64>,
+    ) -> anyhow::Result<String> {
+        let project_key = project_key.trim();
+        let summary = summary.trim();
+        if project_key.is_empty() {
+            anyhow::bail!("project_key is required");
+        }
+        if summary.is_empty() {
+            anyhow::bail!("summary is required");
+        }
+        // Description goes in as a minimal ADF doc — same shape we use for
+        // comments (no marks; one paragraph). Newlines turn into hard breaks
+        // so a multi-line description renders sensibly in Jira UI.
+        let mut fields = serde_json::json!({
+            "project": { "key": project_key },
+            "issuetype": { "name": issue_type },
+            "summary": summary,
+        });
+        if let Some(d) = description.map(str::trim).filter(|s| !s.is_empty()) {
+            let lines: Vec<&str> = d.split('\n').collect();
+            // Build ADF inline content — interleave text nodes with hardBreaks.
+            let mut content: Vec<serde_json::Value> = Vec::new();
+            for (i, line) in lines.iter().enumerate() {
+                if i > 0 {
+                    content.push(serde_json::json!({ "type": "hardBreak" }));
+                }
+                if !line.is_empty() {
+                    content.push(serde_json::json!({ "type": "text", "text": line }));
+                }
+            }
+            fields["description"] = serde_json::json!({
+                "type": "doc",
+                "version": 1,
+                "content": [{ "type": "paragraph", "content": content }]
+            });
+        }
+        if let Some(acct) = assignee_account_id.map(str::trim).filter(|s| !s.is_empty()) {
+            fields["assignee"] = serde_json::json!({ "accountId": acct });
+        }
+        let payload = serde_json::json!({ "fields": fields });
+        let url = format!("https://{}/rest/api/3/issue", self.creds.workspace);
+        let resp = self
+            .http
+            .post(&url)
+            .basic_auth(&self.creds.email, Some(&self.creds.token))
+            .header("Accept", "application/json")
+            .header("Content-Type", "application/json")
+            .json(&payload)
+            .send()
+            .await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("Jira {} creating issue: {}", status, truncate(&body, 600));
+        }
+        let v: serde_json::Value = resp.json().await?;
+        let key = v
+            .get("key")
+            .and_then(|k| k.as_str())
+            .ok_or_else(|| anyhow::anyhow!("create response missing `key`"))?
+            .to_string();
+        let url = format!("https://{}/browse/{}", self.creds.workspace, key);
+
+        // Optional follow-up: drop the new issue into a sprint via the
+        // Agile API. Failures here are surfaced as a soft warning in the
+        // returned text — the issue itself was created successfully.
+        let mut sprint_note = String::new();
+        if let Some(sid) = sprint_id {
+            let agile_url = format!(
+                "https://{}/rest/agile/1.0/sprint/{}/issue",
+                self.creds.workspace, sid
+            );
+            let agile_payload = serde_json::json!({ "issues": [&key] });
+            let agile_resp = self
+                .http
+                .post(&agile_url)
+                .basic_auth(&self.creds.email, Some(&self.creds.token))
+                .header("Accept", "application/json")
+                .header("Content-Type", "application/json")
+                .json(&agile_payload)
+                .send()
+                .await;
+            match agile_resp {
+                Ok(r) if r.status().is_success() => {
+                    sprint_note = format!(" Added to sprint {}.", sid);
+                }
+                Ok(r) => {
+                    let s = r.status();
+                    let b = r.text().await.unwrap_or_default();
+                    sprint_note = format!(
+                        " (sprint {} assignment failed: {} {})",
+                        sid,
+                        s,
+                        truncate(&b, 200)
+                    );
+                }
+                Err(e) => {
+                    sprint_note = format!(" (sprint {} assignment failed: {})", sid, e);
+                }
+            }
+        }
+
+        Ok(format!("Created {} — {}.{}", key, url, sprint_note))
     }
 
     async fn fetch_projects(

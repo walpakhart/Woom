@@ -156,6 +156,7 @@ pub fn run() {
             jira_list_issue_types,
             jira_create_issue,
             jira_search_users,
+            jira_list_assignable_users,
             jira_get_issue_detail,
             jira_update_issue,
             jira_transition_issue,
@@ -818,6 +819,13 @@ async fn jira_create_issue(
 async fn jira_search_users(query: String) -> Result<Vec<JiraUserSummary>, String> {
     let creds = jira_creds().await?;
     jira::search_users(&creds, &query).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+#[allow(non_snake_case)]
+async fn jira_list_assignable_users(projectKey: String) -> Result<Vec<JiraUserSummary>, String> {
+    let creds = jira_creds().await?;
+    jira::list_assignable_users(&creds, &projectKey).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]

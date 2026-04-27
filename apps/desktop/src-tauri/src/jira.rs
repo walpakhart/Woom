@@ -408,6 +408,37 @@ pub async fn search_users(
     Ok(raw.into_iter().filter(|u| u.active).map(JiraUserSummary::from).collect())
 }
 
+/// Return users assignable on issues of `project_key`. Powers the assignee
+/// dropdown in the create-issue modal — Jira's `/user/search` returns
+/// site-wide users (incl. ones who can't actually be assigned), so we hit
+/// the project-scoped endpoint instead.
+pub async fn list_assignable_users(
+    creds: &JiraCredentials,
+    project_key: &str,
+) -> Result<Vec<JiraUserSummary>, JiraError> {
+    let ws = normalize_workspace(&creds.workspace);
+    let client = reqwest::Client::builder()
+        .user_agent(USER_AGENT)
+        .timeout(std::time::Duration::from_secs(30))
+        .build()?;
+    let resp = client
+        .get(format!("https://{ws}/rest/api/3/user/assignable/search"))
+        .basic_auth(&creds.email, Some(&creds.token))
+        .header("Accept", "application/json")
+        .query(&[("project", project_key), ("maxResults", "200")])
+        .send()
+        .await?;
+    let status = resp.status();
+    if !status.is_success() {
+        if status == reqwest::StatusCode::UNAUTHORIZED {
+            return Err(JiraError::InvalidCredentials);
+        }
+        return Err(JiraError::Api { status: status.as_u16() });
+    }
+    let raw: Vec<RawUser> = resp.json().await?;
+    Ok(raw.into_iter().filter(|u| u.active).map(JiraUserSummary::from).collect())
+}
+
 // ---------- Issue detail, comments, transitions ----------
 
 #[derive(Debug, Serialize, Clone)]
