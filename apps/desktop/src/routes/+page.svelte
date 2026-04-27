@@ -36,6 +36,7 @@
     activeInstances,
     activeWorkbench,
     firstInstanceOfKind,
+    findInstanceAnywhere,
     listInstancesOfKind,
     listArchivedOfKind,
     unarchiveInstance,
@@ -1064,19 +1065,28 @@
     if (!activeSession) return;
     const editorPath =
       sessionsState.editorInstanceState[editorInstanceId]?.repoPath ?? '';
-    // Only an isolated worktree counts as the chat's "owned" folder — `.cwd`
-    // can be inherited from another editor via the link-fallback effect, and
-    // pushing that into the new target editor wipes out whatever folder the
-    // user had opened there. (Two-editor crosswire bug.) Plain `.cwd` does
-    // not flow back; the link is editor → chat from this point on.
+    // Decide what counts as the chat's "owned" folder — the thing that
+    // actually deserves to flow into the target editor:
+    //   - worktreePath: explicit isolated worktree, always owned.
+    //   - cwd while NOT currently linked to another editor: user picked
+    //     this via pickCwd; treat as owned.
+    //   - cwd while linked to a DIFFERENT editor: this is just a mirror
+    //     of that other editor's folder, not a deliberate choice — do NOT
+    //     push it onto the new target (that's the cross-overwrite bug).
     const aiWorktree = activeSession.worktreePath || '';
-    if (aiWorktree && aiWorktree !== editorPath) {
-      setEditorRepoPath(aiWorktree, editorInstanceId);
+    const cwdIsMirror =
+      activeSession.linkedToEditor &&
+      !!activeSession.linkedToEditorInstanceId &&
+      activeSession.linkedToEditorInstanceId !== editorInstanceId;
+    const ownedCwd = cwdIsMirror ? '' : (activeSession.cwd || '');
+    const ownedPath = aiWorktree || ownedCwd;
+    if (ownedPath && ownedPath !== editorPath) {
+      setEditorRepoPath(ownedPath, editorInstanceId);
     }
     updateSession(activeSession.id, {
       linkedToEditor: true,
       linkedToEditorInstanceId: editorInstanceId,
-      cwd: aiWorktree || editorPath || null
+      cwd: ownedPath || editorPath || null
     });
   }
 
@@ -1236,10 +1246,23 @@
 
   /** Jump from the active Claude session to the Editor column, loading the
       same folder the session is using (worktree > session.cwd > inherited
-      editorRepoPath). Opens the Editor column if hidden. */
+      editorRepoPath). Opens the Editor column if hidden. Targets the editor
+      this session is linked to when one exists — otherwise creates / scrolls
+      the first editor instance. */
   function openSessionFolderInEditor() {
     const path = activeSession?.worktreePath || activeSession?.cwd || editorRepoPath;
     if (!path) return;
+    const boundId = activeSession?.linkedToEditorInstanceId ?? null;
+    const bound = boundId ? findInstanceAnywhere(boundId) : null;
+    if (bound && bound.inst.kind === 'editor') {
+      // Linked editor still exists — push the path there and scroll it
+      // into view. Don't touch any OTHER editor (was the bug: clicking
+      // the link pill clobbered the first editor's folder regardless of
+      // which editor the session was actually linked to).
+      setEditorRepoPath(path, bound.inst.id);
+      void scrollInstanceIntoView(bound.inst.id);
+      return;
+    }
     ensureEditorShowing(path);
   }
 
@@ -1315,13 +1338,32 @@
     for (const s of sessionsState.list) {
       if (!s.linkedToEditor) continue;
       const boundId = s.linkedToEditorInstanceId;
-      const boundState = boundId ? sessionsState.editorInstanceState[boundId] : null;
+      const boundExists = boundId ? !!findInstanceAnywhere(boundId) : false;
       const fallback = firstInstanceOfKind('editor');
-      const path = boundState?.repoPath
-        ?? (fallback ? sessionsState.editorInstanceState[fallback.id]?.repoPath ?? null : null)
-        ?? null;
+      const patch: Partial<ClaudeSession> = {};
+      // Heal stale `linkedToEditorInstanceId` — the bound editor was closed.
+      // If a fallback editor exists, re-bind silently so the pill shows the
+      // current editor's name instead of "LINKED TO …" with no name. If no
+      // editor remains, drop the link entirely so the pill disappears.
+      if (!boundExists) {
+        if (fallback) {
+          patch.linkedToEditorInstanceId = fallback.id;
+        } else {
+          patch.linkedToEditor = false;
+          patch.linkedToEditorInstanceId = null;
+        }
+      }
+      const effectiveBoundId = patch.linkedToEditorInstanceId !== undefined
+        ? patch.linkedToEditorInstanceId
+        : boundId;
+      const path = effectiveBoundId
+        ? sessionsState.editorInstanceState[effectiveBoundId]?.repoPath ?? null
+        : null;
       if (s.cwd !== path) {
-        updateSession(s.id, { cwd: path });
+        patch.cwd = path;
+      }
+      if (Object.keys(patch).length > 0) {
+        updateSession(s.id, patch);
       }
     }
   });
