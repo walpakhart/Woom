@@ -32,7 +32,7 @@
 
   let { jiraStatus, view = $bindable(), now, onOpenCreateIssue }: Props = $props();
 
-  // Resolve the project object for the active filter. Tasks tab keeps
+  // Resolve the project object for the active filter. The Jira tab keeps
   // its own filter slice (`inboxState.jiraTabFilters`) so picking a
   // project / board / status here doesn't yank the workbench JiraColumn
   // out from under the user — and vice-versa. Project options
@@ -417,8 +417,9 @@
 <!-- JiraDetailPane slide-over is mounted globally at the page root. -->
 
 <style>
-  /* Shared layout helpers — mirrored from GithubTab so Tasks feels at
-     home next to Repositories (same titles, tab-state colors, mono font). */
+  /* Shared layout helpers — mirrored from GithubTab so the Jira tab feels
+     at home next to the GitHub tab (same titles, tab-state colors,
+     mono font). */
   .full-center { flex: 1; display: flex; align-items: center; justify-content: center; padding: 40px; }
   .empty { display: flex; flex-direction: column; align-items: center; gap: 16px; text-align: center; max-width: 420px; }
   .empty-title { font-size: 22px; font-weight: 600; margin: 12px 0 0; color: var(--text-0); letter-spacing: -0.015em; }

@@ -66,8 +66,8 @@
 
   const VIEWS: { key: View; title: string; sub: string }[] = [
     { key: 'workbench', title: 'Workbench', sub: 'Active columns' },
-    { key: 'githubTab', title: 'GitHub', sub: 'Repositories' },
-    { key: 'jiraTab', title: 'Jira', sub: 'Issues / boards / projects' },
+    { key: 'githubTab', title: 'GitHub', sub: 'Repos / PRs / issues / actions' },
+    { key: 'jiraTab', title: 'Jira', sub: 'Tickets / boards / sprints' },
     { key: 'sentryTab', title: 'Sentry', sub: 'Errors / events' },
     { key: 'rules', title: 'Rules', sub: 'Claude system prompts' },
     { key: 'connections', title: 'Connections', sub: 'GitHub / Jira / Sentry / etc.' },
@@ -230,7 +230,7 @@
           section: 'Jira boards',
           pick: () => {
             /* Picking a board / project from the palette lands on the
-               Tasks tab, so we update the tab's filter slice (not the
+               Jira tab, so we update the tab's filter slice (not the
                column's — those are independent now). */
             updateJiraTabFilters({ boardIds: [b.id] });
             setView('jiraTab');

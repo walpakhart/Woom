@@ -38,7 +38,51 @@ export type Workbench = {
     hints fell into one pill at the top + all text concatenated below). */
 export type MessageEvent =
   | { kind: 'text'; body: string }
-  | { kind: 'trace'; segments: string[] };
+  | { kind: 'trace'; segments: string[] }
+  /** Inline diff card for an Edit/Write/MultiEdit tool call. Renders as a
+   *  collapsed file pill that expands to a unified diff with Keep / Revert
+   *  buttons — same UX pattern as Cursor's chat. We intercept the tool call
+   *  *after* the agent has already mutated the file (Claude/cursor-agent
+   *  CLIs don't expose a pre-tool hook), so the visual state always starts
+   *  at `applied`. The status flips to `reverted` if the user undoes the
+   *  change, or `error` if the revert itself failed (e.g. the file moved).
+   *
+   *  `oldText` is the literal `old_string` from the Edit (or empty for
+   *  Write to a new file). `newText` is `new_string` for Edit / `content`
+   *  for Write — what now lives in the file. `isCreate` distinguishes "this
+   *  edited an existing file" from "this created the file from nothing"
+   *  so revert can choose between rewriting and deleting. */
+  | {
+      kind: 'edit';
+      toolId: string;
+      filePath: string;
+      oldText: string;
+      newText: string;
+      isCreate: boolean;
+      /** True when the agent called `Write` (full-file overwrite) rather
+       *  than `Edit` / `MultiEdit` (in-place substitution). Different
+       *  revert semantics — Edit does `replace(newText, oldText)` once,
+       *  Write does `fs::write(filePath, oldText)` (or `remove_file` if
+       *  `isCreate`). The card UI also picks a different verb ("Wrote"
+       *  vs "Edited"). */
+      wholeFile: boolean;
+      /** Diff card's lifecycle state.
+       *    - `loading` — Write event was just pushed; we're awaiting the
+       *      async `git show HEAD:<file>` that fetches the pre-agent
+       *      version. The card renders a placeholder so the user
+       *      doesn't see a flash of "+N" without context.
+       *    - `applied` — change is on disk and the diff is fully
+       *      populated. Default state for Edit/MultiEdit (no async
+       *      fetch needed).
+       *    - `reverted` — user clicked Revert; the inverse write
+       *      succeeded.
+       *    - `error` — Revert (or the git fetch) failed. `note` carries
+       *      the message. */
+      status: 'loading' | 'applied' | 'reverted' | 'error';
+      /** Optional explanation when `status === 'error'` — surfaced on the
+       *  card so the user understands why Revert didn't apply. */
+      note?: string;
+    };
 
 export type ClaudeMessage = {
   role: 'system' | 'user' | 'assistant';

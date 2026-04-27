@@ -15,7 +15,16 @@
 // scroll out of this module means the same handler can drive replays
 // later (e.g. an artifact re-render) without DOM coupling.
 
-import { appendToLastAssistant, appendToLastThinking, appendToLastTrace, addAction, genId } from '$lib/state/sessions.svelte';
+import { invoke } from '@tauri-apps/api/core';
+import {
+  appendToLastAssistant,
+  appendToLastThinking,
+  appendToLastTrace,
+  appendEditEvent,
+  updateEditEvent,
+  addAction,
+  genId
+} from '$lib/state/sessions.svelte';
 import { formatToolUse } from '$lib/format';
 
 export interface ClaudeStreamHandlers {
@@ -182,9 +191,155 @@ export function handleStreamEvent(
           if (hint) merged.onTraceDelta?.(sessionId, hint);
           continue;
         }
+        // File-mutation tools: surface them as inline diff cards
+        // (Cursor-style "apply / revert" UX). We REPLACE the trace
+        // pill instead of duplicating: each Edit/MultiEdit/Write
+        // already produces a visible card with file path + line
+        // counts, and adding a "_edit foo.ts_" trace line on top
+        // means every modification shows up twice — once as an
+        // inline card, once buried inside "✓ N steps". The card is
+        // the more useful anchor (it's expandable and revertable),
+        // so we drop the trace via `continue`.
+        if (name === 'Edit') {
+          const fp = typeof input.file_path === 'string' ? input.file_path : '';
+          const oldStr = typeof input.old_string === 'string' ? input.old_string : '';
+          const newStr = typeof input.new_string === 'string' ? input.new_string : '';
+          if (fp) {
+            appendEditEvent(sessionId, {
+              toolId: id,
+              filePath: fp,
+              oldText: oldStr,
+              newText: newStr,
+              isCreate: false
+            });
+          }
+          // Skip the trace line — the diff card already says "edited X".
+          continue;
+        }
+        if (name === 'MultiEdit') {
+          // MultiEdit packs several `{old_string,new_string}` edits onto
+          // one file. Emit one diff card per edit so each chunk gets its
+          // own Keep / Revert pair — that matches Cursor's behavior and
+          // keeps reverts surgical (one bad edit doesn't force the user
+          // to revert the whole sequence).
+          const fp = typeof input.file_path === 'string' ? input.file_path : '';
+          const edits = Array.isArray(input.edits)
+            ? (input.edits as Array<Record<string, unknown>>)
+            : [];
+          if (fp && edits.length) {
+            for (let i = 0; i < edits.length; i++) {
+              const e = edits[i] ?? {};
+              const oldStr = typeof e.old_string === 'string' ? e.old_string : '';
+              const newStr = typeof e.new_string === 'string' ? e.new_string : '';
+              if (!oldStr && !newStr) continue;
+              appendEditEvent(sessionId, {
+                // Synthesize a stable per-edit id so updateEditEvent can
+                // find the right card. `id` is the tool_use id; appending
+                // the index keeps it unique within the call.
+                toolId: `${id}#${i}`,
+                filePath: fp,
+                oldText: oldStr,
+                newText: newStr,
+                isCreate: false
+              });
+            }
+          }
+          continue;
+        }
+        if (name === 'Write') {
+          // Write is a full-file overwrite. The payload only carries the
+          // *new* contents — there's no `old_string` to diff against.
+          // Strategy: ship a placeholder card immediately (so the user
+          // sees "wrote X" in chat order without delay), then in the
+          // background ask Tauri for `git show HEAD:<path>` to recover
+          // the pre-agent version. Three outcomes:
+          //   • git_show succeeds → swap in `oldText`, flip to applied,
+          //     real diff renders.
+          //   • file isn't tracked / cwd isn't a repo → leave `oldText`
+          //     empty, mark `isCreate=true`. Card shows as "new file".
+          //   • the agent really created a new file → same as above.
+          // Why fetch from HEAD instead of capturing pre-state at
+          // tool_use time: by the time the assistant block reaches us,
+          // claude/cursor-agent has already executed Write — the file
+          // on disk is already the new content. HEAD is the closest
+          // pre-agent baseline we can recover after the fact.
+          const fp = typeof input.file_path === 'string' ? input.file_path : '';
+          const content = typeof input.content === 'string' ? input.content : '';
+          if (fp) {
+            appendEditEvent(sessionId, {
+              toolId: id,
+              filePath: fp,
+              oldText: '',
+              newText: content,
+              // Optimistic default — we'll flip this to false in the
+              // backfill if git_show finds the file in HEAD. Erring on
+              // "new" rather than "modified" so the early-render card
+              // doesn't promise a diff that's actually missing.
+              isCreate: true,
+              wholeFile: true,
+              status: 'loading'
+            });
+            void backfillWriteOldText(sessionId, id, fp);
+          }
+          continue;
+        }
         const formatted = formatToolUse(name, input);
         if (formatted) merged.onTraceDelta?.(sessionId, formatted);
       }
     }
   }
 }
+
+/** Resolve the pre-agent contents of a file the agent just `Write`'d, by
+ *  asking git for the HEAD-version of that path. Runs out-of-band
+ *  (called via `void`) because `handleStreamEvent` is synchronous and
+ *  we don't want to block the next stream line on a Tauri round-trip.
+ *
+ *  Lookup chain:
+ *    1. `git_repo_root(filePath)` — if filePath isn't inside a git
+ *       worktree this throws and we bail (file stays as `isCreate`).
+ *    2. Compute the path relative to the repo root. `git show
+ *       HEAD:<rel>` only accepts repo-relative paths.
+ *    3. `git_show(repo, "HEAD", rel)` — returns the file as-of HEAD,
+ *       or errors if the file is untracked / didn't exist at HEAD.
+ *
+ *  All errors land on the same branch: leave the card in `applied`
+ *  state with `oldText=""` and `isCreate=true`, which renders as a
+ *  pure-additions diff. We deliberately don't surface the git error
+ *  on the card — it's noise for the common case (writing a brand new
+ *  file). The Revert button still works because `revert_write`
+ *  treats `isCreate=true` as "delete the file we created". */
+async function backfillWriteOldText(
+  sessionId: string,
+  toolId: string,
+  filePath: string
+): Promise<void> {
+  try {
+    const repoRoot = await invoke<string>('git_repo_root', { path: filePath });
+    if (!repoRoot) {
+      updateEditEvent(sessionId, toolId, { status: 'applied' });
+      return;
+    }
+    // Repo-relative path. git_show takes the slash-form even on macOS
+    // (the underlying call is `git show <rev>:<path>`), and our
+    // filePath already uses '/' on Tauri's macOS/Linux targets.
+    const rel = filePath.startsWith(repoRoot + '/')
+      ? filePath.slice(repoRoot.length + 1)
+      : filePath;
+    const oldText = await invoke<string>('git_show', {
+      repo: repoRoot,
+      revision: 'HEAD',
+      path: rel
+    });
+    updateEditEvent(sessionId, toolId, {
+      status: 'applied',
+      oldText,
+      isCreate: false
+    });
+  } catch {
+    // File isn't tracked at HEAD (brand-new file, untracked, or cwd
+    // isn't a repo). Stay on the optimistic isCreate=true path.
+    updateEditEvent(sessionId, toolId, { status: 'applied' });
+  }
+}
+

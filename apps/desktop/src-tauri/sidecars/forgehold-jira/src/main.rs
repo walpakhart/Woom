@@ -203,7 +203,7 @@ impl Jira {
     }
 
     #[tool(
-        description = "Search Jira issues with JQL. Returns a compact list (key, summary, status, assignee, updated)."
+        description = "Search Jira issues with JQL. Returns a compact list (key, summary, status, assignee, updated).\n\nIMPORTANT — make ONE focused JQL query, do not iterate. JQL is expressive enough to combine project, status, assignee, sprint, and full-text in a single call (e.g. `project = DEVOPS AND status != Done AND assignee = currentUser() ORDER BY updated DESC`). Do NOT re-run with broader/narrower scopes — that re-pays the entire conversation context for the same answer. Examples:\n  - \"my open tickets\" → ONE call: `assignee = currentUser() AND resolution = Unresolved ORDER BY updated DESC`.\n  - \"DEVOPS tickets in current sprint\" → ONE call: `project = DEVOPS AND sprint in openSprints() ORDER BY rank`.\n  - \"who's working on auth\" → ONE call: `text ~ \\\"auth\\\" AND status != Done`.\nOnly broaden / narrow if the first result was empty or clearly missed the user's intent."
     )]
     async fn search(
         &self,

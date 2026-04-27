@@ -224,7 +224,7 @@ impl Gh {
     }
 
     #[tool(
-        description = "Fetch GitHub PR detail (title, author, state, mergeable, branches, body)."
+        description = "Fetch GitHub PR detail (title, author, state, mergeable, branches, body). Use this as the SINGLE call for most PR questions — title/author/state/branches/body are usually all you need. Call get_pr_diff / get_pr_files / get_pr_comments only when the user explicitly asks about diff content, file list, or discussion respectively. Do NOT pre-emptively call all four for the same PR — that's 4× the context cost for one answer."
     )]
     async fn get_pr(
         &self,
@@ -236,7 +236,7 @@ impl Gh {
         }
     }
 
-    #[tool(description = "Fetch the full unified diff for a PR (raw patch text).")]
+    #[tool(description = "Fetch the full unified diff for a PR (raw patch text). LARGE response — call only when the user explicitly asks to see the diff or you need to reason about specific code changes. For 'what does this PR do' questions, get_pr's body field is usually sufficient.")]
     async fn get_pr_diff(
         &self,
         Parameters(PrRef { owner, repo, number }): Parameters<PrRef>,
@@ -248,7 +248,7 @@ impl Gh {
     }
 
     #[tool(
-        description = "List files changed in a PR with status (added/modified/removed), additions, deletions, and a patch per file."
+        description = "List files changed in a PR with status (added/modified/removed), additions, deletions, and a patch per file. Prefer this over get_pr_diff when you only need 'which files changed' — it returns one row per file instead of the full patch. If the user wants only file names without per-file patches, mention that in the reply rather than calling this AND get_pr_diff."
     )]
     async fn get_pr_files(
         &self,
@@ -261,7 +261,7 @@ impl Gh {
     }
 
     #[tool(
-        description = "Fetch the discussion on a PR: both issue-level comments (general conversation) and review comments (inline on specific lines)."
+        description = "Fetch the discussion on a PR: both issue-level comments (general conversation) and review comments (inline on specific lines). Call only when the user asks about review feedback, blockers, or thread context — not as a default companion to get_pr."
     )]
     async fn get_pr_comments(
         &self,
@@ -463,7 +463,7 @@ impl Gh {
     }
 
     #[tool(
-        description = "Search GitHub pull requests across one or more repos / orgs. Returns id, number, repo, title, state (open/closed/merged), author, draft flag, created/updated, url. Use this when the user wants to find PRs by keyword, ticket id, author, label, or status — e.g. \"find merged PRs that mention DEVOPS-414\" → `is:pr is:merged DEVOPS-414`. Pass full GitHub search syntax."
+        description = "Search GitHub pull requests across one or more repos / orgs. Returns id, number, repo, title, state (open/closed/merged), author, draft flag, created/updated, url. Use this when the user wants to find PRs by keyword, ticket id, author, label, or status — e.g. \"find merged PRs that mention DEVOPS-414\" → `is:pr is:merged DEVOPS-414`. Pass full GitHub search syntax. \n\nIMPORTANT — make ONE focused query, do not iterate. GitHub's search returns all matching PRs across orgs/repos in a single call (sort by updated, paginate up to 100). Do NOT re-run the same intent with different `org:` / `repo:` / `is:draft` / `state:` scopes — that re-pays the entire conversation context for the same answer. Examples:\n  - \"my open PRs\" → ONE call: `is:pr author:<user> state:open sort:updated-desc` (then group by repo in your reply).\n  - \"PRs mentioning DEVOPS-414\" → ONE call: `is:pr DEVOPS-414`.\nOnly broaden / narrow if the first result was empty or clearly missed the user's intent."
     )]
     async fn search_prs(
         &self,
@@ -478,7 +478,7 @@ impl Gh {
     }
 
     #[tool(
-        description = "Search GitHub issues across one or more repos / orgs. Same syntax as search_prs but defaults to `is:issue`. Use to find tickets by label, milestone, mention, or full-text — e.g. \"open issues with label:bug touched in the last week\" → `is:issue is:open label:bug updated:>2025-04-18`."
+        description = "Search GitHub issues across one or more repos / orgs. Same syntax as search_prs but defaults to `is:issue`. Use to find tickets by label, milestone, mention, or full-text — e.g. \"open issues with label:bug touched in the last week\" → `is:issue is:open label:bug updated:>2025-04-18`.\n\nIMPORTANT — make ONE focused query, do not iterate. Same discipline as search_prs: a single call returns all matches across orgs/repos. Do NOT re-run with different scopes (`org:` / `repo:` / `state:`) — that re-pays the entire conversation context for the same answer."
     )]
     async fn search_issues(
         &self,

@@ -94,6 +94,13 @@ fn hydrate_path_from_login_shell() {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     hydrate_path_from_login_shell();
+    // Push the current set of Forgehold-owned MCP entries (jira / github /
+    // sentry / memory / app) into `~/.cursor/mcp.json` once at startup.
+    // Without this, an existing user wouldn't pick up new sidecars (most
+    // notably `forgehold-app` for UI-navigation tools) until they touched
+    // a connect/disconnect toggle. Best-effort — a failure here just leaves
+    // the cursor mcp config a turn behind; no UX impact otherwise.
+    let _ = cursor_mcp::sync();
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -175,7 +182,10 @@ pub fn run() {
             fs_read_file,
             fs_write_file,
             fs_write_bytes,
+            revert_edit,
+            revert_write,
             app_data_dir,
+            set_window_zoom,
             fs_list_dir,
             fs_path_exists,
             fs_bash_run,
@@ -1005,6 +1015,113 @@ fn fs_write_file(path: String, contents: String) -> Result<(), String> {
     fs::write_file(&path, &contents)
 }
 
+/// Revert one Edit / MultiEdit chunk: replace `new_text` (what the agent
+/// wrote) back with `old_text` (what was there before). Behaviour:
+///
+/// - File is missing → `Err("file not found")`. The agent might have
+///   moved/deleted it between the Edit and the user's Revert click; we
+///   refuse to recreate a phantom rather than silently land an empty
+///   file.
+/// - `new_text` not present → `Err(...)`. Either a later edit overlaid
+///   ours, or the user already reverted manually. Surfacing the error
+///   lets the diff card flip to `error` state with a usable note,
+///   instead of a no-op write that lies about success.
+/// - `new_text` appears multiple times → `Err(...)`. Edit only emits
+///   when its `old_string` was unique, so a multi-match means the file
+///   has drifted into something we can't safely target. Refusing here
+///   prevents stomping on legit later edits to a *different* hit.
+/// - Single match → in-place replace, write back.
+///
+/// Atomic from the user's perspective (single `write_file` after the
+/// match check), but not crash-safe — if the host crashes between
+/// `read_file` and `write_file` the file is unchanged. We accept that
+/// because Tauri's local file API doesn't surface fsync semantics
+/// across platforms, and an Edit revert losing power-cycle data would
+/// be a far weirder failure than the original Edit losing it.
+#[tauri::command]
+fn revert_edit(
+    #[allow(non_snake_case)] filePath: String,
+    #[allow(non_snake_case)] oldText: String,
+    #[allow(non_snake_case)] newText: String,
+) -> Result<(), String> {
+    let current = fs::read_file(&filePath)?;
+    if newText.is_empty() {
+        // Defensive: an Edit with empty new_string would mean "delete
+        // this slice", and we'd happily insert old_text everywhere —
+        // including positions the agent never touched. Refuse and let
+        // the user resolve manually.
+        return Err("cannot revert an edit whose new_string was empty".into());
+    }
+    let count = current.matches(newText.as_str()).count();
+    if count == 0 {
+        return Err(
+            "the new_text isn't in the file anymore — a later edit must have overlaid it. Refusing to revert.".into()
+        );
+    }
+    if count > 1 {
+        return Err(format!(
+            "the new_text matches {} places in the file — Edit normally requires unique matches; refusing to revert ambiguously.",
+            count
+        ));
+    }
+    let next = current.replacen(newText.as_str(), oldText.as_str(), 1);
+    fs::write_file(&filePath, &next)
+}
+
+/// Revert one `Write` (full-file overwrite). Differs from `revert_edit`
+/// in three ways:
+///   1. The "before" text is the full file, not a unique substring, so
+///      we don't search-and-replace — we just rewrite (or delete).
+///   2. We still verify the current file equals `newText` before
+///      touching it. If something edited the file *after* the agent's
+///      Write, blindly restoring `oldText` would clobber that work.
+///      Surfacing the error lets the user investigate instead of
+///      silently losing changes.
+///   3. `isCreate=true` is the "agent created this from nothing" case
+///      — there's no `oldText` to restore, so the inverse is to
+///      delete the file. We bail if the file is missing (already
+///      reverted by hand) and if the contents drifted.
+///
+/// Trade-off: requiring the on-disk content to match `newText` exactly
+/// rules out cases where the user added a single character before
+/// hitting Revert. Worth it — the alternative (best-effort rewrite)
+/// lets a stale Revert click silently overwrite live edits, which is
+/// strictly worse than asking the user to revert manually.
+#[tauri::command]
+fn revert_write(
+    #[allow(non_snake_case)] filePath: String,
+    #[allow(non_snake_case)] oldText: String,
+    #[allow(non_snake_case)] newText: String,
+    #[allow(non_snake_case)] isCreate: bool,
+) -> Result<(), String> {
+    use std::path::Path;
+    let path = Path::new(&filePath);
+    if !path.exists() {
+        // Either the user manually deleted/moved the file, or another
+        // tool already reverted. Either way nothing for us to do, and
+        // recreating an empty placeholder would be worse than the
+        // current state.
+        return Err("file not found — nothing to revert".into());
+    }
+    let current = fs::read_file(&filePath)?;
+    if current != newText {
+        return Err(
+            "the file's contents don't match what the agent wrote — something modified it after the Write. Refusing to revert."
+                .into(),
+        );
+    }
+    if isCreate {
+        // Inverse of "Write created this file" is "remove the file".
+        // Skip directory cleanup — the agent might have created
+        // `a/b/c.txt` deep in a fresh tree, but we don't know which
+        // ancestors existed before, and removing non-empty dirs is
+        // unsafe regardless.
+        std::fs::remove_file(path).map_err(|e| format!("failed to delete file: {}", e))
+    } else {
+        fs::write_file(&filePath, &oldText)
+    }
+}
+
 #[tauri::command]
 fn fs_write_bytes(path: String, base64: String) -> Result<(), String> {
     use base64::Engine;
@@ -1025,6 +1142,27 @@ fn app_data_dir(app: tauri::AppHandle) -> Result<String, String> {
         .app_data_dir()
         .map(|p| p.to_string_lossy().into_owned())
         .map_err(|e| e.to_string())
+}
+
+/// Native webview zoom — same code path as Cmd+/- in Cursor / VSCode /
+/// Chrome. We use this instead of CSS `zoom` on `<html>` because the
+/// CSS approach silently breaks `position: fixed`, viewport units
+/// (`100vw` / `100vh`), and scroll-container dimensions in WebKit
+/// (Tauri's macOS engine) — at 0.9× zoom modals drift, sidebars
+/// undersize, and `getBoundingClientRect` returns post-zoom values
+/// while `clientX`/`clientY` are still in CSS pixels. Native
+/// webview zoom dilates the entire pixel grid uniformly so all
+/// layout math stays consistent.
+///
+/// `factor` is the multiplier (e.g. `0.8`, `1.0`, `1.25`). We clamp
+/// to [0.5, 3.0] to stop frontend bugs from rendering an unusable
+/// window. Values outside this range produce truly degenerate UI
+/// (text below ~7px is unreadable, above 3× a single column eats
+/// the whole window).
+#[tauri::command]
+fn set_window_zoom(window: tauri::WebviewWindow, factor: f64) -> Result<(), String> {
+    let clamped = factor.clamp(0.5, 3.0);
+    window.set_zoom(clamped).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

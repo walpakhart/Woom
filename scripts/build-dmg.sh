@@ -38,7 +38,7 @@ fi
 
 echo "→ target triple: $TARGET"
 
-SIDECARS=(forgehold-github forgehold-jira forgehold-memory)
+SIDECARS=(forgehold-github forgehold-jira forgehold-memory forgehold-sentry forgehold-app)
 
 mkdir -p "$BINARIES_DIR"
 
@@ -105,7 +105,12 @@ echo ""
 echo "Done."
 [[ -n "$APP_PATH" ]] && echo "  .app: $APP_PATH"
 [[ -n "$DMG_PATH" ]] && echo "  .dmg: $DMG_PATH"
-[[ -z "$APP_PATH" && -z "$DMG_PATH" ]] && {
+if [[ -z "$APP_PATH" && -z "$DMG_PATH" ]]; then
   echo "  (no bundles found under $BUNDLE_DIR — check tauri build output above)" >&2
   exit 1
-}
+fi
+# Explicit success — the previous `[[ ... ]]` returned non-zero when at
+# least one bundle existed, which bash propagated as the script's exit
+# code, making CI think the build failed despite the artefacts being
+# on disk. Anchor the exit so that's no longer a worry.
+exit 0

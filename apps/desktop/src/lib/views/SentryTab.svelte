@@ -29,7 +29,7 @@
 
   // Drill-down model: zero projects selected = projects grid, one project
   // selected = filtered issue list. Mirrors JiraTab's projectKey pattern.
-  // Issues tab keeps its own filter slice (`sentryTabProjects`,
+  // The Sentry tab keeps its own filter slice (`sentryTabProjects`,
   // `sentryTabStatus`, etc.) so a project / status / level pick here
   // does not yank the workbench SentryColumn out from under the user, and
   // vice-versa. Project + environment OPTION caches stay shared since

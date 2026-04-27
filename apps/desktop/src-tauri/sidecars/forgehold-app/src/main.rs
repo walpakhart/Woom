@@ -29,11 +29,20 @@ use rmcp::{
 };
 use serde::Deserialize;
 
+/// Top-level view identifiers exposed to the agent. Named after the
+/// platform (`github` / `jira` / `sentry`) rather than the generic noun
+/// the UI used to show ("Repositories" / "Tasks" / "Issues") because:
+///   1. We're going to grow more sources of the same shape — a future
+///      GitLab tab would have its own "repositories" page, and the
+///      agent would have no way to disambiguate.
+///   2. The internal `View` enum on the frontend is `githubTab` /
+///      `jiraTab` / `sentryTab` — so this also matches the UI rail
+///      tooltips and the platform pills the user sees.
 const VALID_VIEWS: &[&str] = &[
     "workbench",
-    "repositories",
-    "tasks",
-    "issues",
+    "github",
+    "jira",
+    "sentry",
     "rules",
     "connections",
     "settings",
@@ -55,6 +64,18 @@ const VALID_INSTANCE_KINDS: &[&str] = &[
 
 const VALID_REPO_SECTIONS: &[&str] = &[
     "code", "pulls", "issues", "actions", "releases",
+];
+
+const VALID_GH_FILTER_MODES: &[&str] = &[
+    "involving", "authored", "review_requested", "assigned", "user", "all",
+];
+
+const VALID_SENTRY_STATUSES: &[&str] = &[
+    "unresolved", "resolved", "ignored", "all",
+];
+
+const VALID_SENTRY_LEVELS: &[&str] = &[
+    "all", "fatal", "error", "warning", "info", "debug",
 ];
 
 #[derive(Clone)]
@@ -203,6 +224,142 @@ struct OpenRepoParams {
     /// runs), releases. Defaults to "pulls".
     #[serde(default)]
     section: Option<String>,
+    /// Optional repo-relative path to open inside `section=code`. When
+    /// set, Forgehold drills into the code browser to that file (or
+    /// folder) — e.g. `src/lib/auth.ts`. Ignored for non-code sections.
+    /// Use this when the user says "open <file> in <repo>" instead of
+    /// just "open <repo>".
+    #[serde(default)]
+    path: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct OpenJiraTabParams {
+    /// Project key to filter by (e.g. `DEVOPS`). Null/omitted = all
+    /// projects. Resolve human names via `mcp__jira__list_projects`.
+    #[serde(default)]
+    project_key: Option<String>,
+    /// Free-text JQL fragment appended to the search query (e.g.
+    /// `"login flow"`). The tab's existing UI builds the full JQL —
+    /// just pass the keyword.
+    #[serde(default)]
+    search: Option<String>,
+    /// Status name like "In Review", "Done", "Blocked". Use the human
+    /// label, the tab handles canonicalisation.
+    #[serde(default)]
+    status_name: Option<String>,
+    /// Numeric Jira board ids to scope to. Multi-select — multiple
+    /// boards OR-merge their projects. Resolve via the JQL search +
+    /// board metadata; usually omit unless the user explicitly
+    /// mentioned a board.
+    #[serde(default)]
+    board_ids: Option<Vec<u64>>,
+    /// Numeric sprint ids (or `"backlog"`). Resolve via
+    /// `mcp__jira__list_sprints`. Only meaningful with exactly one
+    /// board selected.
+    #[serde(default)]
+    sprint_ids: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct OpenSentryTabParams {
+    /// Sentry project slugs to filter by (e.g. `["catalog-api",
+    /// "checkout-web"]`). Empty/omitted = all projects. Resolve via
+    /// `mcp__sentry__list_projects`.
+    #[serde(default)]
+    projects: Option<Vec<String>>,
+    /// Free-text search appended to Sentry's search query (e.g.
+    /// `"login flow"`). Combined with the structured filters below.
+    #[serde(default)]
+    search: Option<String>,
+    /// Issue status filter. One of: unresolved, resolved, ignored, all.
+    /// Defaults to keeping the user's current selection.
+    #[serde(default)]
+    status: Option<String>,
+    /// Severity level filter. One of: all, fatal, error, warning, info,
+    /// debug.
+    #[serde(default)]
+    level: Option<String>,
+    /// Environment slug (e.g. `production`, `staging`). Null = all envs.
+    #[serde(default)]
+    environment: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct SetGithubColumnParams {
+    /// Art-name of the github workbench column (e.g. "Petra"). Either
+    /// `instance_name` or `instance_id` must be provided.
+    #[serde(default)]
+    instance_name: Option<String>,
+    /// UUID of the github column.
+    #[serde(default)]
+    instance_id: Option<String>,
+    /// `owner/name` to scope the column to (e.g. `Efficiently-Dev/efficiently`).
+    /// Pass empty string `""` to clear the repo filter (= all repos).
+    #[serde(default)]
+    repo: Option<String>,
+    /// Filter mode. One of: involving, authored, review_requested,
+    /// assigned, user, all. Mirrors the dropdown in the column header.
+    #[serde(default)]
+    mode: Option<String>,
+    /// Free-text search applied on top of `mode` + `repo` filters.
+    #[serde(default)]
+    search: Option<String>,
+    /// GitHub login when `mode = "user"`. Ignored otherwise.
+    #[serde(default)]
+    custom_user: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct SetJiraColumnParams {
+    /// Art-name of the jira workbench column (e.g. "Mona-Lisa").
+    /// Either `instance_name` or `instance_id` must be provided.
+    #[serde(default)]
+    instance_name: Option<String>,
+    /// UUID of the jira column.
+    #[serde(default)]
+    instance_id: Option<String>,
+    /// Project key (e.g. `DEVOPS`). Empty string clears the filter.
+    #[serde(default)]
+    project_key: Option<String>,
+    /// Status name ("In Review", "Done"). Empty clears.
+    #[serde(default)]
+    status_name: Option<String>,
+    /// Free-text search.
+    #[serde(default)]
+    search: Option<String>,
+    /// Numeric board ids — see OpenJiraTabParams.
+    #[serde(default)]
+    board_ids: Option<Vec<u64>>,
+    /// Sprint ids — see OpenJiraTabParams.
+    #[serde(default)]
+    sprint_ids: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct SetSentryColumnParams {
+    /// Art-name of the sentry workbench column. Either `instance_name`
+    /// or `instance_id` must be provided.
+    #[serde(default)]
+    instance_name: Option<String>,
+    /// UUID of the sentry column.
+    #[serde(default)]
+    instance_id: Option<String>,
+    /// Sentry project slugs.
+    #[serde(default)]
+    projects: Option<Vec<String>>,
+    /// Free-text search.
+    #[serde(default)]
+    search: Option<String>,
+    /// Status filter. unresolved/resolved/ignored/all.
+    #[serde(default)]
+    status: Option<String>,
+    /// Severity level. all/fatal/error/warning/info/debug.
+    #[serde(default)]
+    level: Option<String>,
+    /// Environment slug.
+    #[serde(default)]
+    environment: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -252,6 +409,57 @@ fn validate_one_of(value: &str, choices: &[&str], label: &str) -> Result<(), Err
             ),
             None,
         ))
+    }
+}
+
+/// Pull a non-empty `instance_name` first, fall back to `instance_id`,
+/// or fail with the same error every column-mutating tool wants. Centralised
+/// because every `set_*_column` tool needs the exact same dispatch and we
+/// don't want to copy 6 lines of `.trim().filter().or()` six times.
+fn require_instance_label<'a>(
+    name: Option<&'a str>,
+    id: Option<&'a str>,
+) -> Result<&'a str, ErrorData> {
+    let by_name = name.map(str::trim).filter(|s| !s.is_empty());
+    let by_id = id.map(str::trim).filter(|s| !s.is_empty());
+    by_name.or(by_id).ok_or_else(|| {
+        ErrorData::invalid_params(
+            "either `instance_name` or `instance_id` must be provided",
+            None,
+        )
+    })
+}
+
+/// Tiny accumulator that builds a "k=v, k=v" trace string for the human-
+/// readable confirmation a tool returns. The agent already sees the
+/// structured `Parameters(…)` it sent, but the user sees this string in
+/// the trace pill — so we want it readable, comma-separated, and skip
+/// keys the caller didn't touch. Keeping it as a helper because the
+/// three column-mutator tools (github/jira/sentry) follow the same
+/// "patch only the keys you want" semantics and would otherwise each
+/// reimplement the same Vec push + join.
+struct FilterBits(Vec<String>);
+
+fn changed_filter_bits() -> FilterBits {
+    FilterBits(Vec::new())
+}
+
+impl FilterBits {
+    fn push_kv(&mut self, key: &str, value: &str) {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            self.0.push(format!("{}=<cleared>", key));
+        } else {
+            self.0.push(format!("{}=\"{}\"", key, trimmed));
+        }
+    }
+
+    fn summary(&self, empty: &str) -> String {
+        if self.0.is_empty() {
+            empty.to_string()
+        } else {
+            self.0.join(", ")
+        }
     }
 }
 
@@ -348,7 +556,7 @@ impl App {
     }
 
     #[tool(
-        description = "Switch Forgehold's top-level view tab. Available tabs: `workbench` (default — columns), `repositories` (full GitHub browser with code/branches/releases/PRs), `tasks` (Jira board), `issues` (Sentry issues browser), `rules` (user-rules editor), `connections` (sources + agents configure), `settings`. Use when the user wants to navigate (\"open repos\", \"go to tasks\", \"show me sentry issues\")."
+        description = "Switch Forgehold's top-level view tab. Available tabs: `workbench` (default — columns), `github` (GitHub browser with code/branches/releases/PRs/issues), `jira` (Jira board / inbox), `sentry` (Sentry issues browser), `rules` (user-rules editor), `connections` (sources + agents configure), `settings`. Use when the user wants to navigate (\"open github\", \"go to jira\", \"show me sentry issues\"). For SCOPED navigation (specific repo / project / sprint / sentry filter), prefer `open_github_repo` / `open_jira_tab` / `open_sentry_tab` instead — they switch the view AND apply filters in one call."
     )]
     async fn switch_view(
         &self,
@@ -475,11 +683,11 @@ impl App {
     }
 
     #[tool(
-        description = "Open a specific repository in the Repositories view (full GitHub browser). Switches the top-level view to `repositories`, picks the repo from the list, and lands on `section` (default: `pulls`). Sections: `code` (file browser + README), `pulls` (PR list), `issues` (issue list), `actions` (workflow runs), `releases`. Use whenever the user wants to drill into a repo (\"show me the actions for efficiently\", \"open the releases tab on forge\")."
+        description = "Open a specific GitHub repository inside Forgehold's GitHub tab. Switches the top-level view to `github`, picks the repo from the list, and lands on `section` (default: `pulls`). Sections: `code` (file browser + README), `pulls` (PR list), `issues` (issue list), `actions` (workflow runs), `releases`. Pass `path` together with `section=code` to drill into a specific file or folder (e.g. `src/lib/auth.ts`) — the file viewer opens with the contents preloaded. Named `open_github_repo` rather than `open_repo` because we'll grow into other VCS sources (GitLab, Bitbucket, etc.) where \"repository\" lookups need their own resolver. Use whenever the user wants to drill into a GitHub repo (\"show me the actions for efficiently\", \"open src/lib/auth.ts in efficiently\", \"open the releases tab on forge\")."
     )]
-    async fn open_repo(
+    async fn open_github_repo(
         &self,
-        Parameters(OpenRepoParams { owner, repo, section }): Parameters<OpenRepoParams>,
+        Parameters(OpenRepoParams { owner, repo, section, path }): Parameters<OpenRepoParams>,
     ) -> Result<CallToolResult, ErrorData> {
         if owner.trim().is_empty() || repo.trim().is_empty() {
             return Err(ErrorData::invalid_params("owner and repo are required", None));
@@ -488,11 +696,202 @@ impl App {
             validate_one_of(s, VALID_REPO_SECTIONS, "section")?;
         }
         let s = section.as_deref().unwrap_or("pulls");
+        let trimmed_path = path.as_deref().map(str::trim).filter(|p| !p.is_empty());
+        if trimmed_path.is_some() && s != "code" {
+            return Err(ErrorData::invalid_params(
+                "`path` is only valid when `section` is `code`",
+                None,
+            ));
+        }
+        let suffix = match trimmed_path {
+            Some(p) => format!(" → file `{}`", p),
+            None => String::new(),
+        };
         Ok(CallToolResult::success(vec![Content::text(format!(
-            "Opening repository {}/{} → {} section.",
+            "Opening repository {}/{} → {} section{}.",
             owner.trim(),
             repo.trim(),
-            s
+            s,
+            suffix
+        ))]))
+    }
+
+    #[tool(
+        description = "Open the Jira top-level tab with optional filters applied — same controls as the tab's UI dropdowns. `project_key` scopes to one project, `status_name` filters by workflow state (\"In Review\", \"Done\"), `search` is a free-text fragment. `board_ids` and `sprint_ids` use Jira's numeric ids — resolve them via `mcp__jira__list_sprints` first if the user mentions a sprint by name. Omit a parameter to leave that filter as the user last set it. Use this instead of `switch_view view=jira` whenever the user asks for a SPECIFIC slice (\"show me my open Jira tickets in DEVOPS\", \"sprint 160 tickets\", \"in-review tickets\")."
+    )]
+    async fn open_jira_tab(
+        &self,
+        Parameters(OpenJiraTabParams { project_key, search, status_name, board_ids, sprint_ids }): Parameters<OpenJiraTabParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let mut bits: Vec<String> = Vec::new();
+        if let Some(p) = project_key.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            bits.push(format!("project={}", p));
+        }
+        if let Some(s) = status_name.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            bits.push(format!("status=\"{}\"", s));
+        }
+        if let Some(q) = search.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            bits.push(format!("search=\"{}\"", q));
+        }
+        if let Some(b) = board_ids.as_ref().filter(|v| !v.is_empty()) {
+            bits.push(format!(
+                "boards=[{}]",
+                b.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(",")
+            ));
+        }
+        if let Some(s) = sprint_ids.as_ref().filter(|v| !v.is_empty()) {
+            bits.push(format!("sprints=[{}]", s.join(",")));
+        }
+        let summary = if bits.is_empty() {
+            "no filters (showing whatever the tab last had)".to_string()
+        } else {
+            bits.join(", ")
+        };
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Opening Jira tab with {}.",
+            summary
+        ))]))
+    }
+
+    #[tool(
+        description = "Open the Sentry top-level tab with optional filters — same controls as the tab's filter bar. `projects` scopes to one or more Sentry project slugs, `status` is unresolved/resolved/ignored/all, `level` is fatal/error/warning/info/debug/all, `environment` is the env slug (e.g. `production`), `search` is free-text appended to Sentry's query. Omit a parameter to leave it untouched. Use whenever the user asks for a SPECIFIC slice of Sentry issues (\"production crashes\", \"unresolved errors in checkout-web\") instead of just \"open Sentry\"."
+    )]
+    async fn open_sentry_tab(
+        &self,
+        Parameters(OpenSentryTabParams { projects, search, status, level, environment }): Parameters<OpenSentryTabParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        if let Some(s) = status.as_deref() {
+            validate_one_of(s, VALID_SENTRY_STATUSES, "status")?;
+        }
+        if let Some(l) = level.as_deref() {
+            validate_one_of(l, VALID_SENTRY_LEVELS, "level")?;
+        }
+        let mut bits: Vec<String> = Vec::new();
+        if let Some(p) = projects.as_ref().filter(|v| !v.is_empty()) {
+            bits.push(format!("projects=[{}]", p.join(",")));
+        }
+        if let Some(q) = search.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            bits.push(format!("search=\"{}\"", q));
+        }
+        if let Some(s) = status.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            bits.push(format!("status={}", s));
+        }
+        if let Some(l) = level.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            bits.push(format!("level={}", l));
+        }
+        if let Some(e) = environment.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            bits.push(format!("env={}", e));
+        }
+        let summary = if bits.is_empty() {
+            "no filters (showing whatever the tab last had)".to_string()
+        } else {
+            bits.join(", ")
+        };
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Opening Sentry tab with {}.",
+            summary
+        ))]))
+    }
+
+    #[tool(
+        description = "Apply filters to a GitHub workbench column (kind=`github`). Identify the column by `instance_name` (art-name like \"Petra\") or `instance_id`. `repo` is `owner/name` (or empty string `\"\"` to clear → all repos), `mode` is involving/authored/review_requested/assigned/user/all, `search` is free-text, `custom_user` is a GitHub login (only used when `mode=user`). Pass only the keys you want to change; omitted keys keep their current value. Use this instead of `add_workbench_instance kind=github` when a column already exists — \"show authored PRs in efficiently in the github column\", \"filter Petra to only review-requested\"."
+    )]
+    async fn set_github_column(
+        &self,
+        Parameters(SetGithubColumnParams { instance_name, instance_id, repo, mode, search, custom_user }): Parameters<SetGithubColumnParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let label = require_instance_label(instance_name.as_deref(), instance_id.as_deref())?;
+        if let Some(m) = mode.as_deref() {
+            validate_one_of(m, VALID_GH_FILTER_MODES, "mode")?;
+        }
+        let mut bits = changed_filter_bits();
+        if let Some(r) = repo {
+            bits.push_kv("repo", &r);
+        }
+        if let Some(m) = mode {
+            bits.push_kv("mode", &m);
+        }
+        if let Some(s) = search {
+            bits.push_kv("search", &s);
+        }
+        if let Some(u) = custom_user {
+            bits.push_kv("custom_user", &u);
+        }
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Updating github column `{}`: {}.",
+            label,
+            bits.summary("no filter changes")
+        ))]))
+    }
+
+    #[tool(
+        description = "Apply filters to a Jira workbench column (kind=`jira`). Identify by `instance_name` or `instance_id`. `project_key` (empty string clears), `status_name`, `search`, `board_ids`, `sprint_ids` — same semantics as `open_jira_tab`. Pass only what you want to change. Use when a Jira column already exists and the user asks for a different scope (\"narrow Mona-Lisa to DEVOPS\", \"show in-review only in the jira column\")."
+    )]
+    async fn set_jira_column(
+        &self,
+        Parameters(SetJiraColumnParams { instance_name, instance_id, project_key, status_name, search, board_ids, sprint_ids }): Parameters<SetJiraColumnParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let label = require_instance_label(instance_name.as_deref(), instance_id.as_deref())?;
+        let mut bits = changed_filter_bits();
+        if let Some(p) = project_key {
+            bits.push_kv("project", &p);
+        }
+        if let Some(s) = status_name {
+            bits.push_kv("status", &s);
+        }
+        if let Some(q) = search {
+            bits.push_kv("search", &q);
+        }
+        if let Some(b) = board_ids {
+            bits.push_kv(
+                "boards",
+                &format!("[{}]", b.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(",")),
+            );
+        }
+        if let Some(s) = sprint_ids {
+            bits.push_kv("sprints", &format!("[{}]", s.join(",")));
+        }
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Updating jira column `{}`: {}.",
+            label,
+            bits.summary("no filter changes")
+        ))]))
+    }
+
+    #[tool(
+        description = "Apply filters to a Sentry workbench column (kind=`sentry`). Identify by `instance_name` or `instance_id`. `projects`, `search`, `status`, `level`, `environment` — same semantics as `open_sentry_tab`. Pass only what you want to change. Use to retarget an existing Sentry column (\"only show production fatals in the sentry column\")."
+    )]
+    async fn set_sentry_column(
+        &self,
+        Parameters(SetSentryColumnParams { instance_name, instance_id, projects, search, status, level, environment }): Parameters<SetSentryColumnParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let label = require_instance_label(instance_name.as_deref(), instance_id.as_deref())?;
+        if let Some(s) = status.as_deref() {
+            validate_one_of(s, VALID_SENTRY_STATUSES, "status")?;
+        }
+        if let Some(l) = level.as_deref() {
+            validate_one_of(l, VALID_SENTRY_LEVELS, "level")?;
+        }
+        let mut bits = changed_filter_bits();
+        if let Some(p) = projects {
+            bits.push_kv("projects", &format!("[{}]", p.join(",")));
+        }
+        if let Some(q) = search {
+            bits.push_kv("search", &q);
+        }
+        if let Some(s) = status {
+            bits.push_kv("status", &s);
+        }
+        if let Some(l) = level {
+            bits.push_kv("level", &l);
+        }
+        if let Some(e) = environment {
+            bits.push_kv("env", &e);
+        }
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Updating sentry column `{}`: {}.",
+            label,
+            bits.summary("no filter changes")
         ))]))
     }
 
@@ -579,8 +978,10 @@ impl ServerHandler for App {
              - open_sentry_issue — open a Sentry issue's slide-over.\n\
              \n\
              ## Top-level navigation\n\
-             - switch_view — change the top-level tab (workbench / repositories / tasks / issues / rules / connections / settings).\n\
-             - open_repo — switch to Repositories view AND open a specific repo on a section (code/pulls/issues/actions/releases). Use this instead of switch_view when the user names a repo.\n\
+             - switch_view — change the top-level tab (workbench / github / jira / sentry / rules / connections / settings). Use ONLY when the user wants the bare tab without any specific scope; if they name a repo / project / sprint / Sentry filter, prefer the targeted opener below.\n\
+             - open_github_repo — GitHub tab + specific repo on a section (code/pulls/issues/actions/releases). Pass `path` with `section=code` to drill into a file (\"open src/lib/auth.ts in efficiently\").\n\
+             - open_jira_tab — Jira tab + Jira filters (project_key / status_name / search / board_ids / sprint_ids). Use for \"my Jira tickets in DEVOPS\", \"sprint 160 in Jira\".\n\
+             - open_sentry_tab — Sentry tab + Sentry filters (projects / search / status / level / environment). Use for \"production crashes\", \"unresolved errors in checkout-web\".\n\
              \n\
              ## Workbench manipulation\n\
              - new_workbench — create a fresh workbench tab (with optional name). Activates it by default.\n\
@@ -591,12 +992,13 @@ impl ServerHandler for App {
              - focus_workbench_instance — scroll-to + highlight an existing column (creates one if none exists).\n\
              - list_instances — re-read the workbench layout if you think your preamble is stale.\n\
              - add_editor_instance — DEPRECATED, use add_workbench_instance with kind=`editor`. Kept for back-compat.\n\
+             - set_github_column / set_jira_column / set_sentry_column — patch filters on an EXISTING workbench column (identify by `instance_name` or `instance_id`). Pass only the keys you want to change; omitted keys are preserved. Pass empty string `\"\"` to clear a single-value filter (e.g. `repo=\"\"` = all repos). Use these to retarget a column the user already has open.\n\
              \n\
              ## Sources\n\
              - open_connect_modal — surface the connect/status modal for any source/agent (use when the user asks about an integration that isn't connected yet — e.g. they mention Slack and you can see it's not in their connected list).\n\
              \n\
              # When to chain calls\n\
-             These tools compose. \"Open the actions tab for forge\" → switch_view (workbench is fine) + open_repo with section=actions. \"Make a new workbench called Hotfix and add a Claude column there\" → new_workbench + add_workbench_instance(kind=claude). Don't ask for confirmation — these are harmless navigation that gives the user the same view they'd get clicking through manually."
+             These tools compose. \"Open the actions tab for forge\" → open_github_repo(owner=…, repo=forge, section=actions) — one call, no need to switch_view first. \"Make a new workbench called Hotfix and add a Claude column there\" → new_workbench + add_workbench_instance(kind=claude). Don't ask for confirmation — these are harmless navigation that gives the user the same view they'd get clicking through manually."
                 .to_string(),
         );
         info

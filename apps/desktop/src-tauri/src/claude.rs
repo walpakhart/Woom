@@ -218,16 +218,23 @@ pub async fn ask(
     } else {
         cmd.arg("--session-id").arg(claude_uuid);
     }
-    // Compose the system-prompt suffix in three parts:
-    //  - Per-turn UI context (active workbench, sibling instances, links).
-    //  - Auto behaviors Forgehold injects when the relevant MCP sidecars
-    //    are wired up (memory recall, source-aware references).
-    //  - User-authored rules from the Rules tab.
-    // Joined with a separator so Claude reads them as one append-block.
+    // Compose the system-prompt suffix in three parts. Order matters for
+    // Claude's prompt-cache: the cache key is a prefix of the appended
+    // text, so anything that's mostly-stable should come BEFORE anything
+    // that mutates per turn. Otherwise the variable bytes invalidate the
+    // cache for the kilobytes that follow them.
+    //
+    //   1. Memory hint — fully static (only depends on whether the
+    //      memory sidecar is wired in this session, which is constant
+    //      for the session's lifetime).
+    //   2. User rules — changes only when the user edits the Rules tab,
+    //      and that's a manual save, so effectively static between
+    //      turns.
+    //   3. Per-turn UI context — workbench layout, cwds, linked agents,
+    //      one-shot cwd-switch recap. Mutates every turn that adds a
+    //      column or changes an editor's open path. Goes LAST so the
+    //      preceding block stays a stable prefix.
     let mut system_parts: Vec<String> = Vec::new();
-    if let Some(ctx) = app_context.map(str::trim).filter(|s| !s.is_empty()) {
-        system_parts.push(ctx.to_string());
-    }
     let memory_available = mcp
         .as_ref()
         .map(|(_, allowed)| {
@@ -257,6 +264,9 @@ pub async fn ask(
     }
     if let Some(r) = rules.map(|s| s.trim()).filter(|s| !s.is_empty()) {
         system_parts.push(format!("User rules (follow these on every turn):\n\n{}", r));
+    }
+    if let Some(ctx) = app_context.map(str::trim).filter(|s| !s.is_empty()) {
+        system_parts.push(ctx.to_string());
     }
     if !system_parts.is_empty() {
         cmd.arg("--append-system-prompt").arg(system_parts.join("\n\n---\n\n"));
@@ -616,7 +626,12 @@ fn build_mcp_config(session_id: &str) -> Option<(PathBuf, Vec<String>)> {
         allowed.push("mcp__app__new_workbench".into());
         allowed.push("mcp__app__switch_workbench".into());
         allowed.push("mcp__app__focus_workbench_instance".into());
-        allowed.push("mcp__app__open_repo".into());
+        allowed.push("mcp__app__open_github_repo".into());
+        allowed.push("mcp__app__open_jira_tab".into());
+        allowed.push("mcp__app__open_sentry_tab".into());
+        allowed.push("mcp__app__set_github_column".into());
+        allowed.push("mcp__app__set_jira_column".into());
+        allowed.push("mcp__app__set_sentry_column".into());
         allowed.push("mcp__app__set_editor_repo_path".into());
         allowed.push("mcp__app__set_agent_cwd".into());
         allowed.push("mcp__app__list_instances".into());

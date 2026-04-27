@@ -1,5 +1,5 @@
-//! Cursor MCP bridge — exposes Forgehold's Jira/GitHub/Sentry/Memory sidecars
-//! to `cursor-agent` so Cursor sees the same tools as Claude.
+//! Cursor MCP bridge — exposes Forgehold's Jira/GitHub/Sentry/Memory/App
+//! sidecars to `cursor-agent` so Cursor sees the same tools as Claude.
 //!
 //! Cursor reads its MCP config from `~/.cursor/mcp.json` (and from
 //! `<workspace>/.cursor/mcp.json`). It does NOT accept a `--mcp-config` flag
@@ -37,6 +37,7 @@ const SIDECAR_JIRA: &str = "forgehold-jira";
 const SIDECAR_GITHUB: &str = "forgehold-github";
 const SIDECAR_SENTRY: &str = "forgehold-sentry";
 const SIDECAR_MEMORY: &str = "forgehold-memory";
+const SIDECAR_APP: &str = "forgehold-app";
 
 /// Re-derive the set of Forgehold-owned MCP entries from current Keychain
 /// state and merge them into `~/.cursor/mcp.json`. Idempotent — call this
@@ -107,6 +108,15 @@ pub fn sync() -> Result<Vec<String>, String> {
     if let Some(cfg) = build_memory_entry(&sidecar_dir) {
         servers_obj.insert(SIDECAR_MEMORY.into(), cfg);
         written.push(SIDECAR_MEMORY.into());
+    }
+    // forgehold-app is unconditional — no creds, just exposes the
+    // navigation tools (`mcp__app__open_jira_issue`, `switch_view`, …)
+    // that Claude already gets via `--mcp-config`. Without this, Cursor
+    // saw the tools mentioned in the system preamble but couldn't
+    // actually call them; here we give it parity.
+    if let Some(cfg) = build_app_entry(&sidecar_dir) {
+        servers_obj.insert(SIDECAR_APP.into(), cfg);
+        written.push(SIDECAR_APP.into());
     }
 
     doc.insert(
@@ -217,5 +227,18 @@ fn build_memory_entry(dir: &Option<PathBuf>) -> Option<Value> {
         "env": {
             "FORGEHOLD_MEMORY_DB": app_data.join("memory.db").to_string_lossy(),
         }
+    }))
+}
+
+/// Wire up the bundled `forgehold-app` sidecar — exposes UI navigation
+/// tools (`open_github_pr`, `open_jira_issue`, `switch_view`, …). The
+/// frontend's stream parser intercepts the `mcp__app__*` tool_use events
+/// and drives the Svelte state directly; the sidecar itself just
+/// publishes the schemas so cursor-agent surfaces them as callable.
+/// Always wired — no creds needed, mirrors `claude.rs::build_app_server`.
+fn build_app_entry(dir: &Option<PathBuf>) -> Option<Value> {
+    let cmd = sidecar_path(dir, SIDECAR_APP)?;
+    Some(serde_json::json!({
+        "command": cmd,
     }))
 }

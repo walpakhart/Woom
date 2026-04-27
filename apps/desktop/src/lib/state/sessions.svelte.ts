@@ -3,7 +3,7 @@
 // per-column scroll containers, and user-authored rules. Persists sessions
 // and rules to localStorage via $effect.
 
-import type { ClaudeAction, ClaudeMessage, ClaudeSession, Mention } from '$lib/types';
+import type { ClaudeAction, ClaudeMessage, ClaudeSession, Mention, MessageEvent } from '$lib/types';
 import { notify } from '$lib/state/toaster.svelte';
 import { isImagePath } from '$lib/format';
 
@@ -577,6 +577,113 @@ export function replaceLastAssistant(sessionId: string, content: string) {
         : [];
       msgs[msgs.length - 1] = { ...last, content, events };
     }
+    return { ...s, messages: msgs };
+  });
+}
+
+/** Append a Cursor-style inline diff card into the LAST assistant message
+ *  for `sessionId`. Same lifetime model as `appendToLastTrace` — we attach
+ *  to whichever assistant turn is currently streaming, so the diff lands
+ *  in the chat *exactly* where the agent ran the Edit, not bunched at the
+ *  end. Idempotent on `toolId`: if the same tool_use id already produced
+ *  an edit event (e.g. the stream replayed), we update the existing event
+ *  in place rather than duplicating.
+ *
+ *  No-op when the last message isn't an assistant turn (defensive: stream
+ *  events should only fire after the assistant message starts, but that
+ *  ordering depends on cursor-agent / claude correctly emitting
+ *  `assistant` before `tool_call`). */
+export function appendEditEvent(
+  sessionId: string,
+  ev: {
+    toolId: string;
+    filePath: string;
+    oldText: string;
+    newText: string;
+    isCreate: boolean;
+    /** True for `Write` — full-file overwrite. Picks `revert_write`
+     *  semantics over `revert_edit` (full rewrite vs unique-substring
+     *  replace), and changes the card's verb. Defaults to false. */
+    wholeFile?: boolean;
+    /** Initial status. Edit/MultiEdit emit fully-formed events so they
+     *  start at `applied`. Write events arrive with a placeholder
+     *  `oldText` and finish loading once `git show HEAD:<file>` returns
+     *  — they should start at `loading`. */
+    status?: 'loading' | 'applied';
+  }
+) {
+  sessionsState.list = sessionsState.list.map((s) => {
+    if (s.id !== sessionId) return s;
+    const msgs = [...s.messages];
+    const last = msgs[msgs.length - 1];
+    if (!last || last.role !== 'assistant') return s;
+    const events = [...(last.events ?? [])];
+    const existingIdx = events.findIndex(
+      (e) => e.kind === 'edit' && e.toolId === ev.toolId
+    );
+    const next: MessageEvent = {
+      kind: 'edit',
+      toolId: ev.toolId,
+      filePath: ev.filePath,
+      oldText: ev.oldText,
+      newText: ev.newText,
+      isCreate: ev.isCreate,
+      wholeFile: ev.wholeFile ?? false,
+      status: ev.status ?? 'applied'
+    };
+    if (existingIdx >= 0) {
+      events[existingIdx] = next;
+    } else {
+      events.push(next);
+    }
+    msgs[msgs.length - 1] = { ...last, events };
+    return { ...s, messages: msgs };
+  });
+}
+
+/** Patch an existing edit-event in place. Used in two scenarios:
+ *  - Revert click → flip `status` to `reverted` / `error` (and set
+ *    `note` on failure).
+ *  - Async Write backfill → swap in the `oldText` we just fetched from
+ *    `git show HEAD:<file>` and flip `status` from `loading` to
+ *    `applied`. Optionally also patch `isCreate` (true if the file
+ *    didn't exist in HEAD).
+ *  Walks every assistant message in the session because the user might
+ *  revert an edit from a turn far back in history; the async git
+ *  fetch always lands on the most recent placeholder, but routing it
+ *  through the same lookup keeps both cases on the same code path. */
+export function updateEditEvent(
+  sessionId: string,
+  toolId: string,
+  patch: {
+    status?: 'loading' | 'applied' | 'reverted' | 'error';
+    note?: string;
+    oldText?: string;
+    isCreate?: boolean;
+  }
+) {
+  sessionsState.list = sessionsState.list.map((s) => {
+    if (s.id !== sessionId) return s;
+    let touched = false;
+    const msgs = s.messages.map((m) => {
+      if (m.role !== 'assistant' || !m.events) return m;
+      let mTouched = false;
+      const events = m.events.map((e) => {
+        if (e.kind !== 'edit' || e.toolId !== toolId) return e;
+        mTouched = true;
+        return {
+          ...e,
+          status: patch.status ?? e.status,
+          note: patch.note !== undefined ? patch.note : e.note,
+          oldText: patch.oldText !== undefined ? patch.oldText : e.oldText,
+          isCreate: patch.isCreate !== undefined ? patch.isCreate : e.isCreate
+        };
+      });
+      if (!mTouched) return m;
+      touched = true;
+      return { ...m, events };
+    });
+    if (!touched) return s;
     return { ...s, messages: msgs };
   });
 }

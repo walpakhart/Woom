@@ -5,6 +5,7 @@
   import { layoutState } from '$lib/state/layout.svelte';
   import { notify, notifyError } from '$lib/state/toaster.svelte';
   import { themeState, applyTheme, type ThemeName } from '$lib/state/theme.svelte';
+  import { scaleState, applyScale, SCALE_OPTIONS } from '$lib/state/scale.svelte';
 
   /* Theme picker. Each entry encodes a tiny preview swatch (bg, text,
      accent) so the user can eyeball the palette without applying. */
@@ -237,6 +238,31 @@
       </div>
     </div>
 
+    <!-- UI scale — global zoom multiplier on <html>. Same paradigm as
+         Cursor's "Window: Zoom Level". See lib/state/scale.svelte.ts
+         for the rationale on CSS `zoom` over Tauri's setZoom() API. -->
+    <div class="card">
+      <header class="card-head">
+        <h2 class="card-title">UI scale</h2>
+        <p class="card-sub">
+          Zoom every glyph, border and spacing in the window. Useful on external monitors where
+          the OS scaling feels too tight or too loose for chat reading.
+        </p>
+      </header>
+      <div class="scale-grid">
+        {#each SCALE_OPTIONS as opt (opt.value)}
+          <button
+            class="scale-card"
+            class:active={scaleState.value === opt.value}
+            onclick={() => applyScale(opt.value)}
+            aria-pressed={scaleState.value === opt.value}
+          >
+            <span class="scale-label">{opt.label}</span>
+          </button>
+        {/each}
+      </div>
+    </div>
+
     <!-- Build / app info -->
     <div class="card">
       <header class="card-head">
@@ -363,4 +389,37 @@
   }
   .theme-sub { font-size: 11.5px; color: var(--text-2); }
   .theme-card.active .theme-label { color: var(--accent-bright); }
+
+  /* Scale picker — a row of compact percentage chips. Smaller than the
+     theme cards because the only thing to preview is a number. */
+  .scale-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .scale-card {
+    min-width: 72px;
+    padding: 10px 14px;
+    background: var(--bg-2);
+    border: 1px solid var(--border-neutral);
+    border-radius: 8px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 140ms;
+  }
+  .scale-card:hover {
+    border-color: var(--border-neutral-hi);
+    background: var(--bg-3);
+    transform: translateY(-1px);
+  }
+  .scale-card.active {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent), 0 4px 14px var(--accent-glow);
+  }
+  .scale-label {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-0);
+  }
+  .scale-card.active .scale-label { color: var(--accent-bright); }
 </style>

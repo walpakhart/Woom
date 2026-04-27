@@ -516,7 +516,15 @@ export const inboxState = $state<{
   // there; this reactive channel lets the agent-driven navigation
   // tools land cleanly without a circular dep. Section is a hint —
   // GithubTab validates against its own RepoSection union.
-  pendingRepoNav: { owner: string; repo: string; section: string } | null;
+  // Optional `path` only matters for `section === 'code'`: when set the
+  // tab drills into the file viewer at that repo-relative path. Empty
+  // string / `null` = open at the section root.
+  pendingRepoNav: {
+    owner: string;
+    repo: string;
+    section: string;
+    path?: string | null;
+  } | null;
 }>({
   // GitHub per-instance — hydrated from localStorage at boot
   itemsByInstance: {},
@@ -565,12 +573,12 @@ export const inboxState = $state<{
   sentryEnvironmentOptionsLoading: false,
   sentryFocusId: null,
   sentryFocusEventId: null,
-  // Tasks tab Jira slice
+  // Jira tab filter slice (top-level Jira view)
   jiraTabFilters: readJiraTabFilters(),
   jiraTabItems: [],
   jiraTabItemsLoading: false,
   jiraTabItemsError: null,
-  // Issues tab Sentry slice
+  // Sentry tab filter slice (top-level Sentry view)
   ...(() => {
     const f = readSentryTabFilters();
     return {
@@ -1055,7 +1063,7 @@ let jiraTabFilterDebounce: ReturnType<typeof setTimeout> | null = null;
 
 /* JiraTab mirror of refreshJiraInbox — same JQL builder, same backend
    call, but reads `jiraTabFilters` and writes to `jiraTabItems` so
-   the Tasks tab and the Jira column don't trample each other's lists. */
+   the Jira tab and the Jira column don't trample each other's lists. */
 export async function refreshJiraTabInbox(
   { silent = false }: { silent?: boolean } = {}
 ) {

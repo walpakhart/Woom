@@ -37,7 +37,7 @@
     actionBusy: string | null;
     onOpenFocusItem: (item: InboxItem) => void;
     // Focus-overlay callbacks — same handlers the parent passes to GithubColumn,
-    // wired through so opening a PR in Repositories shows the same detail pane.
+    // wired through so opening a PR in the GitHub tab shows the same detail pane.
     // Close is handled internally (we own when the overlay disappears).
     onRetryLoadDetail: () => void;
     onTabChange: (tab: DetailTab) => void;
@@ -82,7 +82,7 @@
   const repoPulls = $derived(githubTabState.repoItems.filter((i) => i.is_pull_request));
   const repoIssues = $derived(githubTabState.repoItems.filter((i) => !i.is_pull_request));
 
-  // Lazy-load repos when Repositories view opens.
+  // Lazy-load repos when the GitHub tab opens.
   $effect(() => {
     if (connectedGithub && !githubTabState.repos.length && !githubTabState.reposLoading) {
       void loadRepos();
@@ -122,12 +122,57 @@
         if (['code', 'pulls', 'issues', 'actions', 'releases'].includes(sec)) {
           selectRepoSection(sec);
         }
+        // Drill into the requested path inside the code section. Two
+        // shapes accepted by `path`:
+        //   - directory ("src/lib/")        → set repoCodePath, leave file viewer closed
+        //   - blob     ("src/lib/auth.ts")  → set repoCodePath to its parent dir
+        //                                     AND open the file in the viewer
+        // We need the tree to have loaded first so we can tell which
+        // shape we're looking at; selectRepoSection('code') kicks off
+        // loadRepoTree but doesn't await it. Wait here so blobs land
+        // correctly — the user sees a brief spinner instead of an empty
+        // tree flash, which is the same experience as clicking through.
+        const navPath = (nav.path ?? '').replace(/^\/+|\/+$/g, '');
+        if (sec === 'code' && navPath) {
+          await ensureTreeLoaded();
+          const entry = githubTabState.repoCodeTree.find((e) => e.path === navPath);
+          if (entry?.kind === 'blob') {
+            const parent = navPath.includes('/')
+              ? navPath.slice(0, navPath.lastIndexOf('/'))
+              : '';
+            githubTabState.repoCodePath = parent;
+            await openRepoFile(entry);
+          } else {
+            // Either matched a tree entry or path doesn't exist (e.g.
+            // user typo'd, branch differs). Treat as a folder navigate
+            // — the file viewer just renders an empty state and the
+            // breadcrumb still shows the requested path.
+            githubTabState.repoCodePath = navPath;
+            repoCodeCloseFile();
+          }
+        }
       }
       // Always clear, even if the repo wasn't found — the agent's
       // confirmation message already told the user; don't loop.
       inboxState.pendingRepoNav = null;
     })();
   });
+
+  /** Wait for `repoCodeTree` to be populated. `loadRepoTree` is fire-and-
+   *  forget inside `selectRepoSection('code')`, so the agent-driven path
+   *  drilldown above can race against it. We poll the loading flag once
+   *  we've kicked the load — cheap, deterministic, and sidesteps having
+   *  to refactor the loader to return a promise without breaking other
+   *  callers that don't care. Caps at ~3s so a stuck request doesn't
+   *  hang the navigation forever. */
+  async function ensureTreeLoaded(): Promise<void> {
+    if (githubTabState.repoCodeTree.length) return;
+    if (!githubTabState.repoCodeTreeLoading) await loadRepoTree();
+    const start = performance.now();
+    while (githubTabState.repoCodeTreeLoading && performance.now() - start < 3000) {
+      await new Promise((r) => setTimeout(r, 30));
+    }
+  }
 
   async function loadRepos() {
     githubTabState.reposLoading = true;

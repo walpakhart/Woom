@@ -124,17 +124,23 @@ pub async fn ask(
         String::from_utf8_lossy(&out.stdout).trim().to_string()
     };
 
-    // Prepend app context + rules to the prompt — cursor-agent has no
-    // `--append-system-prompt`. Order: app context first (so it frames the
-    // session), then rules, then the user message itself.
+    // Prepend rules + app context to the prompt — cursor-agent has no
+    // `--append-system-prompt`. Order matters for cursor-agent's backend
+    // prompt cache (Anthropic-flavour, prefix-keyed): static-est blocks
+    // first so the cache hit survives layout changes between turns.
+    //   1. User rules — only changes when the user edits the Rules tab.
+    //   2. App context — workbench layout snapshot, mutates per turn;
+    //      its OWN structure is also static-first / variable-last (see
+    //      `buildAgentAppContext`).
+    //   3. The user message itself.
     let mut preamble = String::new();
-    if let Some(ctx) = app_context.map(str::trim).filter(|s| !s.is_empty()) {
-        preamble.push_str(ctx);
-        preamble.push_str("\n\n---\n\n");
-    }
     if let Some(r) = rules.map(|s| s.trim()).filter(|s| !s.is_empty()) {
         preamble.push_str("User rules (follow these on every turn):\n\n");
         preamble.push_str(r);
+        preamble.push_str("\n\n---\n\n");
+    }
+    if let Some(ctx) = app_context.map(str::trim).filter(|s| !s.is_empty()) {
+        preamble.push_str(ctx);
         preamble.push_str("\n\n---\n\n");
     }
     let effective_prompt = if preamble.is_empty() {
@@ -449,6 +455,15 @@ fn normalize_event(raw: &str) -> Vec<serde_json::Value> {
 /// content block. We only handle the `started` subtype (tool *invocation*) —
 /// `completed` carries the tool *result*, which Forgehold already surfaces via
 /// action cards or inline bash output, so rendering it again would duplicate.
+///
+/// Two-pass extraction. cursor-agent has shipped at least three layouts for
+/// where the tool name lives: inside `tool_call` as a discriminated union
+/// (`function` / `*ToolCall`), inside `tool_call` as a flat `{name, input}`
+/// (newer MCP form), or hoisted onto the EVENT itself (with `name`/`args`
+/// siblings of `type`/`subtype`/`call_id`). We try the inner payload first
+/// (it's the historic shape), then fall back to the event itself, then
+/// drop a debug breadcrumb so a stuck `_using tool…_` pill always lets us
+/// recover the raw event from the log file.
 fn normalize_tool_call(v: &serde_json::Value) -> Option<serde_json::Value> {
     let subtype = v.get("subtype").and_then(|s| s.as_str()).unwrap_or("");
     if subtype != "started" {
@@ -460,8 +475,43 @@ fn normalize_tool_call(v: &serde_json::Value) -> Option<serde_json::Value> {
         .unwrap_or("")
         .to_string();
     let session_id = v.get("session_id").cloned().unwrap_or(json!(null));
-    let tool_call = v.get("tool_call")?;
-    let (name, input) = extract_tool_shape(tool_call);
+
+    // Pass 1: inner `tool_call` payload, if it's a JSON object. This is
+    // the historical layout and still the correct one for cursor-agent's
+    // built-in tools (Read/Write/Bash/Grep/Glob).
+    let inner = v.get("tool_call");
+    let (mut raw_name, mut input) = match inner.and_then(|tc| tc.as_object()) {
+        Some(_) => extract_tool_shape(inner.unwrap()),
+        None => ("tool".into(), json!({})),
+    };
+
+    // Pass 2: if the inner payload didn't yield a real tool name (i.e.
+    // we landed on the generic "tool" fallback), retry against the
+    // event's own object. cursor-agent's MCP layout in late-2025
+    // builds hoists `name` and `args` to the event level and leaves
+    // `tool_call` either absent, null, or a free-form string hint.
+    // Without this retry the trace renders an empty "_using tool…_"
+    // pill and the frontend dispatcher never matches `mcp__app__*`,
+    // which is exactly the "Cursor opened the PR but nothing
+    // happened" symptom from the bug repro.
+    if raw_name == "tool" {
+        let (n2, i2) = extract_tool_shape(v);
+        if n2 != "tool" {
+            raw_name = n2;
+            input = i2;
+        } else {
+            // Still nothing. Stash the whole event under `_raw` so
+            // formatToolUse falls into its single-string-arg branch
+            // and surfaces the JSON inline — this is how we'll learn
+            // about the next shape without another roundtrip.
+            input = json!({
+                "_raw": serde_json::to_string(v).unwrap_or_default(),
+            });
+            log_unknown_tool_call(v);
+        }
+    }
+
+    let name = normalize_mcp_tool_name(&raw_name);
     Some(json!({
         "type": "assistant",
         "message": {
@@ -477,20 +527,168 @@ fn normalize_tool_call(v: &serde_json::Value) -> Option<serde_json::Value> {
     }))
 }
 
+/// Append the raw event JSON to a per-machine log so the user can paste
+/// it back when reporting "blank trace pill". Best-effort — failures
+/// to write are silent (don't want diagnostics to break the agent).
+/// The path is `~/Library/Logs/Forgehold/cursor-unknown-tool-calls.log`
+/// on macOS, falling back to `$HOME/.forgehold-cursor-unknown.log`.
+fn log_unknown_tool_call(v: &serde_json::Value) {
+    let Ok(home) = std::env::var("HOME") else {
+        return;
+    };
+    let dir = if cfg!(target_os = "macos") {
+        PathBuf::from(&home).join("Library/Logs/Forgehold")
+    } else {
+        PathBuf::from(&home).join(".forgehold")
+    };
+    let _ = std::fs::create_dir_all(&dir);
+    let file = dir.join("cursor-unknown-tool-calls.log");
+    use std::io::Write;
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&file)
+    {
+        let line = format!(
+            "{} {}\n",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
+            serde_json::to_string(v).unwrap_or_default()
+        );
+        let _ = f.write_all(line.as_bytes());
+    }
+}
+
+/// Strip the `forgehold-` prefix from MCP tool names so cursor-agent's
+/// `mcp__forgehold-app__open_github_pr` lines up with the
+/// `mcp__app__open_github_pr` shape the frontend's `handleStreamEvent` +
+/// `handleAppNavigation` dispatcher matches on. Same fix for the other
+/// sidecars (jira / github / sentry / memory).
+///
+/// Why the names diverge: Claude is invoked with `--mcp-config` listing
+/// servers under bare keys (`app`, `jira`, …) so its tool names land at
+/// `mcp__app__…`. Cursor reads `~/.cursor/mcp.json`, which uses the
+/// public `forgehold-app` / `forgehold-jira` namespace (it's the
+/// global MCP namespace shared with anything else the user wires in
+/// via `cursor-agent mcp add`, so we don't squat on `app`). Without
+/// this normalization the frontend silently drops every navigation
+/// call — cursor-agent reports "tool succeeded" (the sidecar always
+/// answers OK), but no UI mutation runs. That's the "Cursor says it
+/// opened the PR but nothing happened" bug.
+fn normalize_mcp_tool_name(name: &str) -> String {
+    if let Some(rest) = name.strip_prefix("mcp__forgehold-") {
+        // `rest` is now e.g. `app__open_github_pr`. Re-prefix to land at
+        // the Claude-shaped `mcp__app__open_github_pr`.
+        return format!("mcp__{}", rest);
+    }
+    name.to_string()
+}
+
 /// Reach into cursor's discriminated tool_call union (readToolCall /
-/// writeToolCall / function / …) and return a `(tool_name, input_object)`
-/// pair. Best-effort — Forgehold's `formatToolUse` gracefully falls back to a
-/// compact generic render for unknown names/shapes.
+/// writeToolCall / function / mcp / …) and return a `(tool_name,
+/// input_object)` pair. Best-effort — Forgehold's `formatToolUse`
+/// gracefully falls back to a compact generic render for unknown
+/// names/shapes.
+///
+/// We probe in three layers, most-specific → most-general, so a cleaner
+/// shape always wins over a fallback. cursor-agent has shipped four
+/// distinct envelopes for tool_calls across versions; this used to only
+/// handle two, which is why MCP calls (e.g. `mcp__forgehold-app__open_github_pr`)
+/// were collapsing to `("tool", {})` — the agent reports "1 step" but
+/// the trace says "_using tool…_" and the frontend dispatcher never
+/// fires because `name` is empty. See the bug repro: "Открыл PR в
+/// слайдовере" / "1 step ✓ … using tool…".
 fn extract_tool_shape(tc: &serde_json::Value) -> (String, serde_json::Value) {
     let Some(obj) = tc.as_object() else {
         return ("tool".into(), json!({}));
     };
-    // Each known variant pairs a discriminator key with its payload:
+
+    // Layer 1: flat shape — `tool_call: { name, input | args | arguments }`.
+    // cursor-agent ≥ Sept 2025 emits MCP calls this way: there's no
+    // `function`/`fooToolCall` wrapper, just a top-level `name` and an
+    // arg dict. Without this branch the loop below fell straight to
+    // the generic fallback, which is what produced the empty "using
+    // tool…" pill.
+    if let Some(name) = obj.get("name").and_then(|n| n.as_str()) {
+        let input = obj
+            .get("input")
+            .or_else(|| obj.get("args"))
+            .or_else(|| obj.get("arguments"))
+            .cloned()
+            .unwrap_or_else(|| json!({}));
+        return (name.to_string(), input);
+    }
+
+    // Layer 2: split MCP shape — `tool_call: { mcp: { server, tool,
+    // args } }` or `tool_call: { server, tool, args }`. Some cursor
+    // builds split the namespace and the tool name into two fields
+    // instead of pre-joining as `mcp__<server>__<tool>`. Re-stitch so
+    // downstream `normalize_mcp_tool_name` + the frontend dispatcher
+    // see the same `mcp__forgehold-app__open_github_pr` shape Claude
+    // produces directly.
+    let mcp_obj = obj.get("mcp").and_then(|m| m.as_object()).unwrap_or(obj);
+    if let (Some(server), Some(tool)) = (
+        mcp_obj.get("server").and_then(|s| s.as_str()),
+        mcp_obj.get("tool").or_else(|| mcp_obj.get("name")).and_then(|t| t.as_str()),
+    ) {
+        let input = mcp_obj
+            .get("args")
+            .or_else(|| mcp_obj.get("input"))
+            .or_else(|| mcp_obj.get("arguments"))
+            .cloned()
+            .unwrap_or_else(|| json!({}));
+        return (format!("mcp__{}__{}", server, tool), input);
+    }
+
+    // Layer 3a: cursor-agent's MCP shape (≥ Q2-2026). Real shape from
+    // a captured event:
+    //   tool_call: {
+    //     mcpToolCall: {
+    //       args: {
+    //         args: { …actual tool params… },
+    //         name: "forgehold-app-open_github_pr",
+    //         providerIdentifier: "forgehold-app",
+    //         toolCallId: "toolu_…",
+    //         toolName: "open_github_pr"
+    //       }
+    //     }
+    //   }
+    // Two `args` levels: the outer is a metadata wrapper, the inner is
+    // the actual params dict. `name` joins server+tool with a single
+    // dash, which DOESN'T match the `mcp__<server>__<tool>` convention
+    // the rest of the codebase (frontend dispatcher, formatToolUse,
+    // claude.rs) expects. So we re-stitch from `providerIdentifier` +
+    // `toolName` instead, stripping the `forgehold-` prefix to match
+    // Claude's namespace (where servers live as bare keys `app`,
+    // `jira`, …). For 3rd-party MCP servers the user wires in via
+    // `cursor-agent mcp add`, the prefix won't be present, so the full
+    // provider id stays in the namespace slot — `mcp__<provider>__<tool>`,
+    // exactly what `formatToolUse`'s generic mcp branch already
+    // formats nicely.
+    if let Some(mcp) = obj.get("mcpToolCall").and_then(|m| m.as_object()) {
+        let outer = mcp.get("args").and_then(|a| a.as_object());
+        if let Some(outer) = outer {
+            let provider = outer
+                .get("providerIdentifier")
+                .and_then(|s| s.as_str())
+                .unwrap_or("");
+            let tool_name = outer.get("toolName").and_then(|s| s.as_str()).unwrap_or("");
+            let inner_args = outer.get("args").cloned().unwrap_or_else(|| json!({}));
+            if !tool_name.is_empty() && !provider.is_empty() {
+                let namespace = provider.strip_prefix("forgehold-").unwrap_or(provider);
+                return (format!("mcp__{}__{}", namespace, tool_name), inner_args);
+            }
+        }
+    }
+
+    // Layer 3b: discriminated-union shapes we've seen historically.
     //   readToolCall   → Read / Grep / Glob equivalents
     //   writeToolCall  → Edit / Write / NotebookEdit equivalents
-    //   function       → the MCP tool path (`function.name` + `function.args`)
-    // The payload object already has a human-meaningful `name` in most cases;
-    // when it doesn't we fall back to the discriminator itself.
+    //   function       → OpenAI-style `function.name` + `function.args`
+    // The payload object already has a human-meaningful `name` in most
+    // cases; when it doesn't we fall back to the discriminator itself.
     for (key, payload) in obj.iter() {
         if key == "function" {
             let name = payload
@@ -502,6 +700,7 @@ fn extract_tool_shape(tc: &serde_json::Value) -> (String, serde_json::Value) {
                 .get("args")
                 .cloned()
                 .or_else(|| payload.get("arguments").cloned())
+                .or_else(|| payload.get("input").cloned())
                 .unwrap_or_else(|| json!({}));
             return (name, input);
         }
@@ -517,7 +716,18 @@ fn extract_tool_shape(tc: &serde_json::Value) -> (String, serde_json::Value) {
             return (name, input);
         }
     }
-    ("tool".into(), json!({}))
+
+    // Layer 4: nothing matched. Stash the raw payload under `_raw` so a
+    // user reporting "blank trace pill" can paste it back to us — the
+    // frontend's generic renderer will inline-code it via
+    // `formatToolUse`'s "single-string-arg" branch. We keep `name=tool`
+    // (not "") so the assistant card still renders, even ugly.
+    (
+        "tool".into(),
+        json!({
+            "_raw": serde_json::to_string(tc).unwrap_or_default(),
+        }),
+    )
 }
 
 fn humanize_discriminator(key: &str) -> &'static str {
@@ -527,6 +737,13 @@ fn humanize_discriminator(key: &str) -> &'static str {
         "bashToolCall" => "Bash",
         "grepToolCall" => "Grep",
         "globToolCall" => "Glob",
+        // Safety net: if Layer 3a (the dedicated `mcpToolCall` handler)
+        // failed to extract a name — say cursor-agent dropped
+        // `providerIdentifier` / `toolName` from the wrapper — Layer 3b
+        // gets here. We surface "MCP" so the trace pill at least reads
+        // "_using MCP…_" instead of the generic "_using tool…_", which
+        // gave us no signal at all about which family of tool fired.
+        "mcpToolCall" => "MCP",
         _ => "tool",
     }
 }

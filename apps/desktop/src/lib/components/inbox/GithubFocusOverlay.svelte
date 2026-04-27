@@ -568,7 +568,7 @@
 <style>
   /* Focus-pane styles that intentionally override or extend the base rules
      defined globally in app.css. Kept scoped so the Workbench GitHub column
-     and the Repositories view render identically. */
+     and the GitHub tab render identically. */
 
   /* Unified header bar — close on the left, metadata in the middle,
      "Open on GitHub" on the right. Same shape as `.jdp-head` (Jira) and

@@ -106,7 +106,7 @@ impl Memory {
     }
 
     #[tool(
-        description = "Full-text search of stored memories. Returns matches with id, content, and tags. Use this before answering questions about the user's preferences or past context — if a relevant memory exists, quote it back."
+        description = "Full-text search of stored memories. Returns matches with id, content, and tags. Use this before answering questions about the user's preferences or past context — if a relevant memory exists, quote it back.\n\nIMPORTANT — make ONE broad query, not multiple narrow ones. SQLite FTS handles multi-word queries (`auth login session`) and matches any of them — you don't need separate calls for synonyms. If nothing relevant returns on the first call, the memory genuinely isn't there; iterating with different keywords mostly just costs context tokens for the same null result."
     )]
     async fn memory_search(
         &self,

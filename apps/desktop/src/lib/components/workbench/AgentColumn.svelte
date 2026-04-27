@@ -4,6 +4,7 @@
   import { cubicOut } from 'svelte/easing';
   import Markdown from '$lib/components/ui/Markdown.svelte';
   import ClaudeActionCard from '$lib/components/workbench/ClaudeActionCard.svelte';
+  import EditDiffCard from '$lib/components/workbench/EditDiffCard.svelte';
   import Dropdown, { type DropdownOption } from '$lib/components/ui/Dropdown.svelte';
   import { invoke, convertFileSrc } from '@tauri-apps/api/core';
   import { open as openDialog } from '@tauri-apps/plugin-dialog';
@@ -1039,6 +1040,22 @@
                     {#each msg.events as ev, evIdx (evIdx)}
                       {#if ev.kind === 'text'}
                         <Markdown source={ev.body} onOpenFile={onOpenMentionPath} />
+                      {:else if ev.kind === 'edit'}
+                        <!-- Inline diff card for an Edit / MultiEdit chunk.
+                             Cursor-style "expand → red/green → Revert"
+                             surface, lives next to the assistant text so
+                             the user sees the change in context. -->
+                        <EditDiffCard
+                          sessionId={sess.id}
+                          toolId={ev.toolId}
+                          filePath={ev.filePath}
+                          oldText={ev.oldText}
+                          newText={ev.newText}
+                          isCreate={ev.isCreate}
+                          wholeFile={ev.wholeFile ?? false}
+                          status={ev.status}
+                          note={ev.note}
+                        />
                       {:else}
                         {@const ckey = `${sess.id}:${idx}:trace:${evIdx}`}
                         {@const cOpen = expandedTrace.has(ckey)}

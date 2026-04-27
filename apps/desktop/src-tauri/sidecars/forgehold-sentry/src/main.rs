@@ -154,7 +154,7 @@ impl Sentry {
     }
 
     #[tool(
-        description = "Search Sentry issues with the standard Sentry search syntax (e.g. `is:unresolved level:error project:foo`). Returns a compact list (short_id, title, level, status, project, last_seen)."
+        description = "Search Sentry issues with the standard Sentry search syntax (e.g. `is:unresolved level:error project:foo`). Returns a compact list (short_id, title, level, status, project, last_seen).\n\nIMPORTANT — make ONE focused query, do not iterate. Sentry's search returns matching issues across the org in a single call. Do NOT re-run with different `project:` / `level:` / `is:` scopes — that re-pays the entire conversation context for the same answer. Examples:\n  - \"recent errors\" → ONE call: `is:unresolved level:error sort:date`.\n  - \"crashes mentioning auth\" → ONE call: `auth is:unresolved`.\n  - \"errors in project X this week\" → ONE call: `project:X is:unresolved age:-7d`.\nOnly broaden / narrow if the first result was empty or clearly missed the user's intent."
     )]
     async fn search_issues(
         &self,
@@ -195,7 +195,7 @@ impl Sentry {
     }
 
     #[tool(
-        description = "List occurrences (events) for a Sentry issue. Returns event_id, timestamp, environment, release, user, message — useful for spotting a stable repro pattern across multiple events instead of relying on a single (possibly flaky) occurrence."
+        description = "List occurrences (events) for a Sentry issue. Returns event_id, timestamp, environment, release, user, message — useful for spotting a stable repro pattern across multiple events instead of relying on a single (possibly flaky) occurrence. Call once per issue — the default 10 events is enough to spot a pattern. Don't iterate with growing limits unless the first batch was clearly insufficient."
     )]
     async fn list_events(
         &self,

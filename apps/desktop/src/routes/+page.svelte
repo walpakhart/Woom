@@ -100,9 +100,21 @@
     selectAnyAssignee,
     resetGithubInbox,
     resetJiraInbox,
-    setGithubMeLogin
+    setGithubMeLogin,
+    updateGithubFilters,
+    updateJiraFilters,
+    setSentryFilters,
+    updateJiraTabFilters,
+    scheduleSentryTabFilterRefresh
+  } from '$lib/state/inbox.svelte';
+  import type {
+    GithubFilters,
+    GithubFilterMode,
+    JiraFilters,
+    SprintScope
   } from '$lib/state/inbox.svelte';
   import { initTheme } from '$lib/state/theme.svelte';
+  import { initScale } from '$lib/state/scale.svelte';
   import { dragState, setDragPayload, type DragPayload } from '$lib/state/drag.svelte';
   import { attachDragChip } from '$lib/dragImage';
   import { notify, notifyError } from '$lib/state/toaster.svelte';
@@ -180,7 +192,7 @@
   // commit modal, …) not just the inbox. The inbox store reads it as a prop.
   let now = $state(Date.now());
 
-  // Repositories state lives in GithubTab now; parent keeps a handle
+  // GitHub-tab state lives in GithubTab now; parent keeps a handle
   // via `bind:this` so cross-cutting actions (e.g. merging a PR) can refresh
   // the repo items list.
   let repositoriesView = $state<{ refreshItems: () => void } | null>(null);
@@ -503,6 +515,10 @@
        with default `:root` vars, this flips `<html data-theme="…">`
        so the saved palette wins on first paint. */
     initTheme();
+    // Same boot-time pattern as theme: apply the saved zoom level to
+    // <html> before first paint so the layout doesn't briefly flash
+    // at 100% then jump.
+    initScale();
     restorePanelState();
     // One-shot v1 → v2 migration: seed the legacy `forgehold:editor:root`
     // localStorage value into the first editor instance, ONLY if that
@@ -1695,25 +1711,123 @@
    *  to add a NEW one or just change an existing one's path.
    *
    *  Re-derived on every turn from `layoutState` + `sessionsState` so it's
-   *  always current. */
+   *  always current.
+   *
+   *  Ordering rule (matters for prompt-cache): everything static lives at
+   *  the top, the variable workbench-layout block comes LAST. Claude's
+   *  cache keys off a prefix, so a stable header + tool guide on top
+   *  means the kilobytes of instructions get cached across turns and
+   *  only the trailing layout snapshot is fresh on each call. Same logic
+   *  applies to cursor-agent's backend caching. */
   function buildAgentAppContext(callingSessionId: string): string {
     const lines: string[] = [];
+
+    // ── Static section: header + navigation tool guide. Same bytes on
+    // every turn (modulo a Forgehold deploy) so prompt caches eat it.
     lines.push(
       'You are running inside Forgehold, a desktop app where the user has '
         + 'organised work into workbenches (tabs of side-by-side columns). '
         + 'You can navigate the UI directly via the `mcp__app__*` tools.'
     );
+    lines.push('');
+    lines.push(
+      'When the user asks to "switch the editor and claude", "open this '
+        + 'repo in editor", "switch myself to /path", etc — DO NOT add a new '
+        + 'column. Use these tools on existing instances:'
+    );
+    lines.push(
+      '  - `mcp__app__set_editor_repo_path` — change an editor\'s open '
+        + 'folder. Pass `instance_name` (the art-name like "Sagrada-Familia") '
+        + 'or `instance_id`. If the editor has linked agents, their cwd '
+        + 'auto-follows — see the `linked_agents=[…]` field on each editor '
+        + 'in the workbench layout below. So if your column is in '
+        + '`linked_agents` of the editor you\'re moving, you DON\'T need a '
+        + 'separate set_agent_cwd for yourself — the link handles it.'
+    );
+    lines.push(
+      '  - `mcp__app__set_agent_cwd` — change an agent session\'s cwd. '
+        + 'Pass `instance_name`/`instance_id`, or `target=self` for yourself. '
+        + 'For yourself, the change takes effect on your NEXT turn. The '
+        + 'editor↔agent link is NEVER broken by this call — only by the '
+        + 'user clicking "Unlink" in the UI.'
+    );
+    lines.push(
+      '  - `mcp__app__list_instances` — re-list the current state if you '
+        + 'think this preamble is stale.'
+    );
+    lines.push(
+      'Only use `mcp__app__add_workbench_instance` when the user explicitly '
+        + 'says "add", "new", "another" — not for "switch" / "open in".'
+    );
+    lines.push('');
+    lines.push(
+      'Approval cards: `set_editor_repo_path` and `set_agent_cwd` execute '
+        + 'immediately when the USER asked you to switch — no approval card. '
+        + 'If you want to PROACTIVELY suggest a switch (the user didn\'t '
+        + 'ask but you think they should), use `mcp__github__propose_switch_cwd` '
+        + 'instead — that one queues an approval card.'
+    );
 
+    // Tool-iteration discipline. Empirically the biggest token-burn we
+    // see on Forgehold isn't the system prompt — it's the agent
+    // re-running near-identical search queries 5–10 times across
+    // GitHub/Jira/Sentry/memory to "be thorough", then re-paying the
+    // entire conversation history on every round-trip. One focused
+    // query returns the same data and costs 1/Nth of the limit. This
+    // block lives in the static cached prefix, so it costs ~140 tokens
+    // once per session and saves multiple thousand tokens per
+    // "list my PRs" / "find issues mentioning X" / "show recent
+    // errors" turn.
+    lines.push('');
+    lines.push(
+      'Search/list discipline (applies to ALL data sources). When the '
+        + 'user asks for a list, lookup, or "show me my X" — make ONE '
+        + 'focused query, then narrow only if the result needs '
+        + 'filtering. Do NOT iterate variations of the same intent '
+        + '(running the same search with `org:` then without, with '
+        + '`is:draft` then `state:open`, with different JQL scopes, '
+        + 'etc.). The data sources already return all matches in one '
+        + 'call; iterating just re-pays the entire conversation '
+        + 'context for the same answer. Concrete patterns:\n'
+        + '  - GitHub "my open PRs" → ONE `mcp__github__search_prs` '
+        + 'with `is:pr author:<user> state:open sort:updated-desc`. '
+        + 'Group by repo in your reply.\n'
+        + '  - GitHub "PR #N details" → ONE `mcp__github__get_pr` '
+        + '(it has title/state/branches/body). Add `get_pr_diff` / '
+        + '`get_pr_files` / `get_pr_comments` ONLY if the user asks '
+        + 'about diff/files/discussion respectively.\n'
+        + '  - Jira "my tickets" / "open in DEVOPS" → ONE '
+        + '`mcp__jira__search` with a single JQL: '
+        + '`assignee = currentUser() AND resolution = Unresolved` '
+        + 'or `project = DEVOPS AND status != Done`. JQL handles '
+        + 'AND/OR/IN — combine, don\'t iterate.\n'
+        + '  - Sentry "recent errors" / "crashes about X" → ONE '
+        + '`mcp__sentry__search_issues` with combined filters '
+        + '(`is:unresolved level:error project:foo`).\n'
+        + '  - Memory recall → ONE `mcp__memory__memory_search` with '
+        + 'multi-word query (FTS handles synonyms). If null on the '
+        + 'first try, the memory genuinely isn\'t there.\n'
+        + 'If the first call returns an empty result, narrowing then '
+        + 'is free — but never broaden after a hit. Pagination > '
+        + 're-querying.'
+    );
+
+    // ── Variable section: workbench layout snapshot + one-shot
+    // cwd-switch recap. Re-derived every turn so cache-busting bytes
+    // live here exclusively. Keep the section delimiter so the agent
+    // can visually parse where the current state begins.
     const calling = sessionsState.list.find((s) => s.id === callingSessionId);
     const callingInstanceId = calling?.columnInstanceId ?? null;
+
+    lines.push('');
+    lines.push('---');
+    lines.push('Current workbench layout (refreshed on every turn):');
 
     // One-shot recap if the user just switched the agent's cwd. Cleared
     // after the turn ships (in sendClaudeMessage's success path).
     if (calling?.cwdSwitchRecap) {
       lines.push('');
-      lines.push('---');
       lines.push(calling.cwdSwitchRecap);
-      lines.push('---');
     }
 
     for (const wb of layoutState.workbenches) {
@@ -1758,44 +1872,6 @@
       }
     }
 
-    lines.push('');
-    lines.push(
-      'When the user asks to "switch the editor and claude", "open this '
-        + 'repo in editor", "switch myself to /path", etc — DO NOT add a new '
-        + 'column. Use these tools on existing instances:'
-    );
-    lines.push(
-      '  - `mcp__app__set_editor_repo_path` — change an editor\'s open '
-        + 'folder. Pass `instance_name` (the art-name like "Sagrada-Familia") '
-        + 'or `instance_id`. If the editor has linked agents, their cwd '
-        + 'auto-follows — see the `linked_agents=[…]` field on each editor '
-        + 'in the preamble above. So if your column is in `linked_agents` of '
-        + 'the editor you\'re moving, you DON\'T need a separate set_agent_cwd '
-        + 'for yourself — the link handles it.'
-    );
-    lines.push(
-      '  - `mcp__app__set_agent_cwd` — change an agent session\'s cwd. '
-        + 'Pass `instance_name`/`instance_id`, or `target=self` for yourself. '
-        + 'For yourself, the change takes effect on your NEXT turn. The '
-        + 'editor↔agent link is NEVER broken by this call — only by the '
-        + 'user clicking "Unlink" in the UI.'
-    );
-    lines.push(
-      '  - `mcp__app__list_instances` — re-list the current state if you '
-        + 'think this preamble is stale.'
-    );
-    lines.push(
-      'Only use `mcp__app__add_workbench_instance` when the user explicitly '
-        + 'says "add", "new", "another" — not for "switch" / "open in".'
-    );
-    lines.push('');
-    lines.push(
-      'Approval cards: `set_editor_repo_path` and `set_agent_cwd` execute '
-        + 'immediately when the USER asked you to switch — no approval card. '
-        + 'If you want to PROACTIVELY suggest a switch (the user didn\'t '
-        + 'ask but you think they should), use `mcp__github__propose_switch_cwd` '
-        + 'instead — that one queues an approval card.'
-    );
     return lines.join('\n');
   }
 
@@ -1808,6 +1884,94 @@
    *  When inputs are bad (unknown view name, blank id) we silently no-op
    *  rather than throw — the chat still shows the inline `> *Tool* …` hint
    *  so the user can see what the agent tried. */
+  /** Narrow a string to the GithubFilterMode union — anything else (typo
+   *  from the agent, future mode the frontend doesn't know) silently no-
+   *  ops, matching the rest of handleAppNavigation's "bad input = skip"
+   *  contract. Defined here instead of inboxState because it's only
+   *  needed for the agent-driven path; the UI dropdowns build the union
+   *  by construction. */
+  function isGithubFilterMode(s: string): s is GithubFilterMode {
+    return (
+      s === 'involving' ||
+      s === 'authored' ||
+      s === 'review_requested' ||
+      s === 'assigned' ||
+      s === 'user' ||
+      s === 'all'
+    );
+  }
+  type SentryStatus = 'unresolved' | 'resolved' | 'ignored' | 'all';
+  type SentryLevel = 'all' | 'fatal' | 'error' | 'warning' | 'info' | 'debug';
+  function isSentryStatus(s: string): s is SentryStatus {
+    return s === 'unresolved' || s === 'resolved' || s === 'ignored' || s === 'all';
+  }
+  function isSentryLevel(s: string): s is SentryLevel {
+    return (
+      s === 'all' ||
+      s === 'fatal' ||
+      s === 'error' ||
+      s === 'warning' ||
+      s === 'info' ||
+      s === 'debug'
+    );
+  }
+  /** SentryFilters in the column store carries 7 fields including `sort`
+   *  (which the agent doesn't expose) — we accept any subset matching
+   *  what the tool advertises. Pulled out as its own type so the agent-
+   *  driven setter doesn't reference the persisted-filter shape verbatim
+   *  (its `sort` field would be a typed-`unknown` mismatch). */
+  type SentryFilterPatch = {
+    projects?: string[];
+    search?: string;
+    status?: SentryStatus;
+    level?: SentryLevel;
+    environment?: string | null;
+  };
+  /** MCP `switch_view` ships platform-named views (`github` / `jira` /
+   *  `sentry`) so a future GitLab/Bitbucket tab can claim its own slot.
+   *  The internal `View` enum kept the `Tab` suffix to avoid colliding
+   *  with workbench column kinds (the kind `github` is a workbench
+   *  column; `githubTab` is the top-level page). Translate here so the
+   *  agent never sees the suffix. Returns `null` for unknown values so
+   *  the handler can no-op cleanly instead of forcing an `as View`
+   *  cast that would route to a blank screen. */
+  function mapAgentViewToInternal(v: string): View | null {
+    switch (v) {
+      case 'github':
+        return 'githubTab';
+      case 'jira':
+        return 'jiraTab';
+      case 'sentry':
+        return 'sentryTab';
+      case 'workbench':
+      case 'rules':
+      case 'connections':
+      case 'settings':
+        return v;
+      default:
+        return null;
+    }
+  }
+  /** Coerce raw `sprint_ids` payload entries into the persisted
+   *  `SprintScope[]` shape (numeric id or the literal `'backlog'`).
+   *  The MCP tool's JSON schema accepts string|number; we accept either
+   *  here too because cursor-agent and Claude have shipped both. */
+  function parseSprintScopes(raw: unknown[]): SprintScope[] {
+    const out: SprintScope[] = [];
+    for (const x of raw) {
+      if (typeof x === 'number' && Number.isFinite(x) && x > 0) {
+        out.push(x);
+      } else if (typeof x === 'string') {
+        if (x === 'backlog') {
+          out.push('backlog');
+        } else {
+          const n = Number(x);
+          if (Number.isFinite(n) && n > 0) out.push(n);
+        }
+      }
+    }
+    return out;
+  }
   function handleAppNavigation(
     _sessionId: string,
     name: string,
@@ -1856,8 +2020,15 @@
       }
       case 'mcp__app__switch_view': {
         const v = str('view');
-        // Type-safe: view is the View union, validated server-side too.
-        if (v) view = v as View;
+        // The MCP tool exposes platform-named views (`github` / `jira`
+        // / `sentry`) so a future GitLab tab can claim its own slot
+        // without colliding with GitHub. Internal `View` keys still
+        // carry the `Tab` suffix to disambiguate from workbench column
+        // kinds (`github` the column kind vs `githubTab` the top-level
+        // page) — translate here. Anything else passes through
+        // unchanged (`workbench`, `rules`, `connections`, `settings`).
+        const mapped = mapAgentViewToInternal(v);
+        if (mapped) view = mapped;
         return;
       }
       case 'mcp__app__add_editor_instance': {
@@ -1922,14 +2093,145 @@
         void scrollKindIntoView(kind as PanelKind);
         return;
       }
-      case 'mcp__app__open_repo': {
+      case 'mcp__app__open_github_repo': {
         const owner = str('owner');
         const repo = str('repo');
         const section = str('section') || 'pulls';
+        const path = str('path');
         if (!owner || !repo) return;
         view = 'githubTab';
         // GithubTab watches this slot and clears it after opening.
-        inboxState.pendingRepoNav = { owner, repo, section };
+        // `path` only honoured for section=code (server validates too).
+        inboxState.pendingRepoNav = {
+          owner,
+          repo,
+          section,
+          path: section === 'code' && path ? path : null
+        };
+        return;
+      }
+      case 'mcp__app__open_jira_tab': {
+        // Build a Partial<JiraFilters> from only the keys the agent
+        // actually sent. `updateJiraTabFilters` merges and persists
+        // and triggers a debounced re-fetch — same code path JiraTab's
+        // dropdowns use, so we get UI parity for free. Skipping a key
+        // leaves that filter alone; matches the tool's "omitted =
+        // unchanged" contract.
+        const patch: Partial<JiraFilters> = {};
+        if ('project_key' in input) patch.projectKey = str('project_key') || null;
+        if ('search' in input) patch.search = str('search');
+        if ('status_name' in input) patch.statusName = str('status_name') || null;
+        if (Array.isArray(input.board_ids)) {
+          patch.boardIds = input.board_ids
+            .map((x) => Number(x))
+            .filter((x): x is number => Number.isFinite(x) && x > 0);
+        }
+        if (Array.isArray(input.sprint_ids)) {
+          patch.sprintIds = parseSprintScopes(input.sprint_ids);
+        }
+        view = 'jiraTab';
+        updateJiraTabFilters(patch);
+        return;
+      }
+      case 'mcp__app__open_sentry_tab': {
+        // SentryTab fields are flat on `inboxState` (not under one
+        // filter object), so we can't reuse a setSentryFilters-style
+        // patch. Mutate field-by-field — `scheduleSentryTabFilterRefresh`
+        // persists and re-runs the query the same way the dropdown
+        // change handlers do.
+        view = 'sentryTab';
+        if (Array.isArray(input.projects)) {
+          inboxState.sentryTabProjects = input.projects
+            .map((x) => String(x))
+            .filter((s) => s.length > 0);
+        }
+        if ('search' in input) inboxState.sentryTabSearch = str('search');
+        if ('status' in input) {
+          const s = str('status');
+          if (s) inboxState.sentryTabStatus = s as typeof inboxState.sentryTabStatus;
+        }
+        if ('level' in input) {
+          const l = str('level');
+          if (l) inboxState.sentryTabLevel = l as typeof inboxState.sentryTabLevel;
+        }
+        if ('environment' in input) {
+          const e = str('environment');
+          inboxState.sentryTabEnvironment = e ? e : null;
+        }
+        scheduleSentryTabFilterRefresh();
+        return;
+      }
+      case 'mcp__app__set_github_column': {
+        const inst = findInstanceByNameOrId('github', str('instance_name'), str('instance_id'));
+        if (!inst) return;
+        const patch: Partial<GithubFilters> = {};
+        if ('repo' in input) {
+          // Empty string = "clear filter" (= all repos).
+          const r = str('repo');
+          patch.repo = r ? r : null;
+        }
+        if ('mode' in input) {
+          const m = str('mode');
+          if (isGithubFilterMode(m)) patch.mode = m;
+        }
+        if ('search' in input) patch.search = str('search');
+        if ('custom_user' in input) patch.customUser = str('custom_user');
+        view = 'workbench';
+        updateGithubFilters(inst.id, patch);
+        void scrollInstanceIntoView(inst.id);
+        return;
+      }
+      case 'mcp__app__set_jira_column': {
+        const inst = findInstanceByNameOrId('jira', str('instance_name'), str('instance_id'));
+        if (!inst) return;
+        const patch: Partial<JiraFilters> = {};
+        if ('project_key' in input) {
+          const p = str('project_key');
+          patch.projectKey = p ? p : null;
+        }
+        if ('status_name' in input) {
+          const s = str('status_name');
+          patch.statusName = s ? s : null;
+        }
+        if ('search' in input) patch.search = str('search');
+        if (Array.isArray(input.board_ids)) {
+          patch.boardIds = input.board_ids
+            .map((x) => Number(x))
+            .filter((x): x is number => Number.isFinite(x) && x > 0);
+        }
+        if (Array.isArray(input.sprint_ids)) {
+          patch.sprintIds = parseSprintScopes(input.sprint_ids);
+        }
+        view = 'workbench';
+        updateJiraFilters(inst.id, patch);
+        void scrollInstanceIntoView(inst.id);
+        return;
+      }
+      case 'mcp__app__set_sentry_column': {
+        const inst = findInstanceByNameOrId('sentry', str('instance_name'), str('instance_id'));
+        if (!inst) return;
+        const patch: SentryFilterPatch = {};
+        if (Array.isArray(input.projects)) {
+          patch.projects = input.projects
+            .map((x) => String(x))
+            .filter((s) => s.length > 0);
+        }
+        if ('search' in input) patch.search = str('search');
+        if ('status' in input) {
+          const s = str('status');
+          if (isSentryStatus(s)) patch.status = s;
+        }
+        if ('level' in input) {
+          const l = str('level');
+          if (isSentryLevel(l)) patch.level = l;
+        }
+        if ('environment' in input) {
+          const e = str('environment');
+          patch.environment = e ? e : null;
+        }
+        view = 'workbench';
+        setSentryFilters(inst.id, patch);
+        void scrollInstanceIntoView(inst.id);
         return;
       }
       case 'mcp__app__set_editor_repo_path': {
@@ -3676,11 +3978,11 @@
 </div>
 
 <!-- Global focus overlays. Hoisted to page root so they appear in *any*
-     view — workbench, repositories, tasks, issues, etc. The earlier
-     per-view mounts only rendered when their owning component was on
-     screen, which broke the `mcp__app__open_*` navigation tools (PR
-     opened in the focus state but no overlay rendered until the user
-     manually flipped to Repositories). -->
+     view — workbench, github, jira, sentry, etc. The earlier per-view
+     mounts only rendered when their owning component was on screen,
+     which broke the `mcp__app__open_*` navigation tools (PR opened in
+     the focus state but no overlay rendered until the user manually
+     flipped to the GitHub tab). -->
 {#if inboxState.focusItem}
   <GithubFocusOverlay
     {now}
