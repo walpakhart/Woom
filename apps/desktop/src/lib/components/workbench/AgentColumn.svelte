@@ -940,7 +940,14 @@
             <div class="chat-msg chat-msg--{msg.role}" class:chat-msg--editing={editingMsg && editingMsg.sessionId === sess.id && editingMsg.index === idx}>
               <div class="chat-msg-head">
                 {#if msg.role === 'assistant'}
-                  <span class="chat-avatar chat-avatar--claude">{brandInitial}</span>
+                  {@const brandMeta = kind === 'claude' ? claudeMeta : cursorMeta}
+                  {#if brandMeta?.iconImg}
+                    <span class="chat-avatar chat-avatar--brand">
+                      <img src={brandMeta.iconImg} alt="" />
+                    </span>
+                  {:else}
+                    <span class="chat-avatar chat-avatar--claude">{brandInitial}</span>
+                  {/if}
                   <span class="chat-who">{brandLabel}</span>
                 {:else if msg.role === 'user'}
                   {#if githubStatus.kind === 'connected'}
@@ -1402,6 +1409,18 @@
     background: rgba(16, 185, 129, 0.14);
     color: var(--accent-bright);
     border-color: rgba(16, 185, 129, 0.3);
+  }
+  /* PNG/SVG brand mark variant — fills the circle with the actual logo
+     (Anthropic A for Claude, hex prism for Cursor) instead of a letter. */
+  .chat-avatar--brand {
+    padding: 0;
+    background: var(--bg-2);
+    overflow: hidden;
+  }
+  .chat-avatar--brand img {
+    width: 100%; height: 100%;
+    object-fit: cover;
+    display: block;
   }
   .chat-avatar--system {
     background: rgba(59, 130, 246, 0.12);

@@ -252,7 +252,28 @@ pub async fn ask(
         };
         return Err(CursorRunError::Failed(msg));
     }
+    // cursor-agent occasionally exits 0 yet writes nothing to stdout — typical
+    // auth failures (token expired, "Authentication required" — keychain was
+    // ignored, network error during auth refresh). Without surfacing the
+    // stderr text the chat just shows "(empty response)" and the user thinks
+    // the app silently swallowed their turn. Treat empty stdout + non-empty
+    // stderr as an error so they at least see what cursor-agent told us.
+    if final_text.trim().is_empty() && !stderr_text.is_empty() {
+        return Err(CursorRunError::Failed(format!(
+            "cursor-agent finished with no output. Diagnostic: {}",
+            truncate_str(&stderr_text, 600)
+        )));
+    }
     Ok((final_text, chat_id))
+}
+
+fn truncate_str(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let mut out: String = s.chars().take(max).collect();
+    out.push_str("…");
+    out
 }
 
 /// Headless one-off: feed the staged diff and return a one-line commit
@@ -568,12 +589,26 @@ fn home_dir() -> Option<PathBuf> {
     std::env::var("HOME").ok().map(PathBuf::from)
 }
 
-/// Read cursor-agent's session access token from the macOS login Keychain.
-/// node-keytar (used by cursor-agent) stores it as a generic password under
-/// service `cursor-access-token` / account `cursor-user`. We use the system
-/// `security` CLI so Forgehold.app's own (possibly restricted) keychain
-/// access path doesn't matter.
+/// Read cursor-agent's session access token. Tries (in order):
+///   1. Login Keychain — `cursor-access-token` / `cursor-user`. Older
+///      cursor-agent builds (node-keytar) wrote here.
+///   2. `~/.cursor/cli-config.json` `accessToken` field. Newer builds
+///      (post-Sept 2025) write to a config file instead of Keychain on
+///      first install.
+///   3. `~/.cursor/access-token` plain text. Some self-installed builds
+///      use this layout.
+/// Returns the first non-empty hit. We feed whatever we find via
+/// `CURSOR_AUTH_TOKEN` so the spawned cursor-agent doesn't have to make
+/// its own (possibly-failing) Keychain call from inside our unsigned app
+/// sandbox.
 fn read_cursor_access_token() -> Option<String> {
+    if let Some(t) = read_cursor_token_keychain() { return Some(t); }
+    if let Some(t) = read_cursor_token_config_json() { return Some(t); }
+    if let Some(t) = read_cursor_token_plain_file() { return Some(t); }
+    None
+}
+
+fn read_cursor_token_keychain() -> Option<String> {
     let out = std::process::Command::new("/usr/bin/security")
         .args([
             "find-generic-password",
@@ -590,6 +625,48 @@ fn read_cursor_access_token() -> Option<String> {
     }
     let tok = String::from_utf8_lossy(&out.stdout).trim().to_string();
     if tok.is_empty() { None } else { Some(tok) }
+}
+
+fn read_cursor_token_config_json() -> Option<String> {
+    let h = home_dir()?;
+    // Try common json layouts in order; first hit wins.
+    for name in ["cli-config.json", "config.json", "credentials.json", "auth.json"] {
+        let path = h.join(".cursor").join(name);
+        if let Ok(raw) = std::fs::read_to_string(&path) {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
+                for key in ["accessToken", "access_token", "token", "apiKey", "api_key"] {
+                    if let Some(t) = v.get(key).and_then(|x| x.as_str()) {
+                        let t = t.trim();
+                        if !t.is_empty() { return Some(t.to_string()); }
+                    }
+                }
+                // Some builds nest under {auth:{accessToken}} or {credentials:{token}}.
+                for outer in ["auth", "credentials", "session"] {
+                    if let Some(inner) = v.get(outer) {
+                        for key in ["accessToken", "access_token", "token"] {
+                            if let Some(t) = inner.get(key).and_then(|x| x.as_str()) {
+                                let t = t.trim();
+                                if !t.is_empty() { return Some(t.to_string()); }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+fn read_cursor_token_plain_file() -> Option<String> {
+    let h = home_dir()?;
+    for name in ["access-token", "access_token", "token"] {
+        let path = h.join(".cursor").join(name);
+        if let Ok(raw) = std::fs::read_to_string(&path) {
+            let t = raw.trim();
+            if !t.is_empty() { return Some(t.to_string()); }
+        }
+    }
+    None
 }
 
 /// PATH augmentation for spawned subprocesses — matches claude.rs.
