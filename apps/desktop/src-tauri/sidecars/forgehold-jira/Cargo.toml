@@ -16,3 +16,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
 urlencoding = "2"
+# Markdown → ADF for descriptions / comments / update payloads. We feed the
+# event stream through a tiny in-house translator (see md_to_adf.rs) — Jira's
+# ADF schema is small enough that a full mdast → adf library would be overkill.
+pulldown-cmark = { version = "0.13", default-features = false }

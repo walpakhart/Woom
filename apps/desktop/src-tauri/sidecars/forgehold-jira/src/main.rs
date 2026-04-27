@@ -18,6 +18,9 @@ use rmcp::{
 };
 use serde::Deserialize;
 
+mod md_to_adf;
+use md_to_adf::markdown_to_adf;
+
 const USER_AGENT: &str = concat!("forgehold-jira/", env!("CARGO_PKG_VERSION"));
 
 #[derive(Clone)]
@@ -135,6 +138,32 @@ struct ListAssignableUsersParams {
     /// Omit to list all assignable users (capped at 200).
     #[serde(default)]
     query: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct UpdateIssueParams {
+    /// Issue key, e.g. "DEVOPS-452".
+    key: String,
+    /// New summary (title). Omit / null to leave unchanged.
+    #[serde(default)]
+    summary: Option<String>,
+    /// New description in Markdown. Omit to leave unchanged. Pass empty
+    /// string to clear the field.
+    #[serde(default)]
+    description: Option<String>,
+    /// New assignee accountId. Omit to leave unchanged. Pass `"unassign"`
+    /// (literal string) to remove the assignee.
+    #[serde(default)]
+    assignee_account_id: Option<String>,
+    /// Sprint to move the issue into. Omit to leave unchanged. Pass 0 or
+    /// `null`-ish to remove from sprint (best-effort: Jira sometimes
+    /// requires moving to backlog explicitly).
+    #[serde(default)]
+    sprint_id: Option<u64>,
+    /// Replace the issue's labels with this list. Omit to leave labels
+    /// unchanged. Pass `[]` to clear.
+    #[serde(default)]
+    labels: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -257,7 +286,7 @@ impl Jira {
     }
 
     #[tool(
-        description = "Create a new Jira issue. Required: project_key + summary. Optional: issue_type (default Task), description (plain text — wrapped as one ADF paragraph), assignee_account_id (resolve via list_assignable_users), sprint_id (resolve via list_sprints — the issue is added to the sprint via a follow-up Agile API call after the create succeeds). Returns the new issue key + browse URL. Use this whenever the user asks to file/open/create a ticket."
+        description = "Create a new Jira issue. Required: project_key + summary. Optional: issue_type (default Task), description (Markdown — converted to ADF: headings, lists, code blocks, links, bold/italic/strike all preserved), assignee_account_id (resolve via list_assignable_users), sprint_id (resolve via list_sprints — the issue is added to the sprint via a follow-up Agile API call after the create succeeds). Returns the new issue key + browse URL. Use this whenever the user asks to file/open/create a ticket."
     )]
     async fn create_issue(
         &self,
@@ -285,6 +314,36 @@ impl Jira {
             Err(e) => Err(ErrorData::internal_error(e.to_string(), None)),
         }
     }
+
+    #[tool(
+        description = "Update an existing Jira issue. Pass `key` plus any subset of: summary, description (Markdown — replaces existing body, full ADF conversion), assignee_account_id (or the literal string \"unassign\" to clear), sprint_id (numeric — moves issue into that sprint), labels (full replace; pass [] to clear). Omitted fields are left unchanged. Use this when the user asks to fix the description, reassign, change a title, or move between sprints."
+    )]
+    async fn update_issue(
+        &self,
+        Parameters(UpdateIssueParams {
+            key,
+            summary,
+            description,
+            assignee_account_id,
+            sprint_id,
+            labels,
+        }): Parameters<UpdateIssueParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        match self
+            .do_update_issue(
+                &key,
+                summary.as_deref(),
+                description.as_deref(),
+                assignee_account_id.as_deref(),
+                sprint_id,
+                labels.as_deref(),
+            )
+            .await
+        {
+            Ok(text) => Ok(CallToolResult::success(vec![Content::text(text)])),
+            Err(e) => Err(ErrorData::internal_error(e.to_string(), None)),
+        }
+    }
 }
 
 #[tool_handler]
@@ -301,9 +360,11 @@ impl ServerHandler for Jira {
              - list_assignable_users(project_key, query?) — translate a human name (\"give it to Petya\", \"@Nikolay\") into the accountId that create_issue / set_assignee need. Filter by name/email substring.\n\
              - list_sprints(project_key, state?) — translate a sprint name (\"Sprint 160\", \"current sprint\") into the numeric id that create_issue's sprint_id parameter accepts. state defaults to active+future; pass `all` if the user references a closed one.\n\n\
              WRITE:\n\
-             - add_comment(key, body) — post a comment. Use for status updates / handoffs / documenting findings.\n\
+             - add_comment(key, body) — post a comment. Body is Markdown; full ADF conversion (headings, lists, code blocks, links, bold/italic).\n\
              - transition_issue(key, to, comment?) — move workflow state. Pass the human name (e.g. \"In Review\") or transition id.\n\
-             - create_issue(project_key, summary, issue_type?, description?, assignee_account_id?, sprint_id?) — file a new ticket. Default issue_type is Task. ALWAYS call list_projects → list_assignable_users + list_sprints up front when the user asks for a ticket with assignee/sprint, so you can pass real ids instead of bouncing back to the user. Returns the new issue key + URL.\n\n\
+             - create_issue(project_key, summary, issue_type?, description?, assignee_account_id?, sprint_id?) — file a new ticket. Default issue_type is Task. ALWAYS call list_projects → list_assignable_users + list_sprints up front when the user asks for a ticket with assignee/sprint, so you can pass real ids instead of bouncing back to the user. Returns the new issue key + URL.\n\
+             - update_issue(key, summary?, description?, assignee_account_id?, sprint_id?, labels?) — patch existing ticket fields. Pass only the keys you want to change. assignee_account_id=\"unassign\" clears the assignee. description is Markdown.\n\n\
+             All write payloads accept Markdown for rich-text fields (description, comment body) and translate to ADF: headings, bullet/ordered lists, fenced code blocks, links, bold/italic/strike all preserved.\n\n\
              Match GitHub semantics: read-only ops are auto-approved; mutation ops should be called only when the user explicitly asks for them."
                 .to_string(),
         );
@@ -363,25 +424,14 @@ impl Jira {
         if trimmed.is_empty() {
             anyhow::bail!("comment body is empty");
         }
-        // Wrap as a minimal ADF doc — Jira Cloud's POST comment endpoint
-        // expects ADF, not plain text. One paragraph with a single text node
-        // is enough for our case (the user's body is plain Markdown-flavored
-        // text; we don't try to render bold/links/etc. — Jira won't parse
-        // that anyway without proper ADF marks).
+        // Real markdown → ADF translation now (was plain-text wrapped before,
+        // which silently dropped headings / lists / code blocks even though
+        // the docstring promised "Atlassian Markdown" support).
         let url = format!(
             "https://{}/rest/api/3/issue/{}/comment",
             self.creds.workspace, key
         );
-        let payload = serde_json::json!({
-            "body": {
-                "type": "doc",
-                "version": 1,
-                "content": [{
-                    "type": "paragraph",
-                    "content": [{ "type": "text", "text": trimmed }]
-                }]
-            }
-        });
+        let payload = serde_json::json!({ "body": markdown_to_adf(trimmed) });
         let resp = self
             .http
             .post(&url)
@@ -473,18 +523,7 @@ impl Jira {
         });
         if let Some(c) = comment.map(str::trim).filter(|s| !s.is_empty()) {
             payload["update"] = serde_json::json!({
-                "comment": [{
-                    "add": {
-                        "body": {
-                            "type": "doc",
-                            "version": 1,
-                            "content": [{
-                                "type": "paragraph",
-                                "content": [{ "type": "text", "text": c }]
-                            }]
-                        }
-                    }
-                }]
+                "comment": [{ "add": { "body": markdown_to_adf(c) } }]
             });
         }
         let resp = self
@@ -538,22 +577,10 @@ impl Jira {
             "summary": summary,
         });
         if let Some(d) = description.map(str::trim).filter(|s| !s.is_empty()) {
-            let lines: Vec<&str> = d.split('\n').collect();
-            // Build ADF inline content — interleave text nodes with hardBreaks.
-            let mut content: Vec<serde_json::Value> = Vec::new();
-            for (i, line) in lines.iter().enumerate() {
-                if i > 0 {
-                    content.push(serde_json::json!({ "type": "hardBreak" }));
-                }
-                if !line.is_empty() {
-                    content.push(serde_json::json!({ "type": "text", "text": line }));
-                }
-            }
-            fields["description"] = serde_json::json!({
-                "type": "doc",
-                "version": 1,
-                "content": [{ "type": "paragraph", "content": content }]
-            });
+            // Full markdown → ADF: headings, lists, code blocks, links, etc.
+            // Was previously a single paragraph with hard-breaks, which
+            // turned `## Section` into literal `## Section` text in the UI.
+            fields["description"] = markdown_to_adf(d);
         }
         if let Some(acct) = assignee_account_id.map(str::trim).filter(|s| !s.is_empty()) {
             fields["assignee"] = serde_json::json!({ "accountId": acct });
@@ -622,6 +649,140 @@ impl Jira {
         }
 
         Ok(format!("Created {} — {}.{}", key, url, sprint_note))
+    }
+
+    async fn do_update_issue(
+        &self,
+        key: &str,
+        summary: Option<&str>,
+        description: Option<&str>,
+        assignee_account_id: Option<&str>,
+        sprint_id: Option<u64>,
+        labels: Option<&[String]>,
+    ) -> anyhow::Result<String> {
+        let key = key.trim();
+        if key.is_empty() {
+            anyhow::bail!("issue key is required");
+        }
+
+        let mut fields = serde_json::Map::new();
+        if let Some(s) = summary.map(str::trim) {
+            if s.is_empty() {
+                anyhow::bail!("summary cannot be empty (omit the field to leave unchanged)");
+            }
+            fields.insert("summary".into(), serde_json::Value::String(s.to_string()));
+        }
+        if let Some(d) = description {
+            // Empty string clears the field — render as an empty ADF doc.
+            // Non-empty: full markdown → ADF translation.
+            let adf = if d.trim().is_empty() {
+                serde_json::json!({
+                    "type": "doc",
+                    "version": 1,
+                    "content": [{ "type": "paragraph" }],
+                })
+            } else {
+                markdown_to_adf(d)
+            };
+            fields.insert("description".into(), adf);
+        }
+        if let Some(acct) = assignee_account_id {
+            let trimmed = acct.trim();
+            if trimmed.eq_ignore_ascii_case("unassign") || trimmed.is_empty() {
+                fields.insert("assignee".into(), serde_json::Value::Null);
+            } else {
+                fields.insert(
+                    "assignee".into(),
+                    serde_json::json!({ "accountId": trimmed }),
+                );
+            }
+        }
+        if let Some(ls) = labels {
+            // Jira's PUT replaces the labels array verbatim; pass through.
+            fields.insert(
+                "labels".into(),
+                serde_json::Value::Array(
+                    ls.iter()
+                        .map(|s| serde_json::Value::String(s.trim().to_string()))
+                        .filter(|v| match v {
+                            serde_json::Value::String(s) => !s.is_empty(),
+                            _ => false,
+                        })
+                        .collect(),
+                ),
+            );
+        }
+
+        let mut updated_parts: Vec<&str> = Vec::new();
+        if !fields.is_empty() {
+            let url = format!("https://{}/rest/api/3/issue/{}", self.creds.workspace, key);
+            let payload = serde_json::json!({ "fields": serde_json::Value::Object(fields.clone()) });
+            let resp = self
+                .http
+                .put(&url)
+                .basic_auth(&self.creds.email, Some(&self.creds.token))
+                .header("Accept", "application/json")
+                .header("Content-Type", "application/json")
+                .json(&payload)
+                .send()
+                .await?;
+            let status = resp.status();
+            if !status.is_success() {
+                let body = resp.text().await.unwrap_or_default();
+                anyhow::bail!("Jira {} updating {}: {}", status, key, truncate(&body, 600));
+            }
+            for k in fields.keys() {
+                updated_parts.push(k.as_str());
+            }
+        }
+
+        // Sprint moves go through the Agile API — separate from the field PUT.
+        let mut sprint_note = String::new();
+        if let Some(sid) = sprint_id {
+            let agile_url = format!(
+                "https://{}/rest/agile/1.0/sprint/{}/issue",
+                self.creds.workspace, sid
+            );
+            let payload = serde_json::json!({ "issues": [key] });
+            let resp = self
+                .http
+                .post(&agile_url)
+                .basic_auth(&self.creds.email, Some(&self.creds.token))
+                .header("Accept", "application/json")
+                .header("Content-Type", "application/json")
+                .json(&payload)
+                .send()
+                .await;
+            match resp {
+                Ok(r) if r.status().is_success() => {
+                    sprint_note = format!(" Moved to sprint {}.", sid);
+                }
+                Ok(r) => {
+                    let s = r.status();
+                    let b = r.text().await.unwrap_or_default();
+                    sprint_note = format!(
+                        " (sprint {} move failed: {} {})",
+                        sid,
+                        s,
+                        truncate(&b, 200)
+                    );
+                }
+                Err(e) => {
+                    sprint_note = format!(" (sprint {} move failed: {})", sid, e);
+                }
+            }
+        }
+
+        if updated_parts.is_empty() && sprint_note.is_empty() {
+            return Ok(format!("No changes specified for {}.", key));
+        }
+        let url = format!("https://{}/browse/{}", self.creds.workspace, key);
+        let touched = if updated_parts.is_empty() {
+            String::new()
+        } else {
+            format!(" Updated fields: {}.", updated_parts.join(", "))
+        };
+        Ok(format!("Updated {} — {}.{}{}", key, url, touched, sprint_note))
     }
 
     async fn fetch_assignable_users(
