@@ -153,10 +153,9 @@ describe('costForUsage', () => {
     expect(costForUsage(usage({}))).toBe(0);
   });
 
-  it('uses Sonnet rates for unknown / null models (lower bound, no scary numbers)', () => {
-    // 1M input @ $3 + 1M output @ $15 = $18
-    const u = usage({ inputTokens: 1_000_000, outputTokens: 1_000_000, model: null });
-    expect(costForUsage(u)).toBeCloseTo(18);
+  it('returns 0 for unknown / null models (Cursor turns; subscription credits, not per-token)', () => {
+    expect(costForUsage(usage({ inputTokens: 1_000_000, model: null }))).toBe(0);
+    expect(costForUsage(usage({ outputTokens: 1_000_000, model: 'composer-2' }))).toBe(0);
   });
 
   it('charges Opus rates correctly', () => {

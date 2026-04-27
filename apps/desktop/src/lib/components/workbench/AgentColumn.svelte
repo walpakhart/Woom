@@ -211,9 +211,19 @@
   // snapshot. ctxRatio uses the LAST turn's context size (because that
   // reflects how full the window actually is right now); cumCostUsd is
   // a running sum across every turn in this session.
+  //
+  // Effective model = claudeModel for claude sessions, cursorModel for
+  // cursor sessions. Used to size the context window (200k Sonnet, 1M
+  // Opus, 200k default for cursor's composer/gpt models which we don't
+  // have a precise mapping for).
+  const effectiveModel = $derived(
+    activeSess
+      ? activeSess.agentKind === 'claude' ? activeSess.claudeModel : activeSess.cursorModel
+      : null
+  );
   const ctxRatio = $derived(
-    activeSess && activeSess.agentKind === 'claude' && activeSess.lastContextSize > 0
-      ? Math.min(1, activeSess.lastContextSize / contextWindowFor(activeSess.claudeModel))
+    activeSess && activeSess.lastContextSize > 0
+      ? Math.min(1, activeSess.lastContextSize / contextWindowFor(effectiveModel))
       : 0
   );
   const cumCostUsd = $derived(
@@ -947,21 +957,27 @@
             />
           {/key}
         </div>
-        <button
-          class="wt-chip"
-          onclick={runCompact}
-          disabled={compactingId === activeSess.id || activeSess.sending || activeSess.messages.length < 4}
-          title={compactingId === activeSess.id
-            ? 'Compacting…'
-            : activeSess.messages.length < 4
-              ? 'Not enough conversation to compact yet (chat with Claude a bit first).'
-              : 'Compact: ask Claude to summarise the conversation, then start a fresh session seeded with that summary. Cuts context size and 5h-quota cost on long chats.'}
-        >
-          <svg class="i i-sm" viewBox="0 0 24 24"><path d="M4 14h6v6M4 10h6V4M14 10h6V4M14 14h6v6"/></svg>
-          <span>{compactingId === activeSess.id ? 'Compacting…' : 'Compact'}</span>
-        </button>
-        {#if activeSess.lastContextSize > 0}
-          {@const cw = contextWindowFor(activeSess.claudeModel)}
+      {/if}
+      <!-- Compact button: works for both claude and cursor. Backend
+           dispatches by `agentKind` to claude::compact_session or
+           cursor::compact_session — same fork-session pattern, same
+           CompactResult shape. Hidden until the chat has enough
+           history to be worth summarising. -->
+      <button
+        class="wt-chip"
+        onclick={runCompact}
+        disabled={compactingId === activeSess.id || activeSess.sending || activeSess.messages.length < 4}
+        title={compactingId === activeSess.id
+          ? 'Compacting…'
+          : activeSess.messages.length < 4
+            ? 'Not enough conversation to compact yet — chat a bit first.'
+            : `Compact: ask ${activeSess.agentKind === 'claude' ? 'Claude' : 'cursor-agent'} to summarise the conversation, then start a fresh session seeded with that summary. Cuts context size and quota cost on long chats.`}
+      >
+        <svg class="i i-sm" viewBox="0 0 24 24"><path d="M4 14h6v6M4 10h6V4M14 10h6V4M14 14h6v6"/></svg>
+        <span>{compactingId === activeSess.id ? 'Compacting…' : 'Compact'}</span>
+      </button>
+      {#if activeSess.lastContextSize > 0}
+          {@const cw = contextWindowFor(effectiveModel)}
           {@const pct = Math.round(ctxRatio * 100)}
           {@const ringClass = ctxRatio >= 0.85 ? 'ctx-ring-fill ctx-ring-fill--alert'
             : ctxRatio >= 0.6 ? 'ctx-ring-fill ctx-ring-fill--warn'
@@ -990,7 +1006,8 @@
             </svg>
             <span class="mono">{pct}% · {formatCostUsd(cumCostUsd)}</span>
           </div>
-        {/if}
+      {/if}
+      {#if activeSess.agentKind === 'claude'}
         {#if quotaState.usage && (planFiveHour !== null || planSevenDay !== null)}
           <!-- Subscription quota chip → click opens a popover with
                progress bars, mirroring `claude /usage` in the CLI.
@@ -1406,19 +1423,25 @@
                 {#if msg.role === 'assistant' && msg.usage}
                   {@const u = msg.usage}
                   {@const hit = cacheHitRate(u)}
+                  {@const cost = costForUsage(u)}
                   <!-- Per-turn token / cache-hit / cost badge. Pulled from
                        the last `usage` snapshot of the turn (final sub-step
                        — its cache_read covers the whole conversation, so
                        it's the most informative single number). Cost is
                        a "what API would charge" estimate; on a Pro/Max
-                       subscription it's directional, not literal. -->
+                       subscription it's directional, not literal. Cursor
+                       turns omit the cost span (subscription credits,
+                       not per-token billing — `costForUsage` returns 0
+                       when the model isn't in the rate table). -->
                   <div class="usage-badge mono" title={`${formatTokens(u.inputTokens)} input · ${formatTokens(u.cacheCreationTokens)} cache write · ${formatTokens(u.cacheReadTokens)} cache read · ${formatTokens(u.outputTokens)} output${u.model ? ' · ' + u.model : ''}`}>
                     <span>↑ {formatTokens(u.inputTokens + u.cacheCreationTokens + u.cacheReadTokens)}</span>
                     <span>↓ {formatTokens(u.outputTokens)}</span>
                     {#if hit !== null}
                       <span class="usage-badge-cache">{Math.round(hit * 100)}% cache</span>
                     {/if}
-                    <span>{formatCostUsd(costForUsage(u))}</span>
+                    {#if cost > 0}
+                      <span>{formatCostUsd(cost)}</span>
+                    {/if}
                   </div>
                 {/if}
               </div>

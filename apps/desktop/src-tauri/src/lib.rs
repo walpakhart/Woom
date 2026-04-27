@@ -178,7 +178,7 @@ pub fn run() {
             jira_delete_worklog,
             claude_status,
             claude_ask,
-            claude_compact_session,
+            agent_compact_session,
             claude_plan_usage,
             claude_stop,
             agent_generate_commit_message,
@@ -1012,19 +1012,27 @@ async fn claude_plan_usage() -> Result<claude_quota::PlanUsage, String> {
         .map_err(|e| e.to_string())
 }
 
+/// Fork-compact dispatcher: runs the kind-appropriate two-shot summary
+/// → seed flow (claude.rs or cursor.rs) and returns `{ new_uuid,
+/// summary }`. Frontend swaps the session's stored uuid to `new_uuid`
+/// (which equals `proposed_new_uuid` for claude; cursor mints its own
+/// and round-trips it). Replaces the older `claude_compact_session`
+/// command so cursor sessions can compact too.
 #[tauri::command]
-async fn claude_compact_session(
-    #[allow(non_snake_case)] oldClaudeUuid: String,
-    #[allow(non_snake_case)] newClaudeUuid: String,
+async fn agent_compact_session(
+    #[allow(non_snake_case)] agentKind: AgentKind,
+    #[allow(non_snake_case)] oldUuid: String,
+    #[allow(non_snake_case)] proposedNewUuid: String,
     cwd: Option<String>,
-    #[allow(non_snake_case)] claudeModel: Option<String>,
+    model: Option<String>,
 ) -> Result<claude::CompactResult, String> {
     let cwd_path = cwd.as_deref().map(std::path::Path::new);
-    claude::compact_session(
-        &oldClaudeUuid,
-        &newClaudeUuid,
+    agent::compact_session(
+        agentKind,
+        &oldUuid,
+        &proposedNewUuid,
         cwd_path,
-        claudeModel.as_deref(),
+        model.as_deref(),
     )
     .await
     .map_err(|e| e.to_string())

@@ -282,6 +282,131 @@ fn truncate_str(s: &str, max: usize) -> String {
     out
 }
 
+/// Two-shot fork-compact for cursor-agent. Mirrors `claude::compact_session`:
+/// ask the existing chat to summarise itself, then start a brand-new chat
+/// seeded with that summary as the first user turn. The new chat_id is
+/// minted by cursor-agent (it doesn't accept a `--session-id` flag the way
+/// claude does — `--resume` is the only id-control surface) and we read it
+/// back from the seed-call's `result.session_id`.
+///
+/// Both calls go through `--output-format json` so we don't fan out
+/// stream events to the frontend mid-compact (the chat would briefly show
+/// the summary text and ack as if they were normal turns otherwise).
+pub async fn compact_session(
+    old_chat_id: &str,
+    cwd: Option<&Path>,
+    model: Option<&str>,
+) -> Result<crate::claude::CompactResult, CursorRunError> {
+    let status = detect();
+    if !status.detected {
+        return Err(CursorRunError::NotInstalled);
+    }
+    if !status.ready {
+        return Err(CursorRunError::NotAuthed);
+    }
+    let bin = status.path.as_deref().unwrap_or("cursor-agent");
+
+    // Step 1: summary against the live chat. Same prompt shape as the
+    // claude-side compact so summaries read consistently regardless of
+    // which agent produced them.
+    let summary_prompt = "Output ONLY a concise (300-500 word) summary of this conversation \
+        so far — what was asked, what was decided, what was done, what's still in flight, \
+        and any code/config decisions worth remembering. No preamble, no sign-off, no \
+        meta-commentary about \"summarising\" — just the summary content.";
+    let (summary, _) =
+        run_cursor_oneshot(bin, summary_prompt, Some(old_chat_id), cwd, model).await?;
+    let summary = summary.trim();
+    if summary.is_empty() {
+        return Err(CursorRunError::Failed(
+            "cursor-agent returned an empty summary — old chat may not be resumable".into(),
+        ));
+    }
+
+    // Step 2: seed a fresh chat with the summary. cursor-agent mints the
+    // chat_id; we capture it from the result event so the frontend can
+    // swap it onto the session for the user's next normal turn (which
+    // will then `--resume <new>`).
+    let seed_prompt = format!(
+        "This is a continuation of an earlier cursor-agent session. \
+         The prior conversation has been compacted into the summary below. \
+         Reply with a brief one-sentence acknowledgement (e.g. \"Ready to continue.\") \
+         — the user's next message will pick up from here.\n\n\
+         === PRIOR-SESSION SUMMARY ===\n{summary}\n=== END SUMMARY ==="
+    );
+    let (_ack, new_chat_id) = run_cursor_oneshot(bin, &seed_prompt, None, cwd, model).await?;
+    if new_chat_id.is_empty() {
+        return Err(CursorRunError::Failed(
+            "cursor-agent didn't return a session_id for the seed turn".into(),
+        ));
+    }
+
+    Ok(crate::claude::CompactResult {
+        new_uuid: new_chat_id,
+        summary: summary.to_string(),
+    })
+}
+
+/// Run a single non-streaming `cursor-agent --print --output-format json`
+/// call and return `(result_text, session_id)`. `resume_chat_id`
+/// controls whether we attach to an existing chat (Some = `--resume
+/// <id>`) or let cursor-agent mint a fresh one (None = no flag).
+/// `--force --approve-mcps --trust` mirrors the headless flags that
+/// `ask()` uses for the streaming path.
+async fn run_cursor_oneshot(
+    bin: &str,
+    prompt: &str,
+    resume_chat_id: Option<&str>,
+    cwd: Option<&Path>,
+    model: Option<&str>,
+) -> Result<(String, String), CursorRunError> {
+    let mut cmd = tokio::process::Command::new(bin);
+    cmd.arg("--print")
+        .arg("--output-format")
+        .arg("json")
+        .arg("--force")
+        .arg("--approve-mcps")
+        .arg("--trust")
+        .arg("-p")
+        .arg(prompt);
+    if let Some(id) = resume_chat_id {
+        cmd.arg("--resume").arg(id);
+    }
+    if let Some(m) = model.map(str::trim).filter(|m| !m.is_empty()) {
+        cmd.arg("--model").arg(m);
+    }
+    if let Some(d) = cwd {
+        cmd.current_dir(d);
+    }
+    for (k, v) in extended_env() {
+        cmd.env(k, v);
+    }
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
+
+    let out = cmd.output().await.map_err(CursorRunError::Io)?;
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        return Err(CursorRunError::Failed(format!(
+            "cursor-agent exited {}{}",
+            out.status.code().unwrap_or(-1),
+            if stderr.is_empty() { String::new() } else { format!(" — {stderr}") }
+        )));
+    }
+    let parsed: serde_json::Value = serde_json::from_slice(&out.stdout)
+        .map_err(|e| CursorRunError::Failed(format!("cursor-agent json parse failed: {e}")))?;
+    let result = parsed
+        .get("result")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let session_id = parsed
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    Ok((result, session_id))
+}
+
 /// Headless one-off: feed the staged diff and return a one-line commit
 /// message. Minted on a throwaway cursor-agent chat so the agent's real
 /// conversation history stays clean. Same prompt shape as claude's version

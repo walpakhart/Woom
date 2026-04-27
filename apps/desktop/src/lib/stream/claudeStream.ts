@@ -114,6 +114,36 @@ export function handleStreamEvent(
   }
   if (!parsed || typeof parsed !== 'object') return;
   const msg = parsed as Record<string, unknown>;
+
+  // `result` events terminate every cursor-agent turn (and claude in
+  // its own way) and carry a single `usage` block on the top-level
+  // event. Cursor names the fields camelCase (`inputTokens`,
+  // `cacheReadTokens`, `cacheWriteTokens`, `outputTokens`); Claude's
+  // shape lives on `assistant` events with snake_case names handled
+  // below. We surface cursor-style usage here so the chip + badge
+  // light up for cursor sessions too.
+  if (msg.type === 'result' && msg.usage && typeof msg.usage === 'object') {
+    const u = msg.usage as Record<string, unknown>;
+    const inp = numField(u, 'inputTokens');
+    const cacheRead = numField(u, 'cacheReadTokens');
+    const cacheWrite = numField(u, 'cacheWriteTokens');
+    const out = numField(u, 'outputTokens');
+    merged.onUsage?.(sessionId, {
+      inputTokens: inp,
+      cacheCreationTokens: cacheWrite,
+      cacheReadTokens: cacheRead,
+      outputTokens: out,
+      contextSize: inp + cacheWrite + cacheRead,
+      // Cursor doesn't surface a stable model id on the result event
+      // (the system/init carries a display name like "Opus 4.7 1M
+      // High Thinking" but the cli-config modelId is what we'd want).
+      // Leave null — the per-message badge falls back gracefully and
+      // the context-ring chip uses the session's `cursorModel` field.
+      model: null
+    });
+    return;
+  }
+
   if (msg.type !== 'assistant') return;
   const inner = msg.message as {
     content?: Array<Record<string, unknown>>;
@@ -122,11 +152,10 @@ export function handleStreamEvent(
   } | undefined;
   if (!inner?.content || !Array.isArray(inner.content)) return;
 
-  // Pull the per-call usage block (input / cache_creation / cache_read /
-  // output) and surface it before walking the content blocks. Doing it
-  // up front means even tool-only sub-steps (no text blocks) still
-  // update the badge, and a model swap mid-session is reflected on the
-  // very next reply.
+  // Claude shape: usage on every assistant API call (multi-step turns
+  // produce several). Pull up front so even tool-only sub-steps
+  // refresh the badge, and a model swap mid-session is reflected on
+  // the very next reply.
   if (inner.usage && typeof inner.usage === 'object') {
     const u = inner.usage as Record<string, unknown>;
     const inp = numField(u, 'input_tokens');

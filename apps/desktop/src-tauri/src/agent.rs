@@ -134,3 +134,35 @@ pub async fn ask(
 pub fn stop(runners: &Runners, session_id: &str) -> bool {
     claude::stop(runners, session_id) || cursor::stop(runners, session_id)
 }
+
+/// Kind-dispatched fork-compact. Each adapter runs a two-shot summary →
+/// seed-new flow and reports back the new session UUID + summary text.
+/// CompactResult shape is shared (same `{ new_uuid, summary }`) so the
+/// Tauri command + frontend don't branch on agent kind.
+///
+/// `proposed_new_uuid` is honoured for Claude (its `--session-id <uuid>`
+/// flag accepts a fixed id) and ignored for Cursor (cursor-agent has
+/// no equivalent — it always mints its own chat_id, which we read back
+/// from the seed-call's result and return as `new_uuid`). Frontend
+/// rotates the session's stored uuid to whatever comes back, so both
+/// paths converge from the caller's perspective.
+pub async fn compact_session(
+    kind: AgentKind,
+    old_uuid: &str,
+    proposed_new_uuid: &str,
+    cwd: Option<&Path>,
+    model: Option<&str>,
+) -> Result<crate::claude::CompactResult, AgentError> {
+    match kind {
+        AgentKind::Claude => {
+            crate::claude::compact_session(old_uuid, proposed_new_uuid, cwd, model)
+                .await
+                .map_err(AgentError::from)
+        }
+        AgentKind::Cursor => {
+            crate::cursor::compact_session(old_uuid, cwd, model)
+                .await
+                .map_err(AgentError::from)
+        }
+    }
+}

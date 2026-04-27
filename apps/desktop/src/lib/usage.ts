@@ -5,10 +5,13 @@
 import type { ClaudeUsage } from '$lib/types';
 
 /** USD per million tokens, by model id. Keys are the exact `model` strings
- *  Claude CLI returns in stream-json (e.g. `claude-sonnet-4-6`). The
- *  unknown-model fallback uses Sonnet rates — that's the new-session
- *  default and the lower bound, so cost shown for unknown models won't
- *  scare the user with a number that's higher than reality. */
+ *  Claude CLI returns in stream-json (e.g. `claude-sonnet-4-6`).
+ *  Unknown / null models fall through to a 0-cost result rather than a
+ *  guessed-rate one — Cursor turns don't carry a model id on their
+ *  `result.usage` event and Cursor's pricing is subscription-credit
+ *  based anyway, so showing a fabricated USD figure for those would
+ *  mislead. The badge checks `cost > 0` to decide whether to render
+ *  the cost span at all. */
 const RATE_TABLE: Record<
   string,
   { input: number; output: number; cacheWrite: number; cacheRead: number }
@@ -17,8 +20,6 @@ const RATE_TABLE: Record<
   'claude-sonnet-4-6': { input: 3, output: 15, cacheWrite: 3.75, cacheRead: 0.3 },
   'claude-haiku-4-5-20251001': { input: 0.8, output: 4, cacheWrite: 1, cacheRead: 0.08 }
 };
-
-const DEFAULT_RATES = RATE_TABLE['claude-sonnet-4-6'];
 
 /** Effective context-window size in tokens. Sonnet 4.6 and Haiku 4.5 are
  *  200k by default; Opus 4.7 ships with a 1M-context variant (the model
@@ -35,10 +36,14 @@ export function contextWindowFor(model: string | null): number {
 /** USD cost of one usage snapshot. We treat each token bucket separately
  *  because cache_read is ~10x cheaper than fresh input — averaging would
  *  hide the win from prompt caching that Forge specifically optimises
- *  for. Returns 0 when every counter is 0 (avoids `$0.00` stamps on
- *  pre-usage messages). */
+ *  for. Returns 0 when:
+ *    - every counter is 0 (pre-usage messages)
+ *    - or the model id isn't in the rate table (unknown / null —
+ *      typical for Cursor turns; Cursor uses subscription credits,
+ *      not per-token billing, so a guessed USD number would mislead). */
 export function costForUsage(usage: ClaudeUsage): number {
-  const r = (usage.model && RATE_TABLE[usage.model]) || DEFAULT_RATES;
+  const r = usage.model ? RATE_TABLE[usage.model] : undefined;
+  if (!r) return 0;
   return (
     (usage.inputTokens * r.input
       + usage.cacheCreationTokens * r.cacheWrite
