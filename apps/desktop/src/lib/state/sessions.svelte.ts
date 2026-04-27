@@ -3,7 +3,7 @@
 // per-column scroll containers, and user-authored rules. Persists sessions
 // and rules to localStorage via $effect.
 
-import type { ClaudeAction, ClaudeMessage, ClaudeSession, Mention, MessageEvent } from '$lib/types';
+import type { ClaudeAction, ClaudeMessage, ClaudeSession, ClaudeUsage, Mention, MessageEvent } from '$lib/types';
 import { notify } from '$lib/state/toaster.svelte';
 import { isImagePath } from '$lib/format';
 
@@ -86,6 +86,20 @@ function loadStoredSessions(): {
       claudeResumable: Boolean((s as { claudeResumable?: boolean }).claudeResumable),
       agentKind: ((s as { agentKind?: 'claude' | 'cursor' }).agentKind ?? 'claude'),
       cursorModel: (s as { cursorModel?: string | null }).cursorModel ?? null,
+      // Backfill = null (honor whatever the CLI was using before this field
+      // existed). New sessions get `claude-sonnet-4-6` from createSession;
+      // here we leave old ones alone to avoid surprising the user with a
+      // silent model switch on resume.
+      claudeModel: (s as { claudeModel?: string | null }).claudeModel ?? null,
+      // Backfill = null → backend treats as 'all' (legacy behavior, every
+      // MCP tool wired). New sessions get 'coding' from createSession to
+      // shave ~10-15k tokens of MCP schemas off the startup cost.
+      claudeToolProfile:
+        (s as { claudeToolProfile?: ClaudeSession['claudeToolProfile'] }).claudeToolProfile ?? null,
+      // 0 until a turn lands and stamps a real value via
+      // updateLastAssistantUsage. Old persisted sessions don't have
+      // this field — chip just shows "—" until the next reply.
+      lastContextSize: (s as { lastContextSize?: number }).lastContextSize ?? 0,
       linkedToEditor: Boolean((s as { linkedToEditor?: boolean }).linkedToEditor),
       linkedToEditorInstanceId:
         (s as { linkedToEditorInstanceId?: string | null }).linkedToEditorInstanceId ?? null,
@@ -203,6 +217,9 @@ export function persistSessionsEffect() {
           claudeResumable: s.claudeResumable,
           agentKind: s.agentKind,
           cursorModel: s.cursorModel,
+          claudeModel: s.claudeModel,
+          claudeToolProfile: s.claudeToolProfile,
+          lastContextSize: s.lastContextSize,
           linkedToEditor: s.linkedToEditor,
           linkedToEditorInstanceId: s.linkedToEditorInstanceId,
           columnInstanceId: s.columnInstanceId,
@@ -295,6 +312,19 @@ export function newClaudeSession(
       claudeResumable: false,
       agentKind,
       cursorModel: null,
+      // Default new Claude sessions to Sonnet 4.6 — Opus 4.7 (the CLI
+      // default on Max plans) burns ~5x more 5h quota for output and
+      // most Forge tasks (UI edits, code reads, search, triage) don't
+      // need Opus reasoning. Users opt in to Opus per session via the
+      // model chip when they actually need it.
+      claudeModel: agentKind === 'claude' ? 'claude-sonnet-4-6' : null,
+      // Default new Claude sessions to 'coding' profile (App nav +
+      // Memory only). Saves ~10-15k tokens of MCP schemas on every
+      // turn vs wiring all 60+ tools. User flips to 'github' /
+      // 'jira' / 'sentry' / 'triage' / 'all' via the profile chip
+      // when needed.
+      claudeToolProfile: agentKind === 'claude' ? 'coding' : null,
+      lastContextSize: 0,
       linkedToEditor: !!opts.linkedToEditor,
       linkedToEditorInstanceId: opts.linkedToEditorInstanceId ?? null,
       columnInstanceId,
@@ -559,6 +589,28 @@ export function appendToLastTrace(sessionId: string, segment: string) {
       msgs[msgs.length - 1] = { ...last, trace: nextTrace, events };
     }
     return { ...s, messages: msgs };
+  });
+}
+
+/** Stamp a `usage` snapshot onto the last assistant message and update
+ *  the session's `lastContextSize`. Called from the stream handler on
+ *  every assistant event that carries a `usage` block; we keep
+ *  overwriting (vs accumulating) so the stamp on the message reflects
+ *  the FINAL sub-step of the turn — that step's `cache_read` tokens
+ *  cover the entire prior conversation, which is the most useful single
+ *  number to surface in the per-message badge. The session-level
+ *  `lastContextSize` is similarly the most-recent value, since it
+ *  represents "how much context did Claude actually look at on the
+ *  last hop" — drives the context-window % indicator. */
+export function updateLastAssistantUsage(sessionId: string, usage: ClaudeUsage) {
+  sessionsState.list = sessionsState.list.map((s) => {
+    if (s.id !== sessionId) return s;
+    const msgs = [...s.messages];
+    const last = msgs[msgs.length - 1];
+    if (last && last.role === 'assistant') {
+      msgs[msgs.length - 1] = { ...last, usage };
+    }
+    return { ...s, messages: msgs, lastContextSize: usage.contextSize };
   });
 }
 

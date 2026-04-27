@@ -78,6 +78,8 @@ pub async fn ask(
     resume: bool,
     rules: Option<&str>,
     cursor_model: Option<&str>,
+    claude_model: Option<&str>,
+    claude_tool_profile: Option<&str>,
     app_context: Option<&str>,
     image_paths: &[String],
 ) -> Result<AgentAskResult, AgentError> {
@@ -92,6 +94,8 @@ pub async fn ask(
                 agent_uuid,
                 resume,
                 rules,
+                claude_model,
+                claude_tool_profile,
                 app_context,
                 image_paths,
             )

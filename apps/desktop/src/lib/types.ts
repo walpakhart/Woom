@@ -84,10 +84,36 @@ export type MessageEvent =
       note?: string;
     };
 
+/** Token-accounting snapshot from a single Claude API call. Each
+ *  assistant turn produces one of these (sometimes several when the
+ *  agent makes tool-using sub-steps); we stamp the LAST one onto the
+ *  rendered message so the UI badge shows the full cost of the final
+ *  reply (its `cache_read` reflects the entire prior conversation, so
+ *  it's the most informative single number to surface). */
+export type ClaudeUsage = {
+  inputTokens: number;
+  cacheCreationTokens: number;
+  cacheReadTokens: number;
+  outputTokens: number;
+  /** Effective context size for this call: `input + cache_read +
+   *  cache_creation`. The total bytes the model saw on this hop —
+   *  drives the context-window % indicator. */
+  contextSize: number;
+  /** Model id reported by the CLI for this call. Used for $-cost
+   *  calculation (different rates per model) and to label the badge
+   *  if the user mid-session swapped models. */
+  model: string | null;
+};
+
 export type ClaudeMessage = {
   role: 'system' | 'user' | 'assistant';
   content: string;
   at: string;
+  /** Last `usage` snapshot stamped on this assistant turn. Used by the
+   *  per-message badge. Only set on assistant messages once the turn
+   *  has ended (we keep overwriting on each sub-step so the final
+   *  value reflects the real cost of the full turn). */
+  usage?: ClaudeUsage;
   /** Concatenated `thinking` content blocks the agent emitted before the
       final answer. Surfaced as a collapsed "Thinking ✓" pill in the UI
       that the user can expand to read. Only set on assistant messages
@@ -179,6 +205,37 @@ export type ClaudeSession = {
   claudeResumable: boolean;
   agentKind: 'claude' | 'cursor';
   cursorModel: string | null;
+  /** Model id passed to `claude --model`. Null = let the CLI pick (which on
+      a Pro/Max subscription means Opus 4.7 — the default that burns the
+      5h quota fastest). New sessions default to `claude-sonnet-4-6`; users
+      opt in to Opus per-session via the model chip. */
+  claudeModel: string | null;
+  /** Which subset of MCP tools to expose to Claude this session. Each MCP
+      tool schema costs ~150-300 tokens of system-prompt overhead, and we
+      ship 60+ tools across Jira/GitHub/Sentry/Memory/App. Most chats only
+      need a slice — restricting to a profile cuts startup token cost by
+      40-60% and reduces process count (sidecars are spawned only for the
+      servers in the profile).
+        - 'coding' (new-session default): App nav + Memory only.
+        - 'github' / 'jira' / 'sentry': single-source focus — that source
+           full-access plus Memory + App nav. Other sources skipped.
+        - 'triage': Read-only across all three sources (Jira + GitHub +
+           Sentry) + Memory + App nav. For "what's the state of X" chats
+           that don't edit anything.
+        - 'all' (legacy / null backfill): every tool wired, like before
+           profiles existed. */
+  claudeToolProfile:
+    | 'all'
+    | 'coding'
+    | 'github'
+    | 'jira'
+    | 'sentry'
+    | 'triage'
+    | null;
+  /** Effective context size at the end of the most recent turn (input +
+      cache_read + cache_creation from the last assistant API call).
+      Drives the context-window % indicator chip. 0 = no turn yet. */
+  lastContextSize: number;
   /** When true, the session's `cwd` tracks the Editor's open folder live —
       pick a new folder in the Editor and every linked chat follows. The
       link is broken the moment the user picks an explicit cwd on the

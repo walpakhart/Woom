@@ -25,6 +25,18 @@ export interface AgentRunRequest {
   rules: string | null;
   agentKind: 'claude' | 'cursor';
   cursorModel: string | null;
+  /** Model id forwarded to `claude --model`. Null = no flag passed (CLI
+   *  picks its default). */
+  claudeModel: string | null;
+  /** Which subset of MCP tools to expose. Null = backend default ('all'). */
+  claudeToolProfile:
+    | 'all'
+    | 'coding'
+    | 'github'
+    | 'jira'
+    | 'sentry'
+    | 'triage'
+    | null;
   /** Per-turn UI context: a description of the active workbench, sibling
    *  instances + names + cwds, and which instance the calling session is
    *  bound to. Lets the agent address specific columns by name (e.g.
@@ -98,6 +110,8 @@ export async function runAgentRequest(req: AgentRunRequest): Promise<AgentRunRes
       rules: req.rules,
       agentKind: req.agentKind,
       cursorModel: req.cursorModel,
+      claudeModel: req.claudeModel,
+      claudeToolProfile: req.claudeToolProfile,
       appContext: req.appContext,
       imagePaths: req.imagePaths ?? []
     });

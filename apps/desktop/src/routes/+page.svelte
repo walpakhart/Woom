@@ -1476,6 +1476,47 @@
     thinkingStartedAt = null;
   }
 
+  /** Fork-compact a Claude session: ask the live CLI session to summarise
+   *  itself, mint a fresh session UUID, seed it with the summary, swap
+   *  the session over so the next turn resumes the new compacted thread.
+   *  See `claude::compact_session` (Rust) for the two-shot details. We
+   *  surface the summary in chat as a system message so the user can
+   *  audit what the new session was seeded with. */
+  async function runCompactSession(sessionId: string): Promise<void> {
+    const s = sessionsState.list.find((x) => x.id === sessionId);
+    if (!s) return;
+    const newUuid = genUuid();
+    const cwd = s.worktreePath || s.cwd
+      || (s.linkedToEditor && s.linkedToEditorInstanceId
+        ? sessionsState.editorInstanceState[s.linkedToEditorInstanceId]?.repoPath ?? null
+        : null)
+      || editorRepoPath
+      || null;
+    const result = await invoke<{ new_uuid: string; summary: string }>(
+      'claude_compact_session',
+      {
+        oldClaudeUuid: s.claudeUuid,
+        newClaudeUuid: newUuid,
+        cwd,
+        claudeModel: s.claudeModel
+      }
+    );
+    // Swap the session over to the new uuid + reset context-window
+    // counter (the new session starts with just the summary, so its
+    // first turn's context size will be small).
+    updateSession(sessionId, {
+      claudeUuid: result.new_uuid,
+      claudeResumable: true,
+      lastContextSize: 0
+    });
+    appendSessionMessage(sessionId, {
+      role: 'system',
+      content: `Compacted earlier conversation. New session seeded with this summary:\n\n${result.summary}`,
+      at: new Date().toISOString()
+    });
+    void scrollChatBottom();
+  }
+
   async function sendClaudeMessage() {
     const s = activeSession;
     if (!s || s.sending) return;
@@ -1568,6 +1609,8 @@
     const rules = sessionsState.userRules.trim();
     const agentKind = sess?.agentKind ?? 'claude';
     const cursorModel = agentKind === 'cursor' ? (sess?.cursorModel ?? null) : null;
+    const claudeModel = agentKind === 'claude' ? (sess?.claudeModel ?? null) : null;
+    const claudeToolProfile = agentKind === 'claude' ? (sess?.claudeToolProfile ?? null) : null;
     const appContext = buildAgentAppContext(id);
     // Image vision blocks are a Claude-only path (cursor-agent has no
     // equivalent input-format flag). For Cursor we already wove the
@@ -1584,6 +1627,8 @@
         rules: rules || null,
         agentKind,
         cursorModel,
+        claudeModel,
+        claudeToolProfile,
         appContext,
         imagePaths,
         onAssistantDelta: appendAssistantDelta,
@@ -2732,6 +2777,8 @@
     const rules = sessionsState.userRules.trim();
     const agentKind = sess.agentKind;
     const cursorModel = agentKind === 'cursor' ? sess.cursorModel : null;
+    const claudeModel = agentKind === 'claude' ? sess.claudeModel : null;
+    const claudeToolProfile = agentKind === 'claude' ? sess.claudeToolProfile : null;
     const appContext = buildAgentAppContext(sessionId);
 
     try {
@@ -2744,6 +2791,8 @@
         rules: rules || null,
         agentKind,
         cursorModel,
+        claudeModel,
+        claudeToolProfile,
         appContext,
         onAssistantDelta: appendAssistantDelta,
         onAppNavigation: handleAppNavigation
@@ -3821,6 +3870,9 @@
                 onApplyWorktree={applyWorktree}
                 onRemoveWorktree={removeWorktree}
                 onUpdateSessionCursorModel={(id, model) => updateSession(id, { cursorModel: model })}
+                onUpdateSessionClaudeModel={(id, model) => updateSession(id, { claudeModel: model })}
+                onUpdateSessionClaudeToolProfile={(id, profile) => updateSession(id, { claudeToolProfile: profile })}
+                onCompactSession={runCompactSession}
                 onDeleteClaudeSession={deleteClaudeSession}
                 onNewClaudeSession={newClaudeSession}
                 onStartEditMessage={startEditMessage}
@@ -3871,6 +3923,9 @@
                 onApplyWorktree={applyWorktree}
                 onRemoveWorktree={removeWorktree}
                 onUpdateSessionCursorModel={(id, model) => updateSession(id, { cursorModel: model })}
+                onUpdateSessionClaudeModel={(id, model) => updateSession(id, { claudeModel: model })}
+                onUpdateSessionClaudeToolProfile={(id, profile) => updateSession(id, { claudeToolProfile: profile })}
+                onCompactSession={runCompactSession}
                 onDeleteClaudeSession={deleteClaudeSession}
                 onNewClaudeSession={newClaudeSession}
                 onStartEditMessage={startEditMessage}

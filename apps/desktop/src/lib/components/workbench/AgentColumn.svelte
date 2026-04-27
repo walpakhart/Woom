@@ -6,6 +6,14 @@
   import ClaudeActionCard from '$lib/components/workbench/ClaudeActionCard.svelte';
   import EditDiffCard from '$lib/components/workbench/EditDiffCard.svelte';
   import Dropdown, { type DropdownOption } from '$lib/components/ui/Dropdown.svelte';
+  import {
+    cacheHitRate,
+    contextPct,
+    contextWindowFor,
+    costForUsage,
+    formatCostUsd,
+    formatTokens
+  } from '$lib/usage';
   import { invoke, convertFileSrc } from '@tauri-apps/api/core';
   import { open as openDialog } from '@tauri-apps/plugin-dialog';
   import { inboxState } from '$lib/state/inbox.svelte';
@@ -72,6 +80,17 @@
     onApplyWorktree: () => void;
     onRemoveWorktree: () => void;
     onUpdateSessionCursorModel: (sessionId: string, model: string | null) => void;
+    onUpdateSessionClaudeModel: (sessionId: string, model: string | null) => void;
+    onUpdateSessionClaudeToolProfile: (
+      sessionId: string,
+      profile: 'all' | 'coding' | 'github' | 'jira' | 'sentry' | 'triage' | null
+    ) => void;
+    /** Fork-compact: ask the live CLI session to summarise itself, mint
+     *  a fresh session UUID, seed it with the summary, swap the
+     *  session's UUID over. Resolves when the new session is ready
+     *  for the user's next normal turn. Errors bubble up so the
+     *  caller can toast. */
+    onCompactSession: (sessionId: string) => Promise<void>;
     onDeleteClaudeSession: (id: string) => void;
     onNewClaudeSession: (opts: { agentKind: Kind; columnInstanceId: string }) => void;
     onStartEditMessage: (sessionId: string, index: number, content: string) => void;
@@ -128,6 +147,9 @@
     onApplyWorktree,
     onRemoveWorktree,
     onUpdateSessionCursorModel,
+    onUpdateSessionClaudeModel,
+    onUpdateSessionClaudeToolProfile,
+    onCompactSession,
     onDeleteClaudeSession,
     onNewClaudeSession,
     onStartEditMessage,
@@ -157,6 +179,50 @@
   const kindSessions = $derived(sessionsForInstance(instanceId, kind, isFirstOfKind));
   const activeSess = $derived(activeSessionInInstance(instanceId, kind, isFirstOfKind));
   const dragOver = $derived(dragOverInstanceId === instanceId);
+
+  // Per-session compacting flag (one fork-compact in flight at a time).
+  // Local because the operation finishes in <30s and component scope
+  // is enough; persisting across reloads or scoping to the global
+  // session store would only complicate the cancel/abort story.
+  let compactingId: string | null = $state(null);
+
+  async function runCompact() {
+    const s = activeSess;
+    if (!s || compactingId === s.id) return;
+    if (s.messages.length < 4) {
+      // Nothing meaningful to compact yet — skip silently.
+      return;
+    }
+    compactingId = s.id;
+    try {
+      await onCompactSession(s.id);
+    } catch (e) {
+      // Parent already toasted (it has access to the toast store).
+      // Still log so the dev console keeps a record.
+      console.warn('[compact] failed:', e);
+    } finally {
+      if (compactingId === s.id) compactingId = null;
+    }
+  }
+
+  // Context-ring + cumulative-cost summaries for the chip in the column
+  // header. Both update reactively whenever a turn lands a new usage
+  // snapshot. ctxRatio uses the LAST turn's context size (because that
+  // reflects how full the window actually is right now); cumCostUsd is
+  // a running sum across every turn in this session.
+  const ctxRatio = $derived(
+    activeSess && activeSess.agentKind === 'claude' && activeSess.lastContextSize > 0
+      ? Math.min(1, activeSess.lastContextSize / contextWindowFor(activeSess.claudeModel))
+      : 0
+  );
+  const cumCostUsd = $derived(
+    activeSess
+      ? activeSess.messages.reduce(
+          (sum, m) => (m.usage ? sum + costForUsage(m.usage) : sum),
+          0
+        )
+      : 0
+  );
 
   // Per-message expansion of the "Thinking" pill. Keyed by `${sessId}:${idx}`
   // so two sessions in the same column don't share state. Default = collapsed
@@ -227,6 +293,31 @@
     { value: 'claude-opus-4-7-thinking-high', label: 'Opus 4.7 Thinking High' },
     { value: 'gpt-5.3-codex-high', label: 'Codex 5.3 High' },
     { value: 'gpt-5.4-high', label: 'GPT-5.4 High' }
+  ];
+
+  // Claude model options. Empty = no `--model` flag → CLI picks (Opus 4.7
+  // on Max plans). Sonnet 4.6 is the per-session default for new chats
+  // (see createSession in sessions.svelte.ts).
+  const claudeModelOptions: DropdownOption<string>[] = [
+    { value: 'claude-sonnet-4-6', label: 'Sonnet 4.6' },
+    { value: 'claude-opus-4-7', label: 'Opus 4.7' },
+    { value: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5' },
+    { value: '', label: 'auto (CLI default)' }
+  ];
+
+  // Tool-profile options. 'coding' = the new-session default — App nav +
+  // Memory only, no Jira/GitHub/Sentry. Single-source profiles (github /
+  // jira / sentry) re-enable that source full-access. 'triage' is the
+  // read-only cross-tool variant. 'all' is the legacy "every tool wired"
+  // behavior. See ToolProfile in claude.rs for the exact tool list per
+  // profile.
+  const claudeToolProfileOptions: DropdownOption<string>[] = [
+    { value: 'coding', label: 'Coding' },
+    { value: 'github', label: 'GitHub' },
+    { value: 'jira', label: 'Jira' },
+    { value: 'sentry', label: 'Sentry' },
+    { value: 'triage', label: 'Triage (read-only)' },
+    { value: 'all', label: 'All tools' }
   ];
 
   async function pickFiles() {
@@ -796,6 +887,81 @@
           {/key}
         </div>
       {/if}
+      {#if activeSess.agentKind === 'claude'}
+        <div class="model-chip" title="Claude model — forwarded as `claude --model`. Default Sonnet 4.6 (~5x cheaper output than Opus on Max plans).">
+          <svg class="i i-sm" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1"/></svg>
+          {#key activeSess.id}
+            <Dropdown
+              value={activeSess.claudeModel ?? ''}
+              options={claudeModelOptions}
+              onChange={(v) => onUpdateSessionClaudeModel(activeSess.id, v || null)}
+              ariaLabel="Claude model"
+              variant="ghost"
+              compact
+            />
+          {/key}
+        </div>
+        <div class="model-chip" title="Tool profile — selects which MCP tool group is wired. Coding (default) skips GitHub/Jira/Sentry to save ~10-15k tokens of MCP schemas per turn.">
+          <svg class="i i-sm" viewBox="0 0 24 24" aria-hidden="true"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4l-6.6 6.6a1 1 0 0 0 1.4 1.4l6.6-6.6a4 4 0 0 0 5.4-5.4l-2.7 2.7-2-2 2.7-2.7z"/></svg>
+          {#key activeSess.id}
+            <Dropdown
+              value={activeSess.claudeToolProfile ?? 'all'}
+              options={claudeToolProfileOptions}
+              onChange={(v) => onUpdateSessionClaudeToolProfile(
+                activeSess.id,
+                v as 'all' | 'coding' | 'github' | 'jira' | 'sentry' | 'triage'
+              )}
+              ariaLabel="Claude tool profile"
+              variant="ghost"
+              compact
+            />
+          {/key}
+        </div>
+        <button
+          class="wt-chip"
+          onclick={runCompact}
+          disabled={compactingId === activeSess.id || activeSess.sending || activeSess.messages.length < 4}
+          title={compactingId === activeSess.id
+            ? 'Compacting…'
+            : activeSess.messages.length < 4
+              ? 'Not enough conversation to compact yet (chat with Claude a bit first).'
+              : 'Compact: ask Claude to summarise the conversation, then start a fresh session seeded with that summary. Cuts context size and 5h-quota cost on long chats.'}
+        >
+          <svg class="i i-sm" viewBox="0 0 24 24"><path d="M4 14h6v6M4 10h6V4M14 10h6V4M14 14h6v6"/></svg>
+          <span>{compactingId === activeSess.id ? 'Compacting…' : 'Compact'}</span>
+        </button>
+        {#if activeSess.lastContextSize > 0}
+          {@const cw = contextWindowFor(activeSess.claudeModel)}
+          {@const pct = Math.round(ctxRatio * 100)}
+          {@const ringClass = ctxRatio >= 0.85 ? 'ctx-ring-fill ctx-ring-fill--alert'
+            : ctxRatio >= 0.6 ? 'ctx-ring-fill ctx-ring-fill--warn'
+            : 'ctx-ring-fill'}
+          <!-- Context-window ring + session cost. Ring shows the LAST
+               turn's context size as a fraction of the model's window
+               (200k Sonnet/Haiku, 1M Opus). Number to its right is
+               the cumulative API-rate-card cost across every turn in
+               this session — directional on a Pro/Max subscription
+               (you're not actually billed per token), literal if the
+               user has set ANTHROPIC_API_KEY. -->
+          <div
+            class="ctx-ring"
+            title={`Context: ${formatTokens(activeSess.lastContextSize)} / ${formatTokens(cw)} (${pct}%) · session cost ≈ ${formatCostUsd(cumCostUsd)} (API-rate equivalent; subscription users aren't billed per token)`}
+          >
+            <svg width="18" height="18" viewBox="0 0 20 20" aria-hidden="true">
+              <circle class="ctx-ring-track" cx="10" cy="10" r="8" fill="none" stroke-width="2"/>
+              <circle
+                class={ringClass}
+                cx="10" cy="10" r="8" fill="none" stroke-width="2"
+                stroke-dasharray={`${(ctxRatio * 50.265).toFixed(2)} 50.265`}
+                stroke-dashoffset="0"
+                transform="rotate(-90 10 10)"
+                stroke-linecap="round"
+              />
+            </svg>
+            <span class="mono">{pct}% · {formatCostUsd(cumCostUsd)}</span>
+          </div>
+        {/if}
+      {/if}
     </div>
     {#if sessionsState.activeByInstance[instanceId] === activeSess.id && activeRepoInfo && !activeRepoInfo.missing}
       <div class="repo-info-bar" class:is-git={activeRepoInfo.is_git} class:not-git={!activeRepoInfo.is_git}>
@@ -1102,6 +1268,24 @@
                     {/if}
                     <Markdown source={msg.content} onOpenFile={onOpenMentionPath} />
                   {/if}
+                {/if}
+                {#if msg.role === 'assistant' && msg.usage}
+                  {@const u = msg.usage}
+                  {@const hit = cacheHitRate(u)}
+                  <!-- Per-turn token / cache-hit / cost badge. Pulled from
+                       the last `usage` snapshot of the turn (final sub-step
+                       — its cache_read covers the whole conversation, so
+                       it's the most informative single number). Cost is
+                       a "what API would charge" estimate; on a Pro/Max
+                       subscription it's directional, not literal. -->
+                  <div class="usage-badge mono" title={`${formatTokens(u.inputTokens)} input · ${formatTokens(u.cacheCreationTokens)} cache write · ${formatTokens(u.cacheReadTokens)} cache read · ${formatTokens(u.outputTokens)} output${u.model ? ' · ' + u.model : ''}`}>
+                    <span>↑ {formatTokens(u.inputTokens + u.cacheCreationTokens + u.cacheReadTokens)}</span>
+                    <span>↓ {formatTokens(u.outputTokens)}</span>
+                    {#if hit !== null}
+                      <span class="usage-badge-cache">{Math.round(hit * 100)}% cache</span>
+                    {/if}
+                    <span>{formatCostUsd(costForUsage(u))}</span>
+                  </div>
                 {/if}
               </div>
             </div>
@@ -1802,6 +1986,34 @@
     color: var(--text-2);
     flex-shrink: 0;
   }
+  .usage-badge {
+    display: inline-flex; align-items: center; gap: 8px;
+    margin-top: 6px;
+    padding: 3px 8px;
+    border-radius: 5px;
+    background: var(--bg-1);
+    border: 1px solid var(--border-neutral);
+    color: var(--text-mute);
+    font-size: 10.5px;
+    line-height: 1;
+    width: fit-content;
+  }
+  .usage-badge-cache { color: var(--text-2); }
+  .ctx-ring {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 3px 8px 3px 4px;
+    border: 1px solid var(--border-neutral-hi);
+    border-radius: 7px;
+    background: var(--bg-0);
+    color: var(--text-2);
+    font-size: 11px;
+    flex-shrink: 0;
+  }
+  .ctx-ring svg { display: block; }
+  .ctx-ring-track { stroke: var(--border-neutral); }
+  .ctx-ring-fill { stroke: var(--text-2); transition: stroke-dasharray 0.2s ease; }
+  .ctx-ring-fill--warn { stroke: #d18a4a; }
+  .ctx-ring-fill--alert { stroke: #c75a4a; }
   .model-chip:hover { border-color: var(--border-hi); color: var(--text-1); }
   .model-chip:focus-within { border-color: var(--border-hi2); }
   .model-select { border: none; padding: 4px 20px 4px 0; background-color: transparent; }

@@ -23,9 +23,11 @@ import {
   appendEditEvent,
   updateEditEvent,
   addAction,
+  updateLastAssistantUsage,
   genId
 } from '$lib/state/sessions.svelte';
 import { formatToolUse } from '$lib/format';
+import type { ClaudeUsage } from '$lib/types';
 
 export interface ClaudeStreamHandlers {
   /** Called with raw text deltas for the assistant turn. Implementations
@@ -55,6 +57,13 @@ export interface ClaudeStreamHandlers {
     name: string,
     input: Record<string, unknown>
   ) => void;
+  /** Called once per assistant API call with the `usage` block from
+   *  stream-json. Multi-step turns produce several of these (one per
+   *  sub-step); the default handler keeps overwriting so the latest
+   *  sub-step wins — that sub-step's `cache_read` tokens reflect the
+   *  full prior conversation, which is the cheapest informative
+   *  single-number summary for the per-message badge. Optional. */
+  onUsage?: (sessionId: string, usage: ClaudeUsage) => void;
 }
 
 /** Default handler: write to the sessions store. UIs that want to also
@@ -68,6 +77,9 @@ export const defaultStreamHandlers: ClaudeStreamHandlers = {
   },
   onTraceDelta(sessionId, segment) {
     appendToLastTrace(sessionId, segment);
+  },
+  onUsage(sessionId, usage) {
+    updateLastAssistantUsage(sessionId, usage);
   }
 };
 
@@ -97,13 +109,39 @@ export function handleStreamEvent(
     if (handlers.onThinkingDelta) overrides.onThinkingDelta = handlers.onThinkingDelta;
     if (handlers.onTraceDelta) overrides.onTraceDelta = handlers.onTraceDelta;
     if (handlers.onAppNavigation) overrides.onAppNavigation = handlers.onAppNavigation;
+    if (handlers.onUsage) overrides.onUsage = handlers.onUsage;
     merged = { ...defaultStreamHandlers, ...overrides };
   }
   if (!parsed || typeof parsed !== 'object') return;
   const msg = parsed as Record<string, unknown>;
   if (msg.type !== 'assistant') return;
-  const inner = msg.message as { content?: Array<Record<string, unknown>> } | undefined;
+  const inner = msg.message as {
+    content?: Array<Record<string, unknown>>;
+    usage?: Record<string, unknown>;
+    model?: string;
+  } | undefined;
   if (!inner?.content || !Array.isArray(inner.content)) return;
+
+  // Pull the per-call usage block (input / cache_creation / cache_read /
+  // output) and surface it before walking the content blocks. Doing it
+  // up front means even tool-only sub-steps (no text blocks) still
+  // update the badge, and a model swap mid-session is reflected on the
+  // very next reply.
+  if (inner.usage && typeof inner.usage === 'object') {
+    const u = inner.usage as Record<string, unknown>;
+    const inp = numField(u, 'input_tokens');
+    const cacheCreate = numField(u, 'cache_creation_input_tokens');
+    const cacheRead = numField(u, 'cache_read_input_tokens');
+    const out = numField(u, 'output_tokens');
+    merged.onUsage?.(sessionId, {
+      inputTokens: inp,
+      cacheCreationTokens: cacheCreate,
+      cacheReadTokens: cacheRead,
+      outputTokens: out,
+      contextSize: inp + cacheCreate + cacheRead,
+      model: typeof inner.model === 'string' ? inner.model : null
+    });
+  }
 
   for (const block of inner.content) {
     if (block.type === 'text' && typeof block.text === 'string') {
@@ -288,6 +326,15 @@ export function handleStreamEvent(
       }
     }
   }
+}
+
+/** Coerce a possibly-missing JSON number field to a finite integer.
+ *  Stream-json usage blocks usually have all four token counters but
+ *  occasionally drop fields when the value would be 0 — return 0 in
+ *  that case so the math downstream doesn't NaN. */
+function numField(obj: Record<string, unknown>, key: string): number {
+  const v = obj[key];
+  return typeof v === 'number' && Number.isFinite(v) ? v : 0;
 }
 
 /** Resolve the pre-agent contents of a file the agent just `Write`'d, by

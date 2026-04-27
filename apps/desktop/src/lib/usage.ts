@@ -1,0 +1,91 @@
+// Token / cost / context-window helpers for the Claude usage UI. Pure
+// functions only — the chat column and header chip both need the same
+// math so we centralise it here.
+
+import type { ClaudeUsage } from '$lib/types';
+
+/** USD per million tokens, by model id. Keys are the exact `model` strings
+ *  Claude CLI returns in stream-json (e.g. `claude-sonnet-4-6`). The
+ *  unknown-model fallback uses Sonnet rates — that's the new-session
+ *  default and the lower bound, so cost shown for unknown models won't
+ *  scare the user with a number that's higher than reality. */
+const RATE_TABLE: Record<
+  string,
+  { input: number; output: number; cacheWrite: number; cacheRead: number }
+> = {
+  'claude-opus-4-7': { input: 15, output: 75, cacheWrite: 18.75, cacheRead: 1.5 },
+  'claude-sonnet-4-6': { input: 3, output: 15, cacheWrite: 3.75, cacheRead: 0.3 },
+  'claude-haiku-4-5-20251001': { input: 0.8, output: 4, cacheWrite: 1, cacheRead: 0.08 }
+};
+
+const DEFAULT_RATES = RATE_TABLE['claude-sonnet-4-6'];
+
+/** Effective context-window size in tokens. Sonnet 4.6 and Haiku 4.5 are
+ *  200k by default; Opus 4.7 ships with a 1M-context variant (the model
+ *  id Forge passes is bare `claude-opus-4-7`, but the CLI auto-uses 1M
+ *  when the user is on the eligible plan, hence the higher cap here so
+ *  the % indicator doesn't flash red mid-conversation when the agent's
+ *  still well within budget). */
+export function contextWindowFor(model: string | null): number {
+  if (!model) return 200_000;
+  if (model.startsWith('claude-opus-4-7')) return 1_000_000;
+  return 200_000;
+}
+
+/** USD cost of one usage snapshot. We treat each token bucket separately
+ *  because cache_read is ~10x cheaper than fresh input — averaging would
+ *  hide the win from prompt caching that Forge specifically optimises
+ *  for. Returns 0 when every counter is 0 (avoids `$0.00` stamps on
+ *  pre-usage messages). */
+export function costForUsage(usage: ClaudeUsage): number {
+  const r = (usage.model && RATE_TABLE[usage.model]) || DEFAULT_RATES;
+  return (
+    (usage.inputTokens * r.input
+      + usage.cacheCreationTokens * r.cacheWrite
+      + usage.cacheReadTokens * r.cacheRead
+      + usage.outputTokens * r.output) / 1_000_000
+  );
+}
+
+/** "1.2k", "350k", "5.4M" — short token-count formatter for the badge.
+ *  Designed to fit in a chip without wrapping; raw numbers like 348282
+ *  blow up the layout. */
+export function formatTokens(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return '0';
+  if (n < 1000) return String(n);
+  if (n < 1_000_000) {
+    const k = n / 1000;
+    return k >= 100 ? `${Math.round(k)}k` : `${k.toFixed(1).replace(/\.0$/, '')}k`;
+  }
+  const m = n / 1_000_000;
+  return m >= 100 ? `${Math.round(m)}M` : `${m.toFixed(1).replace(/\.0$/, '')}M`;
+}
+
+/** "$0.0042", "$0.18", "$2.40" — picks decimals that show meaningful
+ *  precision without scientific notation. Sub-cent costs use 4
+ *  decimals; cent-and-up use 2. */
+export function formatCostUsd(usd: number): string {
+  if (!Number.isFinite(usd) || usd <= 0) return '$0';
+  if (usd < 0.01) return `$${usd.toFixed(4)}`;
+  if (usd < 1) return `$${usd.toFixed(3)}`;
+  return `$${usd.toFixed(2)}`;
+}
+
+/** What share of the context window did this turn fill? Used by the
+ *  ring indicator in AgentColumn's header. Returns 0..1, clamped. */
+export function contextPct(usage: ClaudeUsage): number {
+  const cap = contextWindowFor(usage.model);
+  if (cap <= 0) return 0;
+  return Math.min(1, Math.max(0, usage.contextSize / cap));
+}
+
+/** Cache hit-rate for one snapshot — `cache_read / (input + cache_read +
+ *  cache_creation)`. The closer to 1, the cheaper this turn was per
+ *  token of input. Used in the per-message badge. Null when there's
+ *  no input at all (defensive — shouldn't happen but the math would
+ *  divide by zero). */
+export function cacheHitRate(usage: ClaudeUsage): number | null {
+  const total = usage.inputTokens + usage.cacheReadTokens + usage.cacheCreationTokens;
+  if (total <= 0) return null;
+  return usage.cacheReadTokens / total;
+}

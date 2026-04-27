@@ -176,6 +176,7 @@ pub fn run() {
             jira_delete_worklog,
             claude_status,
             claude_ask,
+            claude_compact_session,
             claude_stop,
             agent_generate_commit_message,
             agent_status,
@@ -944,6 +945,15 @@ async fn claude_ask(
     // keep the frontend contract stable.
     #[allow(non_snake_case)] agentKind: Option<AgentKind>,
     #[allow(non_snake_case)] cursorModel: Option<String>,
+    // Forwarded as `--model <id>` to claude CLI. None means no flag → CLI
+    // picks its default (Opus on Max). Frontend defaults new sessions to
+    // `claude-sonnet-4-6` so the typical case doesn't burn the 5h quota.
+    #[allow(non_snake_case)] claudeModel: Option<String>,
+    // Subset of MCP tools to wire — 'coding' / 'triage' / 'pr-review' /
+    // 'all'. None or unrecognised → 'all' (legacy behavior). Saves
+    // 10-15k tokens of MCP schemas in startup overhead by skipping
+    // sidecar servers we don't need this session.
+    #[allow(non_snake_case)] claudeToolProfile: Option<String>,
     // Per-turn dynamic context describing the agent's UI surroundings —
     // active workbench, sibling instances + their names + cwds, and which
     // instance the calling session is bound to. Built fresh on the
@@ -972,6 +982,8 @@ async fn claude_ask(
         resume,
         rules.as_deref(),
         cursorModel.as_deref(),
+        claudeModel.as_deref(),
+        claudeToolProfile.as_deref(),
         appContext.as_deref(),
         &images,
     )
@@ -982,6 +994,24 @@ async fn claude_ask(
 #[tauri::command]
 fn agent_status() -> AgentStatus {
     agent::detect_all()
+}
+
+#[tauri::command]
+async fn claude_compact_session(
+    #[allow(non_snake_case)] oldClaudeUuid: String,
+    #[allow(non_snake_case)] newClaudeUuid: String,
+    cwd: Option<String>,
+    #[allow(non_snake_case)] claudeModel: Option<String>,
+) -> Result<claude::CompactResult, String> {
+    let cwd_path = cwd.as_deref().map(std::path::Path::new);
+    claude::compact_session(
+        &oldClaudeUuid,
+        &newClaudeUuid,
+        cwd_path,
+        claudeModel.as_deref(),
+    )
+    .await
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

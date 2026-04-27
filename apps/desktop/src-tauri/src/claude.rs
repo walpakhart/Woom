@@ -172,6 +172,16 @@ pub async fn ask(
     claude_uuid: &str,
     resume: bool,
     rules: Option<&str>,
+    // Forwarded as `--model <id>` to claude CLI. None means no flag → CLI
+    // picks its default (Opus 4.7 on Max plans). Frontend defaults new
+    // sessions to `claude-sonnet-4-6` so the typical case doesn't burn
+    // the 5h quota at Opus rates.
+    model: Option<&str>,
+    // Tool profile name: 'coding' / 'triage' / 'pr-review' / 'all'.
+    // Filters which MCP servers are wired and which tools end up in
+    // `--allowedTools`. Unrecognised/None falls back to 'all' (legacy
+    // behavior — every tool exposed).
+    tool_profile: Option<&str>,
     app_context: Option<&str>,
     image_paths: &[String],
 ) -> Result<String, ClaudeRunError> {
@@ -187,7 +197,7 @@ pub async fn ask(
     }
     let bin = status.path.as_deref().unwrap_or("claude");
 
-    let mcp = build_mcp_config(session_id);
+    let mcp = build_mcp_config(session_id, ToolProfile::from_str(tool_profile));
     // Drop guard ensures the temp config file is removed on every exit path.
     let _mcp_guard = mcp.as_ref().map(|(p, _)| TempFile(p.clone()));
 
@@ -217,6 +227,12 @@ pub async fn ask(
         cmd.arg("--resume").arg(claude_uuid);
     } else {
         cmd.arg("--session-id").arg(claude_uuid);
+    }
+    // Forward selected model. The flag is per-turn, so users can swap
+    // mid-session — Claude CLI accepts a different `--model` on each
+    // `--resume` call. None = no flag, CLI picks its default.
+    if let Some(m) = model.map(str::trim).filter(|s| !s.is_empty()) {
+        cmd.arg("--model").arg(m);
     }
     // Compose the system-prompt suffix in three parts. Order matters for
     // Claude's prompt-cache: the cache key is a prefix of the appended
@@ -530,6 +546,150 @@ pub async fn generate_commit_message(repo: &std::path::Path) -> Result<String, C
     Ok(cleaned)
 }
 
+/// Result of a successful compact-fork. The frontend swaps the
+/// session's `claudeUuid` to `new_uuid` and appends a system message
+/// to the chat carrying `summary` so the user can read what the new
+/// session was seeded with.
+#[derive(Debug, serde::Serialize, Clone)]
+pub struct CompactResult {
+    pub new_uuid: String,
+    pub summary: String,
+}
+
+/// Two-shot fork-compact: ask the existing CLI session to summarise
+/// itself, then seed a brand-new session with that summary as the
+/// first turn. The summary call uses `--resume <old_uuid>` so the
+/// model has full prior context; the seed call uses `--session-id
+/// <new_uuid>` and a short ack-prompt so the new session has stored
+/// history starting from the summary, ready for `--resume <new_uuid>`
+/// on the user's very next normal turn.
+///
+/// We bypass `ask()` here so the calls don't emit on the
+/// `claude:stream:<session_id>` channel (the chat would briefly show
+/// a wall of summary text mid-compact otherwise). Instead each call
+/// runs as a plain `claude -p <prompt> --output-format json`,
+/// blocking until done.
+pub async fn compact_session(
+    old_uuid: &str,
+    new_uuid: &str,
+    cwd: Option<&Path>,
+    model: Option<&str>,
+) -> Result<CompactResult, ClaudeRunError> {
+    let status = detect();
+    if !status.detected {
+        return Err(ClaudeRunError::NotInstalled);
+    }
+    if !status.ready {
+        return Err(ClaudeRunError::NotAuthed);
+    }
+    let bin = status.path.as_deref().unwrap_or("claude");
+
+    // Step 1: summary. Tight prompt so the response is focused — the
+    // sentinel header lets us strip any pre-amble Claude sometimes
+    // emits anyway despite "no preamble" instructions.
+    let summary_prompt = "Output ONLY a concise (300-500 word) summary of this conversation \
+        so far — what was asked, what was decided, what was done, what's still in flight, \
+        and any code/config decisions worth remembering. No preamble, no sign-off, no \
+        meta-commentary about \"summarising\" — just the summary content.";
+    let summary = run_claude_oneshot(bin, summary_prompt, Some(old_uuid), None, cwd, model).await?;
+    let summary = summary.trim();
+    if summary.is_empty() {
+        return Err(ClaudeRunError::Failed(
+            "claude returned an empty summary — old session may not be resumable".into(),
+        ));
+    }
+
+    // Step 2: seed new session. Keep the prompt small (no tool use, no
+    // navigation) — it just needs to land enough turn history that the
+    // next `--resume <new_uuid>` works. Ack body is intentionally
+    // discarded; we keep `summary` as the user-facing artifact.
+    let seed_prompt = format!(
+        "This is a continuation of an earlier Claude Code session. \
+         The prior conversation has been compacted into the summary below. \
+         Reply with a brief one-sentence acknowledgement (e.g. \"Ready to continue.\") \
+         — the user's next message will pick up from here.\n\n\
+         === PRIOR-SESSION SUMMARY ===\n{summary}\n=== END SUMMARY ==="
+    );
+    let _ack = run_claude_oneshot(bin, &seed_prompt, None, Some(new_uuid), cwd, model).await?;
+
+    Ok(CompactResult {
+        new_uuid: new_uuid.to_string(),
+        summary: summary.to_string(),
+    })
+}
+
+/// Run a single non-streaming `claude -p` call and return the
+/// `result` field from the JSON output. Used by `compact_session` for
+/// both the summary call and the seed call. No MCP, no
+/// `--append-system-prompt`, no images — just the prompt text and
+/// (optionally) `--resume` / `--session-id` / `--model`.
+async fn run_claude_oneshot(
+    bin: &str,
+    prompt: &str,
+    resume_uuid: Option<&str>,
+    new_session_uuid: Option<&str>,
+    cwd: Option<&Path>,
+    model: Option<&str>,
+) -> Result<String, ClaudeRunError> {
+    let mut cmd = tokio::process::Command::new(bin);
+    cmd.arg("-p").arg(prompt).arg("--output-format").arg("json");
+    if let Some(u) = resume_uuid {
+        cmd.arg("--resume").arg(u);
+    } else if let Some(u) = new_session_uuid {
+        cmd.arg("--session-id").arg(u);
+    }
+    if let Some(m) = model.map(str::trim).filter(|s| !s.is_empty()) {
+        cmd.arg("--model").arg(m);
+    }
+    if let Some(d) = cwd {
+        cmd.current_dir(d);
+    }
+    // Same PATH augmentation as `ask()` / `generate_commit_message` —
+    // Tauri-launched processes inherit a skinny PATH, and `claude` may
+    // live in `~/.claude/local/bin` etc. depending on install method.
+    if let Ok(p) = std::env::var("PATH") {
+        let mut parts: Vec<String> = p.split(':').map(String::from).collect();
+        for e in ["/opt/homebrew/bin", "/usr/local/bin"] {
+            if !parts.iter().any(|d| d == e) {
+                parts.push(e.into());
+            }
+        }
+        if let Some(h) = home_dir() {
+            for sub in [".local/bin", ".claude/local/bin", ".claude/local", ".bun/bin", ".volta/bin"] {
+                let full = h.join(sub).to_string_lossy().into_owned();
+                if !parts.iter().any(|d| d == &full) {
+                    parts.push(full);
+                }
+            }
+        }
+        cmd.env("PATH", parts.join(":"));
+    }
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
+
+    let out = cmd.output().await?;
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        let code = out.status.code().unwrap_or(-1);
+        return Err(ClaudeRunError::Failed(format!(
+            "claude exited {code}{}",
+            if stderr.is_empty() { String::new() } else { format!(" — {stderr}") }
+        )));
+    }
+    // `--output-format json` returns one envelope: `{"result": "...",
+    // "session_id": "...", "is_error": false, ...}`. Pull `result`,
+    // tolerate missing-field as an empty string so the caller surfaces
+    // a "claude returned empty" instead of a JSON-parse error.
+    let parsed: serde_json::Value = serde_json::from_slice(&out.stdout)
+        .map_err(|e| ClaudeRunError::Failed(format!("claude json parse failed: {e}")))?;
+    let result = parsed
+        .get("result")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    Ok(result)
+}
+
 /// Removes its path on drop. Used to clean up the temp MCP config.
 struct TempFile(PathBuf);
 
@@ -539,15 +699,151 @@ impl Drop for TempFile {
     }
 }
 
+/// Which subset of MCP tools to expose for a given chat session. Each
+/// MCP tool schema costs ~150-300 tokens of system-prompt overhead, so
+/// trimming the wired set is the cheapest startup-cost win we have.
+/// `from_str` is intentionally lenient — unknown / null falls back to
+/// `All` (legacy behavior, every tool wired).
+///
+/// Six profiles cover the recurring chat shapes:
+///  - Coding: just code (no external integrations)
+///  - GitHub / Jira / Sentry: single-source focus — that integration
+///    full-access plus base navigation
+///  - Triage: read-only cross-tool — "what's the state of X" without edits
+///  - All: legacy fallback when nothing's been picked
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ToolProfile {
+    All,
+    Coding,
+    Github,
+    Jira,
+    Sentry,
+    Triage,
+}
+
+impl ToolProfile {
+    fn from_str(s: Option<&str>) -> Self {
+        match s.map(str::trim) {
+            Some("coding") => Self::Coding,
+            Some("github") => Self::Github,
+            Some("jira") => Self::Jira,
+            Some("sentry") => Self::Sentry,
+            Some("triage") => Self::Triage,
+            _ => Self::All,
+        }
+    }
+
+    /// Decide whether `tool` (full mcp__server__name) is in this profile.
+    /// Built-in tools (Edit/Read/Bash/Grep/etc) are unaffected — Claude
+    /// always exposes them; we only filter MCP-side schemas.
+    fn allows(self, tool: &str) -> bool {
+        // Memory + base App nav are always in. Memory persists across
+        // chats so it's universally useful; App nav has no token cost
+        // beyond the base set we always want (open detail panes,
+        // switch views, list instances).
+        let base = tool.starts_with("mcp__memory__")
+            || matches!(tool,
+                "mcp__app__list_instances"
+                | "mcp__app__switch_view"
+                | "mcp__app__open_connect_modal"
+            );
+        if base {
+            return true;
+        }
+        match self {
+            Self::All => true,
+            Self::Coding => {
+                // Code-focused: full App-nav (so the agent can spawn
+                // editor columns / switch cwds), nothing external.
+                tool.starts_with("mcp__app__")
+            }
+            Self::Github => {
+                // GitHub full-access + the App-nav surface that opens
+                // PRs / repos / pins the GH column. PR review and PR
+                // authoring both live here.
+                tool.starts_with("mcp__github__")
+                    || matches!(tool,
+                        "mcp__app__open_github_pr"
+                        | "mcp__app__open_github_issue"
+                        | "mcp__app__open_github_repo"
+                        | "mcp__app__set_github_column"
+                    )
+            }
+            Self::Jira => {
+                tool.starts_with("mcp__jira__")
+                    || matches!(tool,
+                        "mcp__app__open_jira_issue"
+                        | "mcp__app__open_jira_tab"
+                        | "mcp__app__set_jira_column"
+                    )
+            }
+            Self::Sentry => {
+                tool.starts_with("mcp__sentry__")
+                    || matches!(tool,
+                        "mcp__app__open_sentry_issue"
+                        | "mcp__app__open_sentry_event"
+                        | "mcp__app__open_sentry_tab"
+                        | "mcp__app__set_sentry_column"
+                    )
+            }
+            Self::Triage => {
+                // Read-only cross-tool. No write paths (no merge_pr,
+                // no transition_issue, no add_comment, no propose_*,
+                // no update_issue) — triage is "show me", not edit.
+                matches!(tool,
+                    "mcp__jira__get_issue"
+                    | "mcp__jira__search"
+                    | "mcp__jira__list_projects"
+                    | "mcp__jira__list_assignable_users"
+                    | "mcp__jira__list_sprints"
+                    | "mcp__github__get_pr"
+                    | "mcp__github__get_pr_diff"
+                    | "mcp__github__get_pr_files"
+                    | "mcp__github__get_pr_comments"
+                    | "mcp__github__list_tree"
+                    | "mcp__github__get_file"
+                    | "mcp__github__list_commits"
+                    | "mcp__github__list_releases"
+                    | "mcp__github__list_workflow_runs"
+                    | "mcp__github__get_readme"
+                    | "mcp__github__search_prs"
+                    | "mcp__github__search_issues"
+                    | "mcp__github__list_repos"
+                    | "mcp__sentry__get_issue"
+                    | "mcp__sentry__search_issues"
+                    | "mcp__sentry__get_event"
+                    | "mcp__sentry__get_issue_tags"
+                    | "mcp__sentry__list_events"
+                    | "mcp__sentry__list_projects"
+                    | "mcp__sentry__list_releases"
+                    | "mcp__app__open_github_pr"
+                    | "mcp__app__open_github_issue"
+                    | "mcp__app__open_jira_issue"
+                    | "mcp__app__open_sentry_issue"
+                    | "mcp__app__open_sentry_event"
+                    | "mcp__app__open_github_repo"
+                    | "mcp__app__open_jira_tab"
+                    | "mcp__app__open_sentry_tab"
+                )
+            }
+        }
+    }
+}
+
 /// Build an MCP config file for this session by pulling creds from Keychain
 /// and wiring up available sidecars. Returns the temp config path and the
 /// list of tool names to allow (one entry per tool, explicit — wildcards are
 /// not universally supported by `claude -p --allowedTools`).
 ///
+/// `profile` filters the wired set after the per-server blocks below have
+/// pushed everything they could connect to. Servers whose every tool got
+/// filtered out are dropped from the config so we don't spawn sidecars for
+/// nothing.
+///
 /// Returns `None` when no sidecars can be configured (e.g. Jira is not
 /// connected or the sidecar binary isn't next to the main exe); in that case
 /// we run `claude` without MCP, preserving the old behavior.
-fn build_mcp_config(session_id: &str) -> Option<(PathBuf, Vec<String>)> {
+fn build_mcp_config(session_id: &str, profile: ToolProfile) -> Option<(PathBuf, Vec<String>)> {
     let mut servers = serde_json::Map::new();
     let mut allowed: Vec<String> = Vec::new();
 
@@ -636,6 +932,19 @@ fn build_mcp_config(session_id: &str) -> Option<(PathBuf, Vec<String>)> {
         allowed.push("mcp__app__set_agent_cwd".into());
         allowed.push("mcp__app__list_instances".into());
         allowed.push("mcp__app__open_sentry_event".into());
+    }
+
+    // Apply profile filter. Keep app-side & memory entries that profile
+    // allows; drop tools outside the profile so they don't bloat the
+    // system prompt.
+    allowed.retain(|t| profile.allows(t));
+    // Drop sidecars whose every tool was filtered out — no point
+    // spawning a process Claude can't call into.
+    for srv in ["jira", "github", "memory", "sentry", "app"] {
+        let prefix = format!("mcp__{}__", srv);
+        if !allowed.iter().any(|t| t.starts_with(&prefix)) {
+            servers.remove(srv);
+        }
     }
 
     if servers.is_empty() {
