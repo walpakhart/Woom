@@ -35,8 +35,14 @@
     attachPathsToSession,
     sessionsForInstance,
     activeSessionInInstance,
-    setActiveSessionInColumn
+    setActiveSessionInColumn,
+    getPendingEditEvents
   } from '$lib/state/sessions.svelte';
+  import {
+    revertAllPendingEdits,
+    keepAllPendingEdits
+  } from '$lib/services/diffActions';
+  import { notify, notifyError } from '$lib/state/toaster.svelte';
   import {
     layoutState,
     startResizeById,
@@ -223,7 +229,11 @@
   );
   const ctxRatio = $derived(
     activeSess && activeSess.lastContextSize > 0
-      ? Math.min(1, activeSess.lastContextSize / contextWindowFor(effectiveModel))
+      ? Math.min(
+          1,
+          activeSess.lastContextSize /
+            contextWindowFor(effectiveModel, activeSess.agentKind)
+        )
       : 0
   );
   const cumCostUsd = $derived(
@@ -234,6 +244,54 @@
         )
       : 0
   );
+
+  // Diff cards still on disk that the user hasn't acknowledged or
+  // reverted yet. Drives the bulk-action bar above the composer
+  // (Keep all / Revert all). Recomputes on every sessionsState
+  // change because `getPendingEditEvents` walks `sessionsState.list`
+  // — Svelte 5's reactivity tracks that read.
+  const pendingEdits = $derived(
+    activeSess ? getPendingEditEvents(activeSess.id) : []
+  );
+  let bulkActionBusy = $state(false);
+
+  /** Revert every pending edit for the active session, newest-first.
+   *  Disabled while in flight so the user can't re-trigger before the
+   *  Tauri round-trips finish; failures bubble up as a single toast
+   *  instead of N (per-event errors are already on the cards). */
+  async function handleRevertAllPending() {
+    if (!activeSess || bulkActionBusy) return;
+    const sid = activeSess.id;
+    bulkActionBusy = true;
+    try {
+      const r = await revertAllPendingEdits(sid);
+      if (r.failed > 0) {
+        notify({
+          kind: 'warning',
+          title: `Reverted ${r.reverted} of ${r.total}`,
+          body: `${r.failed} change${r.failed === 1 ? '' : 's'} couldn't be reverted — see the cards above for details.`
+        });
+      } else if (r.reverted > 0) {
+        notify({
+          kind: 'success',
+          title: `Reverted ${r.reverted} change${r.reverted === 1 ? '' : 's'}`
+        });
+      }
+    } catch (e) {
+      notifyError(e, { title: 'Revert all failed' });
+    } finally {
+      bulkActionBusy = false;
+    }
+  }
+
+  /** Acknowledge every pending edit for the active session in one go.
+   *  Doesn't touch disk — just clears the bar by stamping
+   *  `acknowledged: true` on each event. The cards stay applied with
+   *  Revert / Reapply still reachable. */
+  function handleKeepAllPending() {
+    if (!activeSess || bulkActionBusy) return;
+    keepAllPendingEdits(activeSess.id);
+  }
 
   // Plan-usage chip values. The 5-hour rolling bucket is the
   // "headline" number — that's the limit that resets fastest and
@@ -977,7 +1035,7 @@
         <span>{compactingId === activeSess.id ? 'Compacting…' : 'Compact'}</span>
       </button>
       {#if activeSess.lastContextSize > 0}
-          {@const cw = contextWindowFor(effectiveModel)}
+          {@const cw = contextWindowFor(effectiveModel, activeSess.agentKind)}
           {@const pct = Math.round(ctxRatio * 100)}
           {@const ringClass = ctxRatio >= 0.85 ? 'ctx-ring-fill ctx-ring-fill--alert'
             : ctxRatio >= 0.6 ? 'ctx-ring-fill ctx-ring-fill--warn'
@@ -1489,6 +1547,43 @@
         </div>
       {/if}
 
+      <!-- Bulk-action bar for un-acknowledged diff cards. Surfaces only
+           while there are still cards in `applied` state that the user
+           hasn't dismissed via Keep / Revert. Rendered as a top strip of
+           the composer block (same bg-1 + border-top as `.attach-row` /
+           `.chat-input`) so the bar visually fuses with whatever is
+           below — no floating pill, no air gap. Visual order follows
+           time: bar = "the agent's last changes still need a verdict",
+           attach-row = "what you'll send next". -->
+      {#if pendingEdits.length > 0}
+        <div class="pending-edits-bar" transition:slide={{ duration: 160, easing: cubicOut }}>
+          <span class="pending-edits-count" aria-live="polite">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 9v4M12 17h.01"/><circle cx="12" cy="12" r="9"/></svg>
+            {pendingEdits.length} pending change{pendingEdits.length === 1 ? '' : 's'}
+          </span>
+          <div class="pending-edits-actions">
+            <button
+              type="button"
+              class="btn btn--ghost btn--small"
+              onclick={handleRevertAllPending}
+              disabled={bulkActionBusy}
+              title="Revert every pending change in this session, newest first"
+            >
+              {bulkActionBusy ? 'Reverting…' : 'Revert all'}
+            </button>
+            <button
+              type="button"
+              class="btn btn--ghost btn--small"
+              onclick={handleKeepAllPending}
+              disabled={bulkActionBusy}
+              title="Acknowledge every pending change without touching disk"
+            >
+              Keep all
+            </button>
+          </div>
+        </div>
+      {/if}
+
       <!-- Image attachments don't get an inline `@token` (the path can have
            spaces and the user can't see what's attached either way), so they
            render as thumbnail chips here. Non-image file mentions stay
@@ -1918,6 +2013,36 @@
     width: 6px; height: 6px; border-radius: 50%;
     background: var(--accent-bright);
     animation: pulse 1.4s ease-in-out infinite;
+  }
+
+  /* Bulk-action bar for un-acknowledged diff cards. Visually a header
+     strip for the composer block — same `bg-1` and `border-top` as
+     `.attach-row` and `.chat-input` below, so the three stack into one
+     continuous panel without gaps. NO side margin / border-radius: a
+     floating pill would read as "loose card" when no attach-row is
+     present and the bar would hang in mid-air above the composer.
+     Full-width strip removes that ambiguity at the cost of being
+     slightly less prominent — fine, it's a transient affordance. */
+  .pending-edits-bar {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 10px;
+    padding: 8px 14px;
+    background: var(--bg-1);
+    border-top: 1px solid var(--border-neutral);
+    font-size: 12px;
+  }
+  .pending-edits-count {
+    display: inline-flex; align-items: center; gap: 6px;
+    color: var(--text-1);
+    font-weight: 500;
+  }
+  .pending-edits-count svg {
+    width: 14px; height: 14px;
+    color: var(--accent-bright);
+    flex-shrink: 0;
+  }
+  .pending-edits-actions {
+    display: inline-flex; align-items: center; gap: 6px;
   }
 
   /* Attachment chips — shown above the composer whenever the active session

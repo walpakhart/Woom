@@ -784,6 +784,7 @@ export function updateEditEvent(
     note?: string;
     oldText?: string;
     isCreate?: boolean;
+    acknowledged?: boolean;
   }
 ) {
   sessionsState.list = sessionsState.list.map((s) => {
@@ -800,7 +801,9 @@ export function updateEditEvent(
           status: patch.status ?? e.status,
           note: patch.note !== undefined ? patch.note : e.note,
           oldText: patch.oldText !== undefined ? patch.oldText : e.oldText,
-          isCreate: patch.isCreate !== undefined ? patch.isCreate : e.isCreate
+          isCreate: patch.isCreate !== undefined ? patch.isCreate : e.isCreate,
+          acknowledged:
+            patch.acknowledged !== undefined ? patch.acknowledged : e.acknowledged
         };
       });
       if (!mTouched) return m;
@@ -810,6 +813,37 @@ export function updateEditEvent(
     if (!touched) return s;
     return { ...s, messages: msgs };
   });
+}
+
+/** All edit events in `sessionId` that are still "live" — applied to
+ *  disk and not yet acknowledged or reverted by the user. Drives the
+ *  bulk-action bar's count and its Keep all / Revert all targets.
+ *
+ *  Returns the events themselves (not just IDs) because the bulk
+ *  handlers need `filePath`, `oldText`, `newText`, `wholeFile`,
+ *  `isCreate`, and `isDelete` to dispatch the right Tauri command —
+ *  same shape `EditDiffCard.svelte`'s individual handler uses. Order
+ *  matches chat order so a user clicking "Revert all" undoes from
+ *  most-recent backwards is implementation-detail; here we keep
+ *  source order and let the caller decide. */
+export function getPendingEditEvents(
+  sessionId: string
+): Array<
+  Extract<MessageEvent, { kind: 'edit' }>
+> {
+  const s = sessionsState.list.find((x) => x.id === sessionId);
+  if (!s) return [];
+  const out: Array<Extract<MessageEvent, { kind: 'edit' }>> = [];
+  for (const m of s.messages) {
+    if (m.role !== 'assistant' || !m.events) continue;
+    for (const e of m.events) {
+      if (e.kind !== 'edit') continue;
+      if (e.status !== 'applied') continue;
+      if (e.acknowledged) continue;
+      out.push(e);
+    }
+  }
+  return out;
 }
 
 export function addAction(sessionId: string, action: ClaudeAction) {

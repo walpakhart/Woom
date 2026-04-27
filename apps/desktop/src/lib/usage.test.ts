@@ -96,11 +96,19 @@ describe('contextWindowFor', () => {
     expect(contextWindowFor('some-unknown-model-id')).toBe(200_000);
   });
 
-  it('returns 1M for any opus-4-7 variant', () => {
+  it('returns 1M for any opus-4-7 variant on Claude', () => {
     expect(contextWindowFor('claude-opus-4-7')).toBe(1_000_000);
     // Future-proofing: a longer suffix on opus-4-7 (e.g. a thinking
     // variant id) should still get the 1M window.
     expect(contextWindowFor('claude-opus-4-7-some-suffix')).toBe(1_000_000);
+  });
+
+  it('caps Cursor sessions at 200k regardless of model', () => {
+    // Cursor's composer is 200k under standard subscriptions even with
+    // Opus 4.7 / Max mode (Max is about tool budget, not context).
+    expect(contextWindowFor('claude-opus-4-7', 'cursor')).toBe(200_000);
+    expect(contextWindowFor('claude-sonnet-4-6', 'cursor')).toBe(200_000);
+    expect(contextWindowFor(null, 'cursor')).toBe(200_000);
   });
 });
 

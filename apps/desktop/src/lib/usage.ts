@@ -21,13 +21,28 @@ const RATE_TABLE: Record<
   'claude-haiku-4-5-20251001': { input: 0.8, output: 4, cacheWrite: 1, cacheRead: 0.08 }
 };
 
-/** Effective context-window size in tokens. Sonnet 4.6 and Haiku 4.5 are
- *  200k by default; Opus 4.7 ships with a 1M-context variant (the model
- *  id Forge passes is bare `claude-opus-4-7`, but the CLI auto-uses 1M
- *  when the user is on the eligible plan, hence the higher cap here so
- *  the % indicator doesn't flash red mid-conversation when the agent's
- *  still well within budget). */
-export function contextWindowFor(model: string | null): number {
+/** Effective context-window size in tokens. The cap depends on **both**
+ *  the model id and the surface the session is running on, because:
+ *
+ *    • Claude Code (Anthropic SDK) on Max plan: Opus 4.7 ships a 1M
+ *      variant; Sonnet/Haiku stay at 200k.
+ *    • cursor-agent (Cursor CLI): even Opus 4.7 is capped at 200k under
+ *      the standard subscription. Cursor's "Max mode" toggle is about
+ *      tool/think budget, NOT context size — observed live as
+ *      "70.4% · 140.9K / 200K context used" with Max enabled, so the
+ *      Forgehold ring was over-reporting "23%" when the user was
+ *      actually past 70% headed into auto-summary territory.
+ *
+ *  Defaults `agentKind = 'claude'` so existing call sites without the
+ *  arg keep their 1M-for-Opus behavior; Cursor sessions explicitly
+ *  pass `'cursor'` and get the safe 200k cap. If we later add a
+ *  per-session "Cursor Ultra plan" toggle (or detect it from
+ *  cursor-agent's status payload), this is the single switch. */
+export function contextWindowFor(
+  model: string | null,
+  agentKind: 'claude' | 'cursor' = 'claude'
+): number {
+  if (agentKind === 'cursor') return 200_000;
   if (!model) return 200_000;
   if (model.startsWith('claude-opus-4-7')) return 1_000_000;
   return 200_000;
@@ -77,9 +92,17 @@ export function formatCostUsd(usd: number): string {
 }
 
 /** What share of the context window did this turn fill? Used by the
- *  ring indicator in AgentColumn's header. Returns 0..1, clamped. */
-export function contextPct(usage: ClaudeUsage): number {
-  const cap = contextWindowFor(usage.model);
+ *  ring indicator in AgentColumn's header. Returns 0..1, clamped.
+ *
+ *  Pass `agentKind` so we use the correct surface-specific cap (Cursor
+ *  sessions are 200k regardless of model — see `contextWindowFor`).
+ *  Defaults to `'claude'` for back-compat with call sites that haven't
+ *  been threaded through yet. */
+export function contextPct(
+  usage: ClaudeUsage,
+  agentKind: 'claude' | 'cursor' = 'claude'
+): number {
+  const cap = contextWindowFor(usage.model, agentKind);
   if (cap <= 0) return 0;
   return Math.min(1, Math.max(0, usage.contextSize / cap));
 }

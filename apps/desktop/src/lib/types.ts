@@ -96,6 +96,13 @@ export type MessageEvent =
       /** Optional explanation when `status === 'error'` — surfaced on the
        *  card so the user understands why Revert didn't apply. */
       note?: string;
+      /** True once the user has explicitly approved this change (clicked
+       *  "Keep" on the card itself or "Keep all" on the bulk-action bar).
+       *  Distinct from `status`: the change is still `applied` on disk,
+       *  but the card no longer counts toward the "N pending changes"
+       *  bar above the composer. We use a flag rather than a separate
+       *  status so Reapply / Revert remain available afterwards. */
+      acknowledged?: boolean;
     };
 
 /** Token-accounting snapshot from a single Claude API call. Each

@@ -24,6 +24,7 @@
   import { sessionsState, updateEditEvent } from '$lib/state/sessions.svelte';
   import { notifyError } from '$lib/state/toaster.svelte';
   import { openFileInEditor } from '$lib/services/editorNavigation';
+  import { revertEditEvent } from '$lib/services/diffActions';
 
   interface Props {
     sessionId: string;
@@ -216,45 +217,36 @@
   async function handleRevert() {
     if (busy) return;
     busy = true;
-    try {
-      if (isDelete) {
-        // The agent deleted the file; "Revert" here means **Restore**
-        // it from the captured `oldText` (cursor's `prevContent` or a
-        // git-HEAD backfill). The Tauri side refuses if the file
-        // already exists at the path — we don't want to clobber a
-        // file the user manually re-created or another tool wrote.
-        await invoke('restore_deleted_file', {
-          filePath,
-          prevContent: oldText
-        });
-      } else if (wholeFile) {
-        // `Write`: rewrite the full file (or delete it if the agent
-        // created it from nothing). The Tauri side validates current
-        // content matches `newText` so we don't trample post-Write
-        // edits.
-        await invoke('revert_write', {
-          filePath,
-          oldText,
-          newText,
-          isCreate
-        });
-      } else {
-        await invoke('revert_edit', {
-          filePath,
-          oldText,
-          newText
-        });
-      }
-      updateEditEvent(sessionId, toolId, { status: 'reverted', note: undefined });
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      updateEditEvent(sessionId, toolId, { status: 'error', note: msg });
-      notifyError(e, {
+    // Delegate to the shared service so the bulk "Revert all" bar uses
+    // the exact same dispatch path; failures are pre-classified into
+    // an error result there. Toast still fires from the card so the
+    // user sees the per-card title.
+    const r = await revertEditEvent(sessionId, {
+      kind: 'edit',
+      toolId,
+      filePath,
+      oldText,
+      newText,
+      isCreate,
+      isDelete,
+      wholeFile,
+      status
+    });
+    if (!r.ok) {
+      notifyError(new Error(r.error), {
         title: `${isDelete ? 'Restore' : 'Revert'} failed for ${shortPath}`
       });
-    } finally {
-      busy = false;
     }
+    busy = false;
+  }
+
+  /** "Keep" on a card — same gesture as "Keep all" on the bulk bar but
+   *  scoped to one event. Marks the card as user-acknowledged so the
+   *  bar's count drops, then collapses the diff body. We deliberately
+   *  don't change `status` (Revert / Reapply must stay reachable). */
+  function handleKeep() {
+    updateEditEvent(sessionId, toolId, { acknowledged: true });
+    expanded = false;
   }
 
   /** Reapply after a Revert: undo the undo. For Edit, swap the args and
@@ -420,7 +412,7 @@
           {isDelete ? 'Restore' : 'Revert'}
         {/if}
       </button>
-      <button class="btn btn--ghost btn--small" onclick={() => (expanded = false)} disabled={busy}>
+      <button class="btn btn--ghost btn--small" onclick={handleKeep} disabled={busy}>
         Keep
       </button>
     {:else if status === 'reverted'}
