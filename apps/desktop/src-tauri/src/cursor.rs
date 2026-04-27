@@ -570,7 +570,37 @@ fn normalize_event(raw: &str) -> Vec<serde_json::Value> {
             }
         }
         "result" | "system" | "user" => vec![v],
-        "tool_call" => normalize_tool_call(&v).into_iter().collect(),
+        // tool_call: cursor-agent fires `started` (immediately on
+        // dispatch) and `completed` (with the result) for every tool.
+        //
+        //   - For edit/write tools we want the COMPLETED event so we
+        //     can read `result.success.afterFullFileContent` — the
+        //     actual final file contents. The `args.streamContent` on
+        //     a `started` event is a partial / streamed edit-spec
+        //     (cursor's edit tool isn't a plain Write — it can patch
+        //     surgically based on a chunk that doesn't equal the full
+        //     file). Rendering a diff card on started would show the
+        //     wrong content.
+        //
+        //   - For all other tools (read, grep, bash, mcp, …) we keep
+        //     the original behavior: emit on STARTED so the user gets
+        //     immediate "_using …_" feedback. The completed event is
+        //     dropped to avoid double-pills.
+        "tool_call" => {
+            let subtype = v.get("subtype").and_then(|s| s.as_str()).unwrap_or("");
+            let is_edit_write = v
+                .get("tool_call")
+                .and_then(|tc| tc.as_object())
+                .is_some_and(|o| {
+                    o.contains_key("editToolCall") || o.contains_key("writeToolCall")
+                });
+            let want = if is_edit_write { "completed" } else { "started" };
+            if subtype == want {
+                normalize_tool_call(&v).into_iter().collect()
+            } else {
+                Vec::new()
+            }
+        }
         _ => Vec::new(),
     }
 }
@@ -590,10 +620,11 @@ fn normalize_event(raw: &str) -> Vec<serde_json::Value> {
 /// drop a debug breadcrumb so a stuck `_using tool…_` pill always lets us
 /// recover the raw event from the log file.
 fn normalize_tool_call(v: &serde_json::Value) -> Option<serde_json::Value> {
-    let subtype = v.get("subtype").and_then(|s| s.as_str()).unwrap_or("");
-    if subtype != "started" {
-        return None;
-    }
+    // Caller (`normalize_event`) already decided which subtype to
+    // emit for which tool family — `started` for read/bash/grep/mcp/…,
+    // `completed` for edit/write (because the full final file content
+    // only lands on completed, in `result.success.afterFullFileContent`).
+    // We accept whichever the caller passed through.
     let call_id = v
         .get("call_id")
         .and_then(|c| c.as_str())
@@ -809,11 +840,21 @@ fn extract_tool_shape(tc: &serde_json::Value) -> (String, serde_json::Value) {
     }
 
     // Layer 3b: discriminated-union shapes we've seen historically.
-    //   readToolCall   → Read / Grep / Glob equivalents
-    //   writeToolCall  → Edit / Write / NotebookEdit equivalents
+    //   readToolCall   → Read
+    //   editToolCall   → cursor's full-file overwrite/append; we
+    //                    re-shape it as Claude's `Write` so the
+    //                    frontend's existing diff-card path fires
+    //                    (oldText backfilled from `git show HEAD:…`)
+    //   writeToolCall  → also re-shape as Write
+    //   bashToolCall   → Bash
+    //   grepToolCall   → Grep
+    //   globToolCall   → Glob
     //   function       → OpenAI-style `function.name` + `function.args`
     // The payload object already has a human-meaningful `name` in most
-    // cases; when it doesn't we fall back to the discriminator itself.
+    // cases; when it doesn't we fall back to humanizing the
+    // discriminator (any `fooBarToolCall` → `FooBar`) so unknown
+    // future tools at least render with a readable label instead of
+    // dumping the raw event JSON.
     for (key, payload) in obj.iter() {
         if key == "function" {
             let name = payload
@@ -829,12 +870,73 @@ fn extract_tool_shape(tc: &serde_json::Value) -> (String, serde_json::Value) {
                 .unwrap_or_else(|| json!({}));
             return (name, input);
         }
+        // Cursor's file-mutation tools: `editToolCall` and `writeToolCall`.
+        //
+        // We re-shape into Claude's `Write` input (`{file_path, content}`)
+        // so the frontend's Write handler in claudeStream.ts produces an
+        // inline EditDiffCard with the same apply/revert UX users get
+        // for Claude. Without this the card path never triggers and
+        // Cursor edits show only as text.
+        //
+        // Source-of-truth ordering for `content`:
+        //   1. `result.success.afterFullFileContent` — the actual final
+        //      file contents after the edit. Only present on `completed`
+        //      events. ALWAYS prefer this when available.
+        //   2. `args.content` — present on cursor's bare-write tool path.
+        //   3. `args.streamContent` — last resort; this is a partial
+        //      streaming chunk / surgical-edit spec, NOT the full file.
+        //      Will produce a wrong diff if rendered, but better than
+        //      nothing if cursor ever emits a started-only event.
+        // (normalize_event filters edit/write to completed-only, so
+        // afterFullFileContent should always be available in practice.)
+        if key == "editToolCall" || key == "writeToolCall" {
+            let args = payload.get("args").and_then(|a| a.as_object());
+            let success = payload
+                .get("result")
+                .and_then(|r| r.get("success"))
+                .and_then(|s| s.as_object());
+            let path = args
+                .and_then(|a| a.get("path").or_else(|| a.get("file_path")))
+                .or_else(|| success.and_then(|s| s.get("path")))
+                .and_then(|p| p.as_str())
+                .unwrap_or("");
+            let content = success
+                .and_then(|s| s.get("afterFullFileContent"))
+                .or_else(|| args.and_then(|a| a.get("content")))
+                .or_else(|| args.and_then(|a| a.get("streamContent")))
+                .and_then(|c| c.as_str())
+                .unwrap_or("");
+            if !path.is_empty() {
+                return (
+                    "Write".into(),
+                    json!({ "file_path": path, "content": content }),
+                );
+            }
+        }
+        // Cursor's deletion tool: `deleteToolCall`. There's no diff to
+        // render (file's gone, nothing to apply/revert against), so we
+        // surface it as a trace pill via formatToolUse — frontend's
+        // generic mcp-shaped renderer hits the `path` field and shows
+        // "_deleted /path/to/file_". A future revision could keep
+        // `result.success.prevContent` to offer a one-click restore,
+        // but EditDiffCard's current model doesn't have a "deleted"
+        // variant; leaving as a pill for now.
+        if key == "deleteToolCall" {
+            let args = payload.get("args").and_then(|a| a.as_object());
+            let path = args
+                .and_then(|a| a.get("path"))
+                .and_then(|p| p.as_str())
+                .unwrap_or("");
+            if !path.is_empty() {
+                return ("Delete".into(), json!({ "file_path": path }));
+            }
+        }
         if key.ends_with("ToolCall") {
             let name = payload
                 .get("name")
                 .and_then(|n| n.as_str())
-                .unwrap_or_else(|| humanize_discriminator(key))
-                .to_string();
+                .map(String::from)
+                .unwrap_or_else(|| humanize_discriminator(key));
             // Flatten the payload as the "input" so formatToolUse can dig out
             // familiar keys (file_path, command, pattern, …).
             let input = json!(payload);
@@ -855,21 +957,39 @@ fn extract_tool_shape(tc: &serde_json::Value) -> (String, serde_json::Value) {
     )
 }
 
-fn humanize_discriminator(key: &str) -> &'static str {
+/// Map cursor's `*ToolCall` discriminator to a human label. Hand-
+/// curated aliases keep the names friendly (Read, not "ReadTool"), and
+/// any unknown discriminator falls back to PascalCasing whatever sits
+/// before the `ToolCall` suffix — so a fresh cursor-agent build that
+/// adds `webSearchToolCall` renders as "WebSearch" instead of dumping
+/// the raw event JSON. Returns String so the dynamic fallback case
+/// can return owned data.
+fn humanize_discriminator(key: &str) -> String {
     match key {
-        "readToolCall" => "Read",
-        "writeToolCall" => "Write",
-        "bashToolCall" => "Bash",
-        "grepToolCall" => "Grep",
-        "globToolCall" => "Glob",
+        "readToolCall" => return "Read".into(),
+        "writeToolCall" | "editToolCall" => return "Write".into(),
+        "bashToolCall" => return "Bash".into(),
+        "grepToolCall" => return "Grep".into(),
+        "globToolCall" => return "Glob".into(),
         // Safety net: if Layer 3a (the dedicated `mcpToolCall` handler)
-        // failed to extract a name — say cursor-agent dropped
-        // `providerIdentifier` / `toolName` from the wrapper — Layer 3b
-        // gets here. We surface "MCP" so the trace pill at least reads
-        // "_using MCP…_" instead of the generic "_using tool…_", which
-        // gave us no signal at all about which family of tool fired.
-        "mcpToolCall" => "MCP",
-        _ => "tool",
+        // failed to extract a name, surface "MCP" so the trace pill
+        // reads "_using MCP…_" instead of the generic "_using tool…_".
+        "mcpToolCall" => return "MCP".into(),
+        _ => {}
+    }
+    // Generic fallback: strip `ToolCall`, capitalise. `searchToolCall`
+    // → "Search", `lsToolCall` → "Ls", `runTerminalCmdToolCall` →
+    // "RunTerminalCmd". Better than the previous "tool" default which
+    // collapsed every unknown variant onto the same label and then
+    // leaked the raw event JSON through the Layer-4 fallback below.
+    let stem = key.strip_suffix("ToolCall").unwrap_or(key);
+    if stem.is_empty() {
+        return "tool".into();
+    }
+    let mut chars = stem.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => "tool".into(),
     }
 }
 
