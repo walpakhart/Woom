@@ -1070,18 +1070,15 @@ fn format_search(v: &serde_json::Value, workspace: &str) -> String {
     if issues.is_empty() {
         return "No issues matched.".into();
     }
-    // Keep the per-issue line as compact as possible: the agent re-feeds
-    // this whole payload on every subsequent turn, so each saved char
-    // pays out N times. We drop the per-row browse URL (the agent can
-    // build it from `key` + the workspace hint at the top) and trim the
-    // ISO timestamp to YYYY-MM-DD (the time/ms aren't useful for triage).
+    // Per-row browse URL stays inline (same shape as Sentry's permalink) —
+    // a `<KEY>` template in the header is technically smaller but bets the
+    // agent will splice the key correctly when generating Markdown links,
+    // and that bet has cost more in fix-up turns than the saved tokens are
+    // worth. The only thing we trim is the ISO timestamp: the milliseconds
+    // and timezone offset on `updated` aren't useful for triage and the
+    // per-row line repeats N times in every subsequent turn.
     let mut out = String::new();
-    out.push_str(&format!(
-        "{} issue(s) on {} (browse: https://{}/browse/<KEY>):\n",
-        issues.len(),
-        workspace,
-        workspace,
-    ));
+    out.push_str(&format!("{} issue(s):\n", issues.len()));
     for i in issues {
         let key = i.get("key").and_then(|k| k.as_str()).unwrap_or("?");
         let fields = i.get("fields").cloned().unwrap_or(serde_json::Value::Null);
@@ -1095,18 +1092,38 @@ fn format_search(v: &serde_json::Value, workspace: &str) -> String {
         let updated = fields
             .get("updated")
             .and_then(|s| s.as_str())
-            .map(|s| s.split('T').next().unwrap_or(s).to_string())
+            .map(trim_iso_to_minute)
             .unwrap_or_default();
         out.push_str(&format!(
-            "- {} [{}] {} ({}, {})\n",
+            "- {} [{}] {} (assignee: {}, updated: {})\n  https://{}/browse/{}\n",
             key,
             status,
             summary,
             assignee.as_deref().unwrap_or("—"),
             updated,
+            workspace,
+            key,
         ));
     }
     out
+}
+
+/// `2026-04-25T14:23:11.123+0300` → `2026-04-25 14:23`. Anything that
+/// doesn't look like ISO-8601 (or a partial fragment) is returned as-is so
+/// we never silently mangle a value Jira hands us.
+fn trim_iso_to_minute(s: &str) -> String {
+    let (date, rest) = match s.split_once('T') {
+        Some(parts) => parts,
+        None => return s.to_string(),
+    };
+    // `rest` looks like `14:23:11.123+0300` — keep just hours and minutes.
+    let mut hm = rest.split(':');
+    let h = hm.next().unwrap_or("");
+    let m = hm.next().unwrap_or("");
+    if h.is_empty() || m.is_empty() {
+        return s.to_string();
+    }
+    format!("{} {}:{}", date, h, m)
 }
 
 fn user_name(v: Option<&serde_json::Value>) -> Option<String> {
