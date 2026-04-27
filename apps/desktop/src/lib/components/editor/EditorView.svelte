@@ -317,14 +317,17 @@
           <div class="ev-left-head">
             <span class="ev-root-name mono" title={repoPath}>{fileName(repoPath)}</span>
             {#each linkedAgents as la (la.sessionId)}
-              <span class="ev-link-pill" title="Linked to {la.kind === 'claude' ? 'Claude Code' : 'Cursor'} · {la.name} — folder syncs between editor and this chat">
-                <span class="ev-link-pill-dot"></span>
+              <!-- Same `.linked-pill` shape the chat side uses, just the
+                   `--compact` modifier so multiple pills fit next to the
+                   open-folder name. Dot animation, palette, and bench-name
+                   chip are now visually identical across editor/chat. -->
+              <span class="linked-pill linked-pill--compact" title="Linked to {la.kind === 'claude' ? 'Claude Code' : 'Cursor'} · {la.name} — folder syncs between editor and this chat">
+                <span class="linked-pill-dot"></span>
                 <svg class="i i-sm" viewBox="0 0 24 24"><path d="M9 17H7A5 5 0 1 1 7 7h2M15 7h2a5 5 0 1 1 0 10h-2M8 12h8"/></svg>
-                <span class="ev-link-pill-kind">{la.kind === 'claude' ? 'C' : 'Cr'}</span>
-                <span class="ev-link-pill-name mono">{la.name}</span>
+                <span class="linked-pill-bench mono">{la.name}</span>
                 {#if onUnlinkAgent}
                   <button
-                    class="ev-link-pill-x"
+                    class="linked-pill-x"
                     onclick={() => onUnlinkAgent?.(la.sessionId)}
                     title="Unlink"
                     aria-label="Unlink"
@@ -540,38 +543,8 @@
 
   .ev-link-wrap { position: relative; display: inline-flex; }
 
-  .ev-link-pill {
-    display: inline-flex; align-items: center; gap: 5px;
-    padding: 3px 4px 3px 7px;
-    border-radius: 5px;
-    background: var(--accent-soft);
-    border: 1px solid rgba(232, 163, 58, 0.3);
-    color: var(--accent-bright);
-    font-size: 11px;
-    flex-shrink: 0;
-    max-width: 160px;
-  }
-  .ev-link-pill-dot {
-    width: 6px; height: 6px; border-radius: 50%;
-    background: var(--accent-bright);
-    box-shadow: 0 0 6px var(--accent-glow);
-    flex-shrink: 0;
-  }
-  .ev-link-pill :global(svg) { width: 10px; height: 10px; color: var(--accent-bright); }
-  .ev-link-pill-kind { font-size: 9.5px; font-weight: 700; letter-spacing: 0.04em; }
-  .ev-link-pill-name {
-    font-size: 10.5px; color: var(--text-1);
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  }
-  .ev-link-pill-x {
-    width: 16px; height: 16px; border-radius: 3px;
-    display: inline-flex; align-items: center; justify-content: center;
-    color: var(--text-2); background: transparent;
-    margin-left: 2px;
-    transition: all 120ms;
-    cursor: pointer;
-  }
-  .ev-link-pill-x:hover { background: var(--bg-3); color: var(--error); }
+  /* `.linked-pill` (+ `.linked-pill--compact`) styles live in app.css —
+     shared with AgentColumn so the chat and editor render the same shape. */
 
   .ev-link-menu {
     position: absolute; top: calc(100% + 4px); right: 0;

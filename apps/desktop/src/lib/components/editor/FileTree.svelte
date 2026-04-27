@@ -1,6 +1,7 @@
 <script lang="ts">
-  import { tick } from 'svelte';
+  import { tick, onMount, onDestroy } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
+  import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import { setDragPayload } from '$lib/state/drag.svelte';
   import { attachDragChip } from '$lib/dragImage';
   import { iconFor } from '$lib/components/editor/fileIcons';
@@ -101,6 +102,53 @@
   }
 
   $effect(() => { void loadRoot(); lastRevealed = ''; });
+
+  /** Smart refresh after a filesystem change emitted by the Rust watcher.
+      Snapshot which dirs are currently expanded, reload root + each
+      expanded subtree, then rebuild the flat `items` array preserving
+      the previous expansion state. New / deleted files surface; the
+      tree doesn't collapse to root every time Claude writes a file. */
+  let refreshDebounce: ReturnType<typeof setTimeout> | null = null;
+  async function smartRefresh() {
+    if (!rootPath) return;
+    const expanded = new Set<string>(items.filter((it) => it.is_dir && it.expanded).map((it) => it.path));
+    try {
+      const flat: Item[] = [];
+      async function walk(parentPath: string, depth: number, parentIgnored: boolean): Promise<void> {
+        const kids = await invoke<Entry[]>('fs_list_dir', { path: parentPath });
+        const ignoredHere = await checkIgnored(kids.map((e) => e.path));
+        for (const e of kids) {
+          const ignored = parentIgnored || ignoredHere.has(e.path);
+          const wasExpanded = e.is_dir && expanded.has(e.path);
+          flat.push({ name: e.name, path: e.path, is_dir: e.is_dir, depth, expanded: wasExpanded, ignored });
+          if (wasExpanded) {
+            try { await walk(e.path, depth + 1, ignored); }
+            catch { /* dir went away mid-refresh — skip its kids */ }
+          }
+        }
+      }
+      await walk(rootPath, 0, false);
+      items = flat;
+    } catch (e: unknown) {
+      // Don't blow up the UI on a refresh error — leave stale state in place,
+      // the next event will retry. (Common cause: rootPath disappeared, the
+      // watcher will eventually emit nothing and we just stop refreshing.)
+      console.warn('FileTree.smartRefresh failed:', e);
+    }
+  }
+
+  let watchUnlisten: UnlistenFn | null = null;
+  onMount(async () => {
+    // Coalesce bursts (Claude writing 5 files = 1 refresh, not 5).
+    watchUnlisten = await listen<{ path: string; kind: string }>('fs:changed', () => {
+      if (refreshDebounce) clearTimeout(refreshDebounce);
+      refreshDebounce = setTimeout(() => { void smartRefresh(); }, 300);
+    });
+  });
+  onDestroy(() => {
+    watchUnlisten?.();
+    if (refreshDebounce) clearTimeout(refreshDebounce);
+  });
 
   /** Walk from `rootPath` down to `target`, expanding every parent
    *  folder that's collapsed along the way. Top-down so each toggle's

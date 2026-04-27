@@ -1062,19 +1062,21 @@
       Editor's folder in (the old one-way behavior). */
   function linkActiveSessionToEditor(editorInstanceId: string) {
     if (!activeSession) return;
-    const aiPath = activeSession.worktreePath || activeSession.cwd || '';
     const editorPath =
       sessionsState.editorInstanceState[editorInstanceId]?.repoPath ?? '';
-    const sharedPath = aiPath || editorPath;
-    // Push AI's folder to the Editor when AI has one — this is the new
-    // symmetry the user asked for.
-    if (aiPath && aiPath !== editorPath) {
-      setEditorRepoPath(aiPath, editorInstanceId);
+    // Only an isolated worktree counts as the chat's "owned" folder — `.cwd`
+    // can be inherited from another editor via the link-fallback effect, and
+    // pushing that into the new target editor wipes out whatever folder the
+    // user had opened there. (Two-editor crosswire bug.) Plain `.cwd` does
+    // not flow back; the link is editor → chat from this point on.
+    const aiWorktree = activeSession.worktreePath || '';
+    if (aiWorktree && aiWorktree !== editorPath) {
+      setEditorRepoPath(aiWorktree, editorInstanceId);
     }
     updateSession(activeSession.id, {
       linkedToEditor: true,
       linkedToEditorInstanceId: editorInstanceId,
-      cwd: sharedPath || null
+      cwd: aiWorktree || editorPath || null
     });
   }
 

@@ -1067,6 +1067,39 @@ kbd {
   border-color: rgba(12, 17, 23, 0.3);
   color: var(--accent-fg);
 }
+/* Compact variant for the Editor's per-agent pill row — same palette,
+   tighter padding, smaller text so multiple linked-agent pills fit next
+   to the file tree's open-folder name. */
+.linked-pill--compact {
+  padding: 3px 4px 3px 8px;
+  border-radius: 6px;
+  font-size: 10.5px;
+  gap: 6px;
+  max-width: 160px;
+}
+.linked-pill--compact .linked-pill-dot { width: 6px; height: 6px; }
+.linked-pill--compact .linked-pill-label { display: none; }
+.linked-pill--compact .linked-pill-bench {
+  font-size: 9.5px;
+  padding: 1px 5px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.linked-pill--compact :global(svg) { width: 10px; height: 10px; }
+/* Embedded X button inside a compact pill (used by Editor's per-agent
+   list — the chat side has a separate dashed Unlink button next to its
+   pill instead). Stays muted at rest, flares red on hover. */
+.linked-pill-x {
+  width: 16px; height: 16px; border-radius: 3px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: transparent; border: 0;
+  color: var(--text-2);
+  margin-left: 2px;
+  cursor: pointer;
+  transition: all 120ms;
+  padding: 0;
+}
+.linked-pill-x:hover { background: var(--bg-3); color: var(--error); }
+.linked-pill-x svg { width: 10px; height: 10px; }
 
 /* Link-editor button in unlinked mode — dashed gold hint that "linking is
    available" without shouting. Becomes solid + glow on hover. */

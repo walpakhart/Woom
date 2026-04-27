@@ -115,15 +115,38 @@ struct CreateIssueParams {
     /// keep formatting simple — line breaks become hard breaks.
     #[serde(default)]
     description: Option<String>,
-    /// Optional assignee Atlassian accountId. Use list_assignable_users
-    /// (TODO: future tool) or get_issue on a similar ticket to find one.
-    /// Omit (or pass null) to leave unassigned.
+    /// Optional assignee Atlassian accountId. Resolve a name → accountId
+    /// via list_assignable_users(project_key, query?). Omit to leave
+    /// unassigned.
     #[serde(default)]
     assignee_account_id: Option<String>,
-    /// Optional sprint id (numeric). The issue is created first, then
-    /// added to the sprint via a follow-up Agile API call.
+    /// Optional sprint id (numeric). Resolve a sprint name → id via
+    /// list_sprints(project_key). The issue is created first, then added
+    /// to the sprint via a follow-up Agile API call.
     #[serde(default)]
     sprint_id: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct ListAssignableUsersParams {
+    /// Project key — assignability is project-scoped, so this is required.
+    project_key: String,
+    /// Optional substring to filter by displayName / email (case-insensitive).
+    /// Omit to list all assignable users (capped at 200).
+    #[serde(default)]
+    query: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct ListSprintsParams {
+    /// Project key. The sidecar resolves the project's first scrum board
+    /// and returns its sprints — covers the common single-board case
+    /// without forcing the agent to know board ids.
+    project_key: String,
+    /// Sprint state filter: `active`, `future`, `closed`, or `all`. Defaults
+    /// to `active,future` so the agent gets the sprints worth filing into.
+    #[serde(default)]
+    state: Option<String>,
 }
 
 #[tool_router]
@@ -206,7 +229,35 @@ impl Jira {
     }
 
     #[tool(
-        description = "Create a new Jira issue. Required: project_key + summary. Optional: issue_type (default Task), description (plain text — wrapped as one ADF paragraph), assignee_account_id, sprint_id (numeric — the issue is added to the sprint via a follow-up Agile API call after the create succeeds). Returns the new issue key + browse URL. Use this whenever the user asks to file/open/create a ticket."
+        description = "List users assignable on issues in a given project. Returns one line per user: accountId, displayName, email. Use this to resolve a human name (\"@Nikolay\", \"assignee=me\", \"give it to Petya\") into the accountId that create_issue / set_assignee require. `query` filters by name/email substring."
+    )]
+    async fn list_assignable_users(
+        &self,
+        Parameters(ListAssignableUsersParams { project_key, query }): Parameters<ListAssignableUsersParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let needle = query.as_deref().map(str::trim).filter(|s| !s.is_empty());
+        match self.fetch_assignable_users(&project_key, needle).await {
+            Ok(text) => Ok(CallToolResult::success(vec![Content::text(text)])),
+            Err(e) => Err(ErrorData::internal_error(e.to_string(), None)),
+        }
+    }
+
+    #[tool(
+        description = "List sprints on a project's first scrum board. Returns one line per sprint: id, name, state (active/future/closed). Use this to translate a human sprint name (\"Sprint 160\", \"current sprint\") into the numeric id that create_issue's sprint_id parameter accepts. `state` filters: `active`, `future`, `closed`, `all` (default = active+future)."
+    )]
+    async fn list_sprints(
+        &self,
+        Parameters(ListSprintsParams { project_key, state }): Parameters<ListSprintsParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let s = state.as_deref().map(str::trim).filter(|s| !s.is_empty()).unwrap_or("active,future");
+        match self.fetch_sprints(&project_key, s).await {
+            Ok(text) => Ok(CallToolResult::success(vec![Content::text(text)])),
+            Err(e) => Err(ErrorData::internal_error(e.to_string(), None)),
+        }
+    }
+
+    #[tool(
+        description = "Create a new Jira issue. Required: project_key + summary. Optional: issue_type (default Task), description (plain text — wrapped as one ADF paragraph), assignee_account_id (resolve via list_assignable_users), sprint_id (resolve via list_sprints — the issue is added to the sprint via a follow-up Agile API call after the create succeeds). Returns the new issue key + browse URL. Use this whenever the user asks to file/open/create a ticket."
     )]
     async fn create_issue(
         &self,
@@ -246,11 +297,13 @@ impl ServerHandler for Jira {
              READ:\n\
              - get_issue(key) — full detail with comments/transitions for a single ticket.\n\
              - search(jql) — JQL query for lists. e.g. `assignee = currentUser() AND resolution = Unresolved`.\n\
-             - list_projects(query?) — discover project keys when the user mentions a project by partial name.\n\n\
+             - list_projects(query?) — discover project keys when the user mentions a project by partial name.\n\
+             - list_assignable_users(project_key, query?) — translate a human name (\"give it to Petya\", \"@Nikolay\") into the accountId that create_issue / set_assignee need. Filter by name/email substring.\n\
+             - list_sprints(project_key, state?) — translate a sprint name (\"Sprint 160\", \"current sprint\") into the numeric id that create_issue's sprint_id parameter accepts. state defaults to active+future; pass `all` if the user references a closed one.\n\n\
              WRITE:\n\
              - add_comment(key, body) — post a comment. Use for status updates / handoffs / documenting findings.\n\
              - transition_issue(key, to, comment?) — move workflow state. Pass the human name (e.g. \"In Review\") or transition id.\n\
-             - create_issue(project_key, summary, issue_type?, description?, assignee_account_id?, sprint_id?) — file a new ticket. Default issue_type is Task. The user typically gives you a project name; call list_projects(query) first to translate it to a key. Returns the new issue key + URL.\n\n\
+             - create_issue(project_key, summary, issue_type?, description?, assignee_account_id?, sprint_id?) — file a new ticket. Default issue_type is Task. ALWAYS call list_projects → list_assignable_users + list_sprints up front when the user asks for a ticket with assignee/sprint, so you can pass real ids instead of bouncing back to the user. Returns the new issue key + URL.\n\n\
              Match GitHub semantics: read-only ops are auto-approved; mutation ops should be called only when the user explicitly asks for them."
                 .to_string(),
         );
@@ -569,6 +622,161 @@ impl Jira {
         }
 
         Ok(format!("Created {} — {}.{}", key, url, sprint_note))
+    }
+
+    async fn fetch_assignable_users(
+        &self,
+        project_key: &str,
+        needle: Option<&str>,
+    ) -> anyhow::Result<String> {
+        let url = format!(
+            "https://{}/rest/api/3/user/assignable/search?project={}&maxResults=200",
+            self.creds.workspace,
+            urlencoding::encode(project_key.trim())
+        );
+        let resp = self
+            .http
+            .get(&url)
+            .basic_auth(&self.creds.email, Some(&self.creds.token))
+            .header("Accept", "application/json")
+            .send()
+            .await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!(
+                "Jira {} listing assignable users for {}: {}",
+                status,
+                project_key,
+                truncate(&body, 500)
+            );
+        }
+        let raw: serde_json::Value = resp.json().await?;
+        let users = raw.as_array().cloned().unwrap_or_default();
+        let needle_lc = needle.map(|s| s.to_lowercase());
+        let mut lines: Vec<String> = Vec::new();
+        for u in &users {
+            let active = u.get("active").and_then(|x| x.as_bool()).unwrap_or(false);
+            if !active {
+                continue;
+            }
+            let name = u.get("displayName").and_then(|x| x.as_str()).unwrap_or("");
+            let email = u.get("emailAddress").and_then(|x| x.as_str()).unwrap_or("");
+            let acct = u.get("accountId").and_then(|x| x.as_str()).unwrap_or("");
+            if let Some(n) = needle_lc.as_deref() {
+                let hay = format!("{} {}", name, email).to_lowercase();
+                if !hay.contains(n) {
+                    continue;
+                }
+            }
+            lines.push(format!(
+                "- accountId={}  displayName={}  email={}",
+                acct,
+                name,
+                if email.is_empty() { "(hidden)" } else { email }
+            ));
+        }
+        if lines.is_empty() {
+            return Ok(format!("No assignable users found for project `{}`{}.", project_key,
+                needle.map(|n| format!(" matching `{}`", n)).unwrap_or_default()));
+        }
+        Ok(format!(
+            "Assignable users for `{}` ({} total):\n{}",
+            project_key,
+            lines.len(),
+            lines.join("\n")
+        ))
+    }
+
+    async fn fetch_sprints(
+        &self,
+        project_key: &str,
+        state: &str,
+    ) -> anyhow::Result<String> {
+        // 1) Resolve project's first scrum board. Most teams have one — covers
+        //    the common case without forcing the agent to know board ids.
+        let boards_url = format!(
+            "https://{}/rest/agile/1.0/board?projectKeyOrId={}&type=scrum&maxResults=50",
+            self.creds.workspace,
+            urlencoding::encode(project_key.trim())
+        );
+        let boards_resp = self
+            .http
+            .get(&boards_url)
+            .basic_auth(&self.creds.email, Some(&self.creds.token))
+            .header("Accept", "application/json")
+            .send()
+            .await?;
+        let boards_status = boards_resp.status();
+        if !boards_status.is_success() {
+            let body = boards_resp.text().await.unwrap_or_default();
+            anyhow::bail!(
+                "Jira {} listing boards for {}: {}",
+                boards_status,
+                project_key,
+                truncate(&body, 500)
+            );
+        }
+        let boards_v: serde_json::Value = boards_resp.json().await?;
+        let board_id = boards_v
+            .get("values")
+            .and_then(|x| x.as_array())
+            .and_then(|a| a.first())
+            .and_then(|b| b.get("id"))
+            .and_then(|x| x.as_u64())
+            .ok_or_else(|| anyhow::anyhow!(
+                "Project `{}` has no scrum board — sprints aren't applicable here.",
+                project_key
+            ))?;
+
+        // 2) Pull sprints, optionally filtered by state. Jira's Agile API
+        //    accepts comma-separated states; "all" means "no filter".
+        let mut url = format!(
+            "https://{}/rest/agile/1.0/board/{}/sprint?maxResults=50",
+            self.creds.workspace, board_id
+        );
+        if state != "all" {
+            url.push_str(&format!("&state={}", urlencoding::encode(state)));
+        }
+        let resp = self
+            .http
+            .get(&url)
+            .basic_auth(&self.creds.email, Some(&self.creds.token))
+            .header("Accept", "application/json")
+            .send()
+            .await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!(
+                "Jira {} listing sprints for board {}: {}",
+                status,
+                board_id,
+                truncate(&body, 500)
+            );
+        }
+        let v: serde_json::Value = resp.json().await?;
+        let sprints = v.get("values").and_then(|x| x.as_array()).cloned().unwrap_or_default();
+        if sprints.is_empty() {
+            return Ok(format!(
+                "No `{}` sprints on board {} (project `{}`).",
+                state, board_id, project_key
+            ));
+        }
+        let mut lines: Vec<String> = Vec::new();
+        for s in &sprints {
+            let id = s.get("id").and_then(|x| x.as_u64()).unwrap_or(0);
+            let name = s.get("name").and_then(|x| x.as_str()).unwrap_or("");
+            let st = s.get("state").and_then(|x| x.as_str()).unwrap_or("");
+            lines.push(format!("- id={}  name={}  state={}", id, name, st));
+        }
+        Ok(format!(
+            "Sprints on board {} (project `{}`, state={}):\n{}",
+            board_id,
+            project_key,
+            state,
+            lines.join("\n")
+        ))
     }
 
     async fn fetch_projects(
