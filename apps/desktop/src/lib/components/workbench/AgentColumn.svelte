@@ -89,6 +89,10 @@
         resolves the path against the session's cwd/worktree/editor and
         opens it in the Editor column. */
     onOpenMentionPath: (path: string) => void;
+    /** Cmd+V of an image in the composer — parent saves bytes to disk and
+        attaches them to the active session. Returns the count attached so
+        the column can decide whether to flash a hint. */
+    onPasteImages: (instanceId: string, kind: Kind, blobs: { name: string; type: string; blob: Blob }[]) => Promise<number>;
   }
 
   let {
@@ -137,7 +141,8 @@
     onSetSessionInput,
     onSendClaudeMessage,
     onStopClaude,
-    onOpenMentionPath
+    onOpenMentionPath,
+    onPasteImages
   }: Props = $props();
 
   const brandLabel = $derived(kind === 'claude' ? 'Claude Code' : 'Cursor');
@@ -1182,6 +1187,33 @@
             disabled={sess.sending}
             onfocus={() => focusLocalSession(sess.id)}
             onkeydown={(e) => onTextareaKeydown(e, sess)}
+            onpaste={(e) => {
+              // Pull image blobs out of the clipboard. If any landed,
+              // intercept the paste so the image data doesn't get
+              // round-tripped as garbled text into the textarea.
+              const items = e.clipboardData?.items;
+              if (!items) return;
+              const blobs: { name: string; type: string; blob: Blob }[] = [];
+              for (let i = 0; i < items.length; i++) {
+                const it = items[i];
+                if (it.kind === 'file' && it.type.startsWith('image/')) {
+                  const f = it.getAsFile();
+                  if (f) {
+                    const ext = f.type.split('/')[1] || 'png';
+                    blobs.push({
+                      name: f.name || `pasted-image.${ext}`,
+                      type: f.type,
+                      blob: f
+                    });
+                  }
+                }
+              }
+              if (blobs.length > 0) {
+                e.preventDefault();
+                focusLocalSession(sess.id);
+                void onPasteImages(instanceId, kind, blobs);
+              }
+            }}
           ></textarea>
           {#if mentionQuery !== null && mentionCandidates.length > 0}
             <div class="mention-pop" role="listbox" aria-label="Mention suggestions">

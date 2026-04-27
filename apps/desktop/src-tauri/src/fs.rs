@@ -31,6 +31,19 @@ pub fn write_file(path: &str, contents: &str) -> Result<(), String> {
     std::fs::write(path, contents).map_err(|e| format!("write {}: {}", path, e))
 }
 
+/// Binary write — for chat image attachments dropped from clipboard / Cmd+Shift+5
+/// floating preview where we have only the byte buffer (no source file path).
+/// Caller picks the destination; we just create parent dirs and dump the bytes.
+pub fn write_bytes(path: &str, bytes: &[u8]) -> Result<(), String> {
+    if let Some(parent) = PathBuf::from(path).parent() {
+        if !parent.as_os_str().is_empty() && !parent.exists() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("mkdir -p {}: {}", parent.display(), e))?;
+        }
+    }
+    std::fs::write(path, bytes).map_err(|e| format!("write {}: {}", path, e))
+}
+
 pub fn list_dir(path: &str) -> Result<Vec<DirEntry>, String> {
     let rd = std::fs::read_dir(path).map_err(|e| format!("read_dir {}: {}", path, e))?;
     let mut out: Vec<DirEntry> = Vec::new();

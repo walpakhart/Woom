@@ -737,6 +737,111 @@
     dragOverInstanceId = null;
   }
 
+  /** App-data path for chat image attachments (clipboard / Cmd+Shift+5 floating
+      preview / direct File blob drop). Resolved lazily once and cached — the
+      OS path is stable for the install. Lives under $APPDATA which is in the
+      `assetProtocol.scope` so `convertFileSrc` can render thumbnails. */
+  let cachedAppDataDir: string | null = null;
+  async function getAttachmentDir(): Promise<string> {
+    if (!cachedAppDataDir) {
+      cachedAppDataDir = await invoke<string>('app_data_dir');
+    }
+    return `${cachedAppDataDir}/chat-attachments`;
+  }
+
+  /** Read a Blob/File as base64 (without the `data:...;base64,` prefix). Uses
+      FileReader to avoid the `String.fromCharCode.apply` stack-overflow that
+      bites on multi-MB images. */
+  function blobToBase64(blob: Blob): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => {
+        const s = String(r.result ?? '');
+        const i = s.indexOf(',');
+        resolve(i >= 0 ? s.slice(i + 1) : s);
+      };
+      r.onerror = () => reject(r.error);
+      r.readAsDataURL(blob);
+    });
+  }
+
+  /** Save a list of in-memory image blobs to disk + attach them to a session.
+      Used for Files drops (Cmd+Shift+5 floating preview, drag from another
+      browser tab) and clipboard paste — anywhere we have bytes but no source
+      path. Sanitises the filename and prefixes a timestamp so two screenshots
+      from the same minute don't collide. */
+  async function attachBlobsToSession(sessionId: string, blobs: { name: string; type: string; blob: Blob }[]): Promise<number> {
+    if (blobs.length === 0) return 0;
+    const dir = await getAttachmentDir();
+    const savedPaths: string[] = [];
+    for (const item of blobs) {
+      try {
+        const b64 = await blobToBase64(item.blob);
+        // Sanitise: drop slashes (path traversal), collapse whitespace, keep
+        // unicode. Falls back to a generic name when the blob has none.
+        const safe = (item.name || `image.${guessExt(item.type)}`)
+          .replace(/[/\\]+/g, '_')
+          .replace(/\s+/g, ' ')
+          .trim();
+        const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        const path = `${dir}/${stamp}-${safe}`;
+        await invoke('fs_write_bytes', { path, base64: b64 });
+        savedPaths.push(path);
+      } catch (err) {
+        console.warn('attach blob failed', err);
+      }
+    }
+    if (savedPaths.length === 0) return 0;
+    return attachPathsToSession(sessionId, savedPaths);
+  }
+
+  function guessExt(mime: string): string {
+    if (mime.includes('jpeg')) return 'jpg';
+    if (mime.includes('gif')) return 'gif';
+    if (mime.includes('webp')) return 'webp';
+    return 'png';
+  }
+
+  /** Cmd+V of one or more images in a chat composer. Routes through the same
+      blob → on-disk → mention pipeline as drag-drop, so the resulting
+      attachment chip strip + transcript thumbnail look identical. */
+  async function pasteImagesIntoColumn(
+    instanceId: string,
+    kind: 'claude' | 'cursor',
+    blobs: { name: string; type: string; blob: Blob }[]
+  ): Promise<number> {
+    if (blobs.length === 0) return 0;
+    // Resolve target the same way `onAgentDrop` does: active session in this
+    // column, then any session bound here, then a fresh one of this kind.
+    const activeId = sessionsState.activeByInstance[instanceId];
+    let target = activeId ? sessionsState.list.find((s) => s.id === activeId) ?? null : null;
+    if (!target) target = sessionsState.list.find((s) => s.columnInstanceId === instanceId) ?? null;
+    if (!target) {
+      const id = newClaudeSession({ agentKind: kind, columnInstanceId: instanceId });
+      target = sessionsState.list.find((s) => s.id === id) ?? null;
+    }
+    if (!target) return 0;
+    const n = await attachBlobsToSession(target.id, blobs);
+    if (n > 0) setActiveSessionInColumn(instanceId, target.id);
+    return n;
+  }
+
+  /** Pull image File blobs out of a DragEvent's dataTransfer.files. Used as
+      a fallback for the Cmd+Shift+5 floating preview drag (which exposes
+      Files but NO text/uri-list, so the OS-path branch above misses it). */
+  function imageFilesFromEvent(e: DragEvent): { name: string; type: string; blob: Blob }[] {
+    const out: { name: string; type: string; blob: Blob }[] = [];
+    const files = e.dataTransfer?.files;
+    if (!files || files.length === 0) return out;
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i];
+      if (f && (f.type.startsWith('image/') || /\.(png|jpe?g|gif|webp|bmp|svg|heic|heif|avif)$/i.test(f.name))) {
+        out.push({ name: f.name, type: f.type || 'image/png', blob: f });
+      }
+    }
+    return out;
+  }
+
   function onAgentDrop(instanceId: string, kind: 'claude' | 'cursor', e: DragEvent) {
     e.preventDefault();
 
@@ -839,6 +944,26 @@
         setTimeout(() => (justDragged = false), 200);
         return;
       }
+    }
+
+    // 2.5) In-memory image File blobs. macOS Cmd+Shift+5 floating preview
+    //    drag exposes the screenshot as a `File` in `dataTransfer.files` but
+    //    omits `text/uri-list` (the file isn't necessarily on disk yet). Same
+    //    happens for cross-tab drags from a browser. Save the bytes ourselves
+    //    under $APPDATA/chat-attachments/ so we have a stable absolute path
+    //    that asset:// can serve and the agent CLI can read.
+    const imageBlobs = imageFilesFromEvent(e);
+    if (imageBlobs.length > 0) {
+      const target = pickTarget();
+      if (target) {
+        void attachBlobsToSession(target.id, imageBlobs).then((n) => {
+          if (n > 0) setActiveSessionInColumn(instanceId, target.id);
+        });
+      }
+      clearAgentDragState();
+      justDragged = true;
+      setTimeout(() => (justDragged = false), 200);
+      return;
     }
 
     // 3) Ticket / Sentry drop from inbox. The file branch above already
@@ -3344,6 +3469,7 @@
                 onSendClaudeMessage={() => void sendClaudeMessage()}
                 onStopClaude={() => void stopActiveAgent()}
                 onOpenMentionPath={(p) => void openMentionPath(p)}
+                onPasteImages={pasteImagesIntoColumn}
               />
             {:else if inst.kind === 'cursor' && connectedCursor}
               <AgentColumn
@@ -3393,6 +3519,7 @@
                 onSendClaudeMessage={() => void sendClaudeMessage()}
                 onStopClaude={() => void stopActiveAgent()}
                 onOpenMentionPath={(p) => void openMentionPath(p)}
+                onPasteImages={pasteImagesIntoColumn}
               />
             {:else if inst.kind === 'editor'}
               <EditorColumn

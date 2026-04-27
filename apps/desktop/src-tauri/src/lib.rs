@@ -173,6 +173,8 @@ pub fn run() {
             agent_status,
             fs_read_file,
             fs_write_file,
+            fs_write_bytes,
+            app_data_dir,
             fs_list_dir,
             fs_path_exists,
             fs_bash_run,
@@ -993,6 +995,28 @@ fn fs_read_file(path: String) -> Result<String, String> {
 #[tauri::command]
 fn fs_write_file(path: String, contents: String) -> Result<(), String> {
     fs::write_file(&path, &contents)
+}
+
+#[tauri::command]
+fn fs_write_bytes(path: String, base64: String) -> Result<(), String> {
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(base64.as_bytes())
+        .map_err(|e| format!("invalid base64: {}", e))?;
+    fs::write_bytes(&path, &bytes)
+}
+
+/// Resolve the OS-level app data dir (`~/Library/Application Support/<id>` on
+/// macOS) for the frontend. Used as a stable cwd-independent home for chat
+/// image attachments saved from clipboard or Cmd+Shift+5 drag, where we have
+/// only the bytes (no source path).
+#[tauri::command]
+fn app_data_dir(app: tauri::AppHandle) -> Result<String, String> {
+    use tauri::Manager;
+    app.path()
+        .app_data_dir()
+        .map(|p| p.to_string_lossy().into_owned())
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
