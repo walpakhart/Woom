@@ -261,8 +261,16 @@
               {#if inboxState.detailLoading && !inboxState.comments.length && !inboxState.prReviews.length}
                 <div class="tab-state">Loading conversation…</div>
               {:else}
-                {@const timeline = [...inboxState.prReviews.map((r) => ({ type: 'review' as const, at: r.submitted_at ?? '', data: r })), ...inboxState.comments.map((c) => ({ type: 'comment' as const, at: c.created_at, data: c }))].sort((a, b) => a.at.localeCompare(b.at))}
-                {#each timeline as entry (entry.type + '-' + entry.data.id)}
+                {@const timeline = [
+                  ...inboxState.prReviews.map((r) => ({ type: 'review' as const, at: r.submitted_at ?? '', data: r, key: `review-${r.id}` })),
+                  ...inboxState.comments.map((c) => ({ type: 'comment' as const, at: c.created_at, data: c, key: `comment-${c.id}` })),
+                  // Commits get interleaved into the same timeline by their
+                  // author_date, so reviewers' "approved / changes requested"
+                  // bubbles surface next to the SHAs that triggered them —
+                  // matches GitHub's own conversation pane layout.
+                  ...inboxState.prCommits.map((c) => ({ type: 'commit' as const, at: c.author_date, data: c, key: `commit-${c.sha}` }))
+                ].sort((a, b) => a.at.localeCompare(b.at))}
+                {#each timeline as entry (entry.key)}
                   {#if entry.type === 'review'}
                     {@const r = entry.data}
                     {@const rl = reviewStateLabel(r.state)}
@@ -305,6 +313,23 @@
                           </div>
                         {/if}
                       {/if}
+                    </div>
+                  {:else if entry.type === 'commit'}
+                    {@const cm = entry.data}
+                    <!-- Slim commit row matching GitHub's conversation
+                         timeline shape: tiny git icon, subject only (body
+                         omitted — same as GH), author chip, short SHA
+                         linking to the commit on github.com. -->
+                    <div class="timeline-commit">
+                      <span class="timeline-commit-icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.5"/><path d="M3 12h5.5M15.5 12H21"/></svg>
+                      </span>
+                      <span class="timeline-commit-msg" title={cm.message}>{cm.message.split('\n')[0]}</span>
+                      {#if cm.author_avatar}
+                        <img class="meta-avatar timeline-commit-avatar" src={cm.author_avatar} alt="" />
+                      {/if}
+                      <span class="meta-time mono">{relativeTime(cm.author_date, now)} ago</span>
+                      <a class="timeline-commit-sha mono" href={cm.url} target="_blank" rel="noopener noreferrer" title="Open commit on GitHub">{cm.short_sha}</a>
                     </div>
                   {:else}
                     {@const c = entry.data}
@@ -695,6 +720,48 @@
   .timeline-item {
     background: var(--bg-1); border: 1px solid var(--border-neutral);
     border-radius: 10px; padding: 14px 16px; margin-bottom: 10px;
+  }
+  /* Slim, sparse commit row in the conversation — visually softer than the
+     review/comment cards (no background, no border) so the surface still
+     reads as "those are the bubbles, this is just history". Matches the
+     way GitHub renders commit dots in the same timeline. */
+  .timeline-commit {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 4px;
+    margin-bottom: 6px;
+    font-size: 12px;
+    color: var(--text-1);
+  }
+  .timeline-commit-icon {
+    width: 22px; height: 22px;
+    display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 50%;
+    background: var(--bg-2);
+    border: 1px solid var(--border-neutral-hi);
+    color: var(--text-2);
+    flex-shrink: 0;
+  }
+  .timeline-commit-icon svg { width: 12px; height: 12px; }
+  .timeline-commit-msg {
+    flex: 1; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    color: var(--text-0);
+  }
+  .timeline-commit-avatar { width: 16px; height: 16px; }
+  .timeline-commit-sha {
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: var(--bg-2);
+    border: 1px solid var(--border-neutral-hi);
+    color: var(--text-1);
+    font-size: 10.5px;
+    text-decoration: none;
+    transition: all 120ms;
+  }
+  .timeline-commit-sha:hover {
+    color: var(--accent-bright);
+    border-color: var(--border-hi);
+    background: var(--accent-soft);
   }
   .timeline-head {
     display: flex; align-items: center; gap: 8px;
