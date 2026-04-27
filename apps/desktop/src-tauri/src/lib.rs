@@ -1,6 +1,7 @@
 mod agent;
 mod biometry;
 mod claude;
+mod claude_mcp;
 mod cursor;
 mod cursor_mcp;
 mod fs;
