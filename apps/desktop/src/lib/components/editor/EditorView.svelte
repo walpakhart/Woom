@@ -9,7 +9,7 @@
   import HistoryPanel from '$lib/components/editor/HistoryPanel.svelte';
   import DiffView from '$lib/components/editor/DiffView.svelte';
   import Splitter from '$lib/components/ui/Splitter.svelte';
-  import { notify, notifyError } from '$lib/state/toaster.svelte';
+  import { notifyError } from '$lib/state/toaster.svelte';
   import { applyRangeToAgent } from '$lib/services/applyToAgent';
 
   const ROOT_STORAGE_KEY = 'forgehold:editor:root';
@@ -81,14 +81,22 @@
   let gitStatusByPath = $state<Record<string, string>>({});
   let diffTarget = $state<{ path: string; staged: boolean } | null>(null);
 
-  /* Live line range of the user's selection in CodeMirror, mirrored
-     up from <Editor> via `onSelectionChange`. `null` means the
-     selection collapsed to a caret — nothing to "apply to" yet, so
-     the bar stays hidden. Reset whenever the active file or diff
-     mode changes; the new <Editor> instance starts with a fresh
-     (caret) selection but doesn't fire `onSelectionChange` for the
-     initial state, hence the explicit reset below. */
-  let selection = $state<{ startLine: number; endLine: number } | null>(null);
+  /* Live line range + viewport anchor of the user's selection in
+     CodeMirror, mirrored up from <Editor> via `onSelectionChange`.
+     `null` for the whole object means the selection collapsed to a
+     caret — nothing to "apply to" yet. `anchor === null` means the
+     selection is real but its end is currently scrolled out of the
+     CodeMirror viewport; we keep the selection state so re-scrolling
+     re-pops the popover, but render nothing in the meantime. Reset
+     whenever the active file or diff mode changes — the new <Editor>
+     instance starts with a fresh selection but doesn't fire
+     `onSelectionChange` for the initial state, hence the explicit
+     reset below. */
+  let selection = $state<{
+    startLine: number;
+    endLine: number;
+    anchor: { x: number; y: number } | null;
+  } | null>(null);
 
   $effect(() => {
     activePath;
@@ -153,23 +161,22 @@
       : `${selection.startLine}-${selection.endLine}`;
   }
 
+  /* No success/error toasts — the user gets the same intent
+     conveyed by the agent column flipping its active session and
+     the @-token appearing in the composer (which is in their
+     direct line of sight when they click an Apply button). Toasts
+     just add visual noise on every selection click. Errors here
+     would only fire if the session was concurrently destroyed,
+     which is rare enough to swallow silently rather than disrupt
+     the flow with a popup. */
   function handleApplyTo(btn: ApplyBtn) {
     if (!selection || !activePath) return;
-    const r = applyRangeToAgent({
+    applyRangeToAgent({
       sessionId: btn.sessionId,
       agentInstanceId: btn.agentInstanceId,
       filePath: activePath,
       startLine: selection.startLine,
       endLine: selection.endLine
-    });
-    if (!r.ok || !r.token) {
-      notifyError(new Error('Could not pin selection — session not found.'));
-      return;
-    }
-    notify({
-      kind: 'info',
-      title: `Pinned to ${btn.label}`,
-      body: `@${r.token}`
     });
   }
 
@@ -585,42 +592,43 @@
                   onSelectionChange={(sel) => (selection = sel)}
                 />
               {/key}
-              {#if selection && !diffTarget}
-                <!-- Floating "Apply to <agent>" bar. Sits at the bottom
-                     of the editor area as an overlay so showing it
-                     doesn't reflow the CodeMirror viewport (the user's
-                     selected lines stay where they were). One button
-                     per linked agent — labels disambiguate via
-                     `Kind · ColumnName` only when there's more than
-                     one of that kind, so the common 1-Claude case
-                     stays a clean "Apply to Claude". -->
-                <div class="ev-apply-bar" role="toolbar" aria-label="Apply selection to agent">
-                  <span class="ev-apply-bar-label">
-                    <svg class="i i-sm" viewBox="0 0 24 24" aria-hidden="true">
-                      <path d="M4 7h16M4 12h10M4 17h16" />
-                    </svg>
-                    <span class="mono">{relToRepo(activePath)}:{selectionRangeText()}</span>
-                  </span>
-                  <div class="ev-apply-bar-actions">
-                    {#if applyButtons.length === 0}
-                      <span class="ev-apply-bar-hint">Link an agent column to apply selections.</span>
-                    {:else}
-                      {#each applyButtons as btn (btn.sessionId)}
-                        <button
-                          class="ev-apply-btn"
-                          class:claude={btn.kind === 'claude'}
-                          class:cursor={btn.kind === 'cursor'}
-                          onclick={() => handleApplyTo(btn)}
-                          title={`Pin @${relToRepo(activePath)}:${selectionRangeText()} to ${btn.label}'s composer`}
-                        >
-                          <svg class="i i-sm" viewBox="0 0 24 24" aria-hidden="true">
-                            <path d="M5 12h12M13 6l6 6-6 6" />
-                          </svg>
-                          <span>Apply to {btn.label}</span>
-                        </button>
-                      {/each}
-                    {/if}
-                  </div>
+              {#if selection && selection.anchor && !diffTarget && applyButtons.length > 0}
+                <!-- Floating popover anchored at the right edge of the
+                     last selected line — same place Cursor/Copilot
+                     drop their inline action chips, so the action
+                     reads as "do this with the highlighted block".
+                     `position: fixed` makes the coordinates we get
+                     from CodeMirror's `coordsAtPos` (viewport-relative)
+                     drop in directly without any rect math. The
+                     anchor recomputes on scroll/resize via the
+                     editor's `geometryChanged` signal, so the chip
+                     follows the selection through scroll instead of
+                     drifting off into space. `mousedown.preventDefault`
+                     on each button keeps focus on CodeMirror, so the
+                     native selection rectangle stays visible while
+                     the user clicks an "Apply to" affordance. -->
+                <div
+                  class="ev-apply-pop"
+                  style:left="{selection.anchor.x}px"
+                  style:top="{selection.anchor.y}px"
+                  role="toolbar"
+                  aria-label="Apply selection to agent"
+                >
+                  {#each applyButtons as btn (btn.sessionId)}
+                    <button
+                      class="ev-apply-pop-btn"
+                      class:claude={btn.kind === 'claude'}
+                      class:cursor={btn.kind === 'cursor'}
+                      onmousedown={(e) => e.preventDefault()}
+                      onclick={() => handleApplyTo(btn)}
+                      title={`Pin @${relToRepo(activePath)}:${selectionRangeText()} to ${btn.label}'s composer`}
+                    >
+                      <svg class="i i-sm" viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M5 12h12M13 6l6 6-6 6" />
+                      </svg>
+                      <span>Apply to {btn.label}</span>
+                    </button>
+                  {/each}
                 </div>
               {/if}
             {/if}
@@ -807,57 +815,53 @@
 
   .ev-editor-wrap { flex: 1; min-height: 0; position: relative; }
 
-  /* Floating "Apply to <agent>" bar, anchored to the bottom of the
-     editor area. Absolute so it overlays the last few CodeMirror
-     lines instead of pushing them off-screen — the bar only appears
-     while a real range selection is live, so the overlay-vs-reflow
-     tradeoff favours not jiggling the viewport mid-action. */
-  .ev-apply-bar {
-    position: absolute; left: 0; right: 0; bottom: 0;
+  /* Floating "Apply to <agent>" popover, anchored to the right end
+     of the last selected line via fixed-position viewport
+     coordinates from `coordsAtPos`. A small `translate` offset puts
+     the chip just below + slightly past the right edge of the
+     highlight so it doesn't overlap the selection or the next
+     line's text. `pointer-events: auto` is implicit (default) so
+     the chip is clickable; the empty space around it is
+     `pointer-events: none` only because there's nothing else there
+     — we don't wrap the chip in a transparent overlay that would
+     intercept editor clicks. */
+  .ev-apply-pop {
+    position: fixed;
+    z-index: 1000;
+    transform: translate(8px, 6px);
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px;
     background: var(--bg-2);
-    border-top: 1px solid var(--border-neutral);
-    padding: 6px 12px;
-    display: flex; align-items: center; gap: 12px;
-    z-index: 5;
-    box-shadow: 0 -6px 16px -10px rgba(0, 0, 0, 0.4);
-    flex-wrap: wrap;
+    border: 1px solid var(--border-hi);
+    border-radius: 7px;
+    box-shadow: 0 6px 20px -6px rgba(0, 0, 0, 0.55), 0 1px 0 0 rgba(0, 0, 0, 0.1);
+    white-space: nowrap;
   }
-  .ev-apply-bar-label {
-    display: inline-flex; align-items: center; gap: 6px;
-    color: var(--text-1); font-size: 11.5px;
-    min-width: 0;
-  }
-  .ev-apply-bar-label .mono {
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    max-width: 280px;
-    color: var(--text-0);
-  }
-  .ev-apply-bar-actions {
-    display: inline-flex; align-items: center; gap: 6px;
-    flex-wrap: wrap;
-    margin-left: auto;
-  }
-  .ev-apply-bar-hint {
-    font-size: 11.5px; color: var(--text-2);
-  }
-  .ev-apply-btn {
+  .ev-apply-pop-btn {
     display: inline-flex; align-items: center; gap: 6px;
     padding: 4px 10px;
     border-radius: 5px;
-    background: var(--bg-3);
-    border: 1px solid var(--border-neutral);
+    background: transparent;
+    border: 1px solid transparent;
     color: var(--text-0);
     font-size: 12px; font-weight: 500;
     cursor: pointer;
-    transition: background 100ms, border-color 100ms;
+    transition: background 100ms, border-color 100ms, color 100ms;
   }
-  .ev-apply-btn:hover { background: var(--accent-soft); border-color: var(--accent); }
-  .ev-apply-btn :global(svg) { width: 12px; height: 12px; opacity: 0.85; }
-  /* Keep the kind hint subtle but present — a 2px left accent stripe
-     in the agent's family colour. Helps the user pick the right
-     button at a glance when both Claude and Cursor are linked. */
-  .ev-apply-btn.claude { border-left-width: 2px; border-left-color: var(--accent); }
-  .ev-apply-btn.cursor { border-left-width: 2px; border-left-color: var(--text-1); }
+  .ev-apply-pop-btn:hover {
+    background: var(--accent-soft);
+    border-color: var(--accent);
+  }
+  .ev-apply-pop-btn :global(svg) {
+    width: 12px; height: 12px; opacity: 0.85;
+  }
+  /* Same family-colour accent we use elsewhere — claude == orange
+     accent, cursor == subdued neutral — so the user can scan
+     "which agent does this go to" without reading the label. */
+  .ev-apply-pop-btn.claude { border-left: 2px solid var(--accent); padding-left: 8px; }
+  .ev-apply-pop-btn.cursor { border-left: 2px solid var(--text-1); padding-left: 8px; }
 
   .ev-error {
     position: absolute;

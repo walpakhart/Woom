@@ -12,12 +12,28 @@
     path: string;
     onDirty?: (dirty: boolean) => void;
     onSaved?: (path: string) => void;
-    /** Fires whenever the user's selection changes. Reports the line
-     *  range (1-based, inclusive) of the primary selection, or `null`
-     *  when the selection collapses to a caret. EditorView uses this
-     *  to surface an "Apply to …" bar with the selected range pinned
-     *  as a `@path:start-end` mention on a linked agent's composer. */
-    onSelectionChange?: (sel: { startLine: number; endLine: number } | null) => void;
+    /** Fires whenever the user's selection or the editor geometry
+     *  changes (so scrolling moves the popover with the selection
+     *  rectangle). Reports:
+     *    - `startLine`, `endLine` — 1-based inclusive line range.
+     *    - `anchor` — viewport-relative coordinates of the END of the
+     *       last selected line, used by EditorView to position the
+     *       floating "Apply to <agent>" popover. `null` means the
+     *       end of the selection is currently scrolled out of view —
+     *       the popover hides until it's visible again, but the
+     *       selection itself isn't lost so re-scrolling brings it
+     *       back without the user re-selecting.
+     *  Whole result is `null` only when the selection collapses to a
+     *  caret. */
+    onSelectionChange?: (
+      sel:
+        | {
+            startLine: number;
+            endLine: number;
+            anchor: { x: number; y: number } | null;
+          }
+        | null
+    ) => void;
   }
   let { path, onDirty, onSaved, onSelectionChange }: Props = $props();
 
@@ -68,13 +84,22 @@
                   onDirty?.(d);
                 }
               }
-              // Selection-change → bubble up the line range so the
-              // parent can surface "Apply to <agent>" affordances. We
-              // only fire when the selection actually changes (CM
-              // re-fires this listener for unrelated reasons too) and
-              // collapse caret-only selections to `null` so the parent
-              // doesn't have to special-case "is this a real range".
-              if (u.selectionSet || u.docChanged) {
+              // Selection-change OR geometry-change → recompute the
+              // popover anchor so it tracks the end of the selection
+              // rectangle even as the user scrolls inside CodeMirror.
+              // We collapse caret-only selections to `null` so the
+              // parent doesn't have to special-case "is this a real
+              // range", and report `anchor: null` (rather than a fake
+              // off-screen pos) when the end of the selection is
+              // outside the visible viewport — the parent hides the
+              // popover but keeps the selection state, so scrolling
+              // back into view re-anchors without re-selecting.
+              if (
+                u.selectionSet ||
+                u.docChanged ||
+                u.geometryChanged ||
+                u.viewportChanged
+              ) {
                 if (onSelectionChange) {
                   const sel = u.state.selection.main;
                   if (sel.from === sel.to) {
@@ -90,7 +115,18 @@
                       rawEndLine > startLine && sel.to === u.state.doc.line(rawEndLine).from
                         ? rawEndLine - 1
                         : rawEndLine;
-                    onSelectionChange({ startLine, endLine });
+                    // Anchor on the END of the last selected line so
+                    // the popover sits flush with the right edge of
+                    // the highlight rectangle on the bottom-most line,
+                    // matching how Cursor / GitHub Copilot anchor
+                    // their inline action bars.
+                    const anchorPos = u.state.doc.line(endLine).to;
+                    const coords = u.view.coordsAtPos(anchorPos);
+                    onSelectionChange({
+                      startLine,
+                      endLine,
+                      anchor: coords ? { x: coords.right, y: coords.bottom } : null
+                    });
                   }
                 }
               }
