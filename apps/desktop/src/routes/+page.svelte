@@ -1350,13 +1350,16 @@
           if (m.source === 'file') {
             const abs = m.body ?? m.externalId;
             const kind = m.isDir ? 'directory' : isImagePath(abs) ? 'image' : 'file';
-            // For Claude, images are attached as base64 vision blocks via
-            // stream-json input — no need to also describe them in text or
-            // ask the agent to Read them. For Cursor (no vision input) we
-            // fall back to the path-pointer flow.
+            // Image payload routing per agent:
+            //  - Claude: already embedded as base64 content blocks via
+            //    stream-json input below; no need to also describe in text.
+            //  - Cursor: cursor-agent's headless mode actually DOES vision
+            //    when the absolute path is in the prompt text (verified
+            //    against cursor-agent CLI 2026-04). So we keep the path-
+            //    pointer mention — it triggers the agent's native image read.
             if (kind === 'image' && agentKindForPrompt === 'claude') return null;
             const hint = kind === 'image'
-              ? `This is an image attached by the user — use the Read tool with its absolute path to view it inline.`
+              ? `This is an image attached by the user — load it via its absolute path to view it inline.`
               : `You have Read / Glob / Grep tools — use them to inspect this ${kind} when relevant.`;
             const label = kind === 'image' ? `Attached ${kind}: ${m.title}` : `Referenced ${kind}: @${m.externalId}`;
             return `${label}\nAbsolute path: ${abs}\n${hint}`;
