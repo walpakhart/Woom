@@ -931,9 +931,16 @@ async fn claude_ask(
     // change cwd) so the agent always sees current state. Prepended to
     // the system prompt for Claude / to the prompt itself for Cursor.
     #[allow(non_snake_case)] appContext: Option<String>,
+    // Absolute paths of image files attached to this turn. For Claude these
+    // get base64-embedded as `image` content blocks via stream-json input
+    // (the model sees the bytes directly via vision). Empty for Cursor —
+    // its CLI has no equivalent input format, so the frontend falls back
+    // to the path-mention flow there.
+    #[allow(non_snake_case)] imagePaths: Option<Vec<String>>,
 ) -> Result<AgentAskResult, String> {
     let cwd_path = cwd.as_deref().map(std::path::Path::new);
     let kind = agentKind.unwrap_or_default();
+    let images = imagePaths.unwrap_or_default();
     agent::ask(
         kind,
         app,
@@ -946,6 +953,7 @@ async fn claude_ask(
         rules.as_deref(),
         cursorModel.as_deref(),
         appContext.as_deref(),
+        &images,
     )
     .await
     .map_err(|e| e.to_string())

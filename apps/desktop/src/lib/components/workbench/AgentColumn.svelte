@@ -971,6 +971,17 @@
                 {/if}
               </div>
               <div class="chat-msg-body">
+                {#if msg.role === 'user' && msg.images && msg.images.length > 0}
+                  <!-- Image attachments stamped on the user message at send time
+                       so the transcript still shows what was sent after the
+                       composer chip strip clears. Loaded via convertFileSrc
+                       (Tauri asset:// protocol — scoped to $HOME). -->
+                  <div class="chat-msg-images">
+                    {#each msg.images as img (img.path)}
+                      <img class="chat-msg-image" src={convertFileSrc(img.path)} alt={img.name} title={img.name} loading="lazy" />
+                    {/each}
+                  </div>
+                {/if}
                 {#if editingMsg && editingMsg.sessionId === sess.id && editingMsg.index === idx}
                   <textarea
                     class="chat-msg-edit"
@@ -1382,6 +1393,19 @@
   }
   .chat-msg--system .chat-msg-body {
     color: var(--text-2); font-style: italic;
+  }
+  /* Image attachments stamped into the user-message bubble at send time. */
+  .chat-msg-images {
+    display: flex; flex-wrap: wrap; gap: 6px;
+    margin-bottom: 6px;
+  }
+  .chat-msg-image {
+    max-width: 220px; max-height: 160px;
+    border-radius: 8px;
+    border: 1px solid var(--border-neutral-hi);
+    background: var(--bg-2);
+    object-fit: contain;
+    display: block;
   }
 
   .chat-typing {

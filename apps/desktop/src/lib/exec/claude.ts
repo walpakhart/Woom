@@ -32,6 +32,11 @@ export interface AgentRunRequest {
    *  so it doesn't blindly add a NEW column when the user said "switch".
    *  Built fresh on every turn. */
   appContext: string | null;
+  /** Absolute paths of image attachments. For Claude they get base64-
+   *  embedded as `image` content blocks via the CLI's stream-json input;
+   *  for Cursor (no equivalent flag) the backend ignores this and the
+   *  caller should fall back to the path-mention flow. */
+  imagePaths?: string[];
   /** Called with every assistant-text delta as it streams in. */
   onAssistantDelta: (sessionId: string, delta: string) => void;
   /** Called with `thinking` deltas from reasoning models. Optional —
@@ -93,7 +98,8 @@ export async function runAgentRequest(req: AgentRunRequest): Promise<AgentRunRes
       rules: req.rules,
       agentKind: req.agentKind,
       cursorModel: req.cursorModel,
-      appContext: req.appContext
+      appContext: req.appContext,
+      imagePaths: req.imagePaths ?? []
     });
     return { reply: result.reply, sessionUuid: result.session_uuid };
   } finally {

@@ -79,6 +79,7 @@ pub async fn ask(
     rules: Option<&str>,
     cursor_model: Option<&str>,
     app_context: Option<&str>,
+    image_paths: &[String],
 ) -> Result<AgentAskResult, AgentError> {
     match kind {
         AgentKind::Claude => {
@@ -92,6 +93,7 @@ pub async fn ask(
                 resume,
                 rules,
                 app_context,
+                image_paths,
             )
             .await?;
             // Claude reuses whatever UUID we handed it, so no change.

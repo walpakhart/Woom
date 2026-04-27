@@ -63,6 +63,12 @@ export type ClaudeMessage = {
       concatenation of every text-event body (used for search /
       back-compat / replaceLastAssistant). */
   events?: MessageEvent[];
+  /** Image attachments the user sent on this turn. Stored alongside the
+      message so the transcript still shows what was sent after the agent
+      replies (the chip strip above the composer is cleared on send). Each
+      entry holds the absolute path (rendered via `convertFileSrc`) and the
+      basename for the alt text. Only set on `role: 'user'` messages. */
+  images?: { path: string; name: string }[];
 };
 
 export type Mention = {

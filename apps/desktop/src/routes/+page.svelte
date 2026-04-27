@@ -1296,16 +1296,26 @@
     if (!s || s.sending) return;
     // Allow send with empty text as long as there's at least one attachment —
     // dropping just an image with no extra prompt is a valid "look at this"
-    // turn (Claude reads it via the path baked into the prompt context).
+    // turn (the image goes to the model as a vision content block).
     if (!s.input.trim() && s.mentions.length === 0) return;
     const text = s.input.trim();
     const id = s.id;
-    appendSessionMessage(id, { role: 'user', content: text, at: new Date().toISOString() });
+    // Snapshot the mentions BEFORE clearing so we can still bake them into
+    // the prompt below + stamp the image refs onto the user-message bubble
+    // so the transcript still shows what was sent after the strip clears.
+    const mentionsSnapshotPre = s.mentions;
+    const imageMentions = mentionsSnapshotPre.filter(
+      (m) => m.source === 'file' && !m.isDir && !!m.body && isImagePath(m.body)
+    );
+    const userImages = imageMentions.map((m) => ({ path: m.body!, name: m.title }));
+    appendSessionMessage(id, {
+      role: 'user',
+      content: text,
+      at: new Date().toISOString(),
+      ...(userImages.length ? { images: userImages } : {})
+    });
     // Auto-title from first user message when chat had no mentions
     const curr = sessionsState.list.find((x) => x.id === id);
-    // Snapshot the mentions BEFORE clearing so we can still bake them into
-    // the prompt below. The attachments strip disappears immediately after
-    // send — that's what the user asked for.
     const mentionsSnapshot = curr?.mentions ?? [];
     if (
       curr &&
@@ -1332,6 +1342,7 @@
     // so the CLI still gets the context even though the UI no longer
     // shows the chips.
     const sess = sessionsState.list.find((x) => x.id === id);
+    const agentKindForPrompt = sess?.agentKind ?? 'claude';
     let prompt = text;
     if (mentionsSnapshot.length) {
       const ctx = mentionsSnapshot
@@ -1339,19 +1350,22 @@
           if (m.source === 'file') {
             const abs = m.body ?? m.externalId;
             const kind = m.isDir ? 'directory' : isImagePath(abs) ? 'image' : 'file';
+            // For Claude, images are attached as base64 vision blocks via
+            // stream-json input — no need to also describe them in text or
+            // ask the agent to Read them. For Cursor (no vision input) we
+            // fall back to the path-pointer flow.
+            if (kind === 'image' && agentKindForPrompt === 'claude') return null;
             const hint = kind === 'image'
               ? `This is an image attached by the user — use the Read tool with its absolute path to view it inline.`
               : `You have Read / Glob / Grep tools — use them to inspect this ${kind} when relevant.`;
-            // Images don't get an inline @token in the input (externalId is
-            // the abs path, not a typeable handle), so we identify them by
-            // title + path rather than the @-mention syntax.
             const label = kind === 'image' ? `Attached ${kind}: ${m.title}` : `Referenced ${kind}: @${m.externalId}`;
             return `${label}\nAbsolute path: ${abs}\n${hint}`;
           }
           return `@${m.externalId} — ${m.title}` + (m.body ? `\n\n${m.body}` : '');
         })
+        .filter((x): x is string => x !== null)
         .join('\n\n----\n\n');
-      prompt = `Referenced items:\n\n${ctx}\n\n----\n\nUser message:\n${text}`;
+      if (ctx) prompt = `Referenced items:\n\n${ctx}\n\n----\n\nUser message:\n${text}`;
     }
 
     // Priority of working dir:
@@ -1367,6 +1381,10 @@
     const agentKind = sess?.agentKind ?? 'claude';
     const cursorModel = agentKind === 'cursor' ? (sess?.cursorModel ?? null) : null;
     const appContext = buildAgentAppContext(id);
+    // Image vision blocks are a Claude-only path (cursor-agent has no
+    // equivalent input-format flag). For Cursor we already wove the
+    // "Read this image at <path>" hint into the prompt above.
+    const imagePaths = agentKind === 'claude' ? userImages.map((u) => u.path) : [];
 
     try {
       const result = await runAgentRequest({
@@ -1379,6 +1397,7 @@
         agentKind,
         cursorModel,
         appContext,
+        imagePaths,
         onAssistantDelta: appendAssistantDelta,
         onAppNavigation: handleAppNavigation
       });
@@ -2090,11 +2109,16 @@
     const trimmed = draft.trim();
     if (!trimmed) return;
     editingMsg = null;
-    // Truncate everything from this message onward, then re-send with the
-    // new text. That way mentions stay in sync with what was truly asked.
-    // Also make sure the session is active so sendClaudeMessage picks it up.
+    // Snapshot the images attached to the message we're editing BEFORE the
+    // truncate drops it from the transcript — so resending still carries the
+    // same vision payload.
+    const orig = sessionsState.list.find((s) => s.id === sessionId)?.messages[index];
+    const images = orig?.images ?? [];
     sessionsState.activeClaudeId = sessionId;
     truncateSessionAt(sessionId, index);
+    if (images.length) {
+      attachPathsToSession(sessionId, images.map((i) => i.path));
+    }
     setSessionInput(sessionId, trimmed);
     await sendClaudeMessage();
   }
@@ -2104,8 +2128,13 @@
       'Resend this message?\n\nEverything after it (Claude\'s replies, your later messages, pending action cards) will be erased.'
     );
     if (!ok) return;
+    const orig = sessionsState.list.find((s) => s.id === sessionId)?.messages[index];
+    const images = orig?.images ?? [];
     sessionsState.activeClaudeId = sessionId;
     truncateSessionAt(sessionId, index);
+    if (images.length) {
+      attachPathsToSession(sessionId, images.map((i) => i.path));
+    }
     setSessionInput(sessionId, content);
     await sendClaudeMessage();
   }

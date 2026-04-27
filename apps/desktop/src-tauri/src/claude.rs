@@ -125,6 +125,23 @@ fn home_dir() -> Option<PathBuf> {
     std::env::var("HOME").ok().map(PathBuf::from)
 }
 
+/// Minimal extension → media-type mapping for the four formats Anthropic's
+/// vision endpoint accepts. Anything else falls through to `image/png` —
+/// the API will reject unsupported types with a clear error rather than
+/// silently corrupting the upload.
+fn guess_image_media_type(path: &str) -> &'static str {
+    let lower = path.to_ascii_lowercase();
+    if lower.ends_with(".jpg") || lower.ends_with(".jpeg") {
+        "image/jpeg"
+    } else if lower.ends_with(".gif") {
+        "image/gif"
+    } else if lower.ends_with(".webp") {
+        "image/webp"
+    } else {
+        "image/png"
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ClaudeRunError {
     #[error("claude CLI is not installed — run `curl -fsSL https://claude.ai/install.sh | bash` or see https://docs.claude.com/en/docs/claude-code/overview")]
@@ -156,9 +173,10 @@ pub async fn ask(
     resume: bool,
     rules: Option<&str>,
     app_context: Option<&str>,
+    image_paths: &[String],
 ) -> Result<String, ClaudeRunError> {
     use tauri::Emitter;
-    use tokio::io::AsyncBufReadExt;
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 
     let status = detect();
     if !status.detected {
@@ -173,12 +191,28 @@ pub async fn ask(
     // Drop guard ensures the temp config file is removed on every exit path.
     let _mcp_guard = mcp.as_ref().map(|(p, _)| TempFile(p.clone()));
 
+    // When the user attached images, switch to `--input-format stream-json` so
+    // we can embed proper `image` content blocks alongside the text. The model
+    // sees the bytes via vision — no Read tool call, no path-encoding pitfalls,
+    // works for any filename including em-dash + Cyrillic. Plain text turns
+    // (no images) keep the simpler `-p <prompt>` arg path.
+    let stream_input = !image_paths.is_empty();
+
     let mut cmd = tokio::process::Command::new(bin);
-    cmd.arg("-p")
-        .arg(prompt)
-        .arg("--output-format")
-        .arg("stream-json")
-        .arg("--verbose");
+    if stream_input {
+        cmd.arg("-p")
+            .arg("--input-format")
+            .arg("stream-json")
+            .arg("--output-format")
+            .arg("stream-json")
+            .arg("--verbose");
+    } else {
+        cmd.arg("-p")
+            .arg(prompt)
+            .arg("--output-format")
+            .arg("stream-json")
+            .arg("--verbose");
+    }
     if resume {
         cmd.arg("--resume").arg(claude_uuid);
     } else {
@@ -258,11 +292,55 @@ pub async fn ask(
     }
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
+    if stream_input {
+        cmd.stdin(std::process::Stdio::piped());
+    }
 
     let mut child = cmd.spawn()?;
     let pid = child.id().unwrap_or(0);
     if pid != 0 {
         runners.lock().unwrap().insert(session_id.to_string(), pid);
+    }
+
+    if stream_input {
+        // Build one user message with text + image content blocks. We resolve
+        // each image to base64 + media_type up front; if a path can't be read
+        // (deleted, permission), skip it silently — the user still gets their
+        // text turn rather than a hard failure.
+        use base64::Engine;
+        let mut content: Vec<serde_json::Value> = Vec::new();
+        // The text block goes first so the prompt context (workbench app
+        // context, mention bodies) stays at the head of the message — same
+        // reading order Claude sees in interactive mode.
+        content.push(serde_json::json!({ "type": "text", "text": prompt }));
+        for p in image_paths {
+            let bytes = match tokio::fs::read(p).await {
+                Ok(b) => b,
+                Err(_) => continue,
+            };
+            let media_type = guess_image_media_type(p);
+            let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+            content.push(serde_json::json!({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": media_type,
+                    "data": b64,
+                }
+            }));
+        }
+        let msg = serde_json::json!({
+            "type": "user",
+            "message": { "role": "user", "content": content }
+        });
+        let line = msg.to_string();
+        if let Some(mut stdin) = child.stdin.take() {
+            // Best-effort: failures to write are surfaced via the CLI's
+            // exit code path below (it'll error out if the input is empty).
+            let _ = stdin.write_all(line.as_bytes()).await;
+            let _ = stdin.write_all(b"\n").await;
+            let _ = stdin.shutdown().await;
+        }
     }
 
     let stdout = child
