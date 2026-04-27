@@ -14,6 +14,7 @@
     formatCostUsd,
     formatTokens
   } from '$lib/usage';
+  import { quotaState, formatResetsIn, refreshPlanUsage } from '$lib/state/quota.svelte';
   import { invoke, convertFileSrc } from '@tauri-apps/api/core';
   import { open as openDialog } from '@tauri-apps/plugin-dialog';
   import { inboxState } from '$lib/state/inbox.svelte';
@@ -223,6 +224,35 @@
         )
       : 0
   );
+
+  // Plan-usage chip values. The 5-hour rolling bucket is the
+  // "headline" number — that's the limit that resets fastest and
+  // burns first when the user spams turns, so it's most actionable
+  // for a glance. Other buckets surface in the popover + (when over
+  // the warn threshold) we color the chip.
+  const planFiveHour = $derived(quotaState.usage?.five_hour?.utilization ?? null);
+  const planSevenDay = $derived(quotaState.usage?.seven_day?.utilization ?? null);
+  // Color by the worst of the two — long-tail weekly hit feels
+  // identical to the user as a near-term 5h hit, both cap turns.
+  const planRingClass = $derived.by(() => {
+    const worst = Math.max(planFiveHour ?? 0, planSevenDay ?? 0);
+    if (worst >= 85) return 'plan-chip plan-chip--alert';
+    if (worst >= 60) return 'plan-chip plan-chip--warn';
+    return 'plan-chip';
+  });
+  // Plan-usage popover open/close. Local to the active column —
+  // each AgentColumn instance has its own toggle since the chip
+  // lives in each column's header.
+  let planPopoverOpen = $state(false);
+  /** Pick the bar color by utilisation. Mirrors how Claude Code's
+   *  /usage panel paints: blue under 60%, yellow 60-85, red over
+   *  85. Same thresholds as the chip border so the bar inside the
+   *  popover matches the outer chip's vibe. */
+  function planBarColor(pct: number | null): string {
+    if (pct == null || pct < 60) return 'var(--accent-bright)';
+    if (pct < 85) return '#d18a4a';
+    return '#c75a4a';
+  }
 
   // Per-message expansion of the "Thinking" pill. Keyed by `${sessId}:${idx}`
   // so two sessions in the same column don't share state. Default = collapsed
@@ -960,6 +990,110 @@
             </svg>
             <span class="mono">{pct}% · {formatCostUsd(cumCostUsd)}</span>
           </div>
+        {/if}
+        {#if quotaState.usage && (planFiveHour !== null || planSevenDay !== null)}
+          <!-- Subscription quota chip → click opens a popover with
+               progress bars, mirroring `claude /usage` in the CLI.
+               Same OAuth endpoint, same numbers. Headline on the
+               chip is 5h + weekly because those are the two walls
+               users hit; full breakdown (Opus / Sonnet / Claude
+               Design) lives in the popover. -->
+          <div class="plan-chip-wrap">
+            <button
+              type="button"
+              class={planRingClass}
+              onclick={() => { planPopoverOpen = !planPopoverOpen; if (planPopoverOpen) void refreshPlanUsage({ force: true }); }}
+              aria-expanded={planPopoverOpen}
+              aria-haspopup="dialog"
+              title="Plan usage — click for breakdown"
+            >
+              <svg class="i i-sm" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M3 12a9 9 0 1 0 9-9"/>
+                <path d="M12 7v5l3 2"/>
+              </svg>
+              <span class="mono">
+                {#if planFiveHour !== null}5h {Math.round(planFiveHour)}%{/if}
+                {#if planFiveHour !== null && planSevenDay !== null} · {/if}
+                {#if planSevenDay !== null}7d {Math.round(planSevenDay)}%{/if}
+              </span>
+            </button>
+            {#if planPopoverOpen}
+              {@const u = quotaState.usage}
+              {@const buckets = [
+                { key: '5h', label: '5-hour limit', pct: u.five_hour?.utilization ?? null, resetsAt: u.five_hour?.resets_at ?? null },
+                { key: '7d', label: 'Weekly · all models', pct: u.seven_day?.utilization ?? null, resetsAt: u.seven_day?.resets_at ?? null },
+                { key: 'opus', label: 'Weekly · Opus', pct: u.seven_day_opus?.utilization ?? null, resetsAt: u.seven_day_opus?.resets_at ?? null },
+                { key: 'sonnet', label: 'Weekly · Sonnet', pct: u.seven_day_sonnet?.utilization ?? null, resetsAt: u.seven_day_sonnet?.resets_at ?? null },
+                { key: 'omelette', label: 'Weekly · Claude Design', pct: u.seven_day_omelette?.utilization ?? null, resetsAt: u.seven_day_omelette?.resets_at ?? null }
+              ].filter((b) => b.pct !== null)}
+              <!-- Backdrop catches outside clicks to close. Sits
+                   below the popover (z-index) but above the page so
+                   clicks on chat / sidebar dismiss instead of
+                   passing through. -->
+              <button
+                type="button"
+                class="plan-popover-backdrop"
+                aria-label="Close plan usage"
+                onclick={() => { planPopoverOpen = false; }}
+              ></button>
+              <div class="plan-popover" role="dialog" aria-label="Plan usage breakdown">
+                <div class="plan-popover-head">
+                  <span>Plan usage</span>
+                  <button
+                    type="button"
+                    class="plan-refresh"
+                    onclick={() => void refreshPlanUsage({ force: true })}
+                    disabled={quotaState.loading}
+                    aria-label="Refresh plan usage"
+                    title={quotaState.loading ? 'Refreshing…' : 'Refresh now'}
+                  >
+                    <svg class="i i-sm" viewBox="0 0 24 24" class:plan-refresh--spinning={quotaState.loading}>
+                      <path d="M1 4v6h6M23 20v-6h-6"/>
+                      <path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4-4.64 4.36A9 9 0 0 1 3.51 15"/>
+                    </svg>
+                  </button>
+                </div>
+                {#each buckets as b (b.key)}
+                  {@const pct = Math.max(0, Math.min(100, b.pct ?? 0))}
+                  {@const resetsIn = formatResetsIn(b.resetsAt)}
+                  <div class="plan-row">
+                    <div class="plan-row-head">
+                      <span class="plan-row-label">{b.label}</span>
+                      <span class="plan-row-num mono">
+                        {Math.round(pct)}%{resetsIn ? ` · resets ${resetsIn}` : ''}
+                      </span>
+                    </div>
+                    <div class="plan-bar">
+                      <div
+                        class="plan-bar-fill"
+                        style="width: {pct}%; background: {planBarColor(b.pct)};"
+                      ></div>
+                    </div>
+                  </div>
+                {/each}
+                <div class="plan-popover-foot mono">
+                  Source: <code>api.anthropic.com/api/oauth/usage</code> · same numbers as <code>claude /usage</code>
+                </div>
+              </div>
+            {/if}
+          </div>
+        {:else if quotaState.error}
+          <!-- Fetch failed (typically: not logged in via `claude
+               login`, or a 429 from over-eager polling). Click to
+               retry. Hover surfaces the underlying error string. -->
+          <button
+            type="button"
+            class="plan-chip plan-chip--err"
+            onclick={() => void refreshPlanUsage({ force: true })}
+            disabled={quotaState.loading}
+            title={`Plan-usage unavailable: ${quotaState.error}. Click to retry.`}
+          >
+            <svg class="i i-sm" viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="12" cy="12" r="9"/>
+              <path d="M12 8v4M12 16h0"/>
+            </svg>
+            <span class="mono">plan: —</span>
+          </button>
         {/if}
       {/if}
     </div>
@@ -2014,6 +2148,107 @@
   .ctx-ring-fill { stroke: var(--text-2); transition: stroke-dasharray 0.2s ease; }
   .ctx-ring-fill--warn { stroke: #d18a4a; }
   .ctx-ring-fill--alert { stroke: #c75a4a; }
+  .plan-chip-wrap { position: relative; display: inline-flex; flex-shrink: 0; }
+  .plan-chip {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 3px 8px 3px 6px;
+    border: 1px solid var(--border-neutral-hi);
+    border-radius: 7px;
+    background: var(--bg-0);
+    color: var(--text-2);
+    font-size: 11px;
+    flex-shrink: 0;
+    white-space: nowrap;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .plan-chip:hover { border-color: var(--border-hi); color: var(--text-1); }
+  .plan-chip svg { display: block; opacity: 0.7; }
+  .plan-chip--warn { border-color: #d18a4a; color: #d18a4a; }
+  .plan-chip--warn:hover { border-color: #d18a4a; color: #d18a4a; }
+  .plan-chip--warn svg { opacity: 1; }
+  .plan-chip--alert { border-color: #c75a4a; color: #c75a4a; }
+  .plan-chip--alert:hover { border-color: #c75a4a; color: #c75a4a; }
+  .plan-chip--alert svg { opacity: 1; }
+  .plan-chip--err { color: var(--text-mute); border-style: dashed; }
+
+  /* Click-outside backdrop. Transparent and unstyled — its only job
+     is to absorb clicks anywhere outside the popover so the dialog
+     dismisses without us wiring a window-level listener. */
+  .plan-popover-backdrop {
+    position: fixed; inset: 0;
+    background: transparent;
+    border: none;
+    padding: 0;
+    cursor: default;
+    z-index: 90;
+  }
+  .plan-popover {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    z-index: 100;
+    min-width: 320px;
+    padding: 12px 12px 10px;
+    background: var(--bg-1);
+    border: 1px solid var(--border-neutral-hi);
+    border-radius: 10px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+    color: var(--text-1);
+    font-size: 12px;
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  .plan-popover-head {
+    display: flex; align-items: center; justify-content: space-between;
+    color: var(--text-mute);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .plan-refresh {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 22px; height: 22px;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: var(--text-mute);
+    border-radius: 5px;
+    cursor: pointer;
+  }
+  .plan-refresh:hover:not(:disabled) { color: var(--text-1); background: var(--bg-0); }
+  .plan-refresh:disabled { cursor: default; opacity: 0.5; }
+  @keyframes plan-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+  .plan-refresh--spinning { animation: plan-spin 0.9s linear infinite; }
+  .plan-row { display: flex; flex-direction: column; gap: 4px; }
+  .plan-row-head {
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: 12px;
+  }
+  .plan-row-label { color: var(--text-1); }
+  .plan-row-num { color: var(--text-mute); font-size: 11px; white-space: nowrap; }
+  .plan-bar {
+    height: 4px;
+    background: var(--border-neutral);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .plan-bar-fill {
+    height: 100%;
+    border-radius: 2px;
+    transition: width 0.25s ease, background 0.25s ease;
+    min-width: 2px;
+  }
+  .plan-popover-foot {
+    color: var(--text-mute);
+    font-size: 10px;
+    line-height: 1.45;
+    padding-top: 6px;
+    border-top: 1px dashed var(--border-neutral);
+  }
+  .plan-popover-foot code {
+    font-size: 10px;
+    color: var(--text-2);
+  }
   .model-chip:hover { border-color: var(--border-hi); color: var(--text-1); }
   .model-chip:focus-within { border-color: var(--border-hi2); }
   .model-select { border: none; padding: 4px 20px 4px 0; background-color: transparent; }

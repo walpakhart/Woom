@@ -25,6 +25,7 @@
   import { buildAgentAppContext } from '$lib/services/agentContext';
   import { applySessionCwd } from '$lib/services/sessionCwd';
   import { runCompactSession as runCompactSessionService } from '$lib/services/agentCompact';
+  import { refreshPlanUsage } from '$lib/state/quota.svelte';
   import {
     layoutState,
     persistPanelState,
@@ -407,6 +408,11 @@
        with default `:root` vars, this flips `<html data-theme="…">`
        so the saved palette wins on first paint. */
     initTheme();
+    // Plan-usage snapshot for the chip. Fire-and-forget — the chip
+    // shows "—" until the first response comes back, after which
+    // refreshPlanUsage is debounced to MIN_REFRESH_MS (60s) so any
+    // post-turn re-fetch is effectively free.
+    void refreshPlanUsage();
     // Same boot-time pattern as theme: apply the saved zoom level to
     // <html> before first paint so the layout doesn't briefly flash
     // at 100% then jump.
@@ -1537,6 +1543,12 @@
           patch.claudeUuid = result.sessionUuid;
         }
       }
+      // Fire-and-forget refresh — debounced to 60s by the state module,
+      // so spamming the chat doesn't hammer the OAuth endpoint (which
+      // 429s under tight polling). One real fetch per ~minute is plenty
+      // for the chip to feel "live" since the 5h bucket only ticks up
+      // once per turn anyway.
+      void refreshPlanUsage();
       // One-shot recap consumed — clear so it doesn't re-inject on every
       // subsequent turn. We check `sessAfter` (post-turn) because
       // applySessionCwd may have just *set* the recap mid-turn; in that

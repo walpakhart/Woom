@@ -2,6 +2,7 @@ mod agent;
 mod biometry;
 mod claude;
 mod claude_mcp;
+mod claude_quota;
 mod cursor;
 mod cursor_mcp;
 mod fs;
@@ -178,6 +179,7 @@ pub fn run() {
             claude_status,
             claude_ask,
             claude_compact_session,
+            claude_plan_usage,
             claude_stop,
             agent_generate_commit_message,
             agent_status,
@@ -995,6 +997,19 @@ async fn claude_ask(
 #[tauri::command]
 fn agent_status() -> AgentStatus {
     agent::detect_all()
+}
+
+/// Subscription / plan-usage panel — same numbers the Claude Code CLI
+/// `/usage` command shows (5-hour limit, weekly all-models, Sonnet-
+/// only, Opus-only, Claude Design). Reads the OAuth token from the
+/// system keychain and calls Anthropic's undocumented oauth/usage
+/// endpoint. Frontend should cache aggressively (60s+) — endpoint
+/// 429s under tight polling.
+#[tauri::command]
+async fn claude_plan_usage() -> Result<claude_quota::PlanUsage, String> {
+    claude_quota::fetch_plan_usage()
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
