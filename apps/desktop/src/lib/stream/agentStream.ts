@@ -120,32 +120,45 @@ export function handleStreamEvent(
   if (!parsed || typeof parsed !== 'object') return;
   const msg = parsed as Record<string, unknown>;
 
-  // `result` events terminate every cursor-agent turn (and claude in
-  // its own way) and carry a single `usage` block on the top-level
-  // event. Cursor names the fields camelCase (`inputTokens`,
-  // `cacheReadTokens`, `cacheWriteTokens`, `outputTokens`); Claude's
-  // shape lives on `assistant` events with snake_case names handled
-  // below. We surface cursor-style usage here so the chip + badge
-  // light up for cursor sessions too.
+  // `result` events terminate every cursor-agent turn AND every
+  // claude-code turn. Cursor names the fields camelCase
+  // (`inputTokens`, `cacheReadTokens`, `cacheWriteTokens`,
+  // `outputTokens`); Claude's CLI shape uses snake_case
+  // (`input_tokens`, `cache_read_input_tokens`,
+  // `cache_creation_input_tokens`, `output_tokens`) — same names it
+  // uses on the per-message `assistant` events. We try both naming
+  // conventions for every field so a Claude `result` event doesn't
+  // stamp a phantom `↑ 0 ↓ 0` onto the bubble (which is what the
+  // camelCase-only path was doing before) and a Cursor `result`
+  // doesn't accidentally fall through to the assistant branch
+  // below. Skip the stamp if every count came back 0 — the CLI
+  // sometimes emits an empty `result.usage` envelope before the
+  // real one and we don't want that wiping a real usage already
+  // stamped from the assistant event right before. */
   if (msg.type === 'result' && msg.usage && typeof msg.usage === 'object') {
     const u = msg.usage as Record<string, unknown>;
-    const inp = numField(u, 'inputTokens');
-    const cacheRead = numField(u, 'cacheReadTokens');
-    const cacheWrite = numField(u, 'cacheWriteTokens');
-    const out = numField(u, 'outputTokens');
-    merged.onUsage?.(sessionId, {
-      inputTokens: inp,
-      cacheCreationTokens: cacheWrite,
-      cacheReadTokens: cacheRead,
-      outputTokens: out,
-      contextSize: inp + cacheWrite + cacheRead,
-      // Cursor doesn't surface a stable model id on the result event
-      // (the system/init carries a display name like "Opus 4.7 1M
-      // High Thinking" but the cli-config modelId is what we'd want).
-      // Leave null — the per-message badge falls back gracefully and
-      // the context-ring chip uses the session's `cursorModel` field.
-      model: null
-    });
+    const inp = numField(u, 'inputTokens') || numField(u, 'input_tokens');
+    const cacheRead =
+      numField(u, 'cacheReadTokens') || numField(u, 'cache_read_input_tokens');
+    const cacheWrite =
+      numField(u, 'cacheWriteTokens') || numField(u, 'cache_creation_input_tokens');
+    const out = numField(u, 'outputTokens') || numField(u, 'output_tokens');
+    if (inp + out + cacheRead + cacheWrite > 0) {
+      merged.onUsage?.(sessionId, {
+        inputTokens: inp,
+        cacheCreationTokens: cacheWrite,
+        cacheReadTokens: cacheRead,
+        outputTokens: out,
+        contextSize: inp + cacheWrite + cacheRead,
+        // Cursor doesn't surface a stable model id on the result
+        // event; Claude's `result` may carry one but we already pull
+        // the model from the in-stream assistant events above so
+        // either way leaving null is safe — the per-message badge
+        // falls back gracefully and the context-ring chip uses the
+        // session's `cursorModel` / `claudeModel` field.
+        model: null
+      });
+    }
     return;
   }
 
@@ -160,21 +173,26 @@ export function handleStreamEvent(
   // Claude shape: usage on every assistant API call (multi-step turns
   // produce several). Pull up front so even tool-only sub-steps
   // refresh the badge, and a model swap mid-session is reflected on
-  // the very next reply.
+  // the very next reply. Skip empty (all-zero) envelopes — Claude
+  // CLI occasionally emits a placeholder usage block at the start
+  // of a step before the real counts land, and we don't want that
+  // wiping the previous turn's stamp until we have real numbers.
   if (inner.usage && typeof inner.usage === 'object') {
     const u = inner.usage as Record<string, unknown>;
     const inp = numField(u, 'input_tokens');
     const cacheCreate = numField(u, 'cache_creation_input_tokens');
     const cacheRead = numField(u, 'cache_read_input_tokens');
     const out = numField(u, 'output_tokens');
-    merged.onUsage?.(sessionId, {
-      inputTokens: inp,
-      cacheCreationTokens: cacheCreate,
-      cacheReadTokens: cacheRead,
-      outputTokens: out,
-      contextSize: inp + cacheCreate + cacheRead,
-      model: typeof inner.model === 'string' ? inner.model : null
-    });
+    if (inp + out + cacheCreate + cacheRead > 0) {
+      merged.onUsage?.(sessionId, {
+        inputTokens: inp,
+        cacheCreationTokens: cacheCreate,
+        cacheReadTokens: cacheRead,
+        outputTokens: out,
+        contextSize: inp + cacheCreate + cacheRead,
+        model: typeof inner.model === 'string' ? inner.model : null
+      });
+    }
   }
 
   for (const block of inner.content) {
