@@ -79,8 +79,16 @@ pub fn status(repo: &str) -> Result<GitStatus, String> {
     // trips up simple line-based parsers — and LF-separated parsing handles
     // 99.9% of real paths; only files with literal newlines in their names
     // would misparse, and those aren't a reality we need to support in MVP.
+    //
+    // `-uall` (≡ `--untracked-files=all`): without it git COLLAPSES an
+    // untracked directory into a single line `?? dir/`, so the CHANGES
+    // panel showed e.g. `?? internal-scripts/` instead of the seven new
+    // files inside it. That made stage-all / discard-all act on the
+    // whole tree blindly and hid file-level diffs. With `-uall` git
+    // emits one entry per file like `?? internal-scripts/foo.ts`, which
+    // is what the panel needs to render and stage individually.
     let mut cmd = git(repo);
-    cmd.args(["status", "--porcelain=v1", "--branch"]);
+    cmd.args(["status", "--porcelain=v1", "--branch", "-uall"]);
     let raw = run(cmd)?;
 
     let mut branch: Option<String> = None;
@@ -535,10 +543,14 @@ pub fn repo_info(path: &str) -> RepoInfo {
         }
     };
 
-    // Status — ahead/behind + counts.
+    // Status — ahead/behind + counts. Same `-uall` reasoning as
+    // `status()` above: without it, an untracked directory with N
+    // new files counts as ONE untracked entry, so the repo badge
+    // showed "1" instead of the real file count and felt wrong
+    // next to a CHANGES panel that exposes per-file rows.
     let (ahead, behind, dirty_count, untracked_count) = {
         let mut c = git(&root_path);
-        c.args(["status", "--porcelain=v1", "--branch"]);
+        c.args(["status", "--porcelain=v1", "--branch", "-uall"]);
         let raw = run(c).unwrap_or_default();
         let mut ahead: u32 = 0;
         let mut behind: u32 = 0;
