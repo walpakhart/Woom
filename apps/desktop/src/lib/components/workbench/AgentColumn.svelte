@@ -36,7 +36,8 @@
     sessionsForInstance,
     activeSessionInInstance,
     setActiveSessionInColumn,
-    getPendingEditEvents
+    getPendingEditEvents,
+    pruneMentionsByInput
   } from '$lib/state/sessions.svelte';
   import {
     revertAllPendingEdits,
@@ -1638,6 +1639,15 @@
             oninput={(e) => {
               const el = e.currentTarget as HTMLTextAreaElement;
               onSetSessionInput(sess.id, el.value);
+              // Backspacing an `@token` out of the textarea must
+              // also unattach the corresponding mention, otherwise
+              // the next send still bakes the file into the prompt
+              // (`mentionsSnapshot` in +page.svelte) and the
+              // placeholder stays "Ask about the attached items…"
+              // forever. Image mentions are exempted inside —
+              // they're managed via the chip strip above the
+              // composer, not via inline tokens.
+              pruneMentionsByInput(sess.id, el.value);
               syncMentionFromTextarea(el);
               syncBackdropScroll();
             }}

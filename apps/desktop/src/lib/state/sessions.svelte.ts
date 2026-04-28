@@ -523,6 +523,55 @@ export function attachLineRangeMention(
   return token;
 }
 
+/** Drop file/Jira/etc. mentions whose `@<externalId>` is no longer
+ *  present in `s.input`. Called from the textarea's `oninput` so
+ *  that backspacing the `@token` actually unattaches the file —
+ *  otherwise the mention silently survives in `s.mentions` and
+ *  haunts the user in two visible ways:
+ *
+ *    1. The composer placeholder stays "Ask about the attached
+ *       items …" forever even when the visible chip strip / textarea
+ *       are empty (the placeholder is wired to `mentions.length`).
+ *    2. The next `sendAgent` snapshots the still-present mentions
+ *       and bakes them into the prompt as `Referenced file: @…`,
+ *       so e.g. Cursor receives "Привет, what about resolve-
+ *       components.js?" even though the user just typed "ку".
+ *
+ *  Image mentions are kept regardless: they live as thumbnail chips
+ *  in the attach-row above the composer (no `@token` is ever written
+ *  to the textarea for them — the path can have spaces and the
+ *  user wouldn't see what the token resolved to anyway), so the
+ *  textarea text is the wrong source of truth for them. The chip's
+ *  X button (`removeMention`) is the user-facing remove path for
+ *  images.
+ *
+ *  Same `(?:^|\s)@([^\s]+)` regex shape the backdrop highlighter
+ *  uses, so we don't accidentally drop a mention because its `@`
+ *  is part of an email address. */
+export function pruneMentionsByInput(sessionId: string, input: string) {
+  const s = sessionsState.list.find((x) => x.id === sessionId);
+  if (!s || s.mentions.length === 0) return;
+  const present = new Set<string>();
+  const re = /(?:^|\s)@([^\s]+)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(input)) !== null) {
+    present.add(m[1]);
+  }
+  const next = s.mentions.filter((mention) => {
+    if (
+      mention.source === 'file' &&
+      !mention.isDir &&
+      mention.body &&
+      isImagePath(mention.body)
+    ) {
+      return true;
+    }
+    return present.has(mention.externalId);
+  });
+  if (next.length === s.mentions.length) return;
+  updateSession(sessionId, { mentions: next });
+}
+
 /** Attach an array of absolute filesystem paths as file-mentions to the given
     session. Called from the composer's + button (AgentColumn) and from the
     OS drag-drop listener (+page.svelte). Skips paths already referenced.
