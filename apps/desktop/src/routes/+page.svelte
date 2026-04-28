@@ -25,6 +25,7 @@
   import { buildAgentAppContext } from '$lib/services/agentContext';
   import { applySessionCwd } from '$lib/services/sessionCwd';
   import { runCompactSession as runCompactSessionService } from '$lib/services/agentCompact';
+  import { openFileInEditor } from '$lib/services/editorNavigation';
   import { refreshPlanUsage } from '$lib/state/quota.svelte';
   import {
     layoutState,
@@ -1183,8 +1184,17 @@
   /** Handle a click on a @file/@dir mention inside a rendered chat bubble.
       `path` is whatever the mention's @token resolved to — usually a path
       relative to the session's cwd/worktree/editor. We try each of those
-      three roots, in priority order, until something exists on disk. */
+      three roots, in priority order, until something exists on disk.
+      
+      File mentions go through `openFileInEditor` which opens a tab without
+      clobbering the editor's repoPath (was a real bug — clicking
+      `@scripts/.../resolve-components.js` made FileTree treat the file
+      itself as the repo root, scrambling the tree). Folder mentions
+      (trailing `/`) keep the legacy `ensureEditorShowing` behaviour
+      because that's what the user actually wants when they click a
+      directory: scope the tree to it. */
   async function openMentionPath(path: string) {
+    const isDir = path.endsWith('/');
     const candidates: string[] = [];
     if (path.startsWith('/')) {
       candidates.push(path);
@@ -1199,11 +1209,16 @@
         candidates.push(`${root.replace(/\/$/, '')}/${trimmed}`);
       }
     }
+    const linkedEditorId = activeSession?.linkedToEditorInstanceId ?? null;
     for (const abs of candidates) {
       try {
         const ok = await invoke<boolean>('fs_path_exists', { path: abs });
         if (ok) {
-          ensureEditorShowing(abs);
+          if (isDir) {
+            ensureEditorShowing(abs);
+          } else {
+            await openFileInEditor(abs, { preferInstanceId: linkedEditorId });
+          }
           return;
         }
       } catch {
@@ -1212,7 +1227,13 @@
     }
     // Last-ditch: open the first candidate anyway — the Editor will surface
     // its own "file not found" state if the path is wrong.
-    if (candidates[0]) ensureEditorShowing(candidates[0]);
+    if (candidates[0]) {
+      if (isDir) {
+        ensureEditorShowing(candidates[0]);
+      } else {
+        await openFileInEditor(candidates[0], { preferInstanceId: linkedEditorId });
+      }
+    }
   }
 
   /** Open (or scroll to) a column of the given kind. Singleton kinds only

@@ -36,15 +36,24 @@ export interface OpenFileInEditorOpts {
  *         a. `preferInstanceId` if it still exists.
  *         b. else first editor in the active workbench.
  *         c. else spawn a fresh editor in the active workbench.
- *    2. Make sure the editor's repoPath covers `filePath`. If the
- *       current repoPath doesn't have it as a descendant, ask Tauri
- *       for `git_repo_root(filePath)`. If that fails (file isn't in a
- *       repo), fall back to the file's parent directory. Either way
- *       the editor's tree will scope to something that contains the
- *       file, which is what FileTree needs to surface it.
+ *    2. ONLY set the editor's repoPath when the editor has none yet —
+ *       i.e. it was just spawned, or has never had a folder opened.
+ *       In that case we resolve `git_repo_root(filePath)` (or fall
+ *       back to the file's parent directory) and use that as the
+ *       initial root.
+ *
+ *       We deliberately do NOT touch the repoPath when the editor
+ *       already has one, even if it doesn't cover `filePath`. Users
+ *       click file paths from agent output expecting to *peek* at the
+ *       file in a tab — clobbering FileTree's root would lose their
+ *       navigation context (and was a real bug — clicking a path from
+ *       another repo dragged the editor into that repo and left the
+ *       user looking at the wrong file tree).
  *    3. Stash `filePath` in the editor's `pendingOpenFile` slot —
  *       EditorView's $effect picks it up and runs the local
- *       `openFile` (which adds a tab + activates it).
+ *       `openFile` (which adds a tab + activates it). Tabs are
+ *       repoPath-independent, so files outside the current root just
+ *       show up as standalone tabs without affecting the tree.
  *    4. Scroll the column into view so the user sees the result.
  *
  *  Errors are swallowed — the worst case is "the editor opens its
@@ -72,13 +81,11 @@ export async function openFileInEditor(
   if (!instanceId) return;
 
   const currentRepo = sessionsState.editorInstanceState[instanceId]?.repoPath ?? '';
-  const covers = currentRepo
-    ? filePath === currentRepo || filePath.startsWith(currentRepo.replace(/\/$/, '') + '/')
-    : false;
-  if (!covers) {
-    // Try git first — preferred because users typically work at the
-    // repo root, not in a single-file directory. Falls through to
-    // parent-dir if the file isn't tracked / cwd isn't a repo.
+  // Bootstrap repoPath only when the editor is empty. If the user
+  // already has a folder open, leave it alone — files outside the root
+  // open as orphan tabs, which is what users expect ("I'm browsing repo
+  // A, let me peek at one file from repo B without losing my tree").
+  if (!currentRepo) {
     let nextRoot = '';
     try {
       nextRoot = await invoke<string>('git_repo_root', { path: filePath });
