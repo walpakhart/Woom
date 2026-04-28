@@ -72,6 +72,15 @@ struct ListFrame {
 #[derive(Debug)]
 struct ItemFrame {
     blocks: Vec<Value>,
+    /// Snapshot of `self.blocks.len()` *before* this item was opened.
+    /// Used by `End(Item)` to flush any implicit Paragraph (or other
+    /// inline-only block) the bullet text accumulated in. Without this,
+    /// pulldown_cmark's tight-list output (`Item → Text → EndItem`,
+    /// no inner Paragraph) lands in a Paragraph that never closes and
+    /// its content leaks past the list as a stray top-level paragraph
+    /// (which Jira renders as an unrelated paragraph + the listItems
+    /// look empty — DEVOPS-452 regression).
+    block_stack_depth_at_open: usize,
 }
 
 /// Currently-open block — drives where text events get appended. `Inlines`
@@ -268,6 +277,19 @@ impl State {
                 self.open(Block::CodeBlock { language, text: String::new() });
             }
             Tag::List(start) => {
+                // If we're inside an item with bullet text already
+                // accumulated in an implicit Paragraph, close that
+                // Paragraph first so the nested list is appended *after*
+                // the bullet text in ADF (Jira renders order strictly —
+                // bulletList-before-paragraph would hide the bullet
+                // text under the nested rows).
+                if self.in_item_depth > 0
+                    && matches!(self.blocks.last(), Some(Block::Paragraph(c)) if !c.is_empty())
+                {
+                    if let Some(node) = self.close() {
+                        self.push_block(node);
+                    }
+                }
                 let ordered = start.is_some();
                 self.lists.push(ListFrame {
                     ordered,
@@ -276,7 +298,10 @@ impl State {
                 });
             }
             Tag::Item => {
-                self.items.push(ItemFrame { blocks: Vec::new() });
+                self.items.push(ItemFrame {
+                    blocks: Vec::new(),
+                    block_stack_depth_at_open: self.blocks.len(),
+                });
                 self.in_item_depth += 1;
             }
             Tag::Strong => self.marks.bold += 1,
@@ -330,6 +355,25 @@ impl State {
                 }
             }
             TagEnd::Item => {
+                // Close any blocks opened *inside* this item that
+                // weren't explicitly closed (tight-list bullet text
+                // lives in an implicit Paragraph that pulldown_cmark
+                // never emits an EndParagraph for). Without this they
+                // stayed open and drained out of the listItem at the
+                // doc level — bullets looked empty and the bullet text
+                // surfaced as a phantom paragraph after the list.
+                let target_depth = self
+                    .items
+                    .last()
+                    .map(|i| i.block_stack_depth_at_open)
+                    .unwrap_or(0);
+                while self.blocks.len() > target_depth {
+                    if let Some(node) = self.close() {
+                        self.push_block(node);
+                    } else {
+                        break;
+                    }
+                }
                 let item = self.items.pop().map(|f| f.blocks).unwrap_or_default();
                 self.in_item_depth = self.in_item_depth.saturating_sub(1);
                 let item_content = if item.is_empty() { vec![empty_paragraph()] } else { item };
@@ -411,4 +455,248 @@ fn text_node(text: &str, marks: &InlineMarks) -> Value {
         node["marks"] = Value::Array(m);
     }
     node
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Recursively flatten an ADF node into the list of (type, plain text)
+    /// pairs that show up at each block level. Lets the assertions below stay
+    /// readable instead of writing literal JSON for every fixture.
+    fn shape(node: &Value) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        walk(node, &mut out);
+        out
+    }
+    fn walk(node: &Value, out: &mut Vec<(String, String)>) {
+        let ty = node.get("type").and_then(|t| t.as_str()).unwrap_or("");
+        if !ty.is_empty() {
+            let mut text = String::new();
+            collect_text(node, &mut text);
+            out.push((ty.to_string(), text));
+        }
+        if let Some(arr) = node.get("content").and_then(|c| c.as_array()) {
+            for child in arr {
+                walk(child, out);
+            }
+        }
+    }
+    fn collect_text(node: &Value, out: &mut String) {
+        if node.get("type").and_then(|t| t.as_str()) == Some("text") {
+            if let Some(s) = node.get("text").and_then(|t| t.as_str()) {
+                out.push_str(s);
+            }
+            return;
+        }
+        if let Some(arr) = node.get("content").and_then(|c| c.as_array()) {
+            for child in arr {
+                collect_text(child, out);
+            }
+        }
+    }
+
+    /// "tight" list = no blank lines between bullets. pulldown_cmark emits
+    /// Item → Text → EndItem (no inner Paragraph), which used to drop bullet
+    /// text into a stray paragraph after the list. This was the DEVOPS-452
+    /// regression — `## Stages\n1. one\n2. two` rendered as six empty bullets
+    /// in Jira's UI.
+    #[test]
+    fn tight_bulleted_list_keeps_text_inside_list_items() {
+        let v = markdown_to_adf("- foo\n- bar");
+        // Top-level: one bulletList with two listItems; no stray paragraph.
+        let items = v["content"][0]["content"].as_array().unwrap();
+        assert_eq!(v["content"][0]["type"], "bulletList");
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0]["content"][0]["type"], "paragraph");
+        assert_eq!(
+            items[0]["content"][0]["content"][0]["text"]
+                .as_str()
+                .unwrap(),
+            "foo"
+        );
+        assert_eq!(
+            items[1]["content"][0]["content"][0]["text"]
+                .as_str()
+                .unwrap(),
+            "bar"
+        );
+        // No phantom paragraph hanging off the doc with the bullet text.
+        assert_eq!(v["content"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn tight_ordered_list_keeps_text_inside_list_items() {
+        let v = markdown_to_adf("1. one\n2. two\n3. three");
+        let list = &v["content"][0];
+        assert_eq!(list["type"], "orderedList");
+        let items = list["content"].as_array().unwrap();
+        assert_eq!(items.len(), 3);
+        for (i, want) in ["one", "two", "three"].iter().enumerate() {
+            assert_eq!(
+                items[i]["content"][0]["content"][0]["text"]
+                    .as_str()
+                    .unwrap(),
+                *want
+            );
+        }
+    }
+
+    /// "loose" list = blank line between bullets, pulldown_cmark wraps each
+    /// item's text in an explicit Paragraph. Was already working; tested to
+    /// guard against regressions when fixing the tight case.
+    #[test]
+    fn loose_bulleted_list_works() {
+        let v = markdown_to_adf("- foo\n\n- bar");
+        let list = &v["content"][0];
+        assert_eq!(list["type"], "bulletList");
+        let items = list["content"].as_array().unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(
+            items[0]["content"][0]["content"][0]["text"]
+                .as_str()
+                .unwrap(),
+            "foo"
+        );
+        assert_eq!(
+            items[1]["content"][0]["content"][0]["text"]
+                .as_str()
+                .unwrap(),
+            "bar"
+        );
+    }
+
+    /// Nested tight list: `- outer\n  - inner` should produce one outer
+    /// listItem whose blocks are [paragraph("outer"), bulletList([inner])].
+    /// Order matters — Jira renders `bulletList` BEFORE the paragraph if
+    /// they're swapped, which looks like the bullet text disappeared.
+    #[test]
+    fn nested_tight_list_preserves_order() {
+        let v = markdown_to_adf("- outer\n  - inner");
+        let outer = &v["content"][0];
+        assert_eq!(outer["type"], "bulletList");
+        let item_blocks = outer["content"][0]["content"].as_array().unwrap();
+        assert_eq!(item_blocks.len(), 2, "outer item should hold 2 blocks");
+        assert_eq!(item_blocks[0]["type"], "paragraph");
+        assert_eq!(
+            item_blocks[0]["content"][0]["text"].as_str().unwrap(),
+            "outer"
+        );
+        assert_eq!(item_blocks[1]["type"], "bulletList");
+        assert_eq!(
+            item_blocks[1]["content"][0]["content"][0]["content"][0]["text"]
+                .as_str()
+                .unwrap(),
+            "inner"
+        );
+    }
+
+    /// Headings between paragraphs and lists must not bleed into the list —
+    /// this mirrors the structure of the DEVOPS-452 description. Each
+    /// section's bullets stay scoped to that section.
+    #[test]
+    fn heading_then_tight_list_then_heading() {
+        let src = "## Why\n\n- a\n- b\n\n## Stages\n\n1. one\n2. two";
+        let v = markdown_to_adf(src);
+        let kinds: Vec<&str> = v["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|n| n["type"].as_str().unwrap())
+            .collect();
+        assert_eq!(kinds, vec!["heading", "bulletList", "heading", "orderedList"]);
+        // First bulletList holds a/b
+        let items = v["content"][1]["content"].as_array().unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(
+            items[0]["content"][0]["content"][0]["text"]
+                .as_str()
+                .unwrap(),
+            "a"
+        );
+        // Second list (orderedList) holds one/two
+        let items = v["content"][3]["content"].as_array().unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(
+            items[0]["content"][0]["content"][0]["text"]
+                .as_str()
+                .unwrap(),
+            "one"
+        );
+    }
+
+    /// Bullets with no text after the dash are valid markdown and should
+    /// produce listItems with an empty paragraph (Jira renders them as
+    /// blank rows). This was the symptom on the screenshot — but the
+    /// reason was the *tight-list bug above*, not these legitimately-empty
+    /// bullets. Test guards we don't accidentally drop them entirely.
+    #[test]
+    fn empty_bullets_produce_empty_listitems() {
+        let v = markdown_to_adf("- \n- \n- ");
+        let list = &v["content"][0];
+        assert_eq!(list["type"], "bulletList");
+        let items = list["content"].as_array().unwrap();
+        assert_eq!(items.len(), 3);
+        for it in items {
+            assert_eq!(it["content"][0]["type"], "paragraph");
+        }
+    }
+
+    #[test]
+    fn fenced_code_block_preserves_content_and_language() {
+        let v = markdown_to_adf("```yaml\non:\n  schedule:\n    - cron: '0 11 * * *'\n```");
+        let cb = &v["content"][0];
+        assert_eq!(cb["type"], "codeBlock");
+        assert_eq!(cb["attrs"]["language"], "yaml");
+        assert_eq!(
+            cb["content"][0]["text"].as_str().unwrap(),
+            "on:\n  schedule:\n    - cron: '0 11 * * *'"
+        );
+    }
+
+    #[test]
+    fn paragraph_with_inline_marks() {
+        let v = markdown_to_adf("Hello **world** and *italics*.");
+        let p = &v["content"][0];
+        assert_eq!(p["type"], "paragraph");
+        let kids = p["content"].as_array().unwrap();
+        // text "Hello ", bold "world", text " and ", italic "italics", text "."
+        let texts: Vec<&str> = kids
+            .iter()
+            .map(|n| n["text"].as_str().unwrap_or(""))
+            .collect();
+        assert_eq!(texts, vec!["Hello ", "world", " and ", "italics", "."]);
+        assert_eq!(kids[1]["marks"][0]["type"], "strong");
+        assert_eq!(kids[3]["marks"][0]["type"], "em");
+    }
+
+    /// Bullet text + nested list under it: the user's actual DEVOPS-452
+    /// shape (`- bullet\n  more text`). Continuation text wraps into the
+    /// same listItem; nested lists land after.
+    #[test]
+    fn bullet_with_continuation_text() {
+        let v = markdown_to_adf("- first line\n  second line continues");
+        let item = &v["content"][0]["content"][0];
+        let blocks = item["content"].as_array().unwrap();
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0]["type"], "paragraph");
+        // pulldown_cmark joins the wrap with a single space (SoftBreak).
+        let text: String = blocks[0]["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|n| n["text"].as_str().unwrap_or(""))
+            .collect();
+        assert_eq!(text, "first line second line continues");
+    }
+
+    #[test]
+    fn shape_helper_smoke() {
+        // Sanity: the shape helper itself works on a known simple doc.
+        let v = markdown_to_adf("# Title\n\nBody");
+        let s = shape(&v);
+        assert!(s.iter().any(|(t, _)| t == "doc"));
+        assert!(s.iter().any(|(t, c)| t == "heading" && c == "Title"));
+        assert!(s.iter().any(|(t, c)| t == "paragraph" && c == "Body"));
+    }
 }
