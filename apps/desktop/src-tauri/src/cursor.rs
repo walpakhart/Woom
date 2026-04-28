@@ -548,7 +548,7 @@ pub async fn generate_commit_message(
 /// loop so dedupe state survives across stream lines.
 ///
 /// Sole job today: dedupe assistant text deltas. cursor-agent has shipped
-/// at least three flavours of `assistant` partial output across versions:
+/// at least four flavours of `assistant` partial output across versions:
 ///
 ///   1. INCREMENTAL (the documented contract) — each event carries the
 ///      *new* chunk only ("Прове" → "рю..."). Frontend appends each
@@ -560,15 +560,28 @@ pub async fn generate_commit_message(
 ///   3. INCREMENTAL with retransmits — same chunk emitted twice in a
 ///      row (likely a CLI flush / network-coalescing artefact). Same
 ///      doubling symptom in the chat.
+///   4. SELF-DOUBLED — a single partial whose body is verbatim-doubled
+///      (`"…редактор:…редактор:"`). Observed in resume-mode for short
+///      replies. Without collapsing this we can't even compute a
+///      sensible tail against later partials.
 ///
-/// We can collapse all three into one rule by tracking the previously-
-/// emitted text and forwarding only the strict-suffix tail (or dropping
-/// on exact match). A non-`assistant` event (tool_call, system, result)
-/// resets the baseline — partials only stream contiguously inside one
-/// assistant message; once anything else lands the model has moved on
-/// (started a tool, ended the turn) and the next assistant text is a
-/// fresh message.
+/// We can collapse all four into one rule by tracking the cumulative
+/// emitted text (NOT the previous delta) and forwarding only the
+/// strict-suffix tail / collapsing self-doubled bodies / dropping
+/// on exact match. A non-`assistant` event (tool_call, system,
+/// result) resets the baseline — partials only stream contiguously
+/// inside one assistant message; once anything else lands the model
+/// has moved on (started a tool, ended the turn) and the next
+/// assistant text is a fresh message.
 struct StreamNormalizer {
+    /// Accumulated visible text we've already streamed on the current
+    /// assistant turn — i.e. the concatenation of every delta we've
+    /// forwarded. Used as the baseline for dedupe / tail extraction
+    /// on the next partial. Tracks the WHOLE message, not just the
+    /// previous chunk: that's the bug from the previous revision
+    /// where mixing incremental partials with a later cumulative
+    /// chunk caused the cumulative chunk to fall through and get
+    /// emitted in full, doubling the message.
     last_assistant_text: String,
 }
 
@@ -689,6 +702,17 @@ impl StreamNormalizer {
             return Vec::new();
         }
 
+        // Paranoid: cursor-agent has been observed shipping an entire
+        // assistant message with its body verbatim-doubled in a single
+        // partial — e.g. text = "Hello world.Hello world." as the FIRST
+        // chunk we ever see for that message. The starts-with branch
+        // below can't catch that because there's no previous baseline
+        // to subtract. Detect a pure 2x repeat (front half == back half)
+        // and collapse before any further processing. We require an
+        // exact char-boundary split so we never slice inside a multi-
+        // byte codepoint.
+        let text = collapse_doubled(&text);
+
         // Exact repeat — same chunk we just shipped. Either a CLI
         // retransmit OR cumulative-mode reporting "no progress yet".
         // Either way the frontend already has it.
@@ -707,6 +731,32 @@ impl StreamNormalizer {
             && text.starts_with(&self.last_assistant_text)
         {
             let tail = text[self.last_assistant_text.len()..].to_string();
+
+            // Defensive: cursor-agent sometimes emits a glitched
+            // cumulative state where the tail is itself a verbatim
+            // repeat of what we already streamed (the new text is
+            // `last + last`). Treat it as a CLI retransmit and drop
+            // — keep the baseline pinned at the clean version so a
+            // subsequent partial can extend it normally.
+            if tail == self.last_assistant_text {
+                return Vec::new();
+            }
+            // Same idea, less rigid: tail begins with everything we've
+            // already streamed (then continues). That happens when
+            // cursor sends `last + last + new`. Preserve the genuinely
+            // new suffix only.
+            let tail_emit = if tail.starts_with(&self.last_assistant_text) {
+                tail[self.last_assistant_text.len()..].to_string()
+            } else {
+                tail
+            };
+            if tail_emit.is_empty() {
+                return Vec::new();
+            }
+            // Baseline becomes the entire visible text we've streamed
+            // — i.e. the cumulative end state of this partial. Future
+            // partials' starts-with check runs against the WHOLE
+            // visible reply, which is what we want.
             self.last_assistant_text = text;
             let mut clone = v;
             if let Some(content) = clone
@@ -717,7 +767,7 @@ impl StreamNormalizer {
                 for block in content.iter_mut() {
                     if block.get("type").and_then(|t| t.as_str()) == Some("text") {
                         if let Some(t) = block.get_mut("text") {
-                            *t = json!(tail);
+                            *t = json!(tail_emit);
                         }
                     }
                 }
@@ -725,13 +775,60 @@ impl StreamNormalizer {
             return vec![clone];
         }
 
-        // First chunk OR genuinely new prefix (uncommon — usually means
-        // the model produced an unrelated continuation that doesn't
-        // share a prefix; we forward it as-is and let the frontend
-        // append, accepting that this rare case keeps the previously
-        // streamed text intact in the bubble).
-        self.last_assistant_text = text;
-        vec![v]
+        // Incremental delta OR a genuinely new prefix (uncommon — model
+        // produces unrelated continuation that doesn't share a prefix
+        // with our baseline). Forward as-is, append onto the running
+        // baseline so the next cumulative-style partial computes its
+        // tail against the WHOLE emitted text. The previous revision
+        // *replaced* the baseline with the current delta, which broke
+        // the moment cursor-agent followed an incremental partial with
+        // a cumulative one — `starts_with` only matched the last
+        // delta, the cumulative chunk fell through to this branch,
+        // and got re-emitted in full, doubling the visible message.
+        //
+        // Always restamp the cleaned `text` back into the JSON before
+        // forwarding: `collapse_doubled` may have rewritten a self-
+        // doubled glitch chunk and the frontend should see the clean
+        // version, not the original.
+        let mut clone = v;
+        if let Some(content) = clone
+            .get_mut("message")
+            .and_then(|m| m.get_mut("content"))
+            .and_then(|c| c.as_array_mut())
+        {
+            for block in content.iter_mut() {
+                if block.get("type").and_then(|t| t.as_str()) == Some("text") {
+                    if let Some(t) = block.get_mut("text") {
+                        *t = json!(text.clone());
+                    }
+                }
+            }
+        }
+        self.last_assistant_text.push_str(&text);
+        vec![clone]
+    }
+}
+
+/// Detect and collapse a payload whose front half equals its back half
+/// — a glitch shape we've seen cursor-agent ship as a single partial.
+/// Returns the collapsed half on a hit, the original text otherwise.
+/// Only runs when the byte length is even AND the midpoint lands on a
+/// UTF-8 char boundary (so we never split inside a multi-byte codepoint
+/// — Cyrillic / emoji / CJK would silently corrupt otherwise).
+fn collapse_doubled(text: &str) -> String {
+    let len = text.len();
+    if len < 2 || len % 2 != 0 {
+        return text.to_string();
+    }
+    let mid = len / 2;
+    if !text.is_char_boundary(mid) {
+        return text.to_string();
+    }
+    let (front, back) = text.split_at(mid);
+    if front == back {
+        front.to_string()
+    } else {
+        text.to_string()
     }
 }
 
@@ -1543,6 +1640,123 @@ mod tests {
         let line = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Final"}]}}"#;
         let out = n.normalize(line);
         assert!(out.is_empty(), "final summary must be dropped, got {:?}", out);
+    }
+
+    #[test]
+    fn dedupe_collapses_self_doubled_first_partial() {
+        let mut n = StreamNormalizer::new();
+        // cursor-agent has been observed shipping the entire body
+        // verbatim-doubled in a single first partial. Without
+        // `collapse_doubled` this slipped through as-is and rendered
+        // as "Hello world.Hello world." in the bubble.
+        let line = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Поищу прямо отсюда:Поищу прямо отсюда:"}]},"timestamp_ms":1}"#;
+        let out = n.normalize(line);
+        assert_eq!(out.len(), 1);
+        assert_eq!(
+            assistant_text(&out[0]),
+            Some("Поищу прямо отсюда:"),
+            "self-doubled payload must be collapsed to one half"
+        );
+    }
+
+    #[test]
+    fn dedupe_drops_doubled_cumulative_tail() {
+        let mut n = StreamNormalizer::new();
+        let line = |t: &str| {
+            format!(
+                r#"{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"text","text":"{}"}}]}},"timestamp_ms":1}}"#,
+                t
+            )
+        };
+        // Stream: clean partial, then a corrupt cumulative state where
+        // the body is repeated end-to-end. Tail equals baseline → drop.
+        let _ = n.normalize(&line("Hello"));
+        let p2 = n.normalize(&line("HelloHello"));
+        assert!(
+            p2.is_empty(),
+            "cumulative chunk whose tail repeats baseline must be dropped, got {:?}",
+            p2
+        );
+    }
+
+    #[test]
+    fn collapse_doubled_preserves_unique_text() {
+        // Sanity: a non-doubled string passes through unchanged. We
+        // never want to collapse legitimate "abab" patterns where the
+        // halves only happen to look similar.
+        assert_eq!(collapse_doubled("Hello world"), "Hello world");
+        assert_eq!(collapse_doubled("abc"), "abc"); // odd length
+        assert_eq!(collapse_doubled("aabb"), "aabb"); // halves differ
+        assert_eq!(collapse_doubled(""), "");
+    }
+
+    #[test]
+    fn dedupe_handles_mixed_incremental_then_cumulative() {
+        let mut n = StreamNormalizer::new();
+        let line = |t: &str| {
+            format!(
+                r#"{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"text","text":"{}"}}]}},"timestamp_ms":1}}"#,
+                t
+            )
+        };
+
+        // cursor-agent has been observed mixing INCREMENTAL partials
+        // for the first chunks of a message with a CUMULATIVE chunk
+        // at the end (typically the model's "final state" flush).
+        // Without baseline-accumulation in handle_assistant, the
+        // cumulative chunk fell through `starts_with` (because the
+        // baseline was just the previous delta " world", not the
+        // full " Hello world"), got emitted in full, and the bubble
+        // ended up as "Hello world" + "Hello world more" =
+        // doubled.
+        let p1 = n.normalize(&line("Hello"));
+        let p2 = n.normalize(&line(" world"));
+        let p3 = n.normalize(&line("Hello world more"));
+
+        assert_eq!(assistant_text(&p1[0]), Some("Hello"));
+        assert_eq!(assistant_text(&p2[0]), Some(" world"));
+        assert_eq!(
+            assistant_text(&p3[0]),
+            Some(" more"),
+            "cumulative partial after incremental ones must be reduced to the new tail"
+        );
+    }
+
+    #[test]
+    fn dedupe_drops_self_doubled_cumulative_after_clean_partial() {
+        // The screenshot scenario: cursor-agent ships a single
+        // incremental partial with the full short reply, then a
+        // self-doubled cumulative chunk (`prefix + prefix`) right
+        // before the final summary. We must drop that doubled
+        // chunk; the user can't see "Поищу...:Поищу...:" twice.
+        let mut n = StreamNormalizer::new();
+        let line = |t: &str| {
+            format!(
+                r#"{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"text","text":"{}"}}]}},"timestamp_ms":1}}"#,
+                t
+            )
+        };
+        let p1 = n.normalize(&line("Поищу прямо отсюда:"));
+        let p2 = n.normalize(&line("Поищу прямо отсюда:Поищу прямо отсюда:"));
+
+        assert_eq!(p1.len(), 1);
+        assert_eq!(assistant_text(&p1[0]), Some("Поищу прямо отсюда:"));
+        assert!(
+            p2.is_empty(),
+            "doubled cumulative chunk must be dropped; got {:?}",
+            p2
+        );
+    }
+
+    #[test]
+    fn collapse_doubled_handles_multibyte() {
+        // The midpoint of "ы:" is 3 bytes; splitting at byte 3 is on a
+        // char boundary so it's safe. The doubled "ы:ы:" splits cleanly
+        // and collapses to "ы:". The off-boundary case "ы" (2 bytes,
+        // mid at 1, NOT a boundary) must pass through unchanged
+        // instead of panicking.
+        assert_eq!(collapse_doubled("ы:ы:"), "ы:");
+        assert_eq!(collapse_doubled("ы"), "ы");
     }
 
     /// `extract_tool_shape` consumes the inner `tool_call` payload — the
