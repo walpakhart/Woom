@@ -580,10 +580,23 @@
     font-size: 11.5px;
     line-height: 1.55;
   }
+  /* Long diff lines need horizontal scroll, not truncation. The card is
+     constrained to the chat column width (~400px), and agents regularly
+     emit markdown tables / long URLs / inlined config blobs that don't
+     fit. Previously `.edit-line-text` had `overflow: hidden` and the
+     line itself was a row-flex equal to the body width, so anything past
+     the right edge just disappeared with no way to see it.
+     Trick: `width: max-content` lets each line grow to its content's
+     full width; `min-width: 100%` keeps short lines spanning the body
+     so the +/- background colour fills the row consistently; the
+     parent `.edit-body` keeps `overflow: auto` and now actually has
+     overflowing children to scroll. */
   .edit-line {
     display: flex;
     padding: 0 10px;
     white-space: pre;
+    width: max-content;
+    min-width: 100%;
   }
   .edit-line-marker {
     width: 16px;
@@ -592,8 +605,7 @@
     user-select: none;
   }
   .edit-line-text {
-    flex: 1;
-    overflow: hidden;
+    flex: 0 0 auto;
   }
   .edit-line--add { background: rgba(111, 174, 136, 0.12); color: var(--text-0); }
   .edit-line--add .edit-line-marker { color: var(--success); }
