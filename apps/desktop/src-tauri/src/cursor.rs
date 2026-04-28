@@ -225,9 +225,15 @@ pub async fn ask(
     // care) which CLI produced the line after normalization.
     let event_name = format!("claude:stream:{}", session_id);
     let mut final_text = String::new();
+    // Stateful normalizer: dedupes assistant text deltas across the
+    // stream (cursor-agent has shipped versions that re-emit the same
+    // partial chunk and versions that emit cumulative-mode chunks
+    // instead of incremental). Without dedupe the frontend's append-
+    // delta path doubles the visible text. See `StreamNormalizer`.
+    let mut normalizer = StreamNormalizer::new();
 
     while let Ok(Some(raw)) = lines.next_line().await {
-        for out in normalize_event(&raw) {
+        for out in normalizer.normalize(&raw) {
             let serialized = out.to_string();
             let _ = app.emit(&event_name, &serialized);
             if let Some(t) = out.get("type").and_then(|t| t.as_str()) {
@@ -537,80 +543,195 @@ pub async fn generate_commit_message(
     Ok(cleaned)
 }
 
-/// Translate one cursor-agent stream line into zero or more Claude-style
-/// events. Most events pass through (cursor's `assistant`/`result` shape is
-/// identical). `tool_call` → synthesized `assistant` event with a `tool_use`
-/// content block so `formatToolUse` on the frontend picks it up unchanged.
-fn normalize_event(raw: &str) -> Vec<serde_json::Value> {
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(raw) else {
-        return Vec::new();
-    };
-    let Some(ty) = v.get("type").and_then(|t| t.as_str()) else {
-        return Vec::new();
-    };
-    match ty {
-        // Text deltas, the final result, the init system event, and the user
-        // echo: already match Claude's shape closely enough — frontend only
-        // reads `type`, `message.content`, and `result`.
-        //
-        // BUT: cursor-agent emits two flavours of `assistant` events when
-        // `--stream-partial-output` is on:
-        //   1. partial deltas — have `timestamp_ms` — each carrying one chunk
-        //   2. one final summary — no `timestamp_ms` — carries the FULL text
-        // If we let both through, the frontend's append-delta path runs the
-        // full text on top of the already-streamed chunks, doubling it. Drop
-        // the summary; the final reply still arrives via the `result` event,
-        // which `+page.svelte`'s `replaceLastAssistant` uses for the clean
-        // post-stream text anyway.
-        "assistant" => {
-            if v.get("timestamp_ms").is_some() {
+/// Stream-scoped state for cursor-agent → Claude-shape translation. One
+/// instance per `run_streaming` invocation; threads through the stdout
+/// loop so dedupe state survives across stream lines.
+///
+/// Sole job today: dedupe assistant text deltas. cursor-agent has shipped
+/// at least three flavours of `assistant` partial output across versions:
+///
+///   1. INCREMENTAL (the documented contract) — each event carries the
+///      *new* chunk only ("Прове" → "рю..."). Frontend appends each
+///      chunk and the visible text grows correctly.
+///   2. CUMULATIVE — each event carries the entire assistant-message
+///      text accumulated so far ("Прове" → "Проверю..."). If we forward
+///      these as-is the frontend's append-delta path layers full state
+///      on top of full state and the text quadruples.
+///   3. INCREMENTAL with retransmits — same chunk emitted twice in a
+///      row (likely a CLI flush / network-coalescing artefact). Same
+///      doubling symptom in the chat.
+///
+/// We can collapse all three into one rule by tracking the previously-
+/// emitted text and forwarding only the strict-suffix tail (or dropping
+/// on exact match). A non-`assistant` event (tool_call, system, result)
+/// resets the baseline — partials only stream contiguously inside one
+/// assistant message; once anything else lands the model has moved on
+/// (started a tool, ended the turn) and the next assistant text is a
+/// fresh message.
+struct StreamNormalizer {
+    last_assistant_text: String,
+}
+
+impl StreamNormalizer {
+    fn new() -> Self {
+        Self {
+            last_assistant_text: String::new(),
+        }
+    }
+
+    /// Translate one cursor-agent stream line into zero or more Claude-style
+    /// events. Most events pass through (cursor's `assistant`/`result` shape is
+    /// identical). `tool_call` → synthesized `assistant` event with a `tool_use`
+    /// content block so `formatToolUse` on the frontend picks it up unchanged.
+    fn normalize(&mut self, raw: &str) -> Vec<serde_json::Value> {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(raw) else {
+            return Vec::new();
+        };
+        let Some(ty) = v.get("type").and_then(|t| t.as_str()) else {
+            return Vec::new();
+        };
+        match ty {
+            // Text deltas already match Claude's shape closely enough —
+            // frontend only reads `type`, `message.content`, and `result`.
+            //
+            // BUT: cursor-agent emits two flavours of `assistant` events when
+            // `--stream-partial-output` is on:
+            //   1. partial deltas — have `timestamp_ms` — each carrying one chunk
+            //   2. one final summary — no `timestamp_ms` — carries the FULL text
+            // If we let both through, the frontend's append-delta path runs the
+            // full text on top of the already-streamed chunks, doubling it. Drop
+            // the summary; the final reply still arrives via the `result` event,
+            // which `+page.svelte`'s `replaceLastAssistant` uses for the clean
+            // post-stream text anyway.
+            //
+            // For partials: feed through the dedupe rule described in
+            // `StreamNormalizer`.
+            "assistant" => {
+                if v.get("timestamp_ms").is_none() {
+                    return Vec::new();
+                }
+                self.handle_assistant(v)
+            }
+            "result" | "system" | "user" => {
+                self.last_assistant_text.clear();
                 vec![v]
-            } else {
-                Vec::new()
             }
-        }
-        "result" | "system" | "user" => vec![v],
-        // tool_call: cursor-agent fires `started` (immediately on
-        // dispatch) and `completed` (with the result) for every tool.
-        //
-        //   - For edit/write tools we want the COMPLETED event so we
-        //     can read `result.success.afterFullFileContent` — the
-        //     actual final file contents. The `args.streamContent` on
-        //     a `started` event is a partial / streamed edit-spec
-        //     (cursor's edit tool isn't a plain Write — it can patch
-        //     surgically based on a chunk that doesn't equal the full
-        //     file). Rendering a diff card on started would show the
-        //     wrong content.
-        //
-        //   - For all other tools (read, grep, bash, mcp, …) we keep
-        //     the original behavior: emit on STARTED so the user gets
-        //     immediate "_using …_" feedback. The completed event is
-        //     dropped to avoid double-pills.
-        "tool_call" => {
-            let subtype = v.get("subtype").and_then(|s| s.as_str()).unwrap_or("");
-            // Same reasoning as edit/write: `started` doesn't have the
-            // pre-deletion file body, only `completed` does (in
-            // `result.success.prevContent`). Without that field we can't
-            // offer Restore — we'd just have a path. So we wait for the
-            // post-tool event and treat the missing-prevContent case as
-            // a degraded "show pill, no Restore" path inside the diff
-            // card layer.
-            let is_file_mutation = v
-                .get("tool_call")
-                .and_then(|tc| tc.as_object())
-                .is_some_and(|o| {
-                    o.contains_key("editToolCall")
-                        || o.contains_key("writeToolCall")
-                        || o.contains_key("deleteToolCall")
-                });
-            let want = if is_file_mutation { "completed" } else { "started" };
-            if subtype == want {
-                normalize_tool_call(&v).into_iter().collect()
-            } else {
-                Vec::new()
+            // tool_call: cursor-agent fires `started` (immediately on
+            // dispatch) and `completed` (with the result) for every tool.
+            //
+            //   - For edit/write tools we want the COMPLETED event so we
+            //     can read `result.success.afterFullFileContent` — the
+            //     actual final file contents. The `args.streamContent` on
+            //     a `started` event is a partial / streamed edit-spec
+            //     (cursor's edit tool isn't a plain Write — it can patch
+            //     surgically based on a chunk that doesn't equal the full
+            //     file). Rendering a diff card on started would show the
+            //     wrong content.
+            //
+            //   - For all other tools (read, grep, bash, mcp, …) we keep
+            //     the original behavior: emit on STARTED so the user gets
+            //     immediate "_using …_" feedback. The completed event is
+            //     dropped to avoid double-pills.
+            "tool_call" => {
+                self.last_assistant_text.clear();
+                let subtype = v.get("subtype").and_then(|s| s.as_str()).unwrap_or("");
+                // Same reasoning as edit/write: `started` doesn't have the
+                // pre-deletion file body, only `completed` does (in
+                // `result.success.prevContent`). Without that field we can't
+                // offer Restore — we'd just have a path. So we wait for the
+                // post-tool event and treat the missing-prevContent case as
+                // a degraded "show pill, no Restore" path inside the diff
+                // card layer.
+                let is_file_mutation = v
+                    .get("tool_call")
+                    .and_then(|tc| tc.as_object())
+                    .is_some_and(|o| {
+                        o.contains_key("editToolCall")
+                            || o.contains_key("writeToolCall")
+                            || o.contains_key("deleteToolCall")
+                    });
+                let want = if is_file_mutation { "completed" } else { "started" };
+                if subtype == want {
+                    normalize_tool_call(&v).into_iter().collect()
+                } else {
+                    Vec::new()
+                }
             }
+            _ => Vec::new(),
         }
-        _ => Vec::new(),
+    }
+
+    fn handle_assistant(&mut self, v: serde_json::Value) -> Vec<serde_json::Value> {
+        // Pull the text payload, if any. content[] may be empty (cursor
+        // emits placeholder partials) or carry only tool-use blocks
+        // (we synthesize those elsewhere). In both cases nothing to
+        // dedupe — forward unchanged.
+        let text_opt: Option<String> = v
+            .get("message")
+            .and_then(|m| m.get("content"))
+            .and_then(|c| c.as_array())
+            .and_then(|arr| {
+                arr.iter()
+                    .find(|b| b.get("type").and_then(|t| t.as_str()) == Some("text"))
+            })
+            .and_then(|b| b.get("text"))
+            .and_then(|t| t.as_str())
+            .map(|s| s.to_string());
+
+        let Some(text) = text_opt else {
+            return vec![v];
+        };
+
+        // Empty text — drop. cursor-agent occasionally sends a
+        // placeholder before the first real chunk; forwarding it
+        // creates an empty assistant message bubble for a frame.
+        if text.is_empty() {
+            return Vec::new();
+        }
+
+        // Exact repeat — same chunk we just shipped. Either a CLI
+        // retransmit OR cumulative-mode reporting "no progress yet".
+        // Either way the frontend already has it.
+        if text == self.last_assistant_text {
+            return Vec::new();
+        }
+
+        // Cumulative-mode chunk: the new text begins with everything we
+        // already streamed. Forward only the strictly new tail so the
+        // frontend's append-delta path produces the correct end state.
+        // Empty `last_assistant_text` is handled by the explicit guard
+        // (otherwise `starts_with("")` is trivially true and we'd
+        // emit the entire text as a "tail", which is fine but doesn't
+        // exercise this branch — handled by the fall-through below).
+        if !self.last_assistant_text.is_empty()
+            && text.starts_with(&self.last_assistant_text)
+        {
+            let tail = text[self.last_assistant_text.len()..].to_string();
+            self.last_assistant_text = text;
+            let mut clone = v;
+            if let Some(content) = clone
+                .get_mut("message")
+                .and_then(|m| m.get_mut("content"))
+                .and_then(|c| c.as_array_mut())
+            {
+                for block in content.iter_mut() {
+                    if block.get("type").and_then(|t| t.as_str()) == Some("text") {
+                        if let Some(t) = block.get_mut("text") {
+                            *t = json!(tail);
+                        }
+                    }
+                }
+            }
+            return vec![clone];
+        }
+
+        // First chunk OR genuinely new prefix (uncommon — usually means
+        // the model produced an unrelated continuation that doesn't
+        // share a prefix; we forward it as-is and let the frontend
+        // append, accepting that this rare case keeps the previously
+        // streamed text intact in the bubble).
+        self.last_assistant_text = text;
+        vec![v]
     }
 }
 
@@ -776,6 +897,13 @@ fn extract_tool_shape(tc: &serde_json::Value) -> (String, serde_json::Value) {
     // arg dict. Without this branch the loop below fell straight to
     // the generic fallback, which is what produced the empty "using
     // tool…" pill.
+    //
+    // We canonicalize the name (`bash` → `Bash`, `grep` → `Grep`, …) so
+    // the frontend's `formatToolUse` per-tool branches match. cursor-
+    // agent has been seen emitting both lowercase and PascalCase names
+    // for the same tool depending on build, and a lowercase `bash` /
+    // `grep` slipped through to the generic fallback before, which is
+    // why the steps drawer rendered them argless.
     if let Some(name) = obj.get("name").and_then(|n| n.as_str()) {
         let input = obj
             .get("input")
@@ -783,7 +911,7 @@ fn extract_tool_shape(tc: &serde_json::Value) -> (String, serde_json::Value) {
             .or_else(|| obj.get("arguments"))
             .cloned()
             .unwrap_or_else(|| json!({}));
-        return (name.to_string(), input);
+        return (canonicalize_tool_name(name), input);
     }
 
     // Layer 2: split MCP shape — `tool_call: { mcp: { server, tool,
@@ -988,16 +1116,91 @@ fn extract_tool_shape(tc: &serde_json::Value) -> (String, serde_json::Value) {
                 );
             }
         }
+        // Bash / Read / Grep / Glob: cursor-agent nests parameters one
+        // level deep under `args` (`{shellToolCall: {args: {command:
+        // …, description: …}}}`), and `formatToolUse` on the frontend
+        // expects them at the *top* level of `input`. Forwarding the
+        // whole payload means formatToolUse can't find `command` /
+        // `pattern` / `file_path` / `path` and falls into its generic
+        // `_using <name>…_` branch — which is the "grep, grep, grep,
+        // read, read" symptom in the steps drawer (no args visible).
+        //
+        // We flatten `args` onto the input here so the per-tool
+        // branches in formatToolUse pick up the actual parameters.
+        // Read also re-keys `path` → `file_path` because cursor uses
+        // `path` while Claude (and our formatter) uses `file_path`.
+        if key == "shellToolCall" || key == "bashToolCall" {
+            let mut input = payload
+                .get("args")
+                .cloned()
+                .unwrap_or_else(|| json!({}));
+            if !input.is_object() {
+                input = json!({});
+            }
+            return ("Bash".into(), input);
+        }
+        if key == "readToolCall" {
+            let args = payload.get("args").and_then(|a| a.as_object());
+            let mut input = serde_json::Map::new();
+            if let Some(a) = args {
+                if let Some(p) = a
+                    .get("path")
+                    .or_else(|| a.get("file_path"))
+                    .and_then(|s| s.as_str())
+                {
+                    input.insert("file_path".into(), json!(p));
+                }
+                for k in [
+                    "offset",
+                    "limit",
+                    "startLine",
+                    "endLine",
+                    "start_line",
+                    "end_line",
+                ] {
+                    if let Some(v) = a.get(k) {
+                        input.insert(k.to_string(), v.clone());
+                    }
+                }
+            }
+            return ("Read".into(), serde_json::Value::Object(input));
+        }
+        if key == "grepToolCall" {
+            let mut input = payload
+                .get("args")
+                .cloned()
+                .unwrap_or_else(|| json!({}));
+            if !input.is_object() {
+                input = json!({});
+            }
+            return ("Grep".into(), input);
+        }
+        if key == "globToolCall" {
+            let mut input = payload
+                .get("args")
+                .cloned()
+                .unwrap_or_else(|| json!({}));
+            if !input.is_object() {
+                input = json!({});
+            }
+            return ("Glob".into(), input);
+        }
         if key.ends_with("ToolCall") {
-            let name = payload
+            let raw_name = payload
                 .get("name")
                 .and_then(|n| n.as_str())
                 .map(String::from)
                 .unwrap_or_else(|| humanize_discriminator(key));
-            // Flatten the payload as the "input" so formatToolUse can dig out
-            // familiar keys (file_path, command, pattern, …).
-            let input = json!(payload);
-            return (name, input);
+            // Same flattening rationale as the named branches above:
+            // formatToolUse looks for parameters at the top level of
+            // `input`, so unwrap `args` if it's there and fall back to
+            // the whole payload only when there's nothing else useful.
+            let input = payload
+                .get("args")
+                .cloned()
+                .filter(|v| v.is_object())
+                .unwrap_or_else(|| json!(payload));
+            return (canonicalize_tool_name(&raw_name), input);
         }
     }
 
@@ -1025,9 +1228,14 @@ fn humanize_discriminator(key: &str) -> String {
     match key {
         "readToolCall" => return "Read".into(),
         "writeToolCall" | "editToolCall" => return "Write".into(),
-        "bashToolCall" => return "Bash".into(),
+        // cursor-agent ≥ April 2026 ships `shellToolCall` instead of
+        // `bashToolCall`. Both map to Bash on the frontend so the same
+        // `$ <command>` rendering and the Bash-rm interception in
+        // agentStream.ts both fire regardless of CLI version.
+        "bashToolCall" | "shellToolCall" => return "Bash".into(),
         "grepToolCall" => return "Grep".into(),
         "globToolCall" => return "Glob".into(),
+        "deleteToolCall" => return "Delete".into(),
         // Safety net: if Layer 3a (the dedicated `mcpToolCall` handler)
         // failed to extract a name, surface "MCP" so the trace pill
         // reads "_using MCP…_" instead of the generic "_using tool…_".
@@ -1047,6 +1255,40 @@ fn humanize_discriminator(key: &str) -> String {
     match chars.next() {
         Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
         None => "tool".into(),
+    }
+}
+
+/// Map a tool name (whatever cursor-agent reported — `bash`, `Bash`,
+/// `shell`, `grep`, `read_file`, …) to the canonical PascalCase label
+/// that `formatToolUse` on the frontend recognizes. Names with the
+/// `mcp__` prefix pass through unchanged (we never want to reshape
+/// MCP namespaces). Unknown names also pass through, so a brand-new
+/// cursor tool still renders by its CLI name instead of disappearing.
+///
+/// Why this matters: `formatToolUse('Grep', …)` → `_grep_ \`pattern\``
+/// (with args) but `formatToolUse('grep', …)` lands in the generic
+/// fallback that doesn't know about `pattern` / `path` and emits
+/// `_using grep…_`. Same problem hit Bash/Read/Write/etc. Canonicalizing
+/// up front means every downstream branch fires.
+fn canonicalize_tool_name(name: &str) -> String {
+    if name.starts_with("mcp__") {
+        return name.to_string();
+    }
+    let lc = name.to_ascii_lowercase();
+    match lc.as_str() {
+        "bash" | "shell" | "terminal" | "exec" => "Bash".into(),
+        "read" | "readfile" | "read_file" | "view" | "open_file" => "Read".into(),
+        "write" | "writefile" | "write_file" | "create_file" => "Write".into(),
+        "edit" | "editfile" | "edit_file" | "patch" => "Edit".into(),
+        "delete" | "deletefile" | "delete_file" | "remove" => "Delete".into(),
+        "grep" | "search_files" | "rg" => "Grep".into(),
+        "glob" | "find_files" => "Glob".into(),
+        "ls" | "list_dir" | "listdir" => "LS".into(),
+        "webfetch" | "web_fetch" => "WebFetch".into(),
+        "websearch" | "web_search" => "WebSearch".into(),
+        "todowrite" | "todo_write" => "TodoWrite".into(),
+        "notebookedit" | "notebook_edit" => "NotebookEdit".into(),
+        _ => name.to_string(),
     }
 }
 
@@ -1208,4 +1450,187 @@ fn extended_env() -> Vec<(String, String)> {
         out.push(("PATH".into(), parts.join(":")));
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn assistant_text(v: &serde_json::Value) -> Option<&str> {
+        v.get("message")?
+            .get("content")?
+            .as_array()?
+            .iter()
+            .find(|b| b.get("type").and_then(|t| t.as_str()) == Some("text"))?
+            .get("text")?
+            .as_str()
+    }
+
+    #[test]
+    fn dedupe_passes_incremental_partials_through() {
+        let mut n = StreamNormalizer::new();
+        let line = |t: &str| {
+            format!(
+                r#"{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"text","text":"{}"}}]}},"timestamp_ms":1}}"#,
+                t
+            )
+        };
+        let p1 = n.normalize(&line("Прове"));
+        let p2 = n.normalize(&line("рю..."));
+        assert_eq!(p1.len(), 1);
+        assert_eq!(assistant_text(&p1[0]), Some("Прове"));
+        assert_eq!(p2.len(), 1);
+        assert_eq!(assistant_text(&p2[0]), Some("рю..."));
+    }
+
+    #[test]
+    fn dedupe_collapses_cumulative_partials_to_tail() {
+        let mut n = StreamNormalizer::new();
+        let line = |t: &str| {
+            format!(
+                r#"{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"text","text":"{}"}}]}},"timestamp_ms":1}}"#,
+                t
+            )
+        };
+        let p1 = n.normalize(&line("Привет"));
+        let p2 = n.normalize(&line("Приветмир"));
+        assert_eq!(assistant_text(&p1[0]), Some("Привет"));
+        assert_eq!(assistant_text(&p2[0]), Some("мир"));
+    }
+
+    #[test]
+    fn dedupe_drops_exact_repeat_partials() {
+        let mut n = StreamNormalizer::new();
+        let line = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Проверю..."}]},"timestamp_ms":1}"#;
+        let p1 = n.normalize(line);
+        let p2 = n.normalize(line);
+        assert_eq!(p1.len(), 1);
+        assert_eq!(assistant_text(&p1[0]), Some("Проверю..."));
+        assert!(
+            p2.is_empty(),
+            "exact repeat must be dropped, got {:?}",
+            p2
+        );
+    }
+
+    #[test]
+    fn dedupe_resets_baseline_after_tool_call() {
+        let mut n = StreamNormalizer::new();
+        let assistant = |t: &str| {
+            format!(
+                r#"{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"text","text":"{}"}}]}},"timestamp_ms":1}}"#,
+                t
+            )
+        };
+        // First assistant message
+        let _ = n.normalize(&assistant("Done."));
+        // Tool call between messages — clears baseline
+        let tool_line = r#"{"type":"tool_call","subtype":"started","call_id":"x","tool_call":{"shellToolCall":{"args":{"command":"ls"}}}}"#;
+        let _ = n.normalize(tool_line);
+        // Second assistant message with the SAME text — must NOT be dropped
+        // (different message; cursor-agent does this when re-introducing
+        // a topic after a tool result).
+        let p2 = n.normalize(&assistant("Done."));
+        assert_eq!(p2.len(), 1, "post-tool same-text partial must pass");
+        assert_eq!(assistant_text(&p2[0]), Some("Done."));
+    }
+
+    #[test]
+    fn dedupe_drops_final_summary_assistant() {
+        let mut n = StreamNormalizer::new();
+        // No `timestamp_ms` → final summary, must be dropped (the `result`
+        // event re-stamps the clean text via `replaceLastAssistant`).
+        let line = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Final"}]}}"#;
+        let out = n.normalize(line);
+        assert!(out.is_empty(), "final summary must be dropped, got {:?}", out);
+    }
+
+    /// `extract_tool_shape` consumes the inner `tool_call` payload — the
+    /// `{shellToolCall: {…}}` style object cursor-agent emits. Tests
+    /// build that object directly and feed it in.
+    fn shape_for(payload: serde_json::Value) -> (String, serde_json::Value) {
+        extract_tool_shape(&payload)
+    }
+
+    #[test]
+    fn shell_tool_call_maps_to_bash_with_command() {
+        let payload = json!({
+            "shellToolCall": {
+                "args": {
+                    "command": "ls -la",
+                    "description": "List files in workspace",
+                }
+            }
+        });
+        let (name, input) = shape_for(payload);
+        assert_eq!(name, "Bash");
+        assert_eq!(input.get("command").and_then(|s| s.as_str()), Some("ls -la"));
+    }
+
+    #[test]
+    fn grep_tool_call_flattens_args_with_pattern() {
+        let payload = json!({
+            "grepToolCall": {
+                "args": {
+                    "pattern": "hello",
+                    "path": "/tmp/test.txt",
+                }
+            }
+        });
+        let (name, input) = shape_for(payload);
+        assert_eq!(name, "Grep");
+        assert_eq!(input.get("pattern").and_then(|s| s.as_str()), Some("hello"));
+        assert_eq!(input.get("path").and_then(|s| s.as_str()), Some("/tmp/test.txt"));
+    }
+
+    #[test]
+    fn read_tool_call_renames_path_to_file_path() {
+        let payload = json!({
+            "readToolCall": {
+                "args": {
+                    "path": "/tmp/test.txt",
+                }
+            }
+        });
+        let (name, input) = shape_for(payload);
+        assert_eq!(name, "Read");
+        // Cursor uses `path`; formatToolUse expects `file_path`.
+        assert_eq!(
+            input.get("file_path").and_then(|s| s.as_str()),
+            Some("/tmp/test.txt")
+        );
+        assert!(input.get("path").is_none(), "raw `path` key must be remapped");
+    }
+
+    #[test]
+    fn glob_tool_call_flattens_args() {
+        let payload = json!({
+            "globToolCall": {
+                "args": {
+                    "pattern": "**/*.rs"
+                }
+            }
+        });
+        let (name, input) = shape_for(payload);
+        assert_eq!(name, "Glob");
+        assert_eq!(input.get("pattern").and_then(|s| s.as_str()), Some("**/*.rs"));
+    }
+
+    #[test]
+    fn canonicalize_tool_name_maps_lowercase_aliases() {
+        assert_eq!(canonicalize_tool_name("bash"), "Bash");
+        assert_eq!(canonicalize_tool_name("shell"), "Bash");
+        assert_eq!(canonicalize_tool_name("grep"), "Grep");
+        assert_eq!(canonicalize_tool_name("read"), "Read");
+        assert_eq!(canonicalize_tool_name("write"), "Write");
+        // PascalCase already-canonical names pass through.
+        assert_eq!(canonicalize_tool_name("Bash"), "Bash");
+        // MCP names are never reshaped.
+        assert_eq!(
+            canonicalize_tool_name("mcp__app__open_github_pr"),
+            "mcp__app__open_github_pr"
+        );
+        // Unknown tools pass through (caller renders them as-is).
+        assert_eq!(canonicalize_tool_name("MysteryTool"), "MysteryTool");
+    }
 }
