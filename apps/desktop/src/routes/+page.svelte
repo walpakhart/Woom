@@ -1296,9 +1296,9 @@
     void scrollKindIntoView(kind);
   }
 
-  /** Spawn a new column instance of the given kind. For singletons it's a
-      no-op (scrolls to the existing one). Bound to the "+" button next to
-      multi-instance agent/editor pills. */
+  /** Spawn a new column instance of the given kind and scroll it into view.
+      Bound to the "+" button in the pill bar. All kinds support multiple
+      instances — see `addPanelInstance` in layout.svelte.ts. */
   function spawnColumnInstance(kind: PanelKind) {
     const id = addPanelInstance(kind);
     void scrollInstanceIntoView(id);
@@ -3025,9 +3025,7 @@
     void scrollChatBottom();
   }
 
-  // ---- Claude stub flow ----
-  // Real agent execution is the next milestone. For now we simulate the
-  // drop → run → commit → open-PR pipeline so the UX is testable.
+  // ---- Agent execution ----
 
   async function stopActiveAgent() {
     const s = activeSession;

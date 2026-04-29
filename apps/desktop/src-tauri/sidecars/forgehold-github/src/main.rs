@@ -2,8 +2,9 @@
 //!
 //! Auth: personal access token via env var GITHUB_TOKEN.
 //!
-//! Read-only tool surface (phase 2). Write tools (comment/review) come later
-//! once the read flow is validated.
+//! Exposes read tools (search, get_pr, diff, files, comments, commits,
+//! releases, workflow runs) and write tools (add_comment, submit_review,
+//! merge_pr) that surface approval cards in the Forgehold UI.
 
 use anyhow::Context;
 use rmcp::{

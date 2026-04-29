@@ -6,9 +6,10 @@
 
 export type PanelKind = 'github' | 'jira' | 'sentry' | 'claude' | 'cursor' | 'editor' | 'canvas';
 
-/** One live instance of a column in a workbench. Editors and chat columns can
- *  have multiple instances side-by-side; github/jira are effectively singletons
- *  (see `addPanelInstance` in layout.svelte.ts).
+/** One live instance of a column in a workbench. Every kind supports multiple
+ *  side-by-side instances — two GitHub columns can browse different repos,
+ *  two Jira columns different boards, etc. (see `addPanelInstance` in
+ *  layout.svelte.ts for how new instances are created).
  *
  *  `name` is a human-readable handle drawn from a pool of art / artist /
  *  monument names (Mona-Lisa, Da-Vinci, Parthenon, …). Shown in the column
