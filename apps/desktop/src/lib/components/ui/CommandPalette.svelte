@@ -45,7 +45,7 @@
   type Result = {
     key: string;
     badge: string;
-    badgeKind: 'view' | 'workbench' | 'editor' | 'github' | 'jira' | 'sentry' | 'claude' | 'cursor';
+    badgeKind: 'view' | 'workbench' | 'editor' | 'canvas' | 'github' | 'jira' | 'sentry' | 'claude' | 'cursor';
     title: string;
     subtitle?: string;
     section: string;
@@ -80,7 +80,8 @@
     sentry: 'St',
     claude: 'C',
     cursor: 'Cr',
-    editor: 'Ed'
+    editor: 'Ed',
+    canvas: 'Cv'
   };
 
   function capitalize(s: string) {

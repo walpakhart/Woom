@@ -110,6 +110,8 @@ function loadStoredSessions(): {
       linkedToEditor: Boolean((s as { linkedToEditor?: boolean }).linkedToEditor),
       linkedToEditorInstanceId:
         (s as { linkedToEditorInstanceId?: string | null }).linkedToEditorInstanceId ?? null,
+      linkedCanvasId:
+        (s as { linkedCanvasId?: string | null }).linkedCanvasId ?? null,
       // Sessions persisted before multi-instance landed have no column binding
       // — null means "float and attach to the first matching-kind column".
       columnInstanceId:
@@ -234,6 +236,7 @@ export function persistSessionsEffect() {
           lastContextSize: s.lastContextSize,
           linkedToEditor: s.linkedToEditor,
           linkedToEditorInstanceId: s.linkedToEditorInstanceId,
+          linkedCanvasId: s.linkedCanvasId,
           columnInstanceId: s.columnInstanceId,
           cwdSwitchRecap: s.cwdSwitchRecap,
           cwdUuids: s.cwdUuids,
@@ -391,6 +394,7 @@ export function newClaudeSession(
       lastContextSize: 0,
       linkedToEditor: !!opts.linkedToEditor,
       linkedToEditorInstanceId: opts.linkedToEditorInstanceId ?? null,
+      linkedCanvasId: null,
       columnInstanceId,
       cwdSwitchRecap: null,
       cwdUuids: {},

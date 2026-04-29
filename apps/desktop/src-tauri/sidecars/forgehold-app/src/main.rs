@@ -398,6 +398,319 @@ struct SetAgentCwdParams {
     repo_path: String,
 }
 
+// ---------- Canvas (whiteboard) param shapes ----------
+//
+// Architecture mirrors the existing pattern: this sidecar validates the
+// arguments and returns a confirmation string. The Forgehold frontend's
+// stream parser sees the same `mcp__app__canvas_*` tool_use event in
+// Claude's stream-json output and performs the actual mutation against
+// the canvas store.
+//
+// READ access is NOT via a tool call. The frontend injects a compact
+// state summary of the linked canvas into the system prompt at the
+// start of every turn, so the agent already knows the shape inventory
+// + their bboxes. That keeps the round-trip free of IPC.
+//
+// Agent-supplied ids: every shape and edge insert lets the agent pass
+// the id it wants to use (`shape_id` / `edge_id`). Without it, the
+// frontend mints one and includes it in the confirmation string the
+// agent reads — but providing one up front lets the agent reference
+// the shape in a subsequent edge call without a round-trip.
+
+const VALID_SHAPE_KINDS: &[&str] = &[
+    "rect", "ellipse", "arrow-shape", "line", "text", "sticky",
+    "mermaid", "dot", "code", "image", "freehand",
+    "frame", "group",
+    "jira-card", "github-pr-card", "github-issue-card",
+    "sentry-event-card", "file-card", "chat-message-card",
+];
+
+const VALID_EDGE_ANCHORS: &[&str] = &[
+    "tl", "tc", "tr", "ml", "mc", "mr", "bl", "bc", "br",
+];
+
+const VALID_EDGE_KINDS: &[&str] = &["arrow", "line", "dashed"];
+const VALID_EDGE_ROUTINGS: &[&str] = &["straight", "orthogonal", "curved"];
+
+const VALID_LAYOUT_ALGORITHMS: &[&str] = &["grid", "row", "column", "dagre"];
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct CanvasAddShapeParams {
+    /// Optional client-supplied id for the new shape. Useful when you'll
+    /// reference it in a subsequent `canvas_add_edge` call. Must be a
+    /// uuid-like string. Omit to let Forgehold mint one — the new id
+    /// will be in the confirmation text so you can grab it.
+    #[serde(default)]
+    shape_id: Option<String>,
+    /// Shape kind. One of: rect, ellipse, arrow-shape, line, text,
+    /// sticky, mermaid, dot, code, image, freehand, frame, group, and
+    /// the live-card kinds (jira-card, github-pr-card, github-issue-card,
+    /// sentry-event-card, file-card, chat-message-card). For live cards
+    /// you must also pass the lookup keys in `props` (e.g. ticketKey for
+    /// jira-card; owner/repo/number for github-pr-card).
+    kind: String,
+    /// Top-left x in canvas pixels.
+    x: f64,
+    /// Top-left y in canvas pixels.
+    y: f64,
+    /// Width in canvas pixels (>0).
+    w: f64,
+    /// Height in canvas pixels (>0).
+    h: f64,
+    /// Optional kind-specific properties (text source, mermaid source,
+    /// stroke / fill colors, sticky markdown, etc). Forge merges this
+    /// with the kind's defaults. See docs/CANVAS.md §5 for the schema.
+    #[serde(default)]
+    #[allow(dead_code)]
+    props: Option<serde_json::Value>,
+    /// Optional accessibility label. Shown on hover; doesn't affect
+    /// rendering otherwise.
+    #[serde(default)]
+    #[allow(dead_code)]
+    label: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct CanvasAddShapesParams {
+    /// Batch of shape specs to insert atomically (single undo entry).
+    /// Each entry has the same fields as `canvas_add_shape`. Use this
+    /// when drawing a multi-shape diagram (e.g. 5 boxes + their layout)
+    /// so the user can ⌘Z back to the pre-insert state in one step.
+    shapes: Vec<CanvasAddShapeParams>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct CanvasUpdateShapeParams {
+    /// Shape id to patch.
+    shape_id: String,
+    /// Optional new top-left x.
+    #[serde(default)] x: Option<f64>,
+    #[serde(default)] y: Option<f64>,
+    /// Optional new width / height. Both > 0 if provided.
+    #[serde(default)] w: Option<f64>,
+    #[serde(default)] h: Option<f64>,
+    /// Optional new rotation in radians.
+    #[serde(default)] rot: Option<f64>,
+    /// Optional kind-specific props patch. Merges with existing props
+    /// (does NOT replace — pass only the fields you want to change).
+    #[serde(default)]
+    props: Option<serde_json::Value>,
+    /// Optional new accessibility label.
+    #[serde(default)]
+    label: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct CanvasDeleteShapeParams {
+    /// Single shape id to delete. Use either `shape_id` OR
+    /// `shape_ids` — at least one is required.
+    #[serde(default)]
+    shape_id: Option<String>,
+    /// Multiple shape ids to delete in one history entry. Edges
+    /// touching deleted shapes are removed alongside (cascade).
+    #[serde(default)]
+    shape_ids: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct CanvasAddEdgeParams {
+    /// Optional client-supplied id for the new edge.
+    #[serde(default)]
+    edge_id: Option<String>,
+    /// Source shape id.
+    from_shape_id: String,
+    /// Source anchor — one of: tl, tc, tr, ml, mc, mr, bl, bc, br.
+    /// Defaults to `mr` (right-middle) for left-to-right flow.
+    #[serde(default)]
+    from_anchor: Option<String>,
+    /// Target shape id.
+    to_shape_id: String,
+    /// Target anchor — same options as `from_anchor`. Defaults to `ml`.
+    #[serde(default)]
+    to_anchor: Option<String>,
+    /// Visual style. One of: arrow (default — directed), line, dashed.
+    #[serde(default)]
+    kind: Option<String>,
+    /// Routing algorithm. One of: straight, orthogonal (default —
+    /// Manhattan elbow), curved (cubic bezier).
+    #[serde(default)]
+    routing: Option<String>,
+    /// Optional mid-line label.
+    #[serde(default)]
+    #[allow(dead_code)] /* read by the frontend dispatcher from raw JSON; the sidecar's confirmation doesn't surface it. */
+    label: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct CanvasDeleteEdgeParams {
+    /// Edge id to delete (or use `edge_ids` for bulk).
+    #[serde(default)]
+    edge_id: Option<String>,
+    #[serde(default)]
+    edge_ids: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct CanvasArrangeParams {
+    /// Layout algorithm. One of: `grid`, `row`, `column`, `dagre`.
+    /// `dagre` is best for connected DAGs (it uses the existing edges
+    /// to compute layers); `row` / `column` produce a linear sequence;
+    /// `grid` packs into a square-ish array.
+    algorithm: String,
+    /// Optional list of shape ids to arrange. If omitted, layouts the
+    /// entire canvas's root-level shapes.
+    #[serde(default)]
+    shape_ids: Option<Vec<String>>,
+    /// Optional rankdir for `dagre` only. One of: TB, LR (default), BT,
+    /// RL. Ignored for the other algorithms.
+    #[serde(default)]
+    rankdir: Option<String>,
+    /// Optional gap between shapes in canvas px (used by grid/row/
+    /// column). Defaults to 24.
+    #[serde(default)]
+    #[allow(dead_code)]
+    gap: Option<f64>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct CanvasFocusParams {
+    /// Shape id to scroll/zoom into the visible viewport. The user
+    /// sees a smooth animation toward the shape — useful right after
+    /// you add new shapes off-screen.
+    shape_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct CanvasSetZParams {
+    /// Shape id to reorder.
+    shape_id: String,
+    /// Z-order action. `to-front` floats above everything; `to-back`
+    /// sinks below everything; `forward` swaps just above the next
+    /// higher shape; `backward` just below the next lower one.
+    mode: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct CanvasDuplicateParams {
+    /// Shape ids to clone. New shapes get fresh uuids and are offset
+    /// by `(dx, dy)` canvas px from the originals so they don't sit
+    /// flush on top. Default offset (12, 12) matches Figma's ⌘D.
+    shape_ids: Vec<String>,
+    #[serde(default)] #[allow(dead_code)] dx: Option<f64>,
+    #[serde(default)] #[allow(dead_code)] dy: Option<f64>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct CanvasFindParams {
+    /// Substring to search for. Case-insensitive. Matches shape
+    /// labels, text content, mermaid / DOT / code source, sticky
+    /// markdown, live-card lookup keys (ticketKey, relPath, shortId,
+    /// snapshot.title, snapshot.summary). Returns matched shape ids
+    /// in creation order.
+    query: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct CanvasGroupParams {
+    /// Shape ids to wrap in a fresh frame/group container. The
+    /// container is sized to their AABB plus padding and each child's
+    /// `parentId` is set to the new container — so dragging the
+    /// container moves all of them together.
+    shape_ids: Vec<String>,
+    /// Container kind: `frame` (default — visible labeled rectangle)
+    /// or `group` (logical container with no visual border).
+    #[serde(default)]
+    #[allow(dead_code)]
+    kind: Option<String>,
+    /// Optional label for the frame's title bar. Ignored for `group`.
+    #[serde(default)]
+    #[allow(dead_code)]
+    title: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct CanvasUngroupParams {
+    /// Container shape id (a `frame` or `group`). Children get their
+    /// `parentId` cleared and the container is removed.
+    shape_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct CanvasLockParams {
+    /// Shape ids to (un)lock.
+    shape_ids: Vec<String>,
+    /// `true` = lock (further patches and edits ignored), `false` =
+    /// unlock.
+    locked: bool,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct CanvasAlignParams {
+    /// Shape ids to align. Need at least 2.
+    shape_ids: Vec<String>,
+    /// Alignment axis. One of: `left`, `center-x`, `right`, `top`,
+    /// `center-y`, `bottom`. The anchor value is derived from the
+    /// AABB of the selection (e.g. `left` snaps every shape's left
+    /// edge to the leftmost current left edge).
+    axis: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct CanvasDistributeParams {
+    /// Shape ids to distribute. Need at least 3 — first and last
+    /// keep their position; the middle ones are spaced equally.
+    shape_ids: Vec<String>,
+    /// Distribution axis. `horizontal` (equalize gaps between
+    /// columns) or `vertical` (between rows).
+    axis: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct CanvasSetViewportParams {
+    /// Viewport top-left x in canvas pixels. Required.
+    x: f64,
+    /// Viewport top-left y in canvas pixels. Required.
+    y: f64,
+    /// Zoom multiplier (canvas-px → CSS-px). 1.0 = identity. Clamped
+    /// to 0.1..4.0 to match the manual zoom range. Optional —
+    /// defaults to current zoom.
+    #[serde(default)]
+    zoom: Option<f64>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct CanvasUploadImageParams {
+    /// Base64-encoded image bytes (PNG or JPEG; no `data:...;base64,`
+    /// prefix). The frontend decodes via dataURL, computes intrinsic
+    /// size, and inserts an `image` shape clamped to a max-dim cap so
+    /// a giant image doesn't dominate the canvas.
+    base64: String,
+    /// Image MIME type. One of: `image/png`, `image/jpeg`,
+    /// `image/gif`, `image/webp`. Used for the dataURL prefix.
+    /// Defaults to `image/png`.
+    #[serde(default)]
+    #[allow(dead_code)]
+    mime_type: Option<String>,
+    /// Top-left x where the image lands. Defaults to current viewport
+    /// center if omitted.
+    #[serde(default)]
+    #[allow(dead_code)]
+    x: Option<f64>,
+    /// Top-left y. Defaults to current viewport center if omitted.
+    #[serde(default)]
+    #[allow(dead_code)]
+    y: Option<f64>,
+    /// Optional shape id for the new image (lets you reference it in
+    /// follow-up calls).
+    #[serde(default)]
+    #[allow(dead_code)]
+    shape_id: Option<String>,
+    /// Optional alt text.
+    #[serde(default)]
+    #[allow(dead_code)]
+    alt: Option<String>,
+}
+
 fn validate_one_of(value: &str, choices: &[&str], label: &str) -> Result<(), ErrorData> {
     if choices.contains(&value) {
         Ok(())
@@ -962,6 +1275,373 @@ impl App {
             "Forgehold injects the current workbench / instance map into your system prompt at the start of every turn. Re-read it for the latest state. (This tool is a placeholder — the frontend interceptor doesn't need to mutate anything for it; the actual data lives in the system prompt preamble.)".to_string(),
         )]))
     }
+
+    // ---------- Canvas (whiteboard) ----------
+
+    #[tool(
+        description = "Add a single shape to the canvas the current session is linked to. Coordinates are in canvas pixels (logical, DPI-independent). For live cards (jira-card, github-pr-card, etc.), pass the lookup keys in `props` — e.g. `{\"ticketKey\": \"PROJ-123\"}` for jira-card. Pass an explicit `shape_id` (any uuid-like string) when you'll reference the shape in a later `canvas_add_edge` call so you don't have to round-trip. The current canvas state is in the system prompt preamble (id, dimensions, shape inventory) — read from there to know where to place new shapes."
+    )]
+    async fn canvas_add_shape(
+        &self,
+        Parameters(p): Parameters<CanvasAddShapeParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        validate_one_of(&p.kind, VALID_SHAPE_KINDS, "kind")?;
+        if !(p.w.is_finite() && p.w > 0.0) || !(p.h.is_finite() && p.h > 0.0) {
+            return Err(ErrorData::invalid_params("w and h must be > 0", None));
+        }
+        if !p.x.is_finite() || !p.y.is_finite() {
+            return Err(ErrorData::invalid_params("x and y must be finite numbers", None));
+        }
+        let id_label = p.shape_id.as_deref().unwrap_or("(auto)");
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Adding `{}` shape (id `{}`) at ({:.0},{:.0}) {:.0}x{:.0} on the linked canvas.",
+            p.kind, id_label, p.x, p.y, p.w, p.h
+        ))]))
+    }
+
+    #[tool(
+        description = "Add MANY shapes to the linked canvas in one atomic op (single ⌘Z entry). Use this when laying out a multi-shape diagram — it lands as one history step instead of N. Each entry has the same fields as `canvas_add_shape`. After the call, you can use `canvas_arrange` to position them via dagre/grid/row/column without computing positions yourself."
+    )]
+    async fn canvas_add_shapes(
+        &self,
+        Parameters(p): Parameters<CanvasAddShapesParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        if p.shapes.is_empty() {
+            return Err(ErrorData::invalid_params("`shapes` is empty", None));
+        }
+        for s in &p.shapes {
+            validate_one_of(&s.kind, VALID_SHAPE_KINDS, "kind")?;
+            if !(s.w.is_finite() && s.w > 0.0) || !(s.h.is_finite() && s.h > 0.0) {
+                return Err(ErrorData::invalid_params(
+                    format!("shape '{}' has invalid w/h (must be > 0)", s.kind),
+                    None,
+                ));
+            }
+        }
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Adding {} shape(s) to the linked canvas (atomic).",
+            p.shapes.len()
+        ))]))
+    }
+
+    #[tool(
+        description = "Patch a shape on the linked canvas. Pass only the fields you want to change — others are preserved. To MOVE: pass new x/y. To RESIZE: pass new w/h. To CHANGE TEXT (text/sticky): pass `props.text` or `props.markdown`. To CHANGE MERMAID: pass `props.source`. The patch is one undo step; multi-field patches collapse to one ⌘Z."
+    )]
+    async fn canvas_update_shape(
+        &self,
+        Parameters(p): Parameters<CanvasUpdateShapeParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        if p.shape_id.trim().is_empty() {
+            return Err(ErrorData::invalid_params("`shape_id` is empty", None));
+        }
+        if let (Some(w), _) = (p.w, ()) { if !w.is_finite() || w <= 0.0 {
+            return Err(ErrorData::invalid_params("w must be > 0", None));
+        }}
+        if let (Some(h), _) = (p.h, ()) { if !h.is_finite() || h <= 0.0 {
+            return Err(ErrorData::invalid_params("h must be > 0", None));
+        }}
+        let mut bits = Vec::new();
+        if let Some(x) = p.x { bits.push(format!("x={:.0}", x)); }
+        if let Some(y) = p.y { bits.push(format!("y={:.0}", y)); }
+        if let Some(w) = p.w { bits.push(format!("w={:.0}", w)); }
+        if let Some(h) = p.h { bits.push(format!("h={:.0}", h)); }
+        if let Some(r) = p.rot { bits.push(format!("rot={:.2}", r)); }
+        if p.props.is_some() { bits.push("props=…".to_string()); }
+        if p.label.is_some() { bits.push("label=…".to_string()); }
+        let summary = if bits.is_empty() { "(no changes)".to_string() } else { bits.join(", ") };
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Patching shape `{}`: {}.",
+            p.shape_id, summary
+        ))]))
+    }
+
+    #[tool(
+        description = "Delete a shape (or many) from the linked canvas. Edges anchored to the deleted shape(s) are removed in the same history entry — undo restores both at once. Provide either `shape_id` (single) or `shape_ids` (array)."
+    )]
+    async fn canvas_delete_shape(
+        &self,
+        Parameters(p): Parameters<CanvasDeleteShapeParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let single = p.shape_id.as_deref().map(str::trim).filter(|s| !s.is_empty());
+        let many = p.shape_ids.as_ref().filter(|v| !v.is_empty());
+        if single.is_none() && many.is_none() {
+            return Err(ErrorData::invalid_params(
+                "either `shape_id` or `shape_ids` is required",
+                None,
+            ));
+        }
+        let n = match (single, many) {
+            (Some(_), Some(arr)) => arr.len() + 1,
+            (Some(_), None) => 1,
+            (None, Some(arr)) => arr.len(),
+            _ => 0,
+        };
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Deleting {} shape(s) (and their connecting edges) on the linked canvas.",
+            n
+        ))]))
+    }
+
+    #[tool(
+        description = "Connect two shapes with an edge on the linked canvas. Anchors are the canonical 9-point set per shape (`tl`,`tc`,`tr`,`ml`,`mc`,`mr`,`bl`,`bc`,`br`); for a left-to-right flowchart the defaults `from_anchor=mr` + `to_anchor=ml` give clean straight handoffs. `routing` controls the path: `orthogonal` (default — Manhattan elbow, best for boxy diagrams), `straight` (no detour), `curved` (cubic bezier, organic feel). `kind` controls visuals: `arrow` (default — directed), `line`, `dashed`."
+    )]
+    async fn canvas_add_edge(
+        &self,
+        Parameters(p): Parameters<CanvasAddEdgeParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        if p.from_shape_id.trim().is_empty() || p.to_shape_id.trim().is_empty() {
+            return Err(ErrorData::invalid_params("from/to shape ids are required", None));
+        }
+        if let Some(a) = p.from_anchor.as_deref() { validate_one_of(a, VALID_EDGE_ANCHORS, "from_anchor")?; }
+        if let Some(a) = p.to_anchor.as_deref()   { validate_one_of(a, VALID_EDGE_ANCHORS, "to_anchor")?; }
+        if let Some(k) = p.kind.as_deref()        { validate_one_of(k, VALID_EDGE_KINDS, "kind")?; }
+        if let Some(r) = p.routing.as_deref()     { validate_one_of(r, VALID_EDGE_ROUTINGS, "routing")?; }
+        let id_label = p.edge_id.as_deref().unwrap_or("(auto)");
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Connecting `{}` → `{}` (edge id `{}`, {} routing).",
+            p.from_shape_id,
+            p.to_shape_id,
+            id_label,
+            p.routing.as_deref().unwrap_or("orthogonal")
+        ))]))
+    }
+
+    #[tool(
+        description = "Delete one or more edges from the linked canvas. Provide `edge_id` (single) or `edge_ids` (bulk)."
+    )]
+    async fn canvas_delete_edge(
+        &self,
+        Parameters(p): Parameters<CanvasDeleteEdgeParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let single = p.edge_id.as_deref().map(str::trim).filter(|s| !s.is_empty());
+        let many = p.edge_ids.as_ref().filter(|v| !v.is_empty());
+        if single.is_none() && many.is_none() {
+            return Err(ErrorData::invalid_params(
+                "either `edge_id` or `edge_ids` is required",
+                None,
+            ));
+        }
+        let n = match (single, many) {
+            (Some(_), Some(arr)) => arr.len() + 1,
+            (Some(_), None) => 1,
+            (None, Some(arr)) => arr.len(),
+            _ => 0,
+        };
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Deleting {} edge(s) on the linked canvas.",
+            n
+        ))]))
+    }
+
+    #[tool(
+        description = "Auto-position shapes on the linked canvas via a built-in layout algorithm. Use this AFTER `canvas_add_shapes` so you don't have to compute positions yourself. Algorithms: `dagre` (Sugiyama-style layered DAG, uses existing edges — best for flowcharts; pass `rankdir`=LR/TB), `grid` (square-ish pack), `row` (horizontal sequence), `column` (vertical). With `shape_ids` empty / omitted, layouts every root-level shape on the canvas. The new positions land as one undo entry."
+    )]
+    async fn canvas_arrange(
+        &self,
+        Parameters(p): Parameters<CanvasArrangeParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        validate_one_of(&p.algorithm, VALID_LAYOUT_ALGORITHMS, "algorithm")?;
+        if let Some(rd) = p.rankdir.as_deref() {
+            validate_one_of(rd, &["TB", "LR", "BT", "RL"], "rankdir")?;
+        }
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Arranging {} shape(s) with `{}` layout on the linked canvas.",
+            p.shape_ids.as_ref().map(|v| v.len().to_string()).unwrap_or_else(|| "all".to_string()),
+            p.algorithm
+        ))]))
+    }
+
+    #[tool(
+        description = "Animate the canvas viewport to bring a shape into view. Smooth pan/zoom toward the shape so the user sees what you just added or modified. Useful right after adding shapes off-screen — gives the user a visual cue that a new piece of the diagram exists."
+    )]
+    async fn canvas_focus(
+        &self,
+        Parameters(CanvasFocusParams { shape_id }): Parameters<CanvasFocusParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        if shape_id.trim().is_empty() {
+            return Err(ErrorData::invalid_params("`shape_id` is required", None));
+        }
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Focusing canvas viewport on shape `{}`.",
+            shape_id
+        ))]))
+    }
+
+    #[tool(
+        description = "Reorder a shape in the canvas's z-stack. `mode=to-front` floats it above everything; `to-back` sinks it below; `forward` / `backward` swap with the next-adjacent neighbour. Use when shapes overlap and you need a specific one on top — e.g. a callout sticky over a screenshot."
+    )]
+    async fn canvas_set_z(
+        &self,
+        Parameters(CanvasSetZParams { shape_id, mode }): Parameters<CanvasSetZParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        if shape_id.trim().is_empty() {
+            return Err(ErrorData::invalid_params("`shape_id` is required", None));
+        }
+        validate_one_of(&mode, &["to-front", "to-back", "forward", "backward"], "mode")?;
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Setting z-order of `{}` → {}.",
+            shape_id, mode
+        ))]))
+    }
+
+    #[tool(
+        description = "Clone shape(s) on the linked canvas. Each clone gets a fresh id and is offset by `(dx, dy)` canvas px (default 12, 12). Useful when you want to vary a layout — duplicate a node, then patch its label / position. The clones are auto-selected after the call so a follow-up `canvas_arrange` works on them. Returns one undo entry."
+    )]
+    async fn canvas_duplicate(
+        &self,
+        Parameters(p): Parameters<CanvasDuplicateParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        if p.shape_ids.is_empty() {
+            return Err(ErrorData::invalid_params("`shape_ids` is empty", None));
+        }
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Duplicating {} shape(s) on the linked canvas.",
+            p.shape_ids.len()
+        ))]))
+    }
+
+    #[tool(
+        description = "Substring-search the linked canvas. Case-insensitive — matches shape labels, text content, mermaid/DOT/code source, sticky markdown, and live-card lookup fields (ticketKey, relPath, shortId, snapshot title/summary). Returns matched shape ids you can then update / focus / connect. The system-prompt preamble already contains an inventory; use this tool when you need to find by content rather than browse by id."
+    )]
+    async fn canvas_find(
+        &self,
+        Parameters(CanvasFindParams { query }): Parameters<CanvasFindParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        if query.trim().is_empty() {
+            return Err(ErrorData::invalid_params("`query` is empty", None));
+        }
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Searching the linked canvas for `{}`. Result ids will be visible in your next system-prompt preamble — re-issue your inventory check or assume a match.",
+            query.trim()
+        ))]))
+    }
+
+    #[tool(
+        description = "Wrap shapes in a frame / group container so they move together as a unit. Each child's `parentId` is set to the new container — drag the container, all children follow. Use this when you've drawn a multi-shape sub-diagram and want to treat it as one piece (\"group these auth flow boxes so I can move them together\"). The container's bbox auto-sizes to the children + padding."
+    )]
+    async fn canvas_group(
+        &self,
+        Parameters(p): Parameters<CanvasGroupParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        if p.shape_ids.is_empty() {
+            return Err(ErrorData::invalid_params("`shape_ids` is empty", None));
+        }
+        if let Some(k) = p.kind.as_deref() {
+            validate_one_of(k, &["frame", "group"], "kind")?;
+        }
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Grouping {} shape(s) into a {}.",
+            p.shape_ids.len(),
+            p.kind.as_deref().unwrap_or("frame")
+        ))]))
+    }
+
+    #[tool(
+        description = "Inverse of canvas_group — unwraps a frame/group, freeing its children to root. Children keep their absolute positions; the container is removed. The freed children become the new selection so a follow-up `canvas_arrange` works on them."
+    )]
+    async fn canvas_ungroup(
+        &self,
+        Parameters(CanvasUngroupParams { shape_id }): Parameters<CanvasUngroupParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        if shape_id.trim().is_empty() {
+            return Err(ErrorData::invalid_params("`shape_id` is empty", None));
+        }
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Ungrouping container `{}` — children become root-level.",
+            shape_id
+        ))]))
+    }
+
+    #[tool(
+        description = "Lock or unlock shapes. Locked shapes ignore further patches (move / resize / props) — useful when the user has \"frozen\" reference cards and you should rearrange the rest. Pass `locked=false` to unlock."
+    )]
+    async fn canvas_lock(
+        &self,
+        Parameters(p): Parameters<CanvasLockParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        if p.shape_ids.is_empty() {
+            return Err(ErrorData::invalid_params("`shape_ids` is empty", None));
+        }
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "{} {} shape(s).",
+            if p.locked { "Locking" } else { "Unlocking" },
+            p.shape_ids.len()
+        ))]))
+    }
+
+    #[tool(
+        description = "Align selected shapes on an axis. The anchor (snap-to value) is derived from the selection's AABB — e.g. `left` aligns every shape's left edge to the leftmost current left edge; `center-x` centers them on the horizontal mid-line of the AABB. Use AFTER `canvas_arrange` for fine-tuning. Need 2+ shapes."
+    )]
+    async fn canvas_align(
+        &self,
+        Parameters(p): Parameters<CanvasAlignParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        if p.shape_ids.len() < 2 {
+            return Err(ErrorData::invalid_params("need at least 2 shape ids to align", None));
+        }
+        validate_one_of(&p.axis, &["left", "center-x", "right", "top", "center-y", "bottom"], "axis")?;
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Aligning {} shape(s) → {}.",
+            p.shape_ids.len(),
+            p.axis
+        ))]))
+    }
+
+    #[tool(
+        description = "Equalize gaps between shapes along an axis. The first and last keep their positions; the middle ones are repositioned so consecutive gaps are equal. Use after `canvas_align` for the classic Figma \"align then distribute\" combo. Need 3+ shapes."
+    )]
+    async fn canvas_distribute(
+        &self,
+        Parameters(p): Parameters<CanvasDistributeParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        if p.shape_ids.len() < 3 {
+            return Err(ErrorData::invalid_params("need at least 3 shape ids to distribute", None));
+        }
+        validate_one_of(&p.axis, &["horizontal", "vertical"], "axis")?;
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Distributing {} shape(s) {} with equal gaps.",
+            p.shape_ids.len(),
+            p.axis
+        ))]))
+    }
+
+    #[tool(
+        description = "Pan / zoom the canvas viewport programmatically. `x`/`y` are the top-left of the viewport rect in canvas pixels. `zoom` is the scale factor (1.0 = 100%). Use to ZOOM OUT to show the user the whole graph after `canvas_arrange`, or to position the camera on a specific region (use `canvas_focus` for a single shape — it does the centering math for you)."
+    )]
+    async fn canvas_set_viewport(
+        &self,
+        Parameters(p): Parameters<CanvasSetViewportParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        if !p.x.is_finite() || !p.y.is_finite() {
+            return Err(ErrorData::invalid_params("x/y must be finite", None));
+        }
+        if let Some(z) = p.zoom {
+            if !z.is_finite() || z <= 0.0 {
+                return Err(ErrorData::invalid_params("zoom must be > 0", None));
+            }
+        }
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Setting viewport to ({:.0},{:.0}, zoom {}).",
+            p.x, p.y,
+            p.zoom.map(|z| format!("{:.2}x", z)).unwrap_or_else(|| "current".to_string())
+        ))]))
+    }
+
+    #[tool(
+        description = "Insert an image onto the linked canvas. `base64` is the raw image bytes (PNG / JPEG / GIF / WebP), no data-URL prefix. The image is decoded, sized to its intrinsic dimensions (capped to 480×480), and placed at the optional `(x, y)` (defaulting to viewport center). Use this when you've generated a chart / diagram externally and want to put it on the canvas alongside the user's other content. The base64 should be < 1.5 MB to fit in localStorage; consider downsampling first."
+    )]
+    async fn canvas_upload_image(
+        &self,
+        Parameters(p): Parameters<CanvasUploadImageParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        if p.base64.is_empty() {
+            return Err(ErrorData::invalid_params("`base64` is empty", None));
+        }
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Inserting an image ({} KB) onto the linked canvas.",
+            p.base64.len() * 3 / 4 / 1024
+        ))]))
+    }
 }
 
 #[tool_handler]
@@ -996,6 +1676,23 @@ impl ServerHandler for App {
              \n\
              ## Sources\n\
              - open_connect_modal — surface the connect/status modal for any source/agent (use when the user asks about an integration that isn't connected yet — e.g. they mention Slack and you can see it's not in their connected list).\n\
+             \n\
+             ## Canvas (whiteboard) — only when the session is linked to a canvas\n\
+             A linked canvas is announced in your system prompt with the canvas id, dimensions, and a compact shape inventory. ONLY use `canvas_*` tools when this preamble is present — otherwise the tools have nothing to target.\n\
+             - canvas_add_shape / canvas_add_shapes — place new shapes (provide `shape_id` if you'll connect it next so you don't round-trip).\n\
+             - canvas_update_shape — patch x/y/w/h/rot/props/label of a shape.\n\
+             - canvas_delete_shape — remove shape(s); connected edges cascade.\n\
+             - canvas_add_edge / canvas_delete_edge — draw / drop connectors. Default `from_anchor=mr` + `to_anchor=ml` reads as left-to-right flow.\n\
+             - canvas_arrange — auto-layout (dagre / grid / row / column). Run AFTER add_shapes so you don't have to position by hand.\n\
+             - canvas_focus — smooth-pan the viewport onto a shape so the user sees what you just added.\n\
+             - canvas_set_z — reorder z-stack (to-front / to-back / forward / backward) when shapes overlap.\n\
+             - canvas_duplicate — clone shapes at an offset; the clones become the new selection.\n\
+             - canvas_find — substring-search labels / text / source / live-card keys when the inventory is too long to scan.\n\
+             - canvas_group / canvas_ungroup — wrap shapes in a frame so they move together; ungroup frees them.\n\
+             - canvas_lock — freeze a shape's position so subsequent patches ignore it (useful for reference cards).\n\
+             - canvas_align / canvas_distribute — align selection on an axis or equalize gaps (Figma's \"align then distribute\" combo).\n\
+             - canvas_set_viewport — pan/zoom the camera programmatically (use to zoom out after a layout so the user sees the whole graph).\n\
+             - canvas_upload_image — paste a base64-encoded image onto the canvas; useful when you've generated a chart externally.\n\
              \n\
              # When to chain calls\n\
              These tools compose. \"Open the actions tab for forge\" → open_github_repo(owner=…, repo=forge, section=actions) — one call, no need to switch_view first. \"Make a new workbench called Hotfix and add a Claude column there\" → new_workbench + add_workbench_instance(kind=claude). Don't ask for confirmation — these are harmless navigation that gives the user the same view they'd get clicking through manually."

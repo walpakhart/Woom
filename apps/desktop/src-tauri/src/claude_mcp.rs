@@ -77,7 +77,13 @@ impl ToolProfile {
         // chats so it's universally useful; App nav has no token cost
         // beyond the base set we always want (open detail panes,
         // switch views, list instances).
+        // Canvas tools are also profile-agnostic — they only do
+        // anything when the session is linked to a canvas; non-linked
+        // sessions never call them. Putting them outside the profile
+        // gates means a `triage` agent linked to a canvas can still
+        // draw on it without us inflating Triage's allow-list.
         let base = tool.starts_with("mcp__memory__")
+            || tool.starts_with("mcp__app__canvas_")
             || matches!(tool,
                 "mcp__app__list_instances"
                 | "mcp__app__switch_view"
@@ -271,6 +277,30 @@ pub(crate) fn build_mcp_config(
         allowed.push("mcp__app__set_agent_cwd".into());
         allowed.push("mcp__app__list_instances".into());
         allowed.push("mcp__app__open_sentry_event".into());
+        // Canvas (whiteboard) tools — every linked-canvas mutation goes
+        // through one of these. Without explicit allow-listing the
+        // agent sees them in the MCP catalog but `--allowedTools`
+        // strips them, so it answers "I have no canvas tools" even
+        // though the sidecar exposes them. (The `Coding` profile
+        // lets all `mcp__app__*` through — see `Profile::allows`.)
+        allowed.push("mcp__app__canvas_add_shape".into());
+        allowed.push("mcp__app__canvas_add_shapes".into());
+        allowed.push("mcp__app__canvas_update_shape".into());
+        allowed.push("mcp__app__canvas_delete_shape".into());
+        allowed.push("mcp__app__canvas_add_edge".into());
+        allowed.push("mcp__app__canvas_delete_edge".into());
+        allowed.push("mcp__app__canvas_arrange".into());
+        allowed.push("mcp__app__canvas_focus".into());
+        allowed.push("mcp__app__canvas_set_z".into());
+        allowed.push("mcp__app__canvas_duplicate".into());
+        allowed.push("mcp__app__canvas_find".into());
+        allowed.push("mcp__app__canvas_group".into());
+        allowed.push("mcp__app__canvas_ungroup".into());
+        allowed.push("mcp__app__canvas_lock".into());
+        allowed.push("mcp__app__canvas_align".into());
+        allowed.push("mcp__app__canvas_distribute".into());
+        allowed.push("mcp__app__canvas_set_viewport".into());
+        allowed.push("mcp__app__canvas_upload_image".into());
     }
 
     // Apply profile filter. Keep app-side & memory entries that profile

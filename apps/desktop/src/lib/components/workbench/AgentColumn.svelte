@@ -18,6 +18,9 @@
   import { invoke, convertFileSrc } from '@tauri-apps/api/core';
   import { open as openDialog } from '@tauri-apps/plugin-dialog';
   import { inboxState } from '$lib/state/inbox.svelte';
+  import { canvasState } from '$lib/state/canvas.svelte';
+  import { setDragPayload, type DragPayload } from '$lib/state/drag.svelte';
+  import { attachDragChip } from '$lib/dragImage';
   import type { Mention } from '$lib/types';
   import {
     connectionsMeta,
@@ -379,6 +382,76 @@
   /** All Editor instances in the current workbench — used by the link dropdown
       when user wants to pick a specific one. */
   const editorInstances = $derived(activeInstances().filter((i) => i.kind === 'editor'));
+
+  /** Active (non-archived) canvases in the library — drives the
+   *  "Link canvas…" picker. We list all of them, not just those open
+   *  in a column, since linking is per-session and a user can link to
+   *  a canvas that's currently library-only and pin a column for it
+   *  later. */
+  const linkableCanvases = $derived(
+    canvasState.index.filter((c) => !c.archivedAt)
+  );
+  /** Resolved live entry for the session's `linkedCanvasId` — null when
+   *  no link or the canvas was deleted. */
+  const linkedCanvasEntry = $derived.by(() => {
+    const sess = sessionsState.list.find((s) => s.id === sessionsState.activeByInstance[instanceId]);
+    if (!sess?.linkedCanvasId) return null;
+    return canvasState.index.find((c) => c.id === sess.linkedCanvasId) ?? null;
+  });
+
+  function linkSessionToCanvas(canvasId: string) {
+    const sess = sessionsState.list.find((s) => s.id === sessionsState.activeByInstance[instanceId]);
+    if (!sess) return;
+    updateSession(sess.id, { linkedCanvasId: canvasId || null });
+  }
+  function unlinkSessionFromCanvas() {
+    const sess = sessionsState.list.find((s) => s.id === sessionsState.activeByInstance[instanceId]);
+    if (!sess) return;
+    updateSession(sess.id, { linkedCanvasId: null });
+  }
+
+  /** Start dragging a chat message — drop onto a Canvas column to pin it
+   *  as a `chat-message-card`. Snapshot captures role + agent kind +
+   *  excerpt so the card stays meaningful even if the source session
+   *  is later deleted. The drag chip uses the agent kind's accent
+   *  (claude warm orange / cursor violet) so the user can see at a
+   *  glance which session the message came from. */
+  function startChatMessageDrag(
+    e: DragEvent,
+    sessionId: string,
+    sessionTitle: string,
+    agentKind: 'claude' | 'cursor',
+    messageIndex: number,
+    role: 'user' | 'assistant' | 'system',
+    content: string,
+    at: string
+  ) {
+    /* If the user has a non-empty selection inside this message, prefer
+       letting them drag the selected text (e.g., to copy into another
+       app) over dragging the whole message. Standard browser muscle
+       memory: text selection beats element drag. */
+    const sel = window.getSelection?.();
+    if (sel && sel.toString().trim().length > 0) return;
+    const excerpt = (content || '').replace(/\s+/g, ' ').trim().slice(0, 200);
+    const payload: DragPayload = {
+      source: 'chat-message',
+      sessionId,
+      messageIndex,
+      snapshot: { role, agentKind, sessionTitle, excerpt, at }
+    };
+    setDragPayload(payload);
+    if (e.dataTransfer) {
+      e.dataTransfer.effectAllowed = 'copy';
+      const tag = role === 'assistant' ? agentKind : 'file' /* placeholder */;
+      const label = excerpt.length > 60 ? `${excerpt.slice(0, 57)}…` : (excerpt || '(empty)');
+      e.dataTransfer.setData('text/plain', label);
+      attachDragChip(e, tag === 'cursor' ? 'cursor' : tag === 'claude' ? 'claude' : 'file', `${role === 'user' ? 'You' : agentKind} · ${label}`);
+    }
+  }
+
+  function endChatMessageDrag() {
+    setDragPayload(null);
+  }
 
   function focusLocalSession(id: string) {
     setActiveSessionInColumn(instanceId, id);
@@ -973,6 +1046,34 @@
           </button>
         {/if}
       {/if}
+
+      <!-- Canvas link control. Lives after the editor-link area so the
+           cwd-bar reads "where am I editing → which canvas am I drawing
+           on". Hidden entirely when there's no canvas in the library
+           AND no link — keeps the bar tight for users who don't use
+           the canvas feature. -->
+      {#if linkedCanvasEntry}
+        <button
+          class="canvas-link-chip"
+          onclick={() => { focusLocalSession(activeSess.id); unlinkSessionFromCanvas(); }}
+          title="Unlink — agent loses access to canvas tools"
+        >
+          <svg class="i i-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="14" rx="2"/><rect x="6" y="6" width="9" height="6" rx="1"/></svg>
+          <span class="canvas-link-name">{linkedCanvasEntry.name}</span>
+          <svg class="i i-sm canvas-link-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
+      {:else if linkableCanvases.length > 0}
+        <div class="link-canvas-picker">
+          <Dropdown
+            value=""
+            options={linkableCanvases.map((c) => ({ value: c.id, label: `Link to ${c.name}` }))}
+            onChange={(id) => { focusLocalSession(activeSess.id); linkSessionToCanvas(id); }}
+            placeholder="Link canvas…"
+            ariaLabel="Link to canvas"
+          />
+        </div>
+      {/if}
+
       {#if activeSess.agentKind === 'cursor'}
         <div class="model-chip" title="Cursor model — forwarded to cursor-agent --model">
           <svg class="i i-sm" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1"/></svg>
@@ -1317,7 +1418,17 @@
         {:else}
           {#each sess.messages as msg, idx (idx)}
             <div class="chat-msg chat-msg--{msg.role}" class:chat-msg--editing={editingMsg && editingMsg.sessionId === sess.id && editingMsg.index === idx}>
-              <div class="chat-msg-head">
+              <div
+                class="chat-msg-head"
+                class:chat-msg-head--draggable={msg.role !== 'system'}
+                draggable={msg.role !== 'system'}
+                role="presentation"
+                title="Drag onto a Canvas column to pin this message"
+                ondragstart={(e) => startChatMessageDrag(
+                  e, sess.id, sess.title, sess.agentKind, idx, msg.role, msg.content, msg.at
+                )}
+                ondragend={endChatMessageDrag}
+              >
                 {#if msg.role === 'assistant'}
                   {@const brandMeta = kind === 'claude' ? claudeMeta : cursorMeta}
                   {#if brandMeta?.iconImg}
@@ -2668,4 +2779,49 @@
     flex-shrink: 0; max-width: 120px;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
+
+  /* Canvas-link chip — compact "Canvas: <name> ✕" pill.  Mirrors the
+     editor linked-pill compact variant in palette but uses the canvas
+     stacked-frames glyph so it reads as a different concept. Click =
+     unlink (chat-side parity with how the editor `linked-pill`
+     behaves). */
+  .canvas-link-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 6px 4px 8px;
+    border-radius: 6px;
+    background: var(--accent-soft);
+    border: 1px solid var(--border-hi);
+    color: var(--accent-bright);
+    font-size: 11px; font-weight: 500;
+    cursor: pointer;
+    flex-shrink: 0;
+    max-width: 200px;
+    transition: all 120ms;
+  }
+  .canvas-link-chip:hover {
+    background: var(--accent-glow);
+    color: var(--accent-fg);
+  }
+  .canvas-link-chip svg { width: 12px; height: 12px; flex-shrink: 0; }
+  .canvas-link-name {
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    min-width: 0;
+  }
+  .canvas-link-x { opacity: 0.6; transition: opacity 100ms; }
+  .canvas-link-chip:hover .canvas-link-x { opacity: 1; }
+
+  /* Picker dropdown for "Link canvas…". Same compact slot the editor
+     picker uses; the Dropdown component itself handles open/close and
+     option rendering. */
+  .link-canvas-picker {
+    flex-shrink: 0;
+    min-width: 110px;
+  }
+
+  /* Draggable chat message head — barely-there cursor hint. We don't
+     add an explicit grab icon because users get visual feedback via
+     the OS cursor as soon as they start dragging, and a permanent
+     icon would clutter the chat. */
+  .chat-msg-head--draggable { cursor: grab; }
+  .chat-msg-head--draggable:active { cursor: grabbing; }
 </style>

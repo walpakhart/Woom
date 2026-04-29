@@ -42,7 +42,10 @@
     "@tauri-apps/plugin-notification": "^2.3.3",
     "@tauri-apps/plugin-opener": "^2.2.5",
     "codemirror": "^6.0.2",
-    "marked": "^18.0.2"
+    "d3-dag": "^1.2.1",
+    "marked": "^18.0.2",
+    "mermaid": "^11.14.0",
+    "perfect-freehand": "^1.2.3"
   },
   "devDependencies": {
     "@sveltejs/adapter-static": "^3.0.6",

@@ -4,7 +4,7 @@
 // models. Re-exporting these from the columns (plus +page.svelte) keeps
 // the import graph flat.
 
-export type PanelKind = 'github' | 'jira' | 'sentry' | 'claude' | 'cursor' | 'editor';
+export type PanelKind = 'github' | 'jira' | 'sentry' | 'claude' | 'cursor' | 'editor' | 'canvas';
 
 /** One live instance of a column in a workbench. Editors and chat columns can
  *  have multiple instances side-by-side; github/jira are effectively singletons
@@ -256,6 +256,14 @@ export type ClaudeSession = {
       cache_read + cache_creation from the last assistant API call).
       Drives the context-window % indicator chip. 0 = no turn yet. */
   lastContextSize: number;
+  /** When set, the session is bound to a Canvas in the workspace
+      library. The `forgehold-app` sidecar's `mcp__app__canvas_*` tools
+      target this canvas; a brief canvas summary is injected into the
+      system prompt at every turn so the agent knows what's there. Null
+      = no canvas link (default). The id is the **library** canvas id,
+      not a column-instance id — multiple Canvas columns can pin the
+      same canvas; the agent talks to the underlying record. */
+  linkedCanvasId: string | null;
   /** When true, the session's `cwd` tracks the Editor's open folder live —
       pick a new folder in the Editor and every linked chat follows. The
       link is broken the moment the user picks an explicit cwd on the

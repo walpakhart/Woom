@@ -11,6 +11,7 @@
 
 import { layoutState } from '$lib/state/layout.svelte';
 import { sessionsState } from '$lib/state/sessions.svelte';
+import { canvasState, ensureCanvasLoaded, type Shape, type Edge } from '$lib/state/canvas.svelte';
 
 /** Build the per-turn app-context string we hand the agent as a system-
  *  prompt suffix. Lists every workbench's instances by name + id, with
@@ -173,5 +174,166 @@ export function buildAgentAppContext(callingSessionId: string): string {
     }
   }
 
+  /* ── Canvas summary — only when this session is linked to a canvas.
+     Gives the agent the inventory of shapes and edges plus stable ids
+     it can reference in `canvas_*` tool calls without a round-trip. */
+  if (calling?.linkedCanvasId) {
+    const summary = buildCanvasSummary(calling.linkedCanvasId);
+    if (summary) {
+      lines.push('');
+      lines.push('---');
+      lines.push(summary);
+    }
+  }
+
   return lines.join('\n');
 }
+
+/** Cap on the number of shapes / edges we list inline. Past this we
+ *  truncate with a marker — the agent can still mutate the missing
+ *  entries by id (via tool calls), it just can't browse them in the
+ *  preamble. Picked to keep the section under ~3 KB even on a busy
+ *  canvas so it doesn't dominate cache. */
+const MAX_SHAPES_IN_SUMMARY = 80;
+const MAX_EDGES_IN_SUMMARY = 80;
+
+/** Compact canvas-state preamble. Returns an empty string if the canvas
+ *  was deleted between linking and now (callers skip the section). */
+function buildCanvasSummary(canvasId: string): string {
+  const c = ensureCanvasLoaded(canvasId);
+  if (!c) return '';
+  const lines: string[] = [];
+  const bounds = computeCanvasBounds(c.shapes);
+  lines.push(
+    `Linked canvas: "${c.name}" (id ${c.id}, ${c.shapes.length} shape${c.shapes.length === 1 ? '' : 's'}, `
+      + `${c.edges.length} edge${c.edges.length === 1 ? '' : 's'}, version ${c.version}).`
+  );
+  if (bounds) {
+    lines.push(
+      `Content AABB in canvas px: [${Math.round(bounds.x)},${Math.round(bounds.y)}]..`
+        + `[${Math.round(bounds.x + bounds.w)},${Math.round(bounds.y + bounds.h)}].`
+    );
+  } else {
+    lines.push('Canvas is empty.');
+  }
+  lines.push(
+    'Use the `mcp__app__canvas_*` tools to draw, patch, or delete on this canvas. '
+      + 'Shape ids below are STABLE — reuse them in `canvas_add_edge`, '
+      + '`canvas_update_shape`, `canvas_delete_shape`, `canvas_focus`.'
+  );
+  lines.push(
+    'A PNG snapshot of this canvas is attached to the user\'s current '
+      + 'message — read it as a visual companion to the JSON inventory '
+      + 'below. The PNG is regenerated every turn so it always reflects '
+      + 'the live state. The inventory is the SOURCE OF TRUTH for ids '
+      + 'and exact coordinates; the PNG is what helps with layout '
+      + 'aesthetics, freehand strokes, image content, and visual '
+      + 'reasoning ("does this read as balanced?", "is the arrow '
+      + 'pointing at the right node?").'
+  );
+  lines.push(
+    'Color guidance: DO NOT set `props.color`, `props.fill`, or '
+      + '`props.stroke` on text / sticky / rect / ellipse shapes unless '
+      + 'the user explicitly asked for a color. The renderer\'s defaults '
+      + 'are theme-aware (work on dark + light); your custom colors '
+      + 'usually break contrast. If you want to GROUP related shapes '
+      + 'visually, prefer `canvas_group` (a frame around them) over '
+      + 'colored fills. If you really want a hint of color, use sticky '
+      + 'shapes with `props.tint = "yellow" | "pink" | "blue" | "green" | '
+      + '"gray" | "forge"` — those tints are translucent and stay '
+      + 'readable.'
+  );
+
+  if (c.shapes.length > 0) {
+    lines.push('');
+    lines.push('Shapes:');
+    const shown = c.shapes.slice(0, MAX_SHAPES_IN_SUMMARY);
+    for (const s of shown) {
+      lines.push(`  - ${formatShapeForSummary(s)}`);
+    }
+    if (c.shapes.length > MAX_SHAPES_IN_SUMMARY) {
+      lines.push(`  - … ${c.shapes.length - MAX_SHAPES_IN_SUMMARY} more shape(s) omitted`);
+    }
+  }
+
+  if (c.edges.length > 0) {
+    lines.push('');
+    lines.push('Edges:');
+    const shown = c.edges.slice(0, MAX_EDGES_IN_SUMMARY);
+    for (const e of shown) {
+      lines.push(`  - ${formatEdgeForSummary(e)}`);
+    }
+    if (c.edges.length > MAX_EDGES_IN_SUMMARY) {
+      lines.push(`  - … ${c.edges.length - MAX_EDGES_IN_SUMMARY} more edge(s) omitted`);
+    }
+  }
+
+  return lines.join('\n');
+}
+
+function computeCanvasBounds(shapes: Shape[]): { x: number; y: number; w: number; h: number } | null {
+  if (shapes.length === 0) return null;
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const s of shapes) {
+    if (s.x < minX) minX = s.x;
+    if (s.y < minY) minY = s.y;
+    if (s.x + s.w > maxX) maxX = s.x + s.w;
+    if (s.y + s.h > maxY) maxY = s.y + s.h;
+  }
+  return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+}
+
+/** One shape, one line — id, kind, bbox, the most descriptive prop
+ *  per kind. We deliberately don't dump full props (mermaid sources,
+ *  full freehand point lists) here — the agent can ask via a future
+ *  read tool / inspect via individual updates. Goal is "give the
+ *  agent enough to address the shape", not full state. */
+function formatShapeForSummary(s: Shape): string {
+  const bbox = `${Math.round(s.x)},${Math.round(s.y)} ${Math.round(s.w)}x${Math.round(s.h)}`;
+  const meta = describeShapeProps(s);
+  const label = s.label ? ` "${s.label}"` : '';
+  return `${s.id} ${s.kind} (${bbox})${meta ? ' ' + meta : ''}${label}`;
+}
+
+function describeShapeProps(s: Shape): string {
+  const p = s.props as Record<string, unknown>;
+  switch (s.kind) {
+    case 'text':
+    case 'sticky': {
+      const body = (typeof p.text === 'string' ? p.text : (typeof p.markdown === 'string' ? p.markdown : '')).trim();
+      if (!body) return '';
+      const oneline = body.replace(/\s+/g, ' ');
+      return `text="${oneline.length > 40 ? oneline.slice(0, 37) + '…' : oneline}"`;
+    }
+    case 'mermaid':
+    case 'dot':
+    case 'plantuml': {
+      const src = typeof p.source === 'string' ? p.source : '';
+      const first = src.split('\n')[0]?.trim() ?? '';
+      return `source.0="${first.length > 40 ? first.slice(0, 37) + '…' : first}"`;
+    }
+    case 'code': {
+      const lang = typeof p.language === 'string' ? p.language : '';
+      return lang ? `language=${lang}` : '';
+    }
+    case 'jira-card':         return `ticketKey=${typeof p.ticketKey === 'string' ? p.ticketKey : '?'}`;
+    case 'github-pr-card':
+    case 'github-issue-card': return `${p.owner}/${p.repo}#${p.number}`;
+    case 'sentry-event-card': return `shortId=${p.shortId ?? p.issueId ?? '?'}`;
+    case 'file-card':         return `path=${typeof p.relPath === 'string' ? p.relPath : ''}`;
+    default:                  return '';
+  }
+}
+
+function formatEdgeForSummary(e: Edge): string {
+  const fromAnchor = 'anchor' in e.from ? e.from.anchor : 'offset';
+  const toAnchor   = 'anchor' in e.to   ? e.to.anchor   : 'offset';
+  const label = e.label ? ` "${e.label}"` : '';
+  return `${e.id} ${e.from.shapeId}.${fromAnchor} → ${e.to.shapeId}.${toAnchor} [${e.kind}/${e.routing}]${label}`;
+}
+
+/* `canvasState` is referenced indirectly through `ensureCanvasLoaded`,
+   but TS will complain it's imported and unused without this no-op
+   reference. Re-exporting keeps the intent visible to anyone reading
+   this file. */
+void canvasState;

@@ -22,6 +22,39 @@
   import SentryColumn from '$lib/components/workbench/SentryColumn.svelte';
   import AgentColumn from '$lib/components/workbench/AgentColumn.svelte';
   import EditorColumn from '$lib/components/workbench/EditorColumn.svelte';
+  import CanvasColumn from '$lib/components/workbench/CanvasColumn.svelte';
+  import {
+    restoreCanvasState,
+    dropCanvasInstance,
+    ensureCanvasLoaded,
+    addShape as canvasAddShape,
+    addShapes as canvasAddShapes,
+    addEdge as canvasAddEdge,
+    deleteShapes as canvasDeleteShapes,
+    deleteEdges as canvasDeleteEdges,
+    patchShape as canvasPatchShape,
+    requestCanvasFocus,
+    setShapeZ as canvasSetShapeZ,
+    duplicateShapes as canvasDuplicateShapes,
+    findShapesByQuery as canvasFindShapes,
+    setSelection as canvasSetSelection,
+    groupShapes as canvasGroupShapes,
+    ungroupShapes as canvasUngroupShapes,
+    setShapesLocked as canvasSetShapesLocked,
+    alignShapes as canvasAlignShapes,
+    distributeShapes as canvasDistributeShapes,
+    setViewport as canvasSetViewport,
+    type AlignAxis,
+    type DistributeAxis,
+    makeShape,
+    makeEdge,
+    canvasState,
+    type ShapeKind,
+    type EdgeAnchor,
+    type Shape
+  } from '$lib/state/canvas.svelte';
+  import { applyLayout as canvasApplyLayout, type LayoutAlgorithm } from '$lib/services/canvasLayout';
+  import { saveCanvasScreenshot } from '$lib/services/canvasScreenshot';
   import { buildAgentAppContext } from '$lib/services/agentContext';
   import { applySessionCwd } from '$lib/services/sessionCwd';
   import { runCompactSession as runCompactSessionService } from '$lib/services/agentCompact';
@@ -388,7 +421,14 @@
   // Wire the layout→sessions hook once. Any closed panel instance (via the X
   // button or workbench deletion) orphans its pinned sessions back to the
   // floating pool so they reattach elsewhere instead of vanishing.
-  registerInstanceRemovedHook((id) => orphanSessionsForInstance(id));
+  registerInstanceRemovedHook((id) => {
+    orphanSessionsForInstance(id);
+    /* Canvas columns own per-instance tab state (which canvases are pinned
+       to this column, which one is active). Closing the column drops that
+       map entry — but does NOT delete the canvases themselves; they stay
+       in the library so a future canvas column can reopen them. */
+    dropCanvasInstance(id);
+  });
 
   // Auto-clear `awaitingApproval` when the user dismisses every pending
   // action card without approving any. Otherwise the "waiting for
@@ -420,6 +460,10 @@
     // at 100% then jump.
     initScale();
     restorePanelState();
+    /* Canvas state is persisted alongside layout state — index of canvases
+       + per-column-instance tab strip. Hydrate after layout so instance ids
+       in the canvas store still match live columns. */
+    restoreCanvasState();
     // One-shot v1 → v2 migration: seed the legacy `forgehold:editor:root`
     // localStorage value into the first editor instance, ONLY if that
     // instance has no persisted v2 state yet. Without this guard the
@@ -576,10 +620,14 @@
         const ref = payload.item.short_id || payload.item.id;
         e.dataTransfer.setData('text/plain', ref);
         attachDragChip(e, 'sentry', `${ref} · ${payload.item.title}`);
-      } else {
+      } else if (payload.source === 'file') {
         e.dataTransfer.setData('text/plain', payload.path);
         attachDragChip(e, payload.isDir ? 'dir' : 'file', payload.name);
       }
+      /* `chat-message` payloads are dragstart-handled inside AgentColumn
+         itself (which sets dragState directly). This `+page.svelte`
+         path is for the inbox / file-tree drags; chat messages don't
+         flow through `onDragStart` here. */
     }
     // Track pointer globally so we can auto-scroll .wb-columns when the
     // user drags a card near either edge.
@@ -884,8 +932,11 @@
     }
 
     // 3) Ticket / Sentry drop from inbox. The file branch above already
-    //    returned, so `internal` is one of the issue-shaped variants here.
-    if (!internal || internal.source === 'file') {
+    //    returned, so `internal` is one of the issue-shaped variants
+    //    here. Chat-message payloads are also rejected — agent columns
+    //    don't accept "drop a message onto myself" (we'd just create a
+    //    self-reference loop). Chat messages drop onto Canvas only.
+    if (!internal || internal.source === 'file' || internal.source === 'chat-message') {
       clearAgentDragState();
       return;
     }
@@ -1508,6 +1559,32 @@
     // "Read this image at <path>" hint into the prompt above.
     const imagePaths = agentKind === 'claude' ? userImages.map((u) => u.path) : [];
 
+    /* Linked-canvas vision channel: rasterize the canvas to a PNG and
+       append its path to imagePaths so the agent gets a visual snapshot
+       alongside the JSON inventory in the system prompt. We don't add
+       it to the user's message `images` array (the chip strip / chat
+       transcript) — it's a "behind the scenes" attachment that
+       belongs to the API call, not the user's perception of "what I
+       sent". Skipped silently when:
+         - the session isn't linked,
+         - the canvas was deleted,
+         - the canvas is empty (no shapes / edges),
+         - rendering fails for any reason.
+       Cursor-agent doesn't support image inputs the same way so we
+       only attach for Claude sessions. */
+    if (agentKind === 'claude' && sess?.linkedCanvasId) {
+      const c = ensureCanvasLoaded(sess.linkedCanvasId);
+      if (c && (c.shapes.length > 0 || c.edges.length > 0)) {
+        try {
+          const dir = await getAttachmentDir();
+          const path = await saveCanvasScreenshot(c, dir);
+          if (path) imagePaths.push(path);
+        } catch (err) {
+          console.warn('canvas screenshot attach failed', err);
+        }
+      }
+    }
+
     try {
       const result = await runAgentRequest({
         sessionId: id,
@@ -1816,7 +1893,7 @@
       }
       case 'mcp__app__add_workbench_instance': {
         const kind = str('kind');
-        const validKinds: PanelKind[] = ['github', 'jira', 'sentry', 'claude', 'cursor', 'editor'];
+        const validKinds: PanelKind[] = ['github', 'jira', 'sentry', 'claude', 'cursor', 'editor', 'canvas'];
         if (!validKinds.includes(kind as PanelKind)) return;
         view = 'workbench';
         const newId = addPanelInstance(kind as PanelKind);
@@ -1857,7 +1934,7 @@
       }
       case 'mcp__app__focus_workbench_instance': {
         const kind = str('kind');
-        const validKinds: PanelKind[] = ['github', 'jira', 'sentry', 'claude', 'cursor', 'editor'];
+        const validKinds: PanelKind[] = ['github', 'jira', 'sentry', 'claude', 'cursor', 'editor', 'canvas'];
         if (!validKinds.includes(kind as PanelKind)) return;
         view = 'workbench';
         void scrollKindIntoView(kind as PanelKind);
@@ -2054,7 +2131,318 @@
         // refreshed on every turn. The sidecar's tool reply explains.
         return;
       }
+      /* ---- Canvas (whiteboard) ---- */
+      case 'mcp__app__canvas_add_shape': {
+        const canvasId = linkedCanvasIdFor(_sessionId);
+        if (!canvasId) return;
+        const kind = str('kind') as ShapeKind;
+        if (!kind) return;
+        const x = num('x'); const y = num('y');
+        const w = num('w'); const h = num('h');
+        if (!Number.isFinite(x) || !Number.isFinite(y) || !(w > 0) || !(h > 0)) return;
+        const props = (input.props && typeof input.props === 'object')
+          ? (input.props as Record<string, unknown>)
+          : undefined;
+        const label = typeof input.label === 'string' ? (input.label as string) : null;
+        const desiredId = str('shape_id');
+        const shape = makeShape({
+          kind, x, y, w, h, props, label, createdBy: 'agent'
+        });
+        if (desiredId) shape.id = desiredId;
+        canvasAddShape(canvasId, shape);
+        return;
+      }
+      case 'mcp__app__canvas_add_shapes': {
+        const canvasId = linkedCanvasIdFor(_sessionId);
+        if (!canvasId) return;
+        const arr = Array.isArray(input.shapes) ? input.shapes : [];
+        const shapes: Shape[] = [];
+        for (const raw of arr) {
+          if (!raw || typeof raw !== 'object') continue;
+          const s = raw as Record<string, unknown>;
+          const kind = typeof s.kind === 'string' ? s.kind as ShapeKind : null;
+          if (!kind) continue;
+          const x = Number(s.x); const y = Number(s.y);
+          const w = Number(s.w); const h = Number(s.h);
+          if (!Number.isFinite(x) || !Number.isFinite(y) || !(w > 0) || !(h > 0)) continue;
+          const sh = makeShape({
+            kind, x, y, w, h,
+            props: (s.props && typeof s.props === 'object') ? (s.props as Record<string, unknown>) : undefined,
+            label: typeof s.label === 'string' ? s.label : null,
+            createdBy: 'agent'
+          });
+          if (typeof s.shape_id === 'string' && s.shape_id) sh.id = s.shape_id;
+          shapes.push(sh);
+        }
+        if (shapes.length > 0) canvasAddShapes(canvasId, shapes);
+        return;
+      }
+      case 'mcp__app__canvas_update_shape': {
+        const canvasId = linkedCanvasIdFor(_sessionId);
+        if (!canvasId) return;
+        const shapeId = str('shape_id');
+        if (!shapeId) return;
+        const patch: Partial<Shape> = {};
+        if (typeof input.x === 'number') patch.x = input.x as number;
+        if (typeof input.y === 'number') patch.y = input.y as number;
+        if (typeof input.w === 'number' && (input.w as number) > 0) patch.w = input.w as number;
+        if (typeof input.h === 'number' && (input.h as number) > 0) patch.h = input.h as number;
+        if (typeof input.rot === 'number') patch.rot = input.rot as number;
+        if (typeof input.label === 'string') patch.label = input.label as string;
+        if (input.props && typeof input.props === 'object') {
+          /* Merge with the shape's existing props rather than replacing,
+             so callers can patch a single field (`{props:{source:"..."}}`)
+             without losing tint / theme / etc. */
+          const c = ensureCanvasLoaded(canvasId);
+          const cur = c?.shapes.find((s) => s.id === shapeId);
+          patch.props = { ...(cur?.props ?? {}), ...(input.props as Record<string, unknown>) };
+        }
+        if (Object.keys(patch).length === 0) return;
+        canvasPatchShape(canvasId, shapeId, patch);
+        return;
+      }
+      case 'mcp__app__canvas_delete_shape': {
+        const canvasId = linkedCanvasIdFor(_sessionId);
+        if (!canvasId) return;
+        const ids: string[] = [];
+        const single = str('shape_id');
+        if (single) ids.push(single);
+        if (Array.isArray(input.shape_ids)) {
+          for (const v of input.shape_ids) if (typeof v === 'string' && v) ids.push(v);
+        }
+        if (ids.length > 0) canvasDeleteShapes(canvasId, ids);
+        return;
+      }
+      case 'mcp__app__canvas_add_edge': {
+        const canvasId = linkedCanvasIdFor(_sessionId);
+        if (!canvasId) return;
+        const fromId = str('from_shape_id');
+        const toId = str('to_shape_id');
+        if (!fromId || !toId) return;
+        type AnchorName = 'tl'|'tc'|'tr'|'ml'|'mc'|'mr'|'bl'|'bc'|'br';
+        const validAnchors: AnchorName[] = ['tl','tc','tr','ml','mc','mr','bl','bc','br'];
+        const fromAnchorRaw = str('from_anchor') || 'mr';
+        const toAnchorRaw = str('to_anchor') || 'ml';
+        const fromAnchor = (validAnchors as string[]).includes(fromAnchorRaw)
+          ? (fromAnchorRaw as AnchorName) : 'mr';
+        const toAnchor = (validAnchors as string[]).includes(toAnchorRaw)
+          ? (toAnchorRaw as AnchorName) : 'ml';
+        const kind = (input.kind === 'line' || input.kind === 'dashed') ? input.kind : 'arrow';
+        const routing = (input.routing === 'straight' || input.routing === 'curved')
+          ? input.routing : 'orthogonal';
+        const from: EdgeAnchor = { shapeId: fromId, anchor: fromAnchor };
+        const to: EdgeAnchor = { shapeId: toId, anchor: toAnchor };
+        const edge = makeEdge({
+          from, to, kind, routing,
+          label: typeof input.label === 'string' ? (input.label as string) : null
+        });
+        const desiredId = str('edge_id');
+        if (desiredId) edge.id = desiredId;
+        canvasAddEdge(canvasId, edge);
+        return;
+      }
+      case 'mcp__app__canvas_delete_edge': {
+        const canvasId = linkedCanvasIdFor(_sessionId);
+        if (!canvasId) return;
+        const ids: string[] = [];
+        const single = str('edge_id');
+        if (single) ids.push(single);
+        if (Array.isArray(input.edge_ids)) {
+          for (const v of input.edge_ids) if (typeof v === 'string' && v) ids.push(v);
+        }
+        if (ids.length > 0) canvasDeleteEdges(canvasId, ids);
+        return;
+      }
+      case 'mcp__app__canvas_arrange': {
+        const canvasId = linkedCanvasIdFor(_sessionId);
+        if (!canvasId) return;
+        const algo = str('algorithm') as LayoutAlgorithm;
+        if (!['grid', 'row', 'column', 'dagre'].includes(algo)) return;
+        const ids = Array.isArray(input.shape_ids)
+          ? (input.shape_ids as unknown[]).filter((v): v is string => typeof v === 'string')
+          : undefined;
+        const opts: Record<string, unknown> = {};
+        if (typeof input.rankdir === 'string') opts.rankdir = input.rankdir;
+        if (typeof input.gap === 'number') opts.gap = input.gap;
+        void canvasApplyLayout(canvasId, algo, ids, opts);
+        return;
+      }
+      case 'mcp__app__canvas_focus': {
+        const canvasId = linkedCanvasIdFor(_sessionId);
+        if (!canvasId) return;
+        const shapeId = str('shape_id');
+        if (!shapeId) return;
+        requestCanvasFocus(canvasId, shapeId);
+        return;
+      }
+      case 'mcp__app__canvas_set_z': {
+        const canvasId = linkedCanvasIdFor(_sessionId);
+        if (!canvasId) return;
+        const shapeId = str('shape_id');
+        const mode = str('mode');
+        if (!shapeId) return;
+        if (!['to-front', 'to-back', 'forward', 'backward'].includes(mode)) return;
+        canvasSetShapeZ(canvasId, shapeId, mode as 'to-front' | 'to-back' | 'forward' | 'backward');
+        return;
+      }
+      case 'mcp__app__canvas_duplicate': {
+        const canvasId = linkedCanvasIdFor(_sessionId);
+        if (!canvasId) return;
+        const ids = Array.isArray(input.shape_ids)
+          ? (input.shape_ids as unknown[]).filter((v): v is string => typeof v === 'string' && v.length > 0)
+          : [];
+        if (ids.length === 0) return;
+        const dx = typeof input.dx === 'number' ? input.dx : 12;
+        const dy = typeof input.dy === 'number' ? input.dy : 12;
+        canvasDuplicateShapes(canvasId, ids, dx, dy);
+        return;
+      }
+      case 'mcp__app__canvas_find': {
+        const canvasId = linkedCanvasIdFor(_sessionId);
+        if (!canvasId) return;
+        const query = str('query');
+        if (!query) return;
+        const ids = canvasFindShapes(canvasId, query);
+        /* `find` is a read — but our sidecar reply is just a
+           confirmation, so returning data through the agent would
+           require either an IPC bridge or a follow-up message. We
+           DO change UI state: select the matches so the user can
+           visually see what the agent found. The agent's next-turn
+           system-prompt preamble will reflect the new selection
+           context (selection is ephemeral so it doesn't pollute
+           saved canvas state). */
+        if (ids.length > 0) canvasSetSelection(canvasId, ids);
+        return;
+      }
+      case 'mcp__app__canvas_group': {
+        const canvasId = linkedCanvasIdFor(_sessionId);
+        if (!canvasId) return;
+        const ids = Array.isArray(input.shape_ids)
+          ? (input.shape_ids as unknown[]).filter((v): v is string => typeof v === 'string' && v.length > 0)
+          : [];
+        if (ids.length === 0) return;
+        const kind = input.kind === 'group' ? 'group' : 'frame';
+        const title = typeof input.title === 'string' ? input.title : undefined;
+        canvasGroupShapes(canvasId, ids, { kind, title });
+        return;
+      }
+      case 'mcp__app__canvas_ungroup': {
+        const canvasId = linkedCanvasIdFor(_sessionId);
+        if (!canvasId) return;
+        const shapeId = str('shape_id');
+        if (!shapeId) return;
+        canvasUngroupShapes(canvasId, shapeId);
+        return;
+      }
+      case 'mcp__app__canvas_lock': {
+        const canvasId = linkedCanvasIdFor(_sessionId);
+        if (!canvasId) return;
+        const ids = Array.isArray(input.shape_ids)
+          ? (input.shape_ids as unknown[]).filter((v): v is string => typeof v === 'string' && v.length > 0)
+          : [];
+        if (ids.length === 0) return;
+        const locked = input.locked === true;
+        canvasSetShapesLocked(canvasId, ids, locked);
+        return;
+      }
+      case 'mcp__app__canvas_align': {
+        const canvasId = linkedCanvasIdFor(_sessionId);
+        if (!canvasId) return;
+        const ids = Array.isArray(input.shape_ids)
+          ? (input.shape_ids as unknown[]).filter((v): v is string => typeof v === 'string' && v.length > 0)
+          : [];
+        const axis = str('axis');
+        const validAxes: AlignAxis[] = ['left', 'center-x', 'right', 'top', 'center-y', 'bottom'];
+        if (ids.length < 2 || !(validAxes as string[]).includes(axis)) return;
+        canvasAlignShapes(canvasId, ids, axis as AlignAxis);
+        return;
+      }
+      case 'mcp__app__canvas_distribute': {
+        const canvasId = linkedCanvasIdFor(_sessionId);
+        if (!canvasId) return;
+        const ids = Array.isArray(input.shape_ids)
+          ? (input.shape_ids as unknown[]).filter((v): v is string => typeof v === 'string' && v.length > 0)
+          : [];
+        const axis = str('axis');
+        if (ids.length < 3 || (axis !== 'horizontal' && axis !== 'vertical')) return;
+        canvasDistributeShapes(canvasId, ids, axis as DistributeAxis);
+        return;
+      }
+      case 'mcp__app__canvas_set_viewport': {
+        const canvasId = linkedCanvasIdFor(_sessionId);
+        if (!canvasId) return;
+        const x = num('x'); const y = num('y');
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+        const c = ensureCanvasLoaded(canvasId);
+        if (!c) return;
+        const z = typeof input.zoom === 'number' && input.zoom > 0
+          ? Math.max(0.1, Math.min(4, input.zoom))
+          : c.viewport.zoom;
+        canvasSetViewport(canvasId, { x, y, zoom: z });
+        return;
+      }
+      case 'mcp__app__canvas_upload_image': {
+        const canvasId = linkedCanvasIdFor(_sessionId);
+        if (!canvasId) return;
+        const b64 = str('base64');
+        if (!b64) return;
+        const mime = str('mime_type') || 'image/png';
+        const dataUrl = `data:${mime};base64,${b64}`;
+        /* Use Image() to read intrinsic dimensions; fall back to a
+           default size if decode fails. We can't await inside this
+           switch elegantly, so this branch fires off an async task
+           that creates the shape once dimensions resolve. */
+        const c = ensureCanvasLoaded(canvasId);
+        if (!c) return;
+        const desiredX = typeof input.x === 'number' ? input.x : (c.viewport.x + 100);
+        const desiredY = typeof input.y === 'number' ? input.y : (c.viewport.y + 100);
+        const desiredId = str('shape_id');
+        const alt = typeof input.alt === 'string' ? input.alt : null;
+        void (async () => {
+          const dim = await new Promise<{ w: number; h: number }>((resolve) => {
+            const img = new Image();
+            img.onerror = () => resolve({ w: 320, h: 200 });
+            img.onload = () => resolve({ w: img.naturalWidth || 320, h: img.naturalHeight || 200 });
+            img.src = dataUrl;
+          });
+          const MAX_DIM = 480;
+          let outW = dim.w, outH = dim.h;
+          if (dim.w > MAX_DIM || dim.h > MAX_DIM) {
+            const k = Math.min(MAX_DIM / dim.w, MAX_DIM / dim.h);
+            outW = Math.round(dim.w * k);
+            outH = Math.round(dim.h * k);
+          }
+          const shape = makeShape({
+            kind: 'image',
+            x: desiredX,
+            y: desiredY,
+            w: outW,
+            h: outH,
+            props: { dataUrl, intrinsicWidth: dim.w, intrinsicHeight: dim.h, alt }
+          });
+          if (desiredId) shape.id = desiredId;
+          canvasAddShape(canvasId, shape);
+        })();
+        return;
+      }
     }
+  }
+
+  /** Resolve which canvas a session is linked to. Returns null when the
+   *  session has no link or its referenced canvas was deleted. The
+   *  canvas tool dispatchers all gate on this so the agent's tool
+   *  call is a no-op when the link is broken (rather than mutating an
+   *  unrelated canvas). */
+  function linkedCanvasIdFor(sessionId: string): string | null {
+    const s = sessionsState.list.find((x) => x.id === sessionId);
+    if (!s || !s.linkedCanvasId) return null;
+    /* Validate the canvas still exists in the library. Index lookup
+       is O(N) but the index is tiny (typically <50 entries). */
+    const exists = canvasState.index.find((e) => e.id === s.linkedCanvasId);
+    if (!exists) return null;
+    /* Hydrate so subsequent ops find it under canvasState.open. */
+    ensureCanvasLoaded(s.linkedCanvasId);
+    return s.linkedCanvasId;
   }
 
   /** Look up a workbench instance by name or id within a given kind, across
@@ -2103,6 +2491,63 @@
       tab = tabHint ?? 'conversation';
     } catch (e) {
       console.warn('open_github_pr resolution failed:', e);
+    }
+  }
+
+  /** Dispatch a double-click on a Canvas live-card to the right
+   *  source-specific navigation. Uses the same nav primitives the
+   *  agent's `mcp__app__open_*` tools and the inbox cards themselves
+   *  call — so a click on a Jira card on the canvas behaves identically
+   *  to a click on the Jira card in the column inbox. */
+  function openCanvasCardSource(shape: Shape) {
+    const p = shape.props as Record<string, unknown>;
+    switch (shape.kind) {
+      case 'jira-card': {
+        const key = typeof p.ticketKey === 'string' ? p.ticketKey : '';
+        if (key) inboxState.jiraFocusKey = key;
+        return;
+      }
+      case 'github-pr-card':
+      case 'github-issue-card': {
+        const owner = typeof p.owner === 'string' ? p.owner : '';
+        const repo = typeof p.repo === 'string' ? p.repo : '';
+        const number = typeof p.number === 'number' ? p.number : 0;
+        if (owner && repo && number > 0) {
+          void resolveGithubFocus(owner, repo, number, null);
+        }
+        return;
+      }
+      case 'sentry-event-card': {
+        const issueId = typeof p.issueId === 'string' ? p.issueId : '';
+        const shortId = typeof p.shortId === 'string' ? p.shortId : '';
+        const id = issueId || shortId;
+        if (id) openSentryFocus(id);
+        return;
+      }
+      case 'file-card': {
+        const relPath = typeof p.relPath === 'string' ? p.relPath : '';
+        if (!relPath) return;
+        /* For file cards we let editorNavigation pick the right editor
+           instance (linked editor wins, then first available, otherwise
+           a new one is created). */
+        void openFileInEditor(relPath, {});
+        return;
+      }
+      case 'chat-message-card': {
+        /* Locate the column the source session belongs to and scroll
+           it into view, then activate the session there. The session
+           may have been moved since the card was pinned; we look it up
+           live from sessionsState to handle that. */
+        const sessionId = typeof p.sessionId === 'string' ? p.sessionId : '';
+        if (!sessionId) return;
+        const sess = sessionsState.list.find((s) => s.id === sessionId);
+        if (!sess?.columnInstanceId) return;
+        const found = findInstanceAnywhere(sess.columnInstanceId);
+        if (!found) return;
+        void goToInstance(found.inst.id, found.wb.id);
+        setActiveSessionInColumn(found.inst.id, sessionId);
+        return;
+      }
     }
   }
 
@@ -3428,6 +3873,11 @@
                   <!-- Folder icon — matches the EditorView header so the
                        Editor's identity is the same in pill / column / tab. -->
                   <span class="pill-icon pill-icon--editor"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v11a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-7L10 5H5a2 2 0 0 0-2 2z"/></svg></span>
+                {:else if kind === 'canvas'}
+                  <!-- Stacked-frames icon — same glyph as the column's
+                       brand mark so the Canvas identity is consistent
+                       across pill / header / library tile. -->
+                  <span class="pill-icon pill-icon--canvas"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="14" rx="2"/><rect x="6" y="6" width="9" height="6" rx="1"/><rect x="13" y="13" width="5" height="3" rx="0.5"/></svg></span>
                 {/if}
                 <span class="pill-label">{label}</span>
                 {#if count > 0}
@@ -3513,6 +3963,7 @@
             {@render pill('cursor', 'Cursor', connectionsMeta.find((c) => c.id === 'cursor'))}
           {/if}
           {@render pill('editor', 'Editor', undefined)}
+          {@render pill('canvas', 'Canvas', undefined)}
 
           <div style="flex:1"></div>
           <button class="icon-btn" title="Search" aria-label="Search" onclick={() => (paletteOpen = true)}>
@@ -3686,6 +4137,8 @@
                 instanceId={inst.id}
                 onLinkToAgent={(agentId) => linkEditorToAgent(inst.id, agentId)}
               />
+            {:else if inst.kind === 'canvas'}
+              <CanvasColumn instanceId={inst.id} onCardOpen={openCanvasCardSource} />
             {/if}
           {/each}
 

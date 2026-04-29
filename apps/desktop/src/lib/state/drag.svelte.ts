@@ -16,7 +16,27 @@ export type DragPayload =
   | { source: 'github'; item: InboxItem }
   | { source: 'jira'; item: JiraItem }
   | { source: 'sentry'; item: SentryIssue }
-  | { source: 'file'; path: string; isDir: boolean; name: string };
+  | { source: 'file'; path: string; isDir: boolean; name: string }
+  /** A specific message within a Claude / Cursor session, referenced
+   *  by `(sessionId, messageIndex)`. The drop target captures a small
+   *  snapshot (role, first ~200 chars of content, agent kind) so the
+   *  card stays meaningful even if the source session is later
+   *  deleted. The renderer prefers live data when the session still
+   *  exists. Used by Canvas's `chat-message-card` shape kind. */
+  | {
+      source: 'chat-message';
+      sessionId: string;
+      messageIndex: number;
+      /** Snapshot — used by the Canvas card if the live message is
+       *  ever unreachable. Kept tiny on purpose. */
+      snapshot: {
+        role: 'user' | 'assistant' | 'system';
+        agentKind: 'claude' | 'cursor';
+        sessionTitle: string;
+        excerpt: string;
+        at: string;
+      };
+    };
 
 export const dragState = $state<{ payload: DragPayload | null }>({ payload: null });
 

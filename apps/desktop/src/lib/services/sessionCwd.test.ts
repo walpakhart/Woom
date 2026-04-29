@@ -35,6 +35,7 @@ function fakeSession(messages: ClaudeSession['messages']): ClaudeSession {
     lastContextSize: 0,
     linkedToEditor: false,
     linkedToEditorInstanceId: null,
+    linkedCanvasId: null,
     columnInstanceId: null,
     cwdSwitchRecap: null,
     cwdUuids: {},
