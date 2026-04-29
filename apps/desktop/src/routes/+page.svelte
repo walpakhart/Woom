@@ -415,7 +415,9 @@
   });
   const anythingConnected = $derived(connectedIds.size > 0);
 
-  let refreshInterval: ReturnType<typeof setInterval> | null = null;
+  let githubPollInterval: ReturnType<typeof setInterval> | null = null;
+  let jiraPollInterval: ReturnType<typeof setInterval> | null = null;
+  let sentryPollInterval: ReturnType<typeof setInterval> | null = null;
   let tickInterval: ReturnType<typeof setInterval> | null = null;
 
   // Wire the layout→sessions hook once. Any closed panel instance (via the X
@@ -525,7 +527,9 @@
   }
 
   onDestroy(() => {
-    if (refreshInterval) clearInterval(refreshInterval);
+    if (githubPollInterval) clearInterval(githubPollInterval);
+    if (jiraPollInterval) clearInterval(jiraPollInterval);
+    if (sentryPollInterval) clearInterval(sentryPollInterval);
     if (tickInterval) clearInterval(tickInterval);
   });
 
@@ -537,18 +541,20 @@
     setGithubMeLogin(githubStatus.kind === 'connected' ? githubStatus.user.login : null);
   });
 
+  // ---- Per-source independent polling ----
+  // Each source owns its own 60 s / 5 min scheduler. No source gates another.
+
   $effect(() => {
     if (connectedGithub) {
-      if (!refreshInterval) {
-        refreshInterval = setInterval(() => {
+      if (!githubPollInterval) {
+        githubPollInterval = setInterval(() => {
           void refreshAllInboxes({ silent: true });
-          if (connectedJira) void refreshAllJiraInboxes({ silent: true });
         }, 60_000);
       }
     } else {
-      if (refreshInterval) {
-        clearInterval(refreshInterval);
-        refreshInterval = null;
+      if (githubPollInterval) {
+        clearInterval(githubPollInterval);
+        githubPollInterval = null;
       }
       resetGithubInbox();
     }
@@ -567,12 +573,36 @@
       if (empty && idle) {
         void refreshAllJiraInboxes({ silent: true });
       }
+      if (!jiraPollInterval) {
+        jiraPollInterval = setInterval(() => {
+          void refreshAllJiraInboxes({ silent: true });
+        }, 60_000);
+      }
     } else {
+      if (jiraPollInterval) {
+        clearInterval(jiraPollInterval);
+        jiraPollInterval = null;
+      }
       // Only wipe the issue list on transient disconnects — keep the
       // user-picked assignee so reconnecting doesn't silently jump back to
       // "me". `resetJiraInbox` below is used by the explicit disconnect
       // button which *does* clear the assignee.
       inboxState.jiraItemsByInstance = {};
+    }
+  });
+
+  $effect(() => {
+    if (connectedSentry) {
+      if (!sentryPollInterval) {
+        sentryPollInterval = setInterval(() => {
+          void refreshAllSentryInboxes({ silent: true });
+        }, 300_000); // 5-minute default
+      }
+    } else {
+      if (sentryPollInterval) {
+        clearInterval(sentryPollInterval);
+        sentryPollInterval = null;
+      }
     }
   });
 
