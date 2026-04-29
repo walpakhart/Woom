@@ -1,8 +1,10 @@
 // Claude + Cursor chat session state. Owns the session list, per-column
 // active-session pointers, the cross-column "currently focused" pointer,
 // per-column scroll containers, and user-authored rules. Persists sessions
-// and rules to localStorage via $effect.
+// to disk (~/Library/Application Support/Forgehold/sessions/) via Tauri
+// fs commands; rules stay in localStorage (small + frequently mutated).
 
+import { invoke } from '@tauri-apps/api/core';
 import type { ClaudeAction, ClaudeMessage, ClaudeSession, ClaudeUsage, Mention, MessageEvent } from '$lib/types';
 import { notify } from '$lib/state/toaster.svelte';
 import { isImagePath } from '$lib/format';
@@ -10,6 +12,85 @@ import { isImagePath } from '$lib/format';
 export const SESSIONS_STORAGE_KEY = 'forgehold:claude-sessions:v1';
 export const RULES_STORAGE_KEY = 'forgehold:claude-rules:v1';
 export const EDITOR_STATE_STORAGE_KEY = 'forgehold:editor-state:v1';
+
+// ---- Disk persistence internals ----
+// After `initSessionsFromDisk()` runs, `_diskDir` is set and disk is the
+// source of truth. Pre-migration, we fall back to localStorage so the app
+// still works on the very first run with existing localStorage data.
+
+let _diskDir: string | null = null; // e.g. "…/Forgehold/sessions"
+let _diskWriteTimer: ReturnType<typeof setTimeout> | null = null;
+
+function sessionIndexPath(): string { return `${_diskDir}/index.json`; }
+function sessionFilePath(id: string): string { return `${_diskDir}/${id}.json`; }
+
+function serializeSession(s: ClaudeSession): object {
+  return {
+    id: s.id,
+    title: s.title,
+    mentions: s.mentions,
+    messages: s.messages,
+    cwd: s.cwd,
+    input: s.input,
+    worktreePath: s.worktreePath,
+    worktreeBranch: s.worktreeBranch,
+    worktreeRepo: s.worktreeRepo,
+    actions: s.actions,
+    claudeUuid: s.claudeUuid,
+    claudeResumable: s.claudeResumable,
+    agentKind: s.agentKind,
+    cursorModel: s.cursorModel,
+    claudeModel: s.claudeModel,
+    claudeToolProfile: s.claudeToolProfile,
+    lastContextSize: s.lastContextSize,
+    linkedToEditor: s.linkedToEditor,
+    linkedToEditorInstanceId: s.linkedToEditorInstanceId,
+    linkedCanvasId: s.linkedCanvasId,
+    columnInstanceId: s.columnInstanceId,
+    cwdSwitchRecap: s.cwdSwitchRecap,
+    cwdUuids: s.cwdUuids,
+    awaitingApproval: s.awaitingApproval
+  };
+}
+
+async function flushToDisk(sessions: ClaudeSession[], activeId: string | null) {
+  if (!_diskDir) return;
+  try {
+    const ids: string[] = [];
+    for (const s of sessions) {
+      await invoke('fs_write_file', {
+        path: sessionFilePath(s.id),
+        contents: JSON.stringify(serializeSession(s))
+      });
+      ids.push(s.id);
+    }
+    await invoke('fs_write_file', {
+      path: sessionIndexPath(),
+      contents: JSON.stringify({ activeId, ids })
+    });
+    if (persistError.sessions) persistError.sessions = null;
+  } catch (e) {
+    const msg = asMessage(e);
+    persistError.sessions = msg;
+    if (!sessionsToastFired) {
+      sessionsToastFired = true;
+      notify({
+        kind: 'error',
+        title: "Couldn't save chats",
+        body: `${msg}. New messages stay in memory but won't survive a restart. See Settings → Storage.`,
+        ttlMs: null
+      });
+    }
+  }
+}
+
+function scheduleDiskWrite() {
+  if (_diskWriteTimer) clearTimeout(_diskWriteTimer);
+  _diskWriteTimer = setTimeout(() => {
+    _diskWriteTimer = null;
+    void flushToDisk(sessionsState.list, sessionsState.activeClaudeId);
+  }, 1500);
+}
 
 function loadStoredEditorState(): Record<
   string,
@@ -73,60 +154,8 @@ function loadStoredSessions(): {
       sessions?: ClaudeSession[];
       activeId?: string | null;
     };
-    const sessions = (data.sessions || []).map((s) => ({
-      ...s,
-      input: s.input || '',
-      sending: false,
-      cwd: s.cwd || null,
-      mentions: s.mentions || [],
-      messages: s.messages || [],
-      worktreePath: s.worktreePath ?? null,
-      worktreeBranch: s.worktreeBranch ?? null,
-      worktreeRepo: s.worktreeRepo ?? null,
-      actions: (s.actions || []).filter(
-        (a: ClaudeAction) => a.status === 'pending' || a.status === 'error'
-      ),
-      // Backfill for sessions persisted before Claude-CLI session resume
-      // landed. No UUID → fresh session on next send (Claude won't remember
-      // old turns, but UI history stays visible).
-      claudeUuid: (s as { claudeUuid?: string }).claudeUuid || genUuid(),
-      claudeResumable: Boolean((s as { claudeResumable?: boolean }).claudeResumable),
-      agentKind: ((s as { agentKind?: 'claude' | 'cursor' }).agentKind ?? 'claude'),
-      cursorModel: (s as { cursorModel?: string | null }).cursorModel ?? null,
-      // Backfill = null (honor whatever the CLI was using before this field
-      // existed). New sessions get `claude-sonnet-4-6` from createSession;
-      // here we leave old ones alone to avoid surprising the user with a
-      // silent model switch on resume.
-      claudeModel: (s as { claudeModel?: string | null }).claudeModel ?? null,
-      // Backfill = null → backend treats as 'all' (legacy behavior, every
-      // MCP tool wired). New sessions get 'coding' from createSession to
-      // shave ~10-15k tokens of MCP schemas off the startup cost.
-      claudeToolProfile:
-        (s as { claudeToolProfile?: ClaudeSession['claudeToolProfile'] }).claudeToolProfile ?? null,
-      // 0 until a turn lands and stamps a real value via
-      // updateLastAssistantUsage. Old persisted sessions don't have
-      // this field — chip just shows "—" until the next reply.
-      lastContextSize: (s as { lastContextSize?: number }).lastContextSize ?? 0,
-      linkedToEditor: Boolean((s as { linkedToEditor?: boolean }).linkedToEditor),
-      linkedToEditorInstanceId:
-        (s as { linkedToEditorInstanceId?: string | null }).linkedToEditorInstanceId ?? null,
-      linkedCanvasId:
-        (s as { linkedCanvasId?: string | null }).linkedCanvasId ?? null,
-      // Sessions persisted before multi-instance landed have no column binding
-      // — null means "float and attach to the first matching-kind column".
-      columnInstanceId:
-        (s as { columnInstanceId?: string | null }).columnInstanceId ?? null,
-      cwdSwitchRecap:
-        (s as { cwdSwitchRecap?: string | null }).cwdSwitchRecap ?? null,
-      cwdUuids:
-        (s as { cwdUuids?: Record<string, string> }).cwdUuids ?? {},
-      awaitingApproval:
-        Boolean((s as { awaitingApproval?: boolean }).awaitingApproval)
-    }));
-    return {
-      sessions,
-      activeId: data.activeId ?? sessions[0]?.id ?? null
-    };
+    const sessions = (data.sessions || []).map(hydrateSession);
+    return { sessions, activeId: data.activeId ?? sessions[0]?.id ?? null };
   } catch {
     return { sessions: [], activeId: null };
   }
@@ -186,16 +215,11 @@ export function getActiveSession(): ClaudeSession | null {
 }
 
 // ---- Persistence ----
-// Call once from a +page root $effect (Svelte 5 requires $effect to run
-// inside a component / .svelte.ts effect root). We expose as a function so
-// the page can wire both effects in one place.
-//
-// Failure mode: localStorage has a ~5–10MB quota. When it fills (long
-// chats, many sessions) `setItem` throws QuotaExceededError. We surface
-// this once per session via a sticky toast and also expose `persistError`
-// so the Settings view can show a permanent banner. Subsequent failures
-// in the same session are silent (no spam) but the flag stays set so the
-// Settings storage panel keeps the warning visible.
+// `initSessionsFromDisk` is called from +page.svelte onMount and migrates
+// sessions from localStorage → disk on first run, then keeps disk as the
+// source of truth. `persistSessionsEffect` wires the reactive $effect that
+// schedules debounced disk writes on every state change; pre-migration it
+// falls back to localStorage so the app works on the very first run.
 
 export const persistError = $state<{ sessions: string | null; rules: string | null }>({
   sessions: null,
@@ -211,41 +235,99 @@ function asMessage(e: unknown): string {
   return String(e);
 }
 
+/** Load sessions from a raw parsed object — same hydration as loadStoredSessions. */
+function hydrateSession(s: ClaudeSession): ClaudeSession {
+  return {
+    ...s,
+    input: s.input || '',
+    sending: false,
+    cwd: s.cwd || null,
+    mentions: s.mentions || [],
+    messages: s.messages || [],
+    worktreePath: s.worktreePath ?? null,
+    worktreeBranch: s.worktreeBranch ?? null,
+    worktreeRepo: s.worktreeRepo ?? null,
+    actions: (s.actions || []).filter(
+      (a: ClaudeAction) => a.status === 'pending' || a.status === 'error'
+    ),
+    claudeUuid: (s as { claudeUuid?: string }).claudeUuid || genUuid(),
+    claudeResumable: Boolean((s as { claudeResumable?: boolean }).claudeResumable),
+    agentKind: ((s as { agentKind?: 'claude' | 'cursor' }).agentKind ?? 'claude'),
+    cursorModel: (s as { cursorModel?: string | null }).cursorModel ?? null,
+    claudeModel: (s as { claudeModel?: string | null }).claudeModel ?? null,
+    claudeToolProfile:
+      (s as { claudeToolProfile?: ClaudeSession['claudeToolProfile'] }).claudeToolProfile ?? null,
+    lastContextSize: (s as { lastContextSize?: number }).lastContextSize ?? 0,
+    linkedToEditor: Boolean((s as { linkedToEditor?: boolean }).linkedToEditor),
+    linkedToEditorInstanceId:
+      (s as { linkedToEditorInstanceId?: string | null }).linkedToEditorInstanceId ?? null,
+    linkedCanvasId:
+      (s as { linkedCanvasId?: string | null }).linkedCanvasId ?? null,
+    columnInstanceId:
+      (s as { columnInstanceId?: string | null }).columnInstanceId ?? null,
+    cwdSwitchRecap:
+      (s as { cwdSwitchRecap?: string | null }).cwdSwitchRecap ?? null,
+    cwdUuids:
+      (s as { cwdUuids?: Record<string, string> }).cwdUuids ?? {},
+    awaitingApproval:
+      Boolean((s as { awaitingApproval?: boolean }).awaitingApproval)
+  };
+}
+
+/** Called from +page.svelte onMount with the resolved app-data dir.
+ *  Tries to load sessions from disk; if no disk sessions exist yet,
+ *  migrates whatever is in localStorage to disk, then clears localStorage. */
+export async function initSessionsFromDisk(appDataDir: string): Promise<void> {
+  _diskDir = `${appDataDir}/sessions`;
+  try {
+    const exists = await invoke<boolean>('fs_path_exists', { path: sessionIndexPath() });
+    if (exists) {
+      const raw = await invoke<string>('fs_read_file', { path: sessionIndexPath() });
+      const index = JSON.parse(raw) as { activeId: string | null; ids: string[] };
+      const sessions: ClaudeSession[] = [];
+      for (const id of index.ids ?? []) {
+        try {
+          const sessionRaw = await invoke<string>('fs_read_file', { path: sessionFilePath(id) });
+          sessions.push(hydrateSession(JSON.parse(sessionRaw) as ClaudeSession));
+        } catch {
+          // Skip corrupt or missing session files — they may have been manually
+          // deleted or lost to a partial write.
+        }
+      }
+      sessionsState.list = sessions;
+      sessionsState.activeClaudeId = index.activeId ?? sessions[0]?.id ?? null;
+      const active = sessions.find((s) => s.id === sessionsState.activeClaudeId);
+      if (active) sessionsState.activeIds[active.agentKind] = active.id;
+    } else {
+      // First run with disk persistence — migrate localStorage to disk.
+      await flushToDisk(sessionsState.list, sessionsState.activeClaudeId);
+    }
+    // localStorage is no longer the source of truth. Clear it to free quota.
+    try { localStorage.removeItem(SESSIONS_STORAGE_KEY); } catch { /* ignore */ }
+  } catch (e) {
+    console.error('[sessions] disk init failed, falling back to localStorage:', e);
+    _diskDir = null; // Keep localStorage path active.
+  }
+}
+
 export function persistSessionsEffect() {
   $effect(() => {
+    if (_diskDir) {
+      // Disk is active — debounce writes to avoid hammering disk during streaming.
+      const list = sessionsState.list;
+      const activeId = sessionsState.activeClaudeId;
+      void list; void activeId; // ensure svelte tracks these reactive reads
+      scheduleDiskWrite();
+      return;
+    }
+    // Pre-migration localStorage fallback.
     if (typeof localStorage === 'undefined') return;
     try {
       const payload = {
-        sessions: sessionsState.list.map((s) => ({
-          id: s.id,
-          title: s.title,
-          mentions: s.mentions,
-          messages: s.messages,
-          cwd: s.cwd,
-          input: s.input,
-          worktreePath: s.worktreePath,
-          worktreeBranch: s.worktreeBranch,
-          worktreeRepo: s.worktreeRepo,
-          actions: s.actions,
-          claudeUuid: s.claudeUuid,
-          claudeResumable: s.claudeResumable,
-          agentKind: s.agentKind,
-          cursorModel: s.cursorModel,
-          claudeModel: s.claudeModel,
-          claudeToolProfile: s.claudeToolProfile,
-          lastContextSize: s.lastContextSize,
-          linkedToEditor: s.linkedToEditor,
-          linkedToEditorInstanceId: s.linkedToEditorInstanceId,
-          linkedCanvasId: s.linkedCanvasId,
-          columnInstanceId: s.columnInstanceId,
-          cwdSwitchRecap: s.cwdSwitchRecap,
-          cwdUuids: s.cwdUuids,
-          awaitingApproval: s.awaitingApproval
-        })),
+        sessions: sessionsState.list.map(serializeSession),
         activeId: sessionsState.activeClaudeId
       };
       localStorage.setItem(SESSIONS_STORAGE_KEY, JSON.stringify(payload));
-      // Recovered after a previous failure — clear the flag.
       if (persistError.sessions) persistError.sessions = null;
     } catch (e) {
       const msg = asMessage(e);

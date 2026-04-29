@@ -88,6 +88,7 @@
     persistSessionsEffect,
     persistRulesEffect,
     persistEditorInstanceStateEffect,
+    initSessionsFromDisk,
     newClaudeSession,
     deleteClaudeSession,
     updateSession,
@@ -466,6 +467,14 @@
        + per-column-instance tab strip. Hydrate after layout so instance ids
        in the canvas store still match live columns. */
     restoreCanvasState();
+    // Migrate / load sessions from disk. Resolves app-data dir once and
+    // passes it to initSessionsFromDisk which handles localStorage →
+    // disk migration on first run, then switches persist to disk-only.
+    // Runs before biometric unlock so sessions are ready when the lock
+    // screen clears.
+    const appDataDir = await invoke<string>('app_data_dir');
+    cachedAppDataDir = appDataDir;
+    await initSessionsFromDisk(appDataDir);
     // One-shot v1 → v2 migration: seed the legacy `forgehold:editor:root`
     // localStorage value into the first editor instance, ONLY if that
     // instance has no persisted v2 state yet. Without this guard the
