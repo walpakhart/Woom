@@ -47,7 +47,8 @@
     unarchiveInstance,
     goToInstance,
     moveInstanceToWorkbench,
-    registerInstanceRemovedHook
+    registerInstanceRemovedHook,
+    restoreMaximized
   } from '$lib/state/layout.svelte';
   import {
     sessionsState,
@@ -2928,6 +2929,19 @@
       if (inboxState.focusItem) closeFocusItem();
       if (inboxState.jiraFocusKey) inboxState.jiraFocusKey = null;
       if (inboxState.sentryFocusId) inboxState.sentryFocusId = null;
+      /* Restore the maximized column if no other ESC-target was active.
+         Defer one frame so single-press ESC closes the topmost overlay
+         first (modals / focus panes), and only the *second* ESC drops
+         the maximize. */
+      if (
+        layoutState.maximizedInstanceId !== null &&
+        !anyModalOpen() &&
+        !inboxState.focusItem &&
+        !inboxState.jiraFocusKey &&
+        !inboxState.sentryFocusId
+      ) {
+        restoreMaximized();
+      }
     } else if (e.key === 'j' && view === 'workbench' && !anyModalOpen()) {
       moveSelection(1);
     } else if (e.key === 'k' && view === 'workbench' && !(e.metaKey || e.ctrlKey) && !anyModalOpen()) {
@@ -4259,4 +4273,38 @@
     background-clip: padding-box;
   }
   .wb-columns::-webkit-scrollbar-thumb:hover { background: var(--accent); background-clip: padding-box; }
+
+  /* ======================================================================
+     Maximize-overlay: one column expanded to fill the whole workbench area.
+     Layered above its siblings, leaving them in the DOM (state untouched —
+     scroll positions, in-flight requests, focused inputs all keep working).
+     ESC / the toolbar button restore. .wb-columns is already
+     `position: relative` so `inset: 0` anchors to it, not the viewport.
+     `!important` overrides the inline `style="flex: 0 0 …px"` written by
+     the resize handler — without it the column would still try to honour
+     its width.
+  ====================================================================== */
+  .wb-columns:has(.wb-column--maximized) > :global(.wb-column:not(.wb-column--maximized)) {
+    /* Visually hide siblings but keep them mounted. visibility:hidden over
+       display:none so we don't tear down their internal state (chat scroll,
+       editor selection, ongoing streams). */
+    visibility: hidden;
+    pointer-events: none;
+  }
+  :global(.wb-column.wb-column--maximized) {
+    position: absolute !important;
+    inset: 0 !important;
+    z-index: 50 !important;
+    flex: 1 1 100% !important;
+    width: auto !important;
+    box-shadow: 0 0 0 1px var(--border-hi), 0 8px 30px rgba(0, 0, 0, 0.55) !important;
+    animation: wb-max-in 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+  /* Hide the resize handle of a maximized column — there's nothing to resize
+     against. Don't drop the wb-col-controls bar; that's where Restore lives. */
+  :global(.wb-column.wb-column--maximized > .wb-col-resize) { display: none !important; }
+  @keyframes wb-max-in {
+    from { opacity: 0.6; transform: scale(0.985); }
+    to   { opacity: 1; transform: scale(1); }
+  }
 </style>

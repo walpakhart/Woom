@@ -4,7 +4,8 @@
     movePanelById,
     closePanelById,
     moveInstanceToWorkbench,
-    archiveInstance
+    archiveInstance,
+    toggleMaximize
   } from '$lib/state/layout.svelte';
   import { notify } from '$lib/state/toaster.svelte';
   import { attachDragChip } from '$lib/dragImage';
@@ -137,6 +138,21 @@
       {/if}
     </div>
   {/if}
+  <button
+    class="wb-col-ctl"
+    class:active={layoutState.maximizedInstanceId === instanceId}
+    onclick={() => toggleMaximize(instanceId)}
+    aria-label={layoutState.maximizedInstanceId === instanceId ? 'Restore column' : 'Maximize column to whole workbench'}
+    title={layoutState.maximizedInstanceId === instanceId ? 'Restore (Esc)' : 'Maximize — overlay this column on the whole bench. Esc to restore.'}
+  >
+    {#if layoutState.maximizedInstanceId === instanceId}
+      <!-- Compress (4 inward arrows) -->
+      <svg class="i i-sm" viewBox="0 0 24 24"><path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/></svg>
+    {:else}
+      <!-- Expand (4 outward arrows from corners) -->
+      <svg class="i i-sm" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
+    {/if}
+  </button>
   <button
     class="wb-col-ctl"
     onclick={() => archiveInstance(instanceId)}

@@ -187,6 +187,7 @@
 
 <section
   class="wb-column inbox"
+  class:wb-column--maximized={layoutState.maximizedInstanceId === instanceId}
   data-instance-id={instanceId}
   data-kind="github"
   transition:slide={{ duration: 240, axis: 'x', easing: cubicOut }}

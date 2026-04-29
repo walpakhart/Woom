@@ -109,6 +109,13 @@ export const layoutState = $state<{
   activeWorkbenchId: string;
   snapFlashInstanceId: string | null;
   archivedInstances: ArchivedInstance[];
+  /** Instance id currently expanded to fill the whole workbench area —
+   *  overlay-style "show this column to someone, then come back". Lives
+   *  on the layout state (and not per-column) so global ESC handler /
+   *  pill clicks / external close all share one switch.
+   *  Ephemeral: not persisted, not migrated; closing the app or switching
+   *  workbench tabs drops it (see setActiveWorkbench). */
+  maximizedInstanceId: string | null;
 }>({
   workbenches: [
     {
@@ -119,7 +126,8 @@ export const layoutState = $state<{
   ],
   activeWorkbenchId: '',
   snapFlashInstanceId: null,
-  archivedInstances: []
+  archivedInstances: [],
+  maximizedInstanceId: null
 });
 // Seed activeWorkbenchId after initialization (can't reference `workbenches` inside the literal).
 layoutState.activeWorkbenchId = layoutState.workbenches[0].id;
@@ -377,6 +385,11 @@ export function closePanelById(id: string) {
   for (const wb of layoutState.workbenches) {
     const idx = wb.instances.findIndex((i) => i.id === id);
     if (idx >= 0) {
+      /* Drop maximize if the maximized column is the one being closed —
+         otherwise the overlay would stay on top of an empty slot. */
+      if (layoutState.maximizedInstanceId === id) {
+        layoutState.maximizedInstanceId = null;
+      }
       wb.instances = [...wb.instances.slice(0, idx), ...wb.instances.slice(idx + 1)];
       persistPanelState();
       onInstanceRemoved?.(id);
@@ -398,6 +411,9 @@ export function archiveInstance(id: string) {
   for (const wb of layoutState.workbenches) {
     const idx = wb.instances.findIndex((i) => i.id === id);
     if (idx < 0) continue;
+    if (layoutState.maximizedInstanceId === id) {
+      layoutState.maximizedInstanceId = null;
+    }
     const inst = wb.instances[idx];
     layoutState.archivedInstances = [
       ...layoutState.archivedInstances,
@@ -683,6 +699,16 @@ export async function goToInstance(instanceId: string, workbenchId: string) {
   if (workbenchId !== layoutState.activeWorkbenchId) {
     setActiveWorkbench(workbenchId);
   }
+  /* Drop maximize when navigating to a *different* column — otherwise
+     the scroll-into-view fires under an opaque overlay and the user
+     sees nothing change. Preserve maximize when the target IS the
+     maximized column (clicked the same pill — already in view). */
+  if (
+    layoutState.maximizedInstanceId !== null &&
+    layoutState.maximizedInstanceId !== instanceId
+  ) {
+    layoutState.maximizedInstanceId = null;
+  }
   await scrollInstanceIntoView(instanceId);
 }
 
@@ -743,6 +769,29 @@ export function renameWorkbench(id: string, name: string) {
 
 export function setActiveWorkbench(id: string) {
   if (!layoutState.workbenches.find((w) => w.id === id)) return;
+  /* Maximize is per-current-workbench. Switching benches automatically
+     drops the overlay so we don't carry an "expanded column" pointer
+     into a workbench that doesn't have it. */
+  layoutState.maximizedInstanceId = null;
   layoutState.activeWorkbenchId = id;
   persistPanelState();
+}
+
+/** Toggle full-bench overlay for `id`. If another column is currently
+ *  maximized in the same workbench, switch to this one instead of
+ *  collapsing first — the user's intent is "show me THIS one full". */
+export function toggleMaximize(id: string) {
+  if (layoutState.maximizedInstanceId === id) {
+    layoutState.maximizedInstanceId = null;
+  } else {
+    layoutState.maximizedInstanceId = id;
+  }
+}
+
+/** Drop any active maximize. Bound to ESC and to the close-X on the
+ *  overlay restore badge. Idempotent. */
+export function restoreMaximized() {
+  if (layoutState.maximizedInstanceId !== null) {
+    layoutState.maximizedInstanceId = null;
+  }
 }

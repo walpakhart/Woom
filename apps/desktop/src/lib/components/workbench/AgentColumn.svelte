@@ -840,6 +840,7 @@
 <section
   class="wb-column claude-col"
   class:wb-column--cursor={kind === 'cursor'}
+  class:wb-column--maximized={layoutState.maximizedInstanceId === instanceId}
   class:drag-over={dragOver}
   ondragenter={(e) => onAgentDragEnter(instanceId, kind, e)}
   ondragover={(e) => onAgentDragOver(instanceId, kind, e)}

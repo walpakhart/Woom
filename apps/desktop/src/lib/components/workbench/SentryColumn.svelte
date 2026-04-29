@@ -166,6 +166,7 @@
 
 <section
   class="wb-column sentry-col"
+  class:wb-column--maximized={layoutState.maximizedInstanceId === instanceId}
   data-instance-id={instanceId}
   data-kind="sentry"
   style="order: {order}; flex: 0 0 {inst?.width ?? 440}px"

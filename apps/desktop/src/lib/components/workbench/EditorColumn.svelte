@@ -143,6 +143,7 @@
 
 <section
   class="wb-column wb-column--editor"
+  class:wb-column--maximized={layoutState.maximizedInstanceId === instanceId}
   data-instance-id={instanceId}
   data-kind="editor"
   transition:slide={{ duration: 240, axis: 'x', easing: cubicOut }}
