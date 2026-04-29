@@ -11,10 +11,14 @@ the Connect view as "coming soon" placeholders only.
 > Forgehold's connection model is deliberately small. Tokens go in the
 > macOS Keychain. Status is a Tauri `invoke` per source — connected /
 > disconnected / connecting. There is no central OAuth roundtrip
-> infrastructure: GitHub uses a PAT, Jira uses email + API token,
-> Sentry uses an internal-integration token. Agents (Claude / Cursor)
-> aren't tokens at all — they're shelled subprocesses; we just check
-> the binary is on PATH and authenticated to its own service.
+> infrastructure, and there never will be (`docs/ROADMAP_1.0.md §6`):
+> GitHub uses a PAT, Jira uses email + API token, Sentry uses an
+> internal-integration token. PAT-only is the permanent shape of
+> Forgehold auth; we invest in token UX (rotation reminders, multi-
+> account, diagnostics) rather than OAuth bureaucracy. Agents
+> (Claude / Cursor) aren't tokens at all — they're shelled subprocesses;
+> we just check the binary is on PATH and authenticated to its own
+> service.
 
 ---
 
@@ -43,9 +47,12 @@ revocation path. No magic; no surprise re-auth roundtrips at runtime.
 
 ### 1.3 Non-Goals (v1)
 
-- **OAuth.** Every source is token-paste in v1.
+- **OAuth.** Permanent non-goal — every source is and stays token-
+  paste (`docs/ROADMAP_1.0.md §6`). Token UX investment instead:
+  scope guidance, rotation reminders, multi-account, diagnostics.
 - **Multiple accounts of the same source.** One GitHub, one Jira, one
-  Sentry per Forgehold instance.
+  Sentry per Forgehold instance (multi-account is a 1.0 backlog
+  item, see ROADMAP §2.7.1).
 - **Slack / Linear / Notion / GitLab / Teams / Asana / Codex / Aider /
   Copilot.** Roadmap chips only.
 - **Per-workspace credentials.** Tokens are user-global.

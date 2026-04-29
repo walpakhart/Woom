@@ -6,11 +6,30 @@
 revisions are summarized in [MVP.md](MVP.md). Read MVP.md for the
 current scope; this doc describes the intended architecture.
 
-> **Important:** sections covering OAuth PKCE, SQLite schema, Slack source,
-> per-scope rules parser, and saved workflows are **deferred to post-v1**.
-> The implementation today uses manual PAT entry, localStorage on the
-> frontend, and a single global rules string. See MVP.md "Cuts from the
-> original plan" for the full list and reasoning.
+> **Important:** this is the **historical** intended-architecture
+> document from the early planning phase. The current source of truth
+> is the per-module spec set (`AGENTS.md`, `CANVAS.md`,
+> `CONNECTIONS.md`, `EDITOR.md`, `GITHUB.md`, `JIRA.md`, `MCP.md`,
+> `SENTRY.md`, `WORKBENCH.md`, `COMMAND_PALETTE.md`) plus
+> `ROADMAP_1.0.md` for what's planned. Several decisions in this
+> document have since been **reversed or made permanent**:
+>
+> - **OAuth (§6.1, §6.2, §6.5).** Cancelled — Forgehold is PAT-only
+>   forever (`docs/ROADMAP_1.0.md §6`). Ignore the OAuth flow tables
+>   and `forge://` URL scheme; we use macOS Keychain with manual PAT
+>   entry, no redirect handler.
+> - **SQLite primary store.** Replaced with disk-backed JSON for
+>   sessions / canvases (M1 of `ROADMAP_1.0.md`) and localStorage for
+>   small UI prefs.
+> - **Slack source.** Listed in `FUTURE_FEATURES.md §A.1`, not 1.0.
+> - **Per-scope rules parser.** Replaced with a single global rules
+>   string (`RulesView.svelte`).
+> - **Saved workflows / `.forge.yaml`.** Deferred to
+>   `FUTURE_FEATURES.md §E.1–§E.2`.
+>
+> Anything in this doc that doesn't contradict the per-module specs
+> or `ROADMAP_1.0.md` still represents the plan. When in doubt, the
+> per-module spec wins.
 
 ---
 
@@ -428,23 +447,22 @@ CREATE INDEX idx_rule_set_workspace ON rule_set(workspace_id, scope);
 
 ## 6. Auth & Security
 
-### 6.1 OAuth flows
+> **Reversed:** §6.1 and §6.2 are obsolete. Forgehold is PAT-only
+> permanently — no OAuth, no redirect handler (`docs/ROADMAP_1.0.md §6`).
+> The current auth shape is `docs/CONNECTIONS.md`. Sections below kept
+> for historical context only.
 
-All providers use OAuth 2.0 with PKCE.
+### 6.1 ~~OAuth flows~~ (cancelled)
 
-| Provider | Flow              | Scopes (minimum)                                  |
-|----------|-------------------|---------------------------------------------------|
-| Jira     | OAuth 2.0 (3LO)   | `read:jira-work`, `write:jira-work`               |
-| GitHub   | OAuth App + PAT   | `repo`, `read:org`, `read:user`                   |
-| Slack    | OAuth v2          | `channels:read`, `chat:write`, `reminders:write`  |
-| Claude   | local (CLI)       | not required — the user has already set up `claude` |
+~~All providers use OAuth 2.0 with PKCE.~~ Forgehold uses Personal
+Access Tokens / API tokens for every source — see
+`docs/CONNECTIONS.md §3` for the actual scopes per provider.
 
-### 6.2 Redirect handling
+### 6.2 ~~Redirect handling~~ (cancelled)
 
-Tauri registers the custom URI scheme `forge://oauth/callback`. The
-browser opens via `tauri-plugin-opener`, we catch the redirect in the main
-process, exchange the code for a token, write it to the keychain, and
-never persist it to the DB.
+~~Tauri registers the custom URI scheme `forge://oauth/callback`.~~
+The `forge://` URL scheme is not registered; PAT entry happens in the
+in-app connect modal.
 
 ### 6.3 Token storage
 
@@ -460,14 +478,14 @@ The DB stores only the ref, never the token itself.
 
 ### 6.5 Team auth (v0.3 preview)
 
-For teams, credentials can be:
-- **Personal:** the user's tokens, not shared.
-- **Workspace:** OAuth via a workspace app, tokens sit on the backend
-  (encrypted at rest, KMS-wrapped); the desktop receives short-lived
-  access tokens.
+> **Reversed:** team OAuth is also cancelled. If teams ever land
+> (`docs/FUTURE_FEATURES.md §F`), workspace credentials will use the
+> same PAT model — every member supplies their own tokens, optionally
+> mediated by a workspace-managed Vault (`§E.5`). No OAuth flow.
 
-In the MVP everything is personal. The schema (`source.shared`) is
-already ready for this.
+In the MVP everything is personal. The `source.shared` flag stays as
+a forward-compat hint but its contract is "one PAT shared across
+workspace members" not "OAuth via workspace app".
 
 ### 6.6 Sandbox
 
@@ -518,9 +536,15 @@ simple table. Not implemented in the MVP, but the DB schema is ready.
 
 ## 8. MVP Scope (acceptance criteria)
 
+> **Note:** the original MVP criteria below included OAuth and Slack;
+> both were dropped (`MVP.md`, `ROADMAP_1.0.md §6`). Today's actual
+> 1.0 acceptance criteria live in `ROADMAP_1.0.md §5`.
+
 MVP is done when:
 
-1. ✅ The user logs into Jira / GitHub / Slack through OAuth.
+1. ~~✅ The user logs into Jira / GitHub / Slack through OAuth.~~
+   Reversed → user pastes a PAT for Jira / GitHub / Sentry (Slack is
+   `FUTURE_FEATURES.md §A.1`).
 2. ✅ The Inbox shows objects from all three sources, sorted by `updated_at`.
 3. ✅ A Ticket can be dragged onto the "Claude Code" zone and a real-time run starts.
 4. ✅ The result (Artifact: diff + summary) can be dragged onto
@@ -670,7 +694,7 @@ Forge.app/
 | `LSMinimumSystemVersion`         | `13.0`                                        |
 | `LSApplicationCategoryType`      | `public.app-category.developer-tools`         |
 | `NSHumanReadableCopyright`       | `© 2026 Forge`                                |
-| `CFBundleURLTypes`               | `forge://` scheme for OAuth callbacks         |
+| ~~`CFBundleURLTypes`~~           | ~~`forge://` scheme for OAuth callbacks~~ — cancelled, no OAuth |
 | `NSAppleEventsUsageDescription`  | Reason for scripting access (if used)         |
 | `LSUIElement`                    | `false` (regular window app, not background)  |
 | `NSHighResolutionCapable`        | `true`                                        |
@@ -754,7 +778,7 @@ About panel.
 | Credential storage            | Keychain Services via `keyring` crate               |
 | Run-completed notifications   | `UNUserNotificationCenter` via Tauri notify plugin  |
 | "Open in Zed / VS Code"       | `NSWorkspace` / direct `spawn`                      |
-| OAuth callbacks               | `forge://` URL scheme (Info.plist)                  |
+| ~~OAuth callbacks~~           | Cancelled — Forgehold is PAT-only (`ROADMAP_1.0.md §6`) |
 | Dark Mode                     | Follows system (`NSRequiresAquaSystemAppearance = NO`) |
 | Dock badge (unread count)     | `NSApplication.setDockBadge` (v0.2)                 |
 | Global shortcut (summon)      | Tauri `global-shortcut` plugin (v0.2)               |

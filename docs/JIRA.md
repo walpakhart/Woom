@@ -4,7 +4,8 @@
 **Last updated:** 2026-04-29
 **Status:** describes shipping behaviour. Atlassian Cloud only; Server
 / Data Center is not supported. Authentication is workspace + email +
-API token (no OAuth in v1).
+API token. PAT-only by design — Forgehold does not ship OAuth for any
+source (`docs/ROADMAP_1.0.md §6`).
 
 > The Jira column is the inbox of issues you should be looking at, with
 > per-instance filters that translate into JQL the way you'd write it
@@ -49,7 +50,9 @@ buttons), assignee, priority, labels, worklogs.
 ### 1.3 Non-Goals (v1)
 
 - **Atlassian Server / DC.** Cloud only.
-- **OAuth** with Atlassian. Future; needs a client id we don't have.
+- **OAuth** with Atlassian. Permanent non-goal — every source uses
+  PATs (`docs/ROADMAP_1.0.md §6`). Token UX is invested in instead:
+  rotation reminders, multi-account, diagnostics.
 - **Custom fields** beyond the standard set surfaced in `JiraDetail`.
 - **Native JQL editor** in the column. Use the global Search if you
   need raw JQL — it's substring-only in v1; raw JQL goes through MCP
@@ -270,7 +273,8 @@ Logical key: `JIRA_KEY = "jira"`. Stored as JSON `{ workspace, email, token }`.
 on `InvalidToken`.
 
 The Connect modal collects all three fields (`JiraConnectModal.svelte`).
-There is no OAuth path. Disconnect: `jira_disconnect`.
+There is no OAuth path — that's by design (`docs/ROADMAP_1.0.md §6`).
+Disconnect: `jira_disconnect`.
 
 ---
 

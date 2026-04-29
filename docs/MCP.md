@@ -245,9 +245,11 @@ Re-merging happens on every Forgehold launch so revoked tokens get
 purged.
 
 There is **no** `mcp_auth` tool in the `user-forgehold-*` directories.
-The `mcp_auth` concept (a tool an MCP server exposes for OAuth handshake)
-is unused here — Forgehold owns the auth, sidecars read what they're
-told.
+The `mcp_auth` concept (a tool an MCP server exposes for its own
+credential round-trip) is unused here — Forgehold owns the auth,
+sidecars read what they're told. Forgehold itself is PAT-only across
+the board (`docs/ROADMAP_1.0.md §6`); a future `mcp_auth` is for
+third-party / community servers we don't ship, not for our own.
 
 ---
 

@@ -66,9 +66,28 @@ export interface GithubUser {
   avatar_url: string;
 }
 
+/** Snapshot of GitHub's per-token rate-limit window. Mirrors the
+ *  `github::RateLimit` struct on the Rust side. `resource` carries the
+ *  bucket label (`core` / `search` / `graphql`) when the upstream
+ *  response set it; PATs and OAuth Apps have separate quotas per
+ *  bucket but the typical UI surface only shows `core`. */
+export interface GithubRateLimit {
+  /** Total per-window quota — 5000 for PATs, 15000 for OAuth Apps. */
+  limit: number;
+  /** Calls remaining in the current window. */
+  remaining: number;
+  /** Calls used so far. Falls back to `limit - remaining` when the
+   *  upstream `x-ratelimit-used` header is absent. */
+  used: number;
+  /** Unix epoch seconds when the window resets. */
+  reset: number;
+  /** Bucket label, when known. */
+  resource?: string;
+}
+
 export type ConnectionStatus =
   | { kind: 'disconnected' }
-  | { kind: 'connected'; user: GithubUser };
+  | { kind: 'connected'; user: GithubUser; rate_limit?: GithubRateLimit };
 
 export interface JiraUser {
   account_id: string;

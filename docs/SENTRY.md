@@ -52,7 +52,8 @@ roll in, the user clicks one, sees the latest stack frame + breadcrumbs
 - **Background polling** in v1 — Sentry is **not** in the 60-second
   GitHub/Jira tick.
 - **Cross-org views.** One Sentry connection at a time.
-- **OAuth.** Internal integration tokens only.
+- **OAuth.** Internal integration tokens only — by design
+  (`docs/ROADMAP_1.0.md §6`).
 
 ---
 

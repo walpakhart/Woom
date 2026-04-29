@@ -8,13 +8,19 @@
 `WORKBENCH.md`) into a single delta from "0.1 ships" to "1.0 ships".
 
 > 0.1 is feature-rich but rough. The integrations work, the agents
-> stream, the workbench persists — but tokens are pasted (no OAuth),
-> sessions live in `localStorage` (quota risk), polling is gated on
-> GitHub being connected (Jira-only users get no auto-refresh), there
-> is no auto-update / no crash reporting / no first-run onboarding,
-> and dozens of comments in the codebase are stale relative to the
-> behaviour they describe. 1.0 is the bar where someone outside the
-> team can install the DMG, connect their tools, and trust the result.
+> stream, the workbench persists — but tokens have no rotation /
+> diagnostics / multi-account UX, sessions live in `localStorage`
+> (quota risk), polling is gated on GitHub being connected (Jira-only
+> users get no auto-refresh), there is no auto-update / no crash
+> reporting / no first-run onboarding, and dozens of comments in the
+> codebase are stale relative to the behaviour they describe. 1.0 is
+> the bar where someone outside the team can install the DMG, connect
+> their tools, and trust the result.
+>
+> **Decision (2026-04):** we ship **PAT-only** for every source.
+> OAuth is intentionally cut from 1.0 and 1.x — see §1.2 and §6 for
+> the rationale. The bar for 1.0 is "PAT UX so good you don't miss
+> OAuth", not "OAuth shipped".
 
 This doc is a living plan. It is **not** a marketing roadmap — it
 intentionally over-scopes so we can cut, not under-scope and discover
@@ -49,25 +55,38 @@ multi-week Claude session with edit cards approaches that on its own.
   `docs/CONNECTIONS.md §8.5`) — extend to show per-source breakdown
   with a "Migrate to disk" CTA for users on the legacy schema.
 
-### 1.2 OAuth across the board (where supported)
+### 1.2 Token UX — PAT only, polished hard
 
-Token-paste UX is a distribution killer. PATs are also a privilege-
-escalation footgun (every PAT we issue has `repo` scope; the user's
-Sentry token is org-wide).
+We deliberately don't ship OAuth (see §6 for why). Forgehold uses
+PATs / API tokens / API keys for every source, stored in macOS
+Keychain. The bar for 1.0 is "the PAT experience is so good no one
+asks for OAuth": clear scopes, easy rotation, multi-account, real
+diagnostics when something fails.
 
 **1.0:**
 
-- GitHub OAuth via the `device flow` (no client secret required, fits
-  Tauri).
-- Atlassian OAuth 2.0 (3LO) for Jira — needs a registered Forgehold
-  client; deferred OAuth registration → ship side-by-side with PAT
-  fallback.
-- Sentry OAuth via "User Auth Tokens" (their OAuth-equivalent for
-  desktop apps).
-- Keep PAT modals as fallback / power-user path (some self-hosted
-  Sentry / on-prem Jira won't have OAuth).
-- Refresh-token rotation handled in keychain; expired-token UX is "you
-  need to reconnect" not silent failure.
+- **Connect modals with scope guidance.** Each source's modal embeds
+  a copy-paste-ready list of the minimum scopes needed (GitHub `repo`
+  + `read:user`; Jira read+write; Sentry org `read` + per-project
+  `event:write`). Includes a one-click "Open token settings page"
+  link that drops the user on GitHub / Atlassian / Sentry's token
+  creation page in the browser.
+- **Test connection** button per card (`§2.7.6`, **shipped**).
+- **Quota / rate-limit visibility** per source (`§2.7.7`, **shipped
+  for GitHub**, Jira / Sentry queued because they don't expose
+  `x-ratelimit-*`).
+- **Connection diagnostics + event log** (`§2.7.11`, **shipped**).
+- **Token rotation reminders.** When a token is N days old (we don't
+  know its actual expiry — most PATs let the user pick), nag at
+  `N=180`, `300`, hard-error at `365`. Configurable in Settings.
+- **Multi-account per source** (`§2.7.2`). One GitHub-org-A and
+  GitHub-org-B side by side. Keychain key gains a numeric suffix
+  (`github`, `github:1`, …); status APIs return an array; per-column
+  account picker in the column header.
+- **Connection identity badge** in the rail showing whose creds are
+  active for each source (`§2.7.13`).
+- **Encryption at rest beyond Keychain** (`§2.7.10`) — defence in
+  depth on laptops with FileVault off.
 
 ### 1.3 Auto-update + crash reporting + bug-report
 
@@ -363,8 +382,11 @@ merge / close), drag to canvas / agent.
 
 #### Gaps to close
 
-1. **OAuth + GitHub App.** §1.2 + extra GitHub-side benefit:
-   fine-grained per-repo permissions.
+1. **Multi-account PAT support** (§1.2). Each org gets its own PAT
+   (Keychain `github`, `github:1`, `github:2`); column header has an
+   account picker; repo lists are scoped to whichever account is
+   active. Fine-grained PATs let the user pin per-repo scope without
+   waiting on a GitHub App.
 2. **Webhooks** for live updates (§1.4). Optional; falls back to poll.
 3. **Per-line review reply UI.** Inline threaded comments in the
    `files` tab.
@@ -426,44 +448,45 @@ worklogs, MD↔ADF.
 
 #### Gaps to close
 
-1. **OAuth (Atlassian 3LO)** §1.2.
-2. **Independent polling** §1.4.
-3. **Custom fields.** Surface the most common (Story Points, Epic Link,
+1. **Independent polling** (§1.4). No longer gated on GitHub being
+   connected; Jira-only users get the same auto-refresh experience.
+2. **Custom fields.** Surface the most common (Story Points, Epic Link,
    Components, Fix Versions) in the slide-over. Schema fetched per
    project; fields hidden when not present.
-4. **Sub-tasks tree** in the slide-over.
-5. **Attachments upload + inline preview.**
-6. **Reactions on comments.**
-7. **@mention picker** in comment composer (uses
+3. **Sub-tasks tree** in the slide-over.
+4. **Attachments upload + inline preview.**
+5. **Reactions on comments.**
+6. **@mention picker** in comment composer (uses
    `list_assignable_users`).
-8. **Linked-issues panel** (blocks / blocked-by / relates-to / clones).
-9. **Inline status / assignee edit** in the column rows (current state
+7. **Linked-issues panel** (blocks / blocked-by / relates-to / clones).
+8. **Inline status / assignee edit** in the column rows (current state
    requires opening the slide-over).
-10. **Sprint board view** (kanban per sprint) as a Jira tab section.
-11. **Burndown / velocity widgets** in the same tab.
-12. **Bulk operations:** multi-select rows, batch assign / transition.
-13. **Saved filter sets** — name a `JiraFilters` snapshot, restore.
-14. **Raw JQL field** for power users (in the column header behind a
+9. **Sprint board view** (kanban per sprint) as a Jira tab section.
+10. **Burndown / velocity widgets** in the same tab.
+11. **Bulk operations:** multi-select rows, batch assign / transition.
+12. **Saved filter sets** — name a `JiraFilters` snapshot, restore.
+13. **Raw JQL field** for power users (in the column header behind a
     chevron).
-15. **JQL query history.**
-16. **Jira Server / DC support.** Different REST surface (`/rest/api/2/`);
+14. **JQL query history.**
+15. **Jira Server / DC support.** Different REST surface (`/rest/api/2/`);
     Forge probes which one works and adapts.
-17. **Multi-org support.** `JiraConnections[]` instead of single
-    `JIRA_KEY`.
-18. **Notifications** (Atlassian-side notifications mirrored in
+16. **Multi-org support.** `JiraConnections[]` instead of single
+    `JIRA_KEY`. Same Keychain-suffix pattern as GitHub (`jira`,
+    `jira:1`, `jira:2`).
+17. **Notifications** (Atlassian-side notifications mirrored in
     Forgehold's badge).
-19. **MD↔ADF parity.** Round-trip is lossy for Jira-specific blocks
+18. **MD↔ADF parity.** Round-trip is lossy for Jira-specific blocks
     (panels, info / warning callouts, expand cards) per
     `docs/JIRA.md §15.6`. 1.0: extend the converter to preserve those
     blocks instead of flattening them; keep "user pasted exotic ADF"
     as a known-loss with a toast warning.
-20. **Project quick-switch.** `⌘G P` (or palette action) pops a tiny
+19. **Project quick-switch.** `⌘G P` (or palette action) pops a tiny
     project picker that retargets the active Jira column without
     opening the slide-over. Mirrors the GitHub repo dropdown.
-21. **Issue templates.** A small `templates.json` of common shapes
+20. **Issue templates.** A small `templates.json` of common shapes
     (Bug, Spike, Tech-debt) prefilled when the user clicks
     "+ New issue". Per-project; team can ship presets via export.
-22. **Recent issues MRU.** A "Recently viewed" section at the top of
+21. **Recent issues MRU.** A "Recently viewed" section at the top of
     the Jira column when no filter is active. Surfaces last 10
     issues touched.
 
@@ -582,43 +605,48 @@ booleans, biometry first-launch.
 
 #### Gaps to close
 
-1. **OAuth** §1.2 across GitHub / Atlassian / Sentry.
-2. **Multi-account per source.** Add "Add another GitHub" inside the
+1. **Multi-account per source.** Add "Add another GitHub" inside the
    modal. Stored as `keychain[github:1]`, `keychain[github:2]`, etc.
-3. **Slack** real integration (currently `implemented: false`).
-4. **Linear** real integration.
-5. **GitLab** real integration (mirror of GitHub flow; same
+   Same shape across GitHub / Jira / Sentry.
+2. **Slack** real integration (currently `implemented: false`).
+3. **Linear** real integration.
+4. **GitLab** real integration (mirror of GitHub flow; same
    read/write/propose-* shape).
-6. **Per-source "Test connection"** button that reruns `*_status()`
-   and surfaces the precise failure mode.
-7. **Quota / rate-limit visibility** per source: GitHub remaining /
-   reset, Jira `Retry-After`, Sentry response codes.
-8. **Token rotation reminder** — if the credential we have has an
-   inferable expiry (GitHub tokens optionally), warn N days ahead.
-9. **Biometry on every launch** as a setting.
-10. **Encryption at rest** beyond Keychain — defence in depth for
-    laptops with Keychain unlocked but no FileVault.
-11. **Connection diagnostics page** — full status with verbose
+5. **Per-source "Test connection"** button that reruns `*_status()`
+   and surfaces the precise failure mode. **Shipped (M2.1).**
+6. **Quota / rate-limit visibility** per source: GitHub remaining /
+   reset (**shipped, M2.2**), Jira `Retry-After`, Sentry response
+   codes — Jira / Sentry queued because they don't expose
+   `x-ratelimit-*` on success.
+7. **Token rotation reminder** — track the date the credential was
+   stored in Keychain (`forgehold:token-installed-at:v1`) and warn
+   when it's older than 180 / 300 days; hard-error after 365. We
+   can't read upstream expiry — most PATs let the user pick.
+8. **Biometry on every launch** as a setting.
+9. **Encryption at rest** beyond Keychain — defence in depth for
+   laptops with Keychain unlocked but no FileVault.
+10. **Connection diagnostics page** — full status with verbose
     error / response codes per source. Linked from "Report bug".
-12. **Auto-detect dev creds** from `.env` files in the open repo as a
+    **Shipped (M2.3).**
+11. **Auto-detect dev creds** from `.env` files in the open repo as a
     suggestion (never auto-import).
-13. **Workspace identity badge** — current account email visible in
+12. **Workspace identity badge** — current account email visible in
     the rail. Wraps `docs/CONNECTIONS.md §11.4` ("`claudeStatus` /
     `cursorStatus` show binary path + version, not 'logged in as'").
     For agents we surface whatever identity the CLI exposes (Claude:
     auth account; Cursor: active workspace) and label "unknown" when
     the CLI doesn't report it.
-14. **Retry / backoff on `*_status()` boot calls.** Today a single
+13. **Retry / backoff on `*_status()` boot calls.** Today a single
     network blip on launch leaves a source disconnected until the
     user reconnects manually (`docs/CONNECTIONS.md §11.1`). 1.0:
     exponential backoff up to 4 attempts in the first 30 s with a
     "Retrying…" state in the rail.
-15. **Notion / Codex / Aider / Copilot / Asana / Teams** — beyond 1.0
+14. **Notion / Codex / Aider / Copilot / Asana / Teams** — beyond 1.0
     unless one is requested loud enough.
-16. **Connection event log.** Persisted history per source: connected
+15. **Connection event log.** Persisted history per source: connected
     at, disconnected at, last token-refresh, last 429, last error.
-    Surfaced in the diagnostics page (§2.7.11). Critical for "why did
-    my Jira column go dark at 3 AM" debugging.
+    Surfaced in the diagnostics page (§2.7.10). Critical for "why did
+    my Jira column go dark at 3 AM" debugging. **Shipped (M2.3).**
 
 #### Out of scope for 1.0
 
@@ -687,9 +715,11 @@ merge, env-injected tokens.
 3. **Live profile switching.** Today requires session stop / start.
    1.0: write a new `--mcp-config` and either signal Claude to reload
    or transparently restart the CLI sidecar with a session resume.
-4. **`mcp_auth` flow** for OAuth-needing servers (Slack, Linear,
-   anything with a refresh-token round-trip). Even though we don't
-   ship those servers in 1.0, shape the flow now.
+4. **`mcp_auth` flow** for MCP servers that need their own credential
+   round-trip (third-party servers we don't ship — e.g. when a user
+   adds an external Slack-MCP that wants a webhook URL). Forge owns
+   our sidecars' creds via Keychain + env injection, so this is purely
+   for plugins. Shape the flow now even though no 1.0 server uses it.
 5. **`forgehold-memory` descriptors** — add `tools/*.json` so the
    user's IDE shows schemas (currently only `STATUS.md`).
 6. **Tool descriptor sweep** — fix stale `read-only phase 2` and
@@ -821,12 +851,18 @@ just with fewer 1.0 boxes ticked.
 
 **Shippable as 0.2.**
 
-### M2 — OAuth + Connections polish (≈ 2 weeks)
+### M2 — Connections polish (≈ 2 weeks, partly shipped)
 
-- §1.2 GitHub OAuth, Atlassian OAuth, Sentry OAuth (best-effort each).
-- §2.7.6 Test-connection button.
-- §2.7.7 Quota visibility.
-- §2.7.11 Connection diagnostics.
+PAT UX hardening — no OAuth (see §1.2 + §6).
+
+- §2.7.5 Test-connection button. **Shipped.**
+- §2.7.6 Quota / rate-limit visibility — GitHub **shipped**, Jira /
+  Sentry queued (no `x-ratelimit-*` upstream).
+- §2.7.10 Connection diagnostics + event log. **Shipped.**
+- §2.7.1 Multi-account per source.
+- §2.7.7 Token rotation reminders.
+- §2.7.12 Workspace identity badge.
+- §2.7.13 Retry / backoff on boot.
 
 **Shippable as 0.3.**
 
@@ -864,8 +900,11 @@ parallel to M2/M4 (canvas is enough surface area to be its own track).
 
 Forgehold is 1.0 when **all** of the following are true:
 
-1. **Tokens:** OAuth available for ≥2 of {GitHub, Atlassian, Sentry};
-   PAT fallback for the rest.
+1. **Tokens:** PAT-only for every source. Each connect modal shows
+   the minimum required scopes + a one-click "Open token settings"
+   link. Multi-account, rotation reminders, and connection
+   diagnostics + event log live in-app. (No OAuth — explicit
+   non-goal, see §6.)
 2. **Updates:** Auto-update channel live, signed + notarised binaries.
 3. **Crashes:** Captured by an internal Sentry project; mean
    time-to-fix-after-report < 1 week.
@@ -894,6 +933,17 @@ Forgehold is 1.0 when **all** of the following are true:
 
 Maintained here so we can say "no" without re-deriving why.
 
+- **OAuth for any source.** Permanent non-goal — *not* deferred,
+  *not* coming. Reasoning: registering OAuth apps means weeks of
+  approval bureaucracy at Atlassian, ongoing client-secret rotation,
+  redirect-handler complexity in Tauri, and a worse story for self-
+  hosted (on-prem Jira / private Sentry). PATs paste-once, work
+  everywhere, and are the path the user already has open in their
+  GitHub/Atlassian/Sentry tab. We invest the OAuth effort into PAT
+  UX (§1.2): scope guidance, multi-account, rotation reminders,
+  connection diagnostics, identity badges. If a user *really* wants
+  delegated auth, they can run their own gateway — but Forgehold
+  itself stays on PATs forever.
 - Real-time multi-user editing (Canvas / Workbench).
 - Public web preview / share links.
 - Slack / Linear / Notion / GitLab / Teams / Asana / Codex / Aider /
@@ -911,8 +961,13 @@ Maintained here so we can say "no" without re-deriving why.
 
 ## 7. Risks & Open Questions
 
-1. **OAuth client registration delay.** Atlassian's OAuth approval is
-   weeks, not days — start the application **before** M2 starts.
+1. **PAT-rotation friction.** Without OAuth, users have to recreate
+   a PAT every time it expires. Mitigate with §1.2 rotation reminders
+   180 / 300 / 365 days, and a "create new token" link that drops
+   them on the right token-creation page with the right scopes
+   pre-selected. If rotation pain becomes the #1 churn complaint at
+   1.x, we revisit — but plan A is "PAT UX is too good to miss
+   OAuth".
 2. **Notarisation cost.** Apple Developer Program is annual; budget
    it. Without it M1 can't fully ship.
 3. **Memory MCP descriptors gap.** Whether to ship without

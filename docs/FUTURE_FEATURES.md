@@ -40,8 +40,9 @@ is well-trodden; the cost is mostly per-source domain modelling.
 - **Effort:** L. Slack's surface is huge; we ship channels + threads
   + DMs only.
 - **Value:** essential — it's where every conversation finishes.
-- **Depends on:** §1.2 OAuth pattern (Slack OAuth flow), §2.7.2 multi-
-  account (Slack workspaces are usually multiple).
+- **Depends on:** Slack bot-token / user-token in Keychain (Forge is
+  PAT-only — no OAuth, see ROADMAP §6); §2.7.1 multi-account so users
+  can connect more than one Slack workspace.
 
 ### A.2 Linear
 
@@ -61,7 +62,8 @@ is well-trodden; the cost is mostly per-source domain modelling.
   releases` sections; same propose-* shape.
 - **Effort:** M (mostly remap the GitHub adapter).
 - **Value:** important.
-- **Depends on:** GitHub OAuth + sidecar pattern.
+- **Depends on:** GitHub PAT pattern (Forge is PAT-only; GitLab uses
+  Personal Access Tokens with the same Keychain shape).
 
 ### A.4 Notion
 
@@ -71,7 +73,8 @@ is well-trodden; the cost is mostly per-source domain modelling.
   page renderer (Notion-flavour MD); slide-over with page content.
 - **Effort:** M.
 - **Value:** important for doc-heavy teams.
-- **Depends on:** OAuth.
+- **Depends on:** Notion integration token (their PAT-equivalent),
+  stored in Keychain like every other source.
 
 ### A.5 Discord
 
@@ -90,7 +93,9 @@ is well-trodden; the cost is mostly per-source domain modelling.
   events API. Metrics widget renders sparklines.
 - **Effort:** XL — APM data is its own beast.
 - **Value:** essential for SRE workflows.
-- **Depends on:** OAuth + a small charting primitive (sparklines).
+- **Depends on:** Datadog API key + Application key (PAT-equivalent
+  pair, stored in Keychain), and a small charting primitive
+  (sparklines).
 
 ### A.7 PagerDuty / OpsGenie (on-call)
 
@@ -184,8 +189,8 @@ new tools inside the workbench.
 - **Effort:** XL.
 - **Value:** important — it replaces "open TablePlus" for most quick
   triage.
-- **Depends on:** §1.2 OAuth doesn't apply here; we use connection-
-  string auth stored in Keychain.
+- **Depends on:** Connection-string auth in Keychain — same pattern
+  as our other sources (PAT-only across the board, see ROADMAP §6).
 
 ### B.3 HTTP / API client column
 

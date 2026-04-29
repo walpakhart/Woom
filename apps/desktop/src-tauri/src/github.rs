@@ -16,6 +16,58 @@ pub struct GithubUser {
     pub avatar_url: String,
 }
 
+/// Snapshot of GitHub's per-token rate-limit window, parsed from the
+/// `x-ratelimit-*` headers that ride on every authenticated response.
+/// Surfaced through `ConnectionStatus::Connected.rate_limit` so the
+/// frontend can render "4823/5000 · resets in 14m" on the GitHub
+/// connection card.
+///
+/// `resource` lets us tell the user when they're hitting a non-core
+/// bucket (search has its own quota) — empty most of the time.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RateLimit {
+    /// Total per-window quota — 5000 for PATs, 15000 for OAuth Apps.
+    pub limit: u32,
+    /// Calls remaining in the current window.
+    pub remaining: u32,
+    /// Calls used so far. Falls back to `limit - remaining` when the
+    /// `x-ratelimit-used` header isn't present (some proxies strip it).
+    pub used: u32,
+    /// Unix epoch seconds when the window resets.
+    pub reset: u64,
+    /// Bucket label — `core` / `search` / `graphql`. May be missing
+    /// when the response didn't include `x-ratelimit-resource`.
+    pub resource: Option<String>,
+}
+
+/// Pull `x-ratelimit-*` out of a response header map. Returns `None`
+/// when the required pair (`limit` + `remaining`) is missing — that's
+/// the only signal we treat as "no quota info"; the rest are best-
+/// effort.
+pub fn parse_rate_limit(headers: &reqwest::header::HeaderMap) -> Option<RateLimit> {
+    let h_u32 = |name: &str| -> Option<u32> {
+        headers.get(name)?.to_str().ok()?.parse::<u32>().ok()
+    };
+    let h_u64 = |name: &str| -> Option<u64> {
+        headers.get(name)?.to_str().ok()?.parse::<u64>().ok()
+    };
+    let limit = h_u32("x-ratelimit-limit")?;
+    let remaining = h_u32("x-ratelimit-remaining")?;
+    let used = h_u32("x-ratelimit-used").unwrap_or_else(|| limit.saturating_sub(remaining));
+    let reset = h_u64("x-ratelimit-reset")?;
+    let resource = headers
+        .get("x-ratelimit-resource")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+    Some(RateLimit {
+        limit,
+        remaining,
+        used,
+        reset,
+        resource,
+    })
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Actor {
     pub login: String,
@@ -304,12 +356,24 @@ async fn handle_unit(resp: reqwest::Response) -> Result<(), GithubError> {
 
 // ---------- /user ----------
 
-pub async fn fetch_user(token: &str) -> Result<GithubUser, GithubError> {
+/// Fetches the authenticated user **and** snapshots the rate-limit
+/// window from the same response. The `Option<RateLimit>` is returned
+/// alongside the user object rather than embedded in `GithubUser` so
+/// callers that don't care (e.g. `github_connect_pat` returning a
+/// minimal user blob to the connect modal) can ignore it via `.0`.
+pub async fn fetch_user(
+    token: &str,
+) -> Result<(GithubUser, Option<RateLimit>), GithubError> {
     let c = client()?;
     let resp = request(&c, reqwest::Method::GET, token, format!("{API_BASE}/user"))
         .send()
         .await?;
-    handle(resp).await
+    if !resp.status().is_success() {
+        return Err(api_error(resp).await);
+    }
+    let rate_limit = parse_rate_limit(resp.headers());
+    let user: GithubUser = resp.json().await?;
+    Ok((user, rate_limit))
 }
 
 // ---------- Inbox via /search/issues ----------

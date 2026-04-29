@@ -44,7 +44,14 @@ const SENTRY_KEY: &str = "sentry";
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ConnectionStatus {
     Disconnected,
-    Connected { user: GithubUser },
+    /// `rate_limit` is `None` when the upstream response didn't include
+    /// `x-ratelimit-*` (rare — every authenticated GitHub call sets
+    /// them, but some corporate proxies strip headers).
+    Connected {
+        user: GithubUser,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        rate_limit: Option<github::RateLimit>,
+    },
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -246,7 +253,7 @@ async fn github_connect_pat(token: String) -> Result<GithubUser, String> {
     if trimmed.is_empty() {
         return Err("token is empty".into());
     }
-    let user = github::fetch_user(&trimmed).await.map_err(|e| e.to_string())?;
+    let (user, _rate_limit) = github::fetch_user(&trimmed).await.map_err(|e| e.to_string())?;
     keychain::set(GITHUB_KEY, &trimmed).map_err(|e| e.to_string())?;
     let _ = cursor_mcp::sync();
     Ok(user)
@@ -257,7 +264,7 @@ async fn github_status() -> Result<ConnectionStatus, String> {
     match keychain::get(GITHUB_KEY).map_err(|e| e.to_string())? {
         None => Ok(ConnectionStatus::Disconnected),
         Some(t) => match github::fetch_user(&t).await {
-            Ok(user) => Ok(ConnectionStatus::Connected { user }),
+            Ok((user, rate_limit)) => Ok(ConnectionStatus::Connected { user, rate_limit }),
             Err(github::GithubError::InvalidToken) => {
                 let _ = keychain::delete(GITHUB_KEY);
                 Ok(ConnectionStatus::Disconnected)

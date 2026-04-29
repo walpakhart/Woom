@@ -19,6 +19,10 @@ release pipeline, first-run wizard, polish.
   Each user pastes their own token; no app-wide OAuth client to
   register, rotate, or audit. Tokens live in macOS Keychain with a
   `kSecAccessControlUserPresence` gate (Touch ID on read).
+  **Made permanent (2026-04):** OAuth is now an explicit non-goal for
+  every source (`docs/ROADMAP_1.0.md §6`). The investment that would
+  have gone into OAuth flows goes into PAT UX instead — rotation
+  reminders, multi-account, scope guidance, diagnostics + event log.
 - **SQLite-backed object cache, event log, repository table, rule_set
   table, workspace/member tables** — none are needed for v0.1. State
   lives in localStorage on the frontend; the only persistent backend

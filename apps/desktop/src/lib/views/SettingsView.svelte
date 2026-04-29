@@ -6,6 +6,13 @@
   import { notify, notifyError } from '$lib/state/toaster.svelte';
   import { themeState, applyTheme, type ThemeName } from '$lib/state/theme.svelte';
   import { scaleState, applyScale, SCALE_OPTIONS } from '$lib/state/scale.svelte';
+  import {
+    connectionEventsState,
+    clearConnectionEvents,
+    type ConnectionEvent,
+    type ConnectionEventSource
+  } from '$lib/state/connectionEvents.svelte';
+  import { relativeTime } from '$lib/data';
 
   /* Theme picker. Each entry encodes a tiny preview swatch (bg, text,
      accent) so the user can eyeball the palette without applying. */
@@ -130,6 +137,61 @@
 
   // Probe on mount so the page lands populated.
   $effect(() => { void refreshDiskStats(); });
+
+  // ---- Connection diagnostics ----------------------------------------
+
+  /** Filter chip selection. `all` is sentinel for the unfiltered view. */
+  let eventFilter = $state<ConnectionEventSource | 'all'>('all');
+
+  const FILTER_TABS: ReadonlyArray<{ id: ConnectionEventSource | 'all'; label: string }> = [
+    { id: 'all', label: 'All' },
+    { id: 'github', label: 'GitHub' },
+    { id: 'jira', label: 'Jira' },
+    { id: 'sentry', label: 'Sentry' },
+    { id: 'claude', label: 'Claude' },
+    { id: 'cursor', label: 'Cursor' }
+  ];
+
+  const filteredEvents = $derived(
+    eventFilter === 'all'
+      ? connectionEventsState.events
+      : connectionEventsState.events.filter((e) => e.source === eventFilter)
+  );
+
+  /** Per-source counts shown in the filter chips. Lets the user spot a
+   *  noisy source ("Jira: 47") without scrolling the timeline. */
+  const counts = $derived.by(() => {
+    const c: Record<ConnectionEventSource, number> = {
+      github: 0,
+      jira: 0,
+      sentry: 0,
+      claude: 0,
+      cursor: 0
+    };
+    for (const ev of connectionEventsState.events) c[ev.source]++;
+    return c;
+  });
+
+  function eventLabel(ev: ConnectionEvent): string {
+    switch (ev.kind) {
+      case 'connected':
+        return 'OK';
+      case 'disconnected':
+        return 'no token';
+      case 'rate_limited':
+        return 'rate-limited';
+      case 'error':
+        return 'error';
+    }
+  }
+
+  function confirmClear() {
+    if (connectionEventsState.events.length === 0) return;
+    const ok = confirm(
+      `Clear ${connectionEventsState.events.length} connection events? This is local diagnostics only — your tokens stay connected.`
+    );
+    if (ok) clearConnectionEvents();
+  }
 </script>
 
 <section class="settings-view">
@@ -206,6 +268,66 @@
         <div style="flex:1"></div>
         <button class="btn btn--primary" onclick={runCleanup} disabled={cleanupBusy}>
           {cleanupBusy ? 'Cleaning…' : 'Clean orphan worktrees > 14 days'}
+        </button>
+      </div>
+    </div>
+
+    <!-- Connection diagnostics. Driven by `connectionEventsState`,
+         which records every status round-trip with timing + outcome.
+         Useful when debugging "why did my Jira go dark at 3 AM" — the
+         timeline shows whether the source actually disconnected, hit a
+         429, or just returned a network error. -->
+    <div class="card">
+      <header class="card-head">
+        <h2 class="card-title">Connection diagnostics</h2>
+        <p class="card-sub">
+          Last {connectionEventsState.events.length} status checks across every connected source. Click a row's source to filter. Local-only — nothing is sent anywhere.
+        </p>
+      </header>
+
+      <div class="diag-tabs">
+        {#each FILTER_TABS as tab (tab.id)}
+          {@const count = tab.id === 'all' ? connectionEventsState.events.length : counts[tab.id]}
+          <button
+            class="diag-tab"
+            class:active={eventFilter === tab.id}
+            onclick={() => (eventFilter = tab.id)}
+          >
+            {tab.label}
+            <span class="diag-tab-count mono">{count}</span>
+          </button>
+        {/each}
+      </div>
+
+      {#if filteredEvents.length === 0}
+        <div class="diag-empty">
+          {#if connectionEventsState.events.length === 0}
+            No events recorded yet. Hit "Test" on a connection card to populate this log.
+          {:else}
+            No events for this source.
+          {/if}
+        </div>
+      {:else}
+        <ol class="diag-list">
+          {#each filteredEvents as ev (ev.id)}
+            <li class="diag-row diag-row--{ev.kind}">
+              <span class="diag-source mono">{ev.source}</span>
+              <span class="diag-kind">{eventLabel(ev)}</span>
+              <span class="diag-detail" title={ev.message ?? ''}>
+                {ev.message ?? ''}
+              </span>
+              <span class="diag-latency mono">
+                {ev.latencyMs !== null ? `${ev.latencyMs}ms` : '—'}
+              </span>
+              <span class="diag-time mono">{relativeTime(ev.at)}</span>
+            </li>
+          {/each}
+        </ol>
+      {/if}
+
+      <div class="card-actions">
+        <button class="btn btn--ghost" onclick={confirmClear} disabled={connectionEventsState.events.length === 0}>
+          Clear log
         </button>
       </div>
     </div>
@@ -422,4 +544,65 @@
     color: var(--text-0);
   }
   .scale-card.active .scale-label { color: var(--accent-bright); }
+
+  /* Connection diagnostics — filter chips + chronological list. */
+  .diag-tabs {
+    display: flex; flex-wrap: wrap; gap: 6px;
+  }
+  .diag-tab {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 5px 10px;
+    background: var(--bg-2);
+    border: 1px solid var(--border-neutral);
+    border-radius: 999px;
+    font-size: 11.5px; font-weight: 500; color: var(--text-1);
+    cursor: pointer; transition: all 140ms;
+  }
+  .diag-tab:hover { background: var(--bg-3); color: var(--text-0); }
+  .diag-tab.active {
+    background: var(--bg-3);
+    border-color: var(--accent);
+    color: var(--accent-bright);
+  }
+  .diag-tab-count {
+    font-size: 10px; color: var(--text-mute);
+    background: var(--bg-0);
+    padding: 1px 6px; border-radius: 999px;
+  }
+  .diag-tab.active .diag-tab-count { color: var(--accent-bright); }
+
+  .diag-list {
+    list-style: none; padding: 0; margin: 0;
+    display: flex; flex-direction: column; gap: 2px;
+    max-height: 320px; overflow-y: auto;
+    border: 1px solid var(--border-neutral);
+    border-radius: 8px;
+    background: var(--bg-0);
+  }
+  .diag-row {
+    display: grid;
+    grid-template-columns: 60px 80px 1fr auto auto;
+    gap: 12px; align-items: center;
+    padding: 6px 12px;
+    font-size: 11.5px; color: var(--text-1);
+    border-bottom: 1px solid var(--border-neutral);
+  }
+  .diag-row:last-child { border-bottom: none; }
+  .diag-source { font-size: 10.5px; color: var(--text-mute); text-transform: uppercase; letter-spacing: 0.04em; }
+  .diag-kind { font-weight: 600; }
+  .diag-detail {
+    color: var(--text-2);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    min-width: 0;
+  }
+  .diag-latency, .diag-time { font-size: 10.5px; color: var(--text-mute); }
+  .diag-row--connected .diag-kind { color: var(--accent-bright); }
+  .diag-row--disconnected .diag-kind { color: var(--text-2); }
+  .diag-row--rate_limited .diag-kind { color: #f59e0b; }
+  .diag-row--error .diag-kind { color: #f87171; }
+  .diag-empty {
+    padding: 16px; border: 1px dashed var(--border-neutral);
+    border-radius: 8px; text-align: center;
+    font-size: 12px; color: var(--text-mute);
+  }
 </style>

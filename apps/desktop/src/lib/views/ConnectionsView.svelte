@@ -1,12 +1,19 @@
 <script lang="ts">
-  import type {
-    ClaudeStatus,
-    ConnectionMeta,
-    ConnectionStatus,
-    CursorStatus,
-    JiraStatus,
-    SentryStatus
+  import {
+    relativeTime,
+    type ClaudeStatus,
+    type ConnectionMeta,
+    type ConnectionStatus,
+    type CursorStatus,
+    type JiraStatus,
+    type SentryStatus
   } from '../data';
+  import { connectionsState, testConnection } from '$lib/state/connections.svelte';
+  import {
+    connectionEventsState,
+    type ConnectionEvent,
+    type ConnectionEventSource
+  } from '$lib/state/connectionEvents.svelte';
 
   interface Props {
     sourceConns: ConnectionMeta[];
@@ -37,6 +44,71 @@
     onDisconnectSentry,
     onOpenConnectModal
   }: Props = $props();
+
+  /* Map source-id → most recent event. The `events` list is already
+   *  sorted newest-first, so the first hit per source wins. */
+  const lastEventBySource = $derived.by(() => {
+    const map: Record<ConnectionEventSource, ConnectionEvent | null> = {
+      github: null,
+      jira: null,
+      sentry: null,
+      claude: null,
+      cursor: null
+    };
+    for (const ev of connectionEventsState.events) {
+      if (map[ev.source] === null) map[ev.source] = ev;
+    }
+    return map;
+  });
+
+  /* `conn.id` → matching event-log key. The catalogue of source ids is
+   *  larger than the set we record events for (Slack / Linear / etc.
+   *  are placeholders); this narrows the union safely. */
+  const TESTABLE_SOURCES: Record<string, ConnectionEventSource> = {
+    github: 'github',
+    jira: 'jira',
+    sentry: 'sentry',
+    claude: 'claude',
+    cursor: 'cursor'
+  };
+
+  function eventKindLabel(kind: ConnectionEvent['kind']): string {
+    switch (kind) {
+      case 'connected':
+        return 'OK';
+      case 'disconnected':
+        return 'no token';
+      case 'rate_limited':
+        return 'rate-limited';
+      case 'error':
+        return 'error';
+    }
+  }
+
+  /** Render the GitHub rate-limit reset window as a friendly relative
+   *  string. The Unix epoch comes from `x-ratelimit-reset`; if the
+   *  window has already elapsed (clock skew / stale data) we say
+   *  "now" rather than "−2m". */
+  function rateLimitResetLabel(unixSec: number): string {
+    const diffMs = unixSec * 1000 - Date.now();
+    if (diffMs < 30_000) return 'momentarily';
+    const minutes = Math.round(diffMs / 60_000);
+    if (minutes < 60) return `${minutes}m`;
+    const hours = Math.round(minutes / 60);
+    return `${hours}h`;
+  }
+
+  /** Tighter quota string for the small per-card test-row. Prefer
+   *  `4.8k/5k` over the verbose form. */
+  function shortQuota(remaining: number, limit: number): string {
+    return `${formatThousands(remaining)}/${formatThousands(limit)}`;
+  }
+
+  function formatThousands(n: number): string {
+    if (n < 1000) return String(n);
+    const k = n / 1000;
+    return Number.isInteger(k) ? `${k}k` : `${k.toFixed(1)}k`;
+  }
 </script>
 
 <section class="connections-view">
@@ -55,6 +127,9 @@
         <div class="conn-grid">
           {#each items as conn (conn.id)}
             {@const connected = connectedIds.has(conn.id)}
+            {@const testKey = TESTABLE_SOURCES[conn.id] ?? null}
+            {@const lastEv = testKey ? lastEventBySource[testKey] : null}
+            {@const testing = testKey ? connectionsState.testing[testKey] : false}
             <div class="conn-card" class:connected class:disabled={!conn.implemented}>
               <div class="conn-head">
                 <span class="conn-icon {conn.iconClass}" class:conn-icon--svg={!!(conn.iconSvg && !conn.iconImg)} class:conn-icon--img={!!conn.iconImg}>
@@ -72,6 +147,44 @@
                 </span>
               </div>
               <div class="conn-desc">{conn.desc}</div>
+              {#if connected && testKey}
+                {@const ghRate =
+                  testKey === 'github' && githubStatus.kind === 'connected'
+                    ? githubStatus.rate_limit
+                    : undefined}
+                {@const lowQuota =
+                  ghRate && ghRate.remaining < ghRate.limit * 0.1}
+                <div class="conn-test-row">
+                  <button
+                    class="conn-test-btn"
+                    onclick={() => void testConnection(testKey)}
+                    disabled={testing}
+                    title="Re-run {conn.name} status check"
+                  >
+                    {testing ? 'Testing…' : 'Test'}
+                  </button>
+                  {#if lastEv}
+                    <span class="conn-event conn-event--{lastEv.kind}" title={lastEv.message ?? ''}>
+                      <span class="conn-event-kind">{eventKindLabel(lastEv.kind)}</span>
+                      {#if lastEv.latencyMs !== null}
+                        <span class="conn-event-sep">·</span>
+                        <span class="mono">{lastEv.latencyMs}ms</span>
+                      {/if}
+                      <span class="conn-event-sep">·</span>
+                      <span>{relativeTime(lastEv.at)}</span>
+                    </span>
+                  {/if}
+                  {#if ghRate}
+                    <span
+                      class="conn-quota"
+                      class:conn-quota--low={lowQuota}
+                      title="Rate limit: {ghRate.remaining} of {ghRate.limit} left ({ghRate.resource ?? 'core'} bucket); resets in {rateLimitResetLabel(ghRate.reset)}"
+                    >
+                      <span class="mono">{shortQuota(ghRate.remaining, ghRate.limit)}</span>
+                    </span>
+                  {/if}
+                </div>
+              {/if}
               <div class="conn-footer">
                 <span class="conn-type mono">{conn.kind}</span>
                 {#if connected && conn.id === 'github'}
@@ -101,6 +214,16 @@
         <img src={githubStatus.user.avatar_url} alt="" class="you-avatar" />
         <span class="mono">@{githubStatus.user.login}</span>
         {#if githubStatus.user.name}<span class="you-name">· {githubStatus.user.name}</span>{/if}
+        {#if githubStatus.rate_limit}
+          {@const rl = githubStatus.rate_limit}
+          {@const usedPct = Math.round((rl.used / rl.limit) * 100)}
+          {@const lowQuota = rl.remaining < rl.limit * 0.1}
+          <span class="you-name you-quota" class:you-quota--low={lowQuota}>
+            · API <span class="mono">{rl.remaining}/{rl.limit}</span>
+            <span class="you-quota-pct">({usedPct}% used)</span>
+            · resets in <span class="mono">{rateLimitResetLabel(rl.reset)}</span>
+          </span>
+        {/if}
       </div>
     {/if}
     {#if jiraStatus.kind === 'connected'}
@@ -202,6 +325,60 @@
   .conn-btn--connect:hover { box-shadow: 0 4px 14px rgba(16, 185, 129, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.25); transform: translateY(-1px); }
   .conn-btn--configure { background: transparent; color: var(--text-1); border: 1px solid var(--border-neutral-hi); }
   .conn-btn--configure:hover { background: var(--bg-3); color: var(--text-0); border-color: var(--border-hi); }
+
+  .conn-test-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 0 0;
+    border-top: 1px dashed var(--border-neutral);
+    font-size: 11px;
+  }
+  .conn-test-btn {
+    padding: 3px 9px; border-radius: 5px;
+    background: transparent; color: var(--text-1);
+    border: 1px solid var(--border-neutral-hi);
+    font-size: 11px; font-weight: 500; cursor: pointer;
+    transition: all 140ms;
+  }
+  .conn-test-btn:hover:not(:disabled) { background: var(--bg-3); color: var(--text-0); border-color: var(--border-hi); }
+  .conn-test-btn:disabled { opacity: 0.55; cursor: progress; }
+
+  .conn-event {
+    display: inline-flex; align-items: center; gap: 4px;
+    color: var(--text-mute);
+    font-size: 11px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .conn-event-kind { font-weight: 600; }
+  .conn-event-sep { opacity: 0.6; }
+  .conn-event--connected .conn-event-kind { color: var(--accent-bright); }
+  .conn-event--disconnected .conn-event-kind { color: var(--text-2); }
+  .conn-event--rate_limited .conn-event-kind { color: #f59e0b; }
+  .conn-event--error .conn-event-kind { color: #f87171; }
+
+  /* GitHub rate-limit chip in the per-card test-row. Pushed to the
+     right with margin-left:auto so the most-relevant info (test
+     button + last event) stays anchored on the left. Turns amber
+     once <10% of the window is left so users notice before the
+     hard 429. */
+  .conn-quota {
+    margin-left: auto;
+    padding: 2px 7px;
+    border-radius: 999px;
+    background: var(--bg-2);
+    border: 1px solid var(--border-neutral);
+    color: var(--text-2);
+    font-size: 10.5px;
+    cursor: help;
+  }
+  .conn-quota--low {
+    background: rgba(245, 158, 11, 0.10);
+    border-color: rgba(245, 158, 11, 0.45);
+    color: #f59e0b;
+  }
+
+  .you-quota { display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+  .you-quota--low { color: #f59e0b; }
+  .you-quota-pct { color: var(--text-mute); font-size: 11.5px; }
 
   .you-are {
     margin-top: 28px; padding: 14px 16px;
