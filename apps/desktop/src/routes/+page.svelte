@@ -1869,6 +1869,18 @@
       const v = input[k];
       return typeof v === 'number' ? v : Number(v);
     };
+    /* `pick` accepts a canonical key plus a list of aliases and
+       returns the first one that's a non-empty string. Mirrors the
+       `#[serde(alias = "...")]` set on the sidecar's params struct
+       so the frontend dispatcher accepts the same shapes the sidecar
+       does — LLMs love shortening field names. */
+    const pick = (...keys: string[]): string => {
+      for (const k of keys) {
+        const v = input[k];
+        if (typeof v === 'string' && v.trim()) return v.trim();
+      }
+      return '';
+    };
     switch (name) {
       case 'mcp__app__open_jira_issue': {
         const key = str('key');
@@ -2121,9 +2133,9 @@
         return;
       }
       case 'mcp__app__set_editor_repo_path': {
-        const repoPath = str('repo_path');
-        const instName = str('instance_name');
-        const instId = str('instance_id');
+        const repoPath = pick('repo_path', 'path', 'folder', 'directory', 'cwd', 'repo', 'repoPath');
+        const instName = pick('instance_name', 'name');
+        const instId = pick('instance_id', 'id');
         if (!repoPath) return;
         const editor = findInstanceByNameOrId('editor', instName, instId);
         if (!editor) return;
@@ -2143,15 +2155,15 @@
         return;
       }
       case 'mcp__app__set_agent_cwd': {
-        const repoPath = str('repo_path');
+        const repoPath = pick('repo_path', 'path', 'folder', 'directory', 'cwd', 'repo', 'repoPath');
         if (!repoPath) return;
         const target = str('target').toLowerCase();
         let sessId: string | null = null;
         if (target === 'self') {
           sessId = _sessionId;
         } else {
-          const instName = str('instance_name');
-          const instId = str('instance_id');
+          const instName = pick('instance_name', 'name');
+          const instId = pick('instance_id', 'id');
           // Try claude first, then cursor — same pool from the user's POV.
           const inst = findInstanceByNameOrId('claude', instName, instId)
             ?? findInstanceByNameOrId('cursor', instName, instId);
@@ -2255,27 +2267,33 @@
       case 'mcp__app__canvas_add_edge': {
         const canvasId = linkedCanvasIdFor(_sessionId);
         if (!canvasId) return;
-        const fromId = str('from_shape_id');
-        const toId = str('to_shape_id');
+        /* Accept the same alias set as the sidecar's CanvasAddEdgeParams.
+           LLMs frequently shorten field names (`from`/`to`) on terse
+           tools like edge inserts. */
+        const fromId = pick('from_shape_id', 'from', 'source', 'from_id', 'fromId', 'fromShapeId');
+        const toId = pick('to_shape_id', 'to', 'target', 'to_id', 'toId', 'toShapeId');
         if (!fromId || !toId) return;
         type AnchorName = 'tl'|'tc'|'tr'|'ml'|'mc'|'mr'|'bl'|'bc'|'br';
         const validAnchors: AnchorName[] = ['tl','tc','tr','ml','mc','mr','bl','bc','br'];
-        const fromAnchorRaw = str('from_anchor') || 'mr';
-        const toAnchorRaw = str('to_anchor') || 'ml';
+        const fromAnchorRaw = pick('from_anchor', 'fromAnchor', 'source_anchor', 'sourceAnchor') || 'mr';
+        const toAnchorRaw = pick('to_anchor', 'toAnchor', 'target_anchor', 'targetAnchor') || 'ml';
         const fromAnchor = (validAnchors as string[]).includes(fromAnchorRaw)
           ? (fromAnchorRaw as AnchorName) : 'mr';
         const toAnchor = (validAnchors as string[]).includes(toAnchorRaw)
           ? (toAnchorRaw as AnchorName) : 'ml';
-        const kind = (input.kind === 'line' || input.kind === 'dashed') ? input.kind : 'arrow';
-        const routing = (input.routing === 'straight' || input.routing === 'curved')
-          ? input.routing : 'orthogonal';
+        const kindRaw = pick('kind', 'style');
+        const kind = (kindRaw === 'line' || kindRaw === 'dashed') ? kindRaw : 'arrow';
+        const routingRaw = pick('routing');
+        const routing = (routingRaw === 'straight' || routingRaw === 'curved')
+          ? routingRaw : 'orthogonal';
         const from: EdgeAnchor = { shapeId: fromId, anchor: fromAnchor };
         const to: EdgeAnchor = { shapeId: toId, anchor: toAnchor };
+        const labelRaw = pick('label', 'text');
         const edge = makeEdge({
           from, to, kind, routing,
-          label: typeof input.label === 'string' ? (input.label as string) : null
+          label: labelRaw || null
         });
-        const desiredId = str('edge_id');
+        const desiredId = pick('edge_id', 'id', 'edgeId');
         if (desiredId) edge.id = desiredId;
         canvasAddEdge(canvasId, edge);
         return;

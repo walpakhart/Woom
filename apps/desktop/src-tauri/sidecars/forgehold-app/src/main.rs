@@ -151,7 +151,19 @@ struct AddEditorInstanceParams {
     /// Optional absolute path to the folder/repo the new editor column
     /// should open. Omit to create an empty editor — the user can pick
     /// a folder afterwards.
-    #[serde(default)]
+    ///
+    /// Accepts the canonical name `repo_path` plus the common aliases
+    /// `path`, `folder`, `directory`, `cwd`, `repo`, `repoPath` —
+    /// LLMs frequently shorten field names on short tools like this.
+    #[serde(
+        default,
+        alias = "path",
+        alias = "folder",
+        alias = "directory",
+        alias = "cwd",
+        alias = "repo",
+        alias = "repoPath"
+    )]
     repo_path: Option<String>,
 }
 
@@ -168,11 +180,22 @@ struct OpenConnectModalParams {
 struct AddWorkbenchInstanceParams {
     /// Kind of instance to add. One of: github, jira, sentry, claude,
     /// cursor, editor. Singleton kinds (github/jira/sentry) are no-ops if
-    /// already present in the active workbench.
+    /// already present in the active workbench. Accepts `kind` or `type`.
+    #[serde(alias = "type")]
     kind: String,
     /// Only meaningful when `kind = "editor"`. Absolute folder path to
     /// open in the new editor column. Omit for an empty editor.
-    #[serde(default)]
+    ///
+    /// Aliases: `path`, `folder`, `directory`, `cwd`, `repo`, `repoPath`.
+    #[serde(
+        default,
+        alias = "path",
+        alias = "folder",
+        alias = "directory",
+        alias = "cwd",
+        alias = "repo",
+        alias = "repoPath"
+    )]
     repo_path: Option<String>,
 }
 
@@ -366,16 +389,30 @@ struct SetSentryColumnParams {
 struct SetEditorRepoPathParams {
     /// Art-name of the editor instance (e.g. "Sagrada-Familia"). Either
     /// `instance_name` or `instance_id` must be provided. Names are
-    /// matched case-insensitively.
-    #[serde(default)]
+    /// matched case-insensitively. Accepts the alias `name`.
+    #[serde(default, alias = "name")]
     instance_name: Option<String>,
     /// UUID of the editor instance. Either `instance_name` or
-    /// `instance_id` must be provided.
-    #[serde(default)]
+    /// `instance_id` must be provided. Accepts the alias `id`.
+    #[serde(default, alias = "id")]
     instance_id: Option<String>,
     /// Absolute folder path to open in the editor. If the editor has
     /// linked agent sessions, their cwd is auto-updated to match.
-    repo_path: String,
+    ///
+    /// Required, but typed as `Option<String>` so we can return our own
+    /// "missing field" hint listing the supported aliases instead of
+    /// the generic serde error. Aliases: `path`, `folder`, `directory`,
+    /// `cwd`, `repo`, `repoPath`.
+    #[serde(
+        default,
+        alias = "path",
+        alias = "folder",
+        alias = "directory",
+        alias = "cwd",
+        alias = "repo",
+        alias = "repoPath"
+    )]
+    repo_path: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -386,16 +423,27 @@ struct SetAgentCwdParams {
     #[serde(default)]
     target: Option<String>,
     /// Art-name of the agent instance. Optional — only used when
-    /// `target` is omitted or != "self".
-    #[serde(default)]
+    /// `target` is omitted or != "self". Accepts the alias `name`.
+    #[serde(default, alias = "name")]
     instance_name: Option<String>,
-    /// UUID of the agent instance.
-    #[serde(default)]
+    /// UUID of the agent instance. Accepts the alias `id`.
+    #[serde(default, alias = "id")]
     instance_id: Option<String>,
     /// Absolute folder path to use as cwd. The change takes effect on
     /// the agent session's NEXT turn (the current turn keeps the old
     /// cwd it spawned with).
-    repo_path: String,
+    ///
+    /// Aliases: `path`, `folder`, `directory`, `cwd`, `repo`, `repoPath`.
+    #[serde(
+        default,
+        alias = "path",
+        alias = "folder",
+        alias = "directory",
+        alias = "cwd",
+        alias = "repo",
+        alias = "repoPath"
+    )]
+    repo_path: Option<String>,
 }
 
 // ---------- Canvas (whiteboard) param shapes ----------
@@ -515,28 +563,62 @@ struct CanvasDeleteShapeParams {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct CanvasAddEdgeParams {
     /// Optional client-supplied id for the new edge.
-    #[serde(default)]
+    #[serde(default, alias = "id", alias = "edgeId")]
     edge_id: Option<String>,
     /// Source shape id.
-    from_shape_id: String,
+    ///
+    /// Required, but typed as `Option<String>` so we can return a
+    /// helpful hint when an LLM forgets the field. Aliases: `from`,
+    /// `source`, `from_id`, `fromId`, `fromShapeId`.
+    #[serde(
+        default,
+        alias = "from",
+        alias = "source",
+        alias = "from_id",
+        alias = "fromId",
+        alias = "fromShapeId"
+    )]
+    from_shape_id: Option<String>,
     /// Source anchor — one of: tl, tc, tr, ml, mc, mr, bl, bc, br.
     /// Defaults to `mr` (right-middle) for left-to-right flow.
-    #[serde(default)]
+    /// Aliases: `fromAnchor`, `source_anchor`, `sourceAnchor`.
+    #[serde(
+        default,
+        alias = "fromAnchor",
+        alias = "source_anchor",
+        alias = "sourceAnchor"
+    )]
     from_anchor: Option<String>,
-    /// Target shape id.
-    to_shape_id: String,
+    /// Target shape id. Aliases: `to`, `target`, `to_id`, `toId`,
+    /// `toShapeId`.
+    #[serde(
+        default,
+        alias = "to",
+        alias = "target",
+        alias = "to_id",
+        alias = "toId",
+        alias = "toShapeId"
+    )]
+    to_shape_id: Option<String>,
     /// Target anchor — same options as `from_anchor`. Defaults to `ml`.
-    #[serde(default)]
+    /// Aliases: `toAnchor`, `target_anchor`, `targetAnchor`.
+    #[serde(
+        default,
+        alias = "toAnchor",
+        alias = "target_anchor",
+        alias = "targetAnchor"
+    )]
     to_anchor: Option<String>,
     /// Visual style. One of: arrow (default — directed), line, dashed.
-    #[serde(default)]
+    /// Accepts the alias `style`.
+    #[serde(default, alias = "style")]
     kind: Option<String>,
     /// Routing algorithm. One of: straight, orthogonal (default —
     /// Manhattan elbow), curved (cubic bezier).
     #[serde(default)]
     routing: Option<String>,
-    /// Optional mid-line label.
-    #[serde(default)]
+    /// Optional mid-line label. Accepts the alias `text`.
+    #[serde(default, alias = "text")]
     #[allow(dead_code)] /* read by the frontend dispatcher from raw JSON; the sidecar's confirmation doesn't surface it. */
     label: Option<String>,
 }
@@ -1215,22 +1297,26 @@ impl App {
         &self,
         Parameters(SetEditorRepoPathParams { instance_name, instance_id, repo_path }): Parameters<SetEditorRepoPathParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        if repo_path.trim().is_empty() {
-            return Err(ErrorData::invalid_params("repo_path is required", None));
-        }
+        let path = repo_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| ErrorData::invalid_params(
+                "`repo_path` is required (canonical name; aliases also accepted: `path`, `folder`, `directory`, `cwd`, `repo`, `repoPath`). Pass an absolute folder path, e.g. `/Users/me/Repos/foo`.",
+                None,
+            ))?;
         let by_name = instance_name.as_deref().map(str::trim).filter(|s| !s.is_empty());
         let by_id = instance_id.as_deref().map(str::trim).filter(|s| !s.is_empty());
         if by_name.is_none() && by_id.is_none() {
             return Err(ErrorData::invalid_params(
-                "either `instance_name` or `instance_id` must be provided",
+                "either `instance_name` (alias `name`) or `instance_id` (alias `id`) must be provided. The art-name is the one shown in the workbench column header — e.g. \"Sagrada-Familia\".",
                 None,
             ));
         }
         let label = by_name.or(by_id).unwrap_or("editor");
         Ok(CallToolResult::success(vec![Content::text(format!(
             "Setting editor `{}` repo path → `{}`. Linked agent sessions (if any) update too.",
-            label,
-            repo_path.trim()
+            label, path
         ))]))
     }
 
@@ -1241,29 +1327,33 @@ impl App {
         &self,
         Parameters(SetAgentCwdParams { target, instance_name, instance_id, repo_path }): Parameters<SetAgentCwdParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        if repo_path.trim().is_empty() {
-            return Err(ErrorData::invalid_params("repo_path is required", None));
-        }
+        let path = repo_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| ErrorData::invalid_params(
+                "`repo_path` is required (canonical name; aliases also accepted: `path`, `folder`, `directory`, `cwd`, `repo`, `repoPath`). Pass an absolute folder path, e.g. `/Users/me/Repos/foo`.",
+                None,
+            ))?;
         let is_self = target.as_deref().map(str::trim).map(|s| s.eq_ignore_ascii_case("self")).unwrap_or(false);
         if !is_self {
             let by_name = instance_name.as_deref().map(str::trim).filter(|s| !s.is_empty());
             let by_id = instance_id.as_deref().map(str::trim).filter(|s| !s.is_empty());
             if by_name.is_none() && by_id.is_none() {
                 return Err(ErrorData::invalid_params(
-                    "for non-self target, either `instance_name` or `instance_id` must be provided",
+                    "for non-self target, either `instance_name` (alias `name`) or `instance_id` (alias `id`) must be provided. To target the calling session itself, pass `target=\"self\"` instead.",
                     None,
                 ));
             }
             let label = by_name.or(by_id).unwrap_or("agent");
             return Ok(CallToolResult::success(vec![Content::text(format!(
                 "Setting agent `{}` cwd → `{}` (effective from its next turn).",
-                label,
-                repo_path.trim()
+                label, path
             ))]));
         }
         Ok(CallToolResult::success(vec![Content::text(format!(
             "Setting MY (self) cwd → `{}`. Effective from my next turn — the current one is already running with the old cwd.",
-            repo_path.trim()
+            path
         ))]))
     }
 
@@ -1389,9 +1479,24 @@ impl App {
         &self,
         Parameters(p): Parameters<CanvasAddEdgeParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        if p.from_shape_id.trim().is_empty() || p.to_shape_id.trim().is_empty() {
-            return Err(ErrorData::invalid_params("from/to shape ids are required", None));
-        }
+        let from = p
+            .from_shape_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| ErrorData::invalid_params(
+                "`from_shape_id` is required (aliases also accepted: `from`, `source`, `from_id`, `fromId`, `fromShapeId`). Use the shape id you minted in a previous `canvas_add_shape` call, or one from the canvas state preamble.",
+                None,
+            ))?;
+        let to = p
+            .to_shape_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| ErrorData::invalid_params(
+                "`to_shape_id` is required (aliases also accepted: `to`, `target`, `to_id`, `toId`, `toShapeId`).",
+                None,
+            ))?;
         if let Some(a) = p.from_anchor.as_deref() { validate_one_of(a, VALID_EDGE_ANCHORS, "from_anchor")?; }
         if let Some(a) = p.to_anchor.as_deref()   { validate_one_of(a, VALID_EDGE_ANCHORS, "to_anchor")?; }
         if let Some(k) = p.kind.as_deref()        { validate_one_of(k, VALID_EDGE_KINDS, "kind")?; }
@@ -1399,8 +1504,8 @@ impl App {
         let id_label = p.edge_id.as_deref().unwrap_or("(auto)");
         Ok(CallToolResult::success(vec![Content::text(format!(
             "Connecting `{}` → `{}` (edge id `{}`, {} routing).",
-            p.from_shape_id,
-            p.to_shape_id,
+            from,
+            to,
             id_label,
             p.routing.as_deref().unwrap_or("orthogonal")
         ))]))
