@@ -27,7 +27,29 @@
     goToInstance
   } from '$lib/state/layout.svelte';
   import { sessionsState } from '$lib/state/sessions.svelte';
+  import { fuzzyScoreAny } from '$lib/services/fuzzyMatch';
+  import { mruRank, recordPalettePick } from '$lib/state/paletteMru.svelte';
+  import { isPalettePinned, togglePalettePin, pinnedState } from '$lib/state/pinned.svelte';
+  import { focusTrap } from '$lib/actions/focusTrap';
   import type { View } from '$lib/state/view.svelte';
+
+  /** Top-level commands rendered in the palette's "Actions" section.
+   *  Pure-data shape so +page.svelte can build the list once with the
+   *  right closures (open the connect modal, toggle cheatsheet, …)
+   *  rather than the palette knowing every callback. */
+  export type PaletteAction = {
+    /** Stable id for MRU tracking. */
+    id: string;
+    /** Verb-led label, e.g. "Connect GitHub". */
+    label: string;
+    /** Optional one-line hint shown after the label. */
+    sub?: string;
+    /** Free-form keywords concatenated into the fuzzy match input —
+     *  surfaces the action even when the user types something
+     *  abbreviated like "ghub" instead of "github". */
+    keywords?: string;
+    pick: () => void;
+  };
 
   interface Props {
     open: boolean;
@@ -35,9 +57,12 @@
      *  flip it directly via setView() from view.svelte.ts (that store
      *  is unused there). Parent passes a callback. */
     setView: (v: View) => void;
+    /** Top-level "Actions" rows (connect / disconnect / new workbench /
+     *  show cheatsheet / report bug …). Built by the parent. */
+    actions?: PaletteAction[];
   }
 
-  let { open = $bindable(), setView }: Props = $props();
+  let { open = $bindable(), setView, actions = [] }: Props = $props();
 
   let query = $state('');
   let selectedIdx = $state(0);
@@ -45,10 +70,13 @@
   type Result = {
     key: string;
     badge: string;
-    badgeKind: 'view' | 'workbench' | 'editor' | 'canvas' | 'github' | 'jira' | 'sentry' | 'claude' | 'cursor';
+    badgeKind: 'view' | 'workbench' | 'editor' | 'canvas' | 'github' | 'jira' | 'sentry' | 'claude' | 'cursor' | 'action';
     title: string;
     subtitle?: string;
     section: string;
+    /** Fuzzy-match score; -1 means "no query, neutral". Higher
+     *  scores rank earlier within their section. */
+    score: number;
     pick: () => void;
   };
 
@@ -58,11 +86,35 @@
     selectedIdx = 0;
   }
 
-  function matches(...fields: (string | null | undefined)[]): boolean {
-    const q = query.trim().toLowerCase();
-    if (!q) return true;
-    return fields.some((f) => f && f.toLowerCase().includes(q));
+  /* Fuzzy score against any of the supplied fields, plus a small
+   * MRU bonus so a row the user just picked floats higher on the
+   * next ambiguous query. Returns null when no field matches the
+   * query — caller drops the row. */
+  function scoreFor(key: string, ...fields: (string | null | undefined)[]): number | null {
+    const q = query.trim();
+    /* `pinnedState.palette` read so the deriveds re-run when the
+     * user pins / unpins a row. */
+    const pinned = isPalettePinned(key);
+    if (!q) return pinned ? 100 : 0;
+    const base = fuzzyScoreAny(q, fields);
+    if (base === null) return null;
+    /* MRU boost: rank 0..49, give 0..10 points. Smaller than the
+     * fuzzy bonuses (boundary +6, consec +4) so MRU never overrides
+     * an obvious typed match — only acts as a tie-breaker for short
+     * queries. */
+    const rank = mruRank(key);
+    const mru = rank < 0 ? 0 : Math.max(0, 10 - rank);
+    /* Pin boost is large enough to float a pinned item above
+     * incidental fuzzy matches but below an exact-prefix typed
+     * match. */
+    const pinBoost = pinned ? 50 : 0;
+    return base + mru + pinBoost;
   }
+  /* Re-read via $derived so reactivity tracks Set replacement when
+   * pins toggle. */
+  $effect(() => {
+    void pinnedState.palette;
+  });
 
   const VIEWS: { key: View; title: string; sub: string }[] = [
     { key: 'workbench', title: 'Workbench', sub: 'Active columns' },
@@ -96,48 +148,94 @@
   /* Build results derived from query + state. Each section caps at
      LIMIT_PER_SECTION rows so a workspace with hundreds of issues
      doesn't drown the workbench / editors / repos that are usually
-     what the user actually wants to reach via Cmd+K. */
+     what the user actually wants to reach via Cmd+K. Inside a
+     section rows are sorted by descending fuzzy score so the most
+     relevant match floats to the top. */
   const LIMIT_PER_SECTION = 6;
+
+  /** Sort results by descending score and trim to the section cap.
+   *  Mutates the input array in place — only used on locally-built
+   *  arrays. */
+  function rankAndCap(rows: Result[]): Result[] {
+    rows.sort((a, b) => b.score - a.score);
+    return rows.slice(0, LIMIT_PER_SECTION);
+  }
 
   const results = $derived.by((): Result[] => {
     const r: Result[] = [];
     const push = (sectionResults: Result[]) => {
-      for (const res of sectionResults.slice(0, LIMIT_PER_SECTION)) r.push(res);
+      for (const res of rankAndCap(sectionResults)) r.push(res);
     };
+
+    // 0. Actions (top-level verbs — Connect / Disconnect / Open settings /
+    //    Show cheatsheet / etc.). Always rendered before content rows so
+    //    the user types "conn" and immediately sees the connect verbs.
+    {
+      const rows: Result[] = [];
+      for (const a of actions) {
+        const s = scoreFor(`action:${a.id}`, a.label, a.sub, a.keywords, a.id);
+        if (s === null) continue;
+        rows.push({
+          key: `action:${a.id}`,
+          badge: '⚡',
+          badgeKind: 'action' as const,
+          title: a.label,
+          subtitle: a.sub,
+          section: 'Actions',
+          score: s,
+          pick: () => {
+            recordPalettePick(`action:${a.id}`);
+            a.pick();
+            close();
+          }
+        });
+      }
+      push(rows);
+    }
 
     // 1. Views
     push(
-      VIEWS.filter((v) => matches(v.title, v.sub, v.key)).map((v) => ({
-        key: `view:${v.key}`,
-        badge: '↗',
-        badgeKind: 'view' as const,
-        title: v.title,
-        subtitle: v.sub || undefined,
-        section: 'Views',
-        pick: () => {
-          setView(v.key);
-          close();
-        }
-      }))
+      VIEWS.flatMap((v) => {
+        const s = scoreFor(`view:${v.key}`, v.title, v.sub, v.key);
+        if (s === null) return [];
+        return [{
+          key: `view:${v.key}`,
+          badge: '↗',
+          badgeKind: 'view' as const,
+          title: v.title,
+          subtitle: v.sub || undefined,
+          section: 'Views',
+          score: s,
+          pick: () => {
+            recordPalettePick(`view:${v.key}`);
+            setView(v.key);
+            close();
+          }
+        }];
+      })
     );
 
     // 2. Workbenches
     push(
-      layoutState.workbenches
-        .filter((wb) => matches(wb.name))
-        .map((wb) => ({
+      layoutState.workbenches.flatMap((wb) => {
+        const s = scoreFor(`wb:${wb.id}`, wb.name);
+        if (s === null) return [];
+        return [{
           key: `wb:${wb.id}`,
           badge: 'WB',
           badgeKind: 'workbench' as const,
           title: wb.name,
           subtitle: `${wb.instances.length} column${wb.instances.length === 1 ? '' : 's'}`,
           section: 'Workbenches',
+          score: s,
           pick: () => {
+            recordPalettePick(`wb:${wb.id}`);
             setActiveWorkbench(wb.id);
             setView('workbench');
             close();
           }
-        }))
+        }];
+      })
     );
 
     // 3. Editor instances — special: show folder + link status
@@ -154,7 +252,8 @@
         const linkSub = linkedSession
           ? `linked → ${linkedSession.title || linkedSession.id.slice(0, 6)}`
           : 'unlinked';
-        if (!matches(inst.name, cwd, folder, linkSub, wb.name)) continue;
+        const score = scoreFor(`inst:${inst.id}`, inst.name, cwd, folder, linkSub, wb.name);
+        if (score === null) continue;
         editorRows.push({
           key: `inst:${inst.id}`,
           badge: 'Ed',
@@ -162,7 +261,9 @@
           title: `Editor · ${inst.name}`,
           subtitle: `${folder} · ${linkSub} · ${wb.name}`,
           section: 'Editors',
+          score,
           pick: () => {
+            recordPalettePick(`inst:${inst.id}`);
             void goToInstance(inst.id, wb.id);
             setView('workbench');
             close();
@@ -177,7 +278,8 @@
     for (const wb of layoutState.workbenches) {
       for (const inst of wb.instances) {
         if (inst.kind === 'editor') continue;
-        if (!matches(inst.name, inst.kind, wb.name)) continue;
+        const score = scoreFor(`inst:${inst.id}`, inst.name, inst.kind, wb.name);
+        if (score === null) continue;
         colRows.push({
           key: `inst:${inst.id}`,
           badge: KIND_BADGE[inst.kind] ?? '?',
@@ -185,7 +287,9 @@
           title: `${capitalize(inst.kind)} · ${inst.name}`,
           subtitle: wb.name,
           section: 'Columns',
+          score,
           pick: () => {
+            recordPalettePick(`inst:${inst.id}`);
             void goToInstance(inst.id, wb.id);
             setView('workbench');
             close();
@@ -197,16 +301,19 @@
 
     // 5. GitHub repos
     push(
-      inboxState.githubRepoOptions
-        .filter((repo) => matches(repo.full_name, repo.name, repo.owner))
-        .map((repo) => ({
+      inboxState.githubRepoOptions.flatMap((repo) => {
+        const score = scoreFor(`repo:${repo.full_name}`, repo.full_name, repo.name, repo.owner);
+        if (score === null) return [];
+        return [{
           key: `repo:${repo.full_name}`,
           badge: 'GH',
           badgeKind: 'github' as const,
           title: repo.full_name,
           subtitle: 'Repository',
           section: 'GitHub repos',
+          score,
           pick: () => {
+            recordPalettePick(`repo:${repo.full_name}`);
             inboxState.pendingRepoNav = {
               owner: repo.owner,
               repo: repo.name,
@@ -215,21 +322,25 @@
             setView('githubTab');
             close();
           }
-        }))
+        }];
+      })
     );
 
     // 6. Jira boards
     push(
-      inboxState.jiraBoardOptions
-        .filter((b) => matches(b.name, b.project_key))
-        .map((b) => ({
+      inboxState.jiraBoardOptions.flatMap((b) => {
+        const score = scoreFor(`jboard:${b.id}`, b.name, b.project_key);
+        if (score === null) return [];
+        return [{
           key: `jboard:${b.id}`,
           badge: 'J',
           badgeKind: 'jira' as const,
           title: b.name,
           subtitle: `Board · ${b.project_key ?? 'no project'}`,
           section: 'Jira boards',
+          score,
           pick: () => {
+            recordPalettePick(`jboard:${b.id}`);
             /* Picking a board / project from the palette lands on the
                Jira tab, so we update the tab's filter slice (not the
                column's — those are independent now). */
@@ -237,46 +348,55 @@
             setView('jiraTab');
             close();
           }
-        }))
+        }];
+      })
     );
 
     // 7. Jira projects
     push(
-      inboxState.jiraProjectOptions
-        .filter((p) => matches(p.name, p.key))
-        .map((p) => ({
+      inboxState.jiraProjectOptions.flatMap((p) => {
+        const score = scoreFor(`jproj:${p.key}`, p.name, p.key);
+        if (score === null) return [];
+        return [{
           key: `jproj:${p.key}`,
           badge: 'J',
           badgeKind: 'jira' as const,
           title: p.name,
           subtitle: `Project · ${p.key}`,
           section: 'Jira projects',
+          score,
           pick: () => {
+            recordPalettePick(`jproj:${p.key}`);
             updateJiraTabFilters({ projectKey: p.key });
             setView('jiraTab');
             close();
           }
-        }))
+        }];
+      })
     );
 
     // 8. Sentry projects
     push(
-      inboxState.sentryProjectOptions
-        .filter((p) => matches(p.name, p.slug))
-        .map((p) => ({
+      inboxState.sentryProjectOptions.flatMap((p) => {
+        const score = scoreFor(`sproj:${p.slug}`, p.name, p.slug);
+        if (score === null) return [];
+        return [{
           key: `sproj:${p.slug}`,
           badge: 'St',
           badgeKind: 'sentry' as const,
           title: p.name,
           subtitle: `Sentry project · ${p.slug}`,
           section: 'Sentry projects',
+          score,
           pick: () => {
+            recordPalettePick(`sproj:${p.slug}`);
             inboxState.sentryTabProjects = [p.slug];
             scheduleSentryTabFilterRefresh();
             setView('sentryTab');
             close();
           }
-        }))
+        }];
+      })
     );
 
     // 9. GitHub PRs/issues — merge across every column instance + dedupe
@@ -292,21 +412,25 @@
         }
       }
       push(
-        merged
-          .filter((item) => matches(item.title, externalId(item)))
-          .map((item) => ({
+        merged.flatMap((item) => {
+          const score = scoreFor(`gh:${item.id}`, item.title, externalId(item));
+          if (score === null) return [];
+          return [{
             key: `gh:${item.id}`,
             badge: 'GH',
             badgeKind: 'github' as const,
             title: item.title,
             subtitle: externalId(item),
             section: 'GitHub items',
+            score,
             pick: () => {
+              recordPalettePick(`gh:${item.id}`);
               selectInboxItem(item.id);
               setView('workbench');
               close();
             }
-          }))
+          }];
+        })
       );
     }
 
@@ -328,21 +452,25 @@
         merged.push(it);
       }
       push(
-        merged
-          .filter((item) => matches(item.summary, item.key))
-          .map((item) => ({
+        merged.flatMap((item) => {
+          const score = scoreFor(`j:${item.id}`, item.summary, item.key);
+          if (score === null) return [];
+          return [{
             key: `j:${item.id}`,
             badge: 'J',
             badgeKind: 'jira' as const,
             title: item.summary,
             subtitle: item.key,
             section: 'Jira issues',
+            score,
             pick: () => {
+              recordPalettePick(`j:${item.id}`);
               inboxState.jiraFocusKey = item.key;
               setView('workbench');
               close();
             }
-          }))
+          }];
+        })
       );
     }
 
@@ -364,21 +492,25 @@
         merged.push(it);
       }
       push(
-        merged
-          .filter((item) => matches(item.title, item.short_id))
-          .map((item) => ({
+        merged.flatMap((item) => {
+          const score = scoreFor(`s:${item.id}`, item.title, item.short_id);
+          if (score === null) return [];
+          return [{
             key: `s:${item.id}`,
             badge: 'St',
             badgeKind: 'sentry' as const,
             title: item.title,
             subtitle: item.short_id,
             section: 'Sentry issues',
+            score,
             pick: () => {
+              recordPalettePick(`s:${item.id}`);
               openSentryFocus(item.id);
               setView('workbench');
               close();
             }
-          }))
+          }];
+        })
       );
     }
 
@@ -434,7 +566,10 @@
     }}
     onkeydown={onKey}
     role="dialog"
+    aria-modal="true"
+    aria-label="Command palette"
     tabindex="-1"
+    use:focusTrap
   >
     <div class="palette">
       <!-- svelte-ignore a11y_autofocus -->
@@ -452,18 +587,32 @@
             <div class="palette-section">
               <div class="palette-section-title">{section}</div>
               {#each items as r (r.key)}
-                <button
+                <div
                   class="palette-item"
                   class:highlight={results.indexOf(r) === selectedIdx}
-                  onclick={r.pick}
                   onmouseenter={() => (selectedIdx = results.indexOf(r))}
+                  role="presentation"
                 >
-                  <span class="badge badge--{r.badgeKind}">{r.badge}</span>
-                  {#if r.subtitle}
-                    <span class="row-id mono">{r.subtitle}</span>
-                  {/if}
-                  <span class="row-title">{r.title}</span>
-                </button>
+                  <button
+                    class="palette-item-main"
+                    onclick={r.pick}
+                    type="button"
+                  >
+                    <span class="badge badge--{r.badgeKind}">{r.badge}</span>
+                    {#if r.subtitle}
+                      <span class="row-id mono">{r.subtitle}</span>
+                    {/if}
+                    <span class="row-title">{r.title}</span>
+                  </button>
+                  <button
+                    class="palette-pin"
+                    class:pinned={isPalettePinned(r.key)}
+                    onclick={(e) => { e.stopPropagation(); togglePalettePin(r.key); }}
+                    title={isPalettePinned(r.key) ? 'Unpin from top' : 'Pin to top'}
+                    aria-label={isPalettePinned(r.key) ? 'Unpin' : 'Pin'}
+                    type="button"
+                  >★</button>
+                </div>
               {/each}
             </div>
           {/each}
@@ -510,14 +659,34 @@
   }
   .palette-empty { padding: 24px 22px; font-size: 13px; color: var(--text-2); text-align: center; }
   .palette-item {
+    display: flex; align-items: stretch;
+    border-radius: 7px;
+    width: 100%;
+    background: none;
+    transition: background 100ms ease;
+  }
+  .palette-item:hover, .palette-item.highlight { background: var(--bg-2); }
+  .palette-item.highlight { box-shadow: inset 0 0 0 1px var(--border-hi); }
+  .palette-item-main {
+    flex: 1; min-width: 0;
     display: flex; align-items: center; gap: 10px;
-    padding: 8px 12px; border-radius: 7px;
-    width: 100%; text-align: left;
+    padding: 8px 12px;
+    text-align: left;
     font-size: 13px; color: var(--text-1); cursor: pointer;
     background: none; border: none;
+    border-radius: 7px 0 0 7px;
   }
-  .palette-item:hover, .palette-item.highlight { background: var(--bg-2); color: var(--text-0); }
-  .palette-item.highlight { box-shadow: inset 0 0 0 1px var(--border-hi); }
+  .palette-item:hover .palette-item-main, .palette-item.highlight .palette-item-main { color: var(--text-0); }
+  .palette-pin {
+    width: 32px; flex-shrink: 0;
+    background: none; border: none; cursor: pointer;
+    color: var(--text-mute); font-size: 14px;
+    border-radius: 0 7px 7px 0;
+    opacity: 0.35; transition: opacity 120ms;
+  }
+  .palette-item:hover .palette-pin { opacity: 0.7; }
+  .palette-pin:hover { opacity: 1; color: var(--accent-bright); }
+  .palette-pin.pinned { opacity: 1; color: var(--accent); }
   .row-id {
     color: var(--text-2); font-size: 11.5px; min-width: 48px; flex-shrink: 0;
   }
@@ -543,6 +712,7 @@
   .badge--sentry   { background: rgba(248, 143, 116, 0.08); color: #f8a994; border-color: rgba(248, 143, 116, 0.2); }
   .badge--claude   { background: rgba(16, 185, 129, 0.12); color: #34d399; border-color: rgba(16, 185, 129, 0.24); }
   .badge--cursor   { background: rgba(255, 255, 255, 0.05); color: #e5ebf4; border-color: rgba(255, 255, 255, 0.1); }
+  .badge--action   { background: rgba(232, 163, 58, 0.15); color: #f3c068; border-color: rgba(232, 163, 58, 0.32); }
 
   @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
   @keyframes slideDown {

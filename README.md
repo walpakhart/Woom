@@ -4,8 +4,9 @@
 > GitHub PRs, code editor, and Claude/Cursor agents in one window —
 > everything a drag away.
 
-**Status:** alpha. Workbench, agents (Claude + Cursor), and editor work
-end-to-end; team / cloud sync features are explicitly post-v1.
+**Status:** 1.0 GA. Workbench, agents (Claude + Cursor), editor, and
+canvas all ship; team / cloud sync features are post-1.0. The full
+1.0 plan and what was cut lives in [`docs/ROADMAP_1.0.md`](docs/ROADMAP_1.0.md).
 
 **Platform:** macOS 13+ only. Ships as a signed & notarized `.app`
 bundle (Universal binary: Apple Silicon + Intel). Windows and Linux

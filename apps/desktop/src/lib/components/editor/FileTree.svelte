@@ -213,6 +213,93 @@
       default: return code;
     }
   }
+
+  /* Right-click context menu (M4 §2.1.2). Standard macOS Finder
+   * complement: Reveal, Copy path, Rename, Delete. Anchored at the
+   * cursor; closes on outside click / Esc. Rename is inline (an
+   * input swaps in for the row label); delete confirms via
+   * `window.confirm` since we don't have a non-modal confirmation
+   * surface available from the tree component yet. */
+  type ContextMenu = {
+    x: number;
+    y: number;
+    item: Item;
+  };
+  let contextMenu = $state<ContextMenu | null>(null);
+  let renaming = $state<{ path: string; original: string; draft: string } | null>(null);
+
+  function openContextMenu(e: MouseEvent, it: Item) {
+    e.preventDefault();
+    contextMenu = { x: e.clientX, y: e.clientY, item: it };
+  }
+  function closeContextMenu() {
+    contextMenu = null;
+  }
+  async function ctxRevealInFinder(it: Item) {
+    closeContextMenu();
+    try {
+      await invoke('fs_reveal_in_finder', { path: it.path });
+    } catch (e) {
+      console.warn('fs_reveal_in_finder', e);
+    }
+  }
+  async function ctxCopyPath(it: Item) {
+    closeContextMenu();
+    try {
+      await navigator.clipboard.writeText(it.path);
+    } catch (e) {
+      console.warn('clipboard', e);
+    }
+  }
+  function ctxRename(it: Item) {
+    closeContextMenu();
+    renaming = { path: it.path, original: it.name, draft: it.name };
+  }
+  async function commitRename() {
+    if (!renaming) return;
+    const next = renaming.draft.trim();
+    if (!next || next === renaming.original) {
+      renaming = null;
+      return;
+    }
+    /* Build the destination path by replacing the basename. We
+     * deliberately don't allow `/` in the new name — that would
+     * effectively be a "move to subdir" operation and we want this
+     * menu to stay focused on rename-in-place. */
+    if (next.includes('/')) {
+      renaming = null;
+      return;
+    }
+    const lastSlash = renaming.path.lastIndexOf('/');
+    const parent = lastSlash > 0 ? renaming.path.slice(0, lastSlash) : '';
+    const dst = parent ? `${parent}/${next}` : next;
+    try {
+      await invoke('fs_rename', { from: renaming.path, to: dst });
+    } catch (e) {
+      console.warn('fs_rename', e);
+    } finally {
+      renaming = null;
+    }
+  }
+  function cancelRename() {
+    renaming = null;
+  }
+  async function ctxDelete(it: Item) {
+    closeContextMenu();
+    if (it.is_dir) {
+      /* Directory delete needs a recursive command; not in 1.0
+       * scope. Surface a hint instead of attempting a partial
+       * delete. */
+      window.alert(`Delete a directory from Finder — Forgehold's tree only deletes files in 1.0.`);
+      return;
+    }
+    if (!window.confirm(`Delete ${it.name}? This cannot be undone.`)) return;
+    try {
+      await invoke('fs_remove_file', { path: it.path });
+    } catch (e) {
+      console.warn('fs_remove_file', e);
+    }
+  }
 </script>
 
 <div class="tree" bind:this={treeContainer}>
@@ -226,6 +313,7 @@
       class:ignored={it.ignored}
       style="padding-left: {8 + it.depth * 12}px"
       onclick={() => toggle(i)}
+      oncontextmenu={(e) => openContextMenu(e, it)}
       title={it.ignored ? `${it.path}\n(gitignored)` : it.path}
       draggable="true"
       ondragstart={(e) => {
@@ -258,7 +346,25 @@
         </svg>
       {/snippet}
       {@render typeIcon()}
-      <span class="tree-name mono">{it.name}</span>
+      {#if renaming && renaming.path === it.path}
+        <!-- Inline rename input — replaces the name label until the
+             user commits (Enter) or cancels (Esc / blur). -->
+        <!-- svelte-ignore a11y_autofocus -->
+        <input
+          class="tree-rename mono"
+          bind:value={renaming.draft}
+          autofocus
+          onclick={(e) => e.stopPropagation()}
+          onkeydown={(e) => {
+            e.stopPropagation();
+            if (e.key === 'Enter') void commitRename();
+            else if (e.key === 'Escape') cancelRename();
+          }}
+          onblur={commitRename}
+        />
+      {:else}
+        <span class="tree-name mono">{it.name}</span>
+      {/if}
       {#if !it.is_dir && gitStatusByPath[it.path]}
         {@const code = gitStatusByPath[it.path]}
         <span class="tree-git mono tree-git--{gitClass(code)}" title={gitTitle(code)}>{code}</span>
@@ -266,6 +372,29 @@
     </button>
   {/each}
 </div>
+
+{#if contextMenu}
+  <div
+    class="tree-ctx-backdrop"
+    onclick={closeContextMenu}
+    onkeydown={(e) => { if (e.key === 'Escape') closeContextMenu(); }}
+    role="presentation"
+  ></div>
+  <div class="tree-ctx" style="left: {contextMenu.x}px; top: {contextMenu.y}px" role="menu">
+    <button class="tree-ctx-item" onclick={() => void ctxRevealInFinder(contextMenu!.item)} role="menuitem">
+      Reveal in Finder
+    </button>
+    <button class="tree-ctx-item" onclick={() => void ctxCopyPath(contextMenu!.item)} role="menuitem">
+      Copy path
+    </button>
+    <button class="tree-ctx-item" onclick={() => ctxRename(contextMenu!.item)} role="menuitem">
+      Rename…
+    </button>
+    <button class="tree-ctx-item tree-ctx-item--danger" onclick={() => void ctxDelete(contextMenu!.item)} role="menuitem">
+      Delete
+    </button>
+  </div>
+{/if}
 
 <style>
   .tree { height: 100%; overflow: auto; padding: 4px 0; }
@@ -327,4 +456,42 @@
   .tree-git--new { color: var(--accent-bright); background: var(--accent-soft); }
   .tree-git--ren { color: var(--accent); background: var(--accent-soft); }
   .tree-git--conflict { color: var(--error); background: rgba(214, 72, 44, 0.25); }
+
+  /* Inline rename input — sized to fit the row, takes the same font
+     so the swap doesn't shift the row height. */
+  .tree-rename {
+    flex: 1; min-width: 0;
+    padding: 1px 4px;
+    background: var(--bg-0);
+    border: 1px solid var(--accent);
+    border-radius: 3px;
+    color: var(--text-0);
+    font-size: 12.5px;
+    outline: none;
+  }
+
+  /* Right-click context menu. Positioned absolute at the cursor;
+     backdrop captures outside clicks so the menu dismisses. */
+  .tree-ctx-backdrop {
+    position: fixed; inset: 0; z-index: 600;
+    background: transparent;
+  }
+  .tree-ctx {
+    position: fixed; z-index: 601;
+    min-width: 180px;
+    padding: 4px;
+    background: var(--bg-3);
+    border: 1px solid var(--border-neutral-hi);
+    border-radius: 8px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.36);
+  }
+  .tree-ctx-item {
+    display: block; width: 100%;
+    padding: 6px 10px; border-radius: 5px;
+    background: none; border: none; text-align: left;
+    color: var(--text-1); font-size: 12px; cursor: pointer;
+  }
+  .tree-ctx-item:hover { background: var(--bg-2); color: var(--text-0); }
+  .tree-ctx-item--danger { color: #f87171; }
+  .tree-ctx-item--danger:hover { background: rgba(248, 113, 113, 0.12); }
 </style>

@@ -14,6 +14,7 @@
     type ConnectionEvent,
     type ConnectionEventSource
   } from '$lib/state/connectionEvents.svelte';
+  import { tokenAgeInfo, type TokenSource } from '$lib/state/tokenAge.svelte';
 
   interface Props {
     sourceConns: ConnectionMeta[];
@@ -98,6 +99,30 @@
     return `${hours}h`;
   }
 
+  /* Sources whose credential is owned by Forgehold (PAT / API token in
+   * Keychain) — only these are eligible for rotation reminders. Agents
+   * (claude, cursor) auth to their own services. */
+  const TOKEN_AGE_SOURCES: Record<string, TokenSource> = {
+    github: 'github',
+    jira: 'jira',
+    sentry: 'sentry'
+  };
+
+  function tokenAgeCopy(days: number, severity: string): string {
+    /* Frame as guidance, not a threat — the token still works; we
+     * just want the user to think about rotating before some upstream
+     * surprise expiry hits them. Round-trip days through `Math.floor`
+     * upstream so this never shows "1 day" for a token created
+     * today. */
+    if (severity === 'expired') {
+      return `Token is ${days} days old — rotate now to avoid an upstream expiry locking you out.`;
+    }
+    if (severity === 'strong-warn') {
+      return `Token is ${days} days old. Rotation strongly recommended.`;
+    }
+    return `Token is ${days} days old. Consider rotating soon.`;
+  }
+
   /** Tighter quota string for the small per-card test-row. Prefer
    *  `4.8k/5k` over the verbose form. */
   function shortQuota(remaining: number, limit: number): string {
@@ -130,6 +155,9 @@
             {@const testKey = TESTABLE_SOURCES[conn.id] ?? null}
             {@const lastEv = testKey ? lastEventBySource[testKey] : null}
             {@const testing = testKey ? connectionsState.testing[testKey] : false}
+            {@const retrying = testKey ? connectionsState.retrying[testKey] : false}
+            {@const ageSource = TOKEN_AGE_SOURCES[conn.id] ?? null}
+            {@const ageInfo = connected && ageSource ? tokenAgeInfo(ageSource) : null}
             <div class="conn-card" class:connected class:disabled={!conn.implemented}>
               <div class="conn-head">
                 <span class="conn-icon {conn.iconClass}" class:conn-icon--svg={!!(conn.iconSvg && !conn.iconImg)} class:conn-icon--img={!!conn.iconImg}>
@@ -142,11 +170,20 @@
                   {/if}
                 </span>
                 <span class="conn-name">{conn.name}</span>
-                <span class="conn-status" class:connected>
-                  {#if connected}live{:else if !conn.implemented}soon{:else}not connected{/if}
+                <span class="conn-status" class:connected class:retrying>
+                  {#if retrying}retrying…{:else if connected}live{:else if !conn.implemented}soon{:else}not connected{/if}
                 </span>
               </div>
               <div class="conn-desc">{conn.desc}</div>
+              {#if ageInfo && ageInfo.severity !== 'fresh'}
+                <div
+                  class="conn-token-age conn-token-age--{ageInfo.severity}"
+                  title="Stored {ageInfo.installedAt}"
+                  role="status"
+                >
+                  {tokenAgeCopy(ageInfo.days, ageInfo.severity)}
+                </div>
+              {/if}
               {#if connected && testKey}
                 {@const ghRate =
                   testKey === 'github' && githubStatus.kind === 'connected'
@@ -311,6 +348,20 @@
     width: 5px; height: 5px; background: var(--accent-bright); border-radius: 50%;
     box-shadow: 0 0 6px var(--accent-glow); margin-right: 6px; vertical-align: middle;
   }
+  /* Retrying: warm-tone pulse so the user sees "still trying" rather
+     than "permanently broken". Connected wins if both flags happen
+     to be true (settles quickly into connected once a retry lands). */
+  .conn-status.retrying:not(.connected) {
+    color: var(--accent);
+    animation: conn-status-pulse 1.4s ease-in-out infinite;
+  }
+  @keyframes conn-status-pulse {
+    0%, 100% { opacity: 0.6; }
+    50%      { opacity: 1; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .conn-status.retrying:not(.connected) { animation: none; opacity: 0.85; }
+  }
   .conn-desc { font-size: 12.5px; color: var(--text-1); line-height: 1.5; min-height: 36px; }
   .conn-footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: auto; }
   .conn-type { font-size: 10.5px; color: var(--text-mute); }
@@ -374,6 +425,26 @@
     background: rgba(245, 158, 11, 0.10);
     border-color: rgba(245, 158, 11, 0.45);
     color: #f59e0b;
+  }
+
+  /* Token rotation reminder banner. Shown only when severity is
+     past `fresh`; tone hardens at strong-warn / expired. */
+  .conn-token-age {
+    margin-top: 6px; padding: 6px 10px;
+    border-radius: 8px;
+    border: 1px solid rgba(245, 158, 11, 0.35);
+    background: rgba(245, 158, 11, 0.07);
+    color: #f59e0b;
+    font-size: 11.5px; line-height: 1.45;
+  }
+  .conn-token-age--strong-warn {
+    border-color: rgba(245, 158, 11, 0.55);
+    background: rgba(245, 158, 11, 0.10);
+  }
+  .conn-token-age--expired {
+    border-color: rgba(248, 113, 113, 0.55);
+    background: rgba(248, 113, 113, 0.10);
+    color: #f87171;
   }
 
   .you-quota { display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; }

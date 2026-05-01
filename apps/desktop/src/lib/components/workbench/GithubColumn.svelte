@@ -21,6 +21,7 @@
     activeInstances
   } from '$lib/state/layout.svelte';
   import ColumnControls from '$lib/components/workbench/ColumnControls.svelte';
+  import { pinnedState, toggleRepoPin } from '$lib/state/pinned.svelte';
   import {
     githubErrorFor,
     githubFiltersFor,
@@ -175,10 +176,22 @@
   );
   const repoOptions = $derived<DropdownOption<string>[]>([
     { value: '', label: 'All repos' },
-    ...inboxState.githubRepoOptions.map((r) => ({
-      value: r.full_name,
-      label: r.full_name
-    }))
+    /* Repo pinning (M4 §2.3.12). Sort the repo list with pinned
+     * names first (alphabetical within the group), then everything
+     * else. The `★ ` prefix in the label gives a visual cue without
+     * requiring a separate "starred" header. */
+    ...[...inboxState.githubRepoOptions]
+      .sort((a, b) => {
+        const ap = pinnedState.repos.has(a.full_name);
+        const bp = pinnedState.repos.has(b.full_name);
+        if (ap && !bp) return -1;
+        if (!ap && bp) return 1;
+        return a.full_name.localeCompare(b.full_name);
+      })
+      .map((r) => ({
+        value: r.full_name,
+        label: pinnedState.repos.has(r.full_name) ? `★ ${r.full_name}` : r.full_name
+      }))
   ]);
 
   const inst = $derived(activeInstances().find((i) => i.id === instanceId));
@@ -247,6 +260,21 @@
             width="100%"
           />
         </div>
+        {#if filters.repo}
+          <!-- Pin / unpin the currently-selected repo. Pinned repos
+               float to the top of the dropdown with a ★ prefix, so
+               this button gives the user a one-click toggle without
+               opening a separate menu. -->
+          <button
+            class="icon-btn"
+            class:pinned-on={pinnedState.repos.has(filters.repo)}
+            onclick={() => toggleRepoPin(filters.repo!)}
+            title={pinnedState.repos.has(filters.repo) ? 'Unpin from top' : 'Pin to top'}
+            aria-label={pinnedState.repos.has(filters.repo) ? 'Unpin' : 'Pin'}
+          >
+            ★
+          </button>
+        {/if}
         <button class="icon-btn" onclick={onRefreshInbox} title="Refresh" aria-label="Refresh" disabled={loading}>
           <svg class="i i-sm" viewBox="0 0 24 24" style="transform: rotate({loading ? 360 : 0}deg); transition: transform 0.6s;">
             <path d="M21 12a9 9 0 0 1-9 9 9 9 0 0 1-8.5-6" />

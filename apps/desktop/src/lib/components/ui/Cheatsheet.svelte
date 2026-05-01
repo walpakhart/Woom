@@ -1,0 +1,205 @@
+<script lang="ts">
+  /* Keyboard shortcut overlay (`?` to toggle).
+   *
+   * Single source of truth for every shortcut Forgehold listens to —
+   * if you add a new binding in +page.svelte or a child, list it here
+   * too. Categorised so the user can scan; rendered as a focus-trapped
+   * dialog with an Escape close path for screen readers (matches the
+   * 1.0 a11y bar in `docs/ROADMAP_1.0.md §1.6`).
+   */
+
+  import { focusTrap } from '$lib/actions/focusTrap';
+
+  interface Props {
+    open: boolean;
+    onClose: () => void;
+  }
+
+  let { open, onClose }: Props = $props();
+
+  /* Detect macOS for the ⌘ vs Ctrl rendering. Forgehold ships macOS-
+   * only today (`docs/SPEC.md §13`), but the rest of the codebase
+   * still does this check defensively in a few places. */
+  const isMac =
+    typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform);
+  const mod = isMac ? '⌘' : 'Ctrl';
+  const altKey = isMac ? '⌥' : 'Alt';
+  const shift = isMac ? '⇧' : 'Shift';
+
+  type Shortcut = { keys: string; label: string };
+  type Section = { title: string; rows: Shortcut[] };
+
+  const sections: Section[] = $derived([
+    {
+      title: 'Global',
+      rows: [
+        { keys: `${mod} K`, label: 'Open command palette' },
+        { keys: '?', label: 'Show this cheatsheet' },
+        { keys: 'Esc', label: 'Close overlay / restore maximized column' }
+      ]
+    },
+    {
+      title: 'Workbench',
+      rows: [
+        { keys: `${mod} 1 — ${mod} 9`, label: 'Switch to workbench by index' },
+        { keys: `${mod}${shift} M`, label: 'Toggle maximize for the focused column' },
+        { keys: 'j / k', label: 'Move selection in inbox lists' },
+        { keys: 'o', label: 'Open focused row in browser (GitHub / Jira / Sentry)' }
+      ]
+    },
+    {
+      title: 'Editor (when focused)',
+      rows: [
+        { keys: `${mod} S`, label: 'Save active file' },
+        { keys: `${mod} P`, label: 'Quick-open file in repo' },
+        { keys: `${mod} F`, label: 'Find in current buffer' }
+      ]
+    },
+    {
+      title: 'Agent column',
+      rows: [
+        { keys: 'Enter', label: 'Send message' },
+        { keys: `${shift} Enter`, label: 'Newline in composer' },
+        { keys: `${mod} ${altKey} C`, label: 'Compact session (drop history, keep summary)' },
+        { keys: '/compact', label: 'Slash command — same as the toolbar compact button' },
+        { keys: '/clear', label: 'Slash command — wipe this session\'s messages' },
+        { keys: '/usage', label: 'Slash command — token + cost breakdown' },
+        { keys: '/help', label: 'Slash command — list every / command' }
+      ]
+    },
+    {
+      title: 'Canvas (when focused)',
+      rows: [
+        { keys: 'V / S / E / A / T / N / F / D', label: 'Tools: select / shape / ellipse / arrow / text / sticky / frame / draw' },
+        { keys: `${mod} Z / ${mod}${shift} Z`, label: 'Undo / redo' },
+        { keys: `${mod} G / ${mod}${shift} G`, label: 'Group / ungroup' },
+        { keys: 'M', label: 'Toggle minimap' },
+        { keys: `${mod} P`, label: 'Open canvas library' }
+      ]
+    }
+  ]);
+
+  function onKeydown(e: KeyboardEvent) {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      onClose();
+    }
+  }
+
+  /* Close only when the click landed directly on the backdrop —
+   * `currentTarget === target` filters out clicks that bubbled up
+   * from inside the panel. Avoids needing a `stopPropagation` on
+   * the inner `<section>` (which would trip svelte's a11y lint
+   * about non-interactive elements with mouse handlers). */
+  function onBackdropClick(e: MouseEvent) {
+    if (e.target === e.currentTarget) onClose();
+  }
+</script>
+
+{#if open}
+  <!-- Backdrop captures clicks landing outside the panel. -->
+  <div
+    class="cheatsheet-backdrop"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="cheatsheet-title"
+    onclick={onBackdropClick}
+    onkeydown={onKeydown}
+    tabindex="-1"
+    use:focusTrap
+  >
+    <section class="cheatsheet-panel" aria-label="Keyboard shortcuts">
+      <header class="cheatsheet-head">
+        <h2 id="cheatsheet-title" class="cheatsheet-title">Keyboard shortcuts</h2>
+        <button class="cheatsheet-close" onclick={onClose} aria-label="Close cheatsheet">×</button>
+      </header>
+      <div class="cheatsheet-body">
+        {#each sections as sec (sec.title)}
+          <section class="cheatsheet-section">
+            <h3 class="cheatsheet-section-title">{sec.title}</h3>
+            <dl class="cheatsheet-list">
+              {#each sec.rows as row (row.keys + row.label)}
+                <div class="cheatsheet-row">
+                  <dt class="cheatsheet-keys mono">{row.keys}</dt>
+                  <dd class="cheatsheet-label">{row.label}</dd>
+                </div>
+              {/each}
+            </dl>
+          </section>
+        {/each}
+      </div>
+      <footer class="cheatsheet-foot">
+        <span class="cheatsheet-hint">Read the spec: <span class="mono">docs/ROADMAP_1.0.md</span></span>
+      </footer>
+    </section>
+  </div>
+{/if}
+
+<style>
+  .cheatsheet-backdrop {
+    position: fixed; inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(4px);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 1000;
+    padding: 32px;
+  }
+  .cheatsheet-panel {
+    width: 100%; max-width: 720px;
+    max-height: calc(100vh - 64px);
+    display: flex; flex-direction: column;
+    background: var(--bg-1);
+    border: 1px solid var(--border-neutral-hi);
+    border-radius: 14px;
+    box-shadow: 0 32px 64px rgba(0, 0, 0, 0.4);
+    overflow: hidden;
+  }
+  .cheatsheet-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 16px 22px;
+    border-bottom: 1px solid var(--border-neutral);
+  }
+  .cheatsheet-title { margin: 0; font-size: 16px; font-weight: 600; color: var(--text-0); }
+  .cheatsheet-close {
+    width: 28px; height: 28px; border-radius: 6px;
+    background: none; border: none; color: var(--text-2);
+    font-size: 22px; line-height: 1; cursor: pointer;
+  }
+  .cheatsheet-close:hover { background: var(--bg-2); color: var(--text-0); }
+
+  .cheatsheet-body {
+    overflow-y: auto;
+    padding: 18px 22px 12px;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 18px 28px;
+  }
+  .cheatsheet-section { min-width: 0; }
+  .cheatsheet-section-title {
+    margin: 0 0 8px;
+    font-size: 11px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.08em; color: var(--text-mute);
+  }
+  .cheatsheet-list { margin: 0; display: flex; flex-direction: column; gap: 6px; }
+  .cheatsheet-row {
+    display: grid;
+    grid-template-columns: minmax(0, auto) 1fr;
+    gap: 12px; align-items: baseline;
+  }
+  .cheatsheet-keys {
+    font-size: 11.5px; color: var(--text-0);
+    background: var(--bg-2);
+    border: 1px solid var(--border-neutral);
+    border-radius: 5px; padding: 1px 6px;
+    white-space: nowrap;
+  }
+  .cheatsheet-label { margin: 0; font-size: 12.5px; color: var(--text-1); line-height: 1.4; }
+  .cheatsheet-foot {
+    padding: 10px 22px; border-top: 1px solid var(--border-neutral);
+    font-size: 11px; color: var(--text-mute);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .cheatsheet-backdrop { backdrop-filter: none; }
+  }
+</style>

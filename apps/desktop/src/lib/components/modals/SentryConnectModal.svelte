@@ -1,5 +1,6 @@
 <script lang="ts">
   import { modalsState, closeModal, patchModal } from '$lib/state/modals.svelte';
+  import { focusTrap } from '$lib/actions/focusTrap';
 
   interface Props {
     openBrowser: (url: string) => void | Promise<void>;
@@ -25,6 +26,7 @@
     role="dialog"
     aria-modal="true"
     tabindex="-1"
+    use:focusTrap
   >
     <div class="modal modal-wide">
       <header class="modal-head">

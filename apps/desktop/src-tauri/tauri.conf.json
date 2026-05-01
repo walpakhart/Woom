@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Forgehold",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "identifier": "com.forgehold.desktop",
   "build": {
     "beforeDevCommand": "pnpm dev",
@@ -48,6 +48,7 @@
       "binaries/forgehold-sentry",
       "binaries/forgehold-app"
     ],
+    "resources": ["../../../docs/*.md"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -68,5 +69,14 @@
       "signingIdentity": "-"
     }
   },
-  "plugins": {}
+  "plugins": {
+    "updater": {
+      "active": true,
+      "dialog": false,
+      "endpoints": [
+        "https://forgehold.app/updates/{{target}}/{{arch}}/{{current_version}}"
+      ],
+      "pubkey": "PLACEHOLDER_REPLACE_WITH_TAURI_SIGNER_OUTPUT"
+    }
+  }
 }

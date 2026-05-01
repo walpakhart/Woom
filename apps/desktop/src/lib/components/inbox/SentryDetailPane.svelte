@@ -9,6 +9,8 @@
   } from '$lib/data';
   import { inboxState, openSentryFocus } from '$lib/state/inbox.svelte';
   import { notify, notifyError } from '$lib/state/toaster.svelte';
+  import { openFileInEditor } from '$lib/services/editorNavigation';
+  import { recordCursor } from '$lib/state/editorCursors.svelte';
 
   interface Props {
     issueId: string;
@@ -129,6 +131,40 @@
       notifyError(e, { title: `Couldn't ${label}` });
     } finally {
       actionBusy = null;
+    }
+  }
+
+  /** Stack-frame → built-in editor (M4 §2.5.5). Sentry's `abs_path`
+   *  is the source-on-disk location at deploy time; on the user's
+   *  machine the same source typically lives at the same absolute
+   *  path (monorepo + checkouts). When `lineno` is present we
+   *  compute the document offset by reading the file and counting
+   *  newlines, then stash it in `editorCursors` so EditorView lands
+   *  on that line on first paint. Errors are swallowed — the worst
+   *  case is the file opens at the top, which is still useful. */
+  async function openFrameInEditor(
+    f: NonNullable<SentryEventDetail['exceptions'][number]['frames']>[number]
+  ) {
+    const path = f.abs_path ?? f.filename;
+    if (!path) return;
+    if (typeof f.lineno === 'number' && f.lineno > 0) {
+      try {
+        const contents = await invoke<string>('fs_read_file', { path });
+        const lines = contents.split('\n');
+        let offset = 0;
+        for (let i = 0; i < f.lineno - 1 && i < lines.length; i++) {
+          offset += lines[i].length + 1; /* +1 for the newline */
+        }
+        recordCursor(path, { from: offset, to: offset, scrollTop: 0 });
+      } catch {
+        /* file might not exist locally (different deploy machine) —
+         * just open at the top below. */
+      }
+    }
+    try {
+      await openFileInEditor(path);
+    } catch (e) {
+      notifyError(e, { title: 'Could not open in editor' });
     }
   }
 
@@ -345,6 +381,14 @@
                       <summary class="sdp-frame-summary mono">
                         <span class="sdp-frame-fn">{frameLabel(f)}</span>
                         {#if f.in_app}<span class="sdp-frame-tag">app</span>{/if}
+                        {#if f.abs_path || f.filename}
+                          <button
+                            class="sdp-frame-open"
+                            onclick={(e) => { e.preventDefault(); e.stopPropagation(); void openFrameInEditor(f); }}
+                            title="Open in Forgehold's editor at this line"
+                            aria-label="Open in editor"
+                          >→ open</button>
+                        {/if}
                       </summary>
                       {#if f.context.length > 0}
                         <pre class="sdp-frame-source mono">{#each f.context as l (l.line)}<span class="sdp-src-line" class:active={l.line === f.lineno}><span class="sdp-src-num">{l.line}</span>{l.source}
@@ -564,6 +608,13 @@
     background: var(--accent-soft); color: var(--accent-bright);
     text-transform: uppercase; letter-spacing: 0.05em;
   }
+  .sdp-frame-open {
+    font-size: 10px; color: var(--text-mute);
+    padding: 1px 6px; border-radius: 3px;
+    background: transparent; border: 1px solid var(--border-neutral);
+    cursor: pointer; transition: all 100ms;
+  }
+  .sdp-frame-open:hover { color: var(--accent-bright); border-color: var(--accent); }
   .sdp-frame-source {
     margin: 0; padding: 8px 0;
     background: var(--bg-0);

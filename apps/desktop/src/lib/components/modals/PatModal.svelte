@@ -1,5 +1,6 @@
 <script lang="ts">
   import { modalsState, closeModal, patchModal } from '$lib/state/modals.svelte';
+  import { focusTrap } from '$lib/actions/focusTrap';
 
   interface Props {
     /** Open the user's browser to the relevant token-creation page. */
@@ -22,6 +23,7 @@
     role="dialog"
     aria-modal="true"
     tabindex="-1"
+    use:focusTrap
   >
     <div class="modal">
       <header class="modal-head">

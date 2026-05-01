@@ -385,34 +385,106 @@ struct SetSentryColumnParams {
     environment: Option<String>,
 }
 
+/// Field names we recognise as `repo_path`. The first element is the
+/// canonical form. Used both as serde aliases on the struct AND by the
+/// recursive extractor when the LLM nests args under `args` /
+/// `arguments` / `params` / `input`.
+const REPO_PATH_KEYS: &[&str] = &[
+    "repo_path",
+    "repoPath",
+    "path",
+    "folder",
+    "directory",
+    "dir",
+    "cwd",
+    "repo",
+    "repository_path",
+    "folderPath",
+    "dirPath",
+    "fullPath",
+    "absolutePath",
+    "target_path",
+    "target",
+];
+const INSTANCE_NAME_KEYS: &[&str] = &[
+    "instance_name",
+    "instanceName",
+    "name",
+    "column_name",
+    "columnName",
+    "editor_name",
+    "agent_name",
+    "label",
+];
+const INSTANCE_ID_KEYS: &[&str] = &[
+    "instance_id",
+    "instanceId",
+    "id",
+    "column_id",
+    "columnId",
+    "editor_id",
+    "agent_id",
+    "uuid",
+];
+
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct SetEditorRepoPathParams {
     /// Art-name of the editor instance (e.g. "Sagrada-Familia"). Either
     /// `instance_name` or `instance_id` must be provided. Names are
     /// matched case-insensitively. Accepts the alias `name`.
-    #[serde(default, alias = "name")]
-    instance_name: Option<String>,
+    ///
+    /// Schema-as-`Option<String>` is intentional — see the comment on
+    /// `repo_path` below. Runtime type is still `Option<Value>` so
+    /// `coerce_to_string` can salvage non-string shapes.
+    #[serde(default, alias = "name", alias = "instanceName", alias = "column_name")]
+    #[schemars(with = "Option<String>")]
+    instance_name: Option<serde_json::Value>,
     /// UUID of the editor instance. Either `instance_name` or
     /// `instance_id` must be provided. Accepts the alias `id`.
-    #[serde(default, alias = "id")]
-    instance_id: Option<String>,
+    #[serde(default, alias = "id", alias = "instanceId", alias = "column_id")]
+    #[schemars(with = "Option<String>")]
+    instance_id: Option<serde_json::Value>,
     /// Absolute folder path to open in the editor. If the editor has
     /// linked agent sessions, their cwd is auto-updated to match.
     ///
-    /// Required, but typed as `Option<String>` so we can return our own
-    /// "missing field" hint listing the supported aliases instead of
-    /// the generic serde error. Aliases: `path`, `folder`, `directory`,
-    /// `cwd`, `repo`, `repoPath`.
+    /// Two-faced typing — runtime `Option<Value>`, advertised
+    /// `Option<String>` via `schemars(with = …)`:
+    ///
+    /// - Runtime is `Option<Value>` because cursor-agent has been
+    ///   observed shipping this field as an array, a wrapped object,
+    ///   or an empty string. `coerce_to_string` salvages the inner
+    ///   path; recursive search through `extras` is the last fallback.
+    ///
+    /// - The advertised JSON Schema MUST declare a real `type`
+    ///   (`["string", "null"]`). Without that key, cursor-agent's
+    ///   tool-binder strips the field entirely from the LLM's call
+    ///   before the request reaches us — `repo_path=None` arrives
+    ///   regardless of what the model wrote. Claude is more lenient
+    ///   here, which is why the same prompt works on Claude but
+    ///   fails on Cursor without this attribute. The model sees
+    ///   `string` in the catalog, emits a string, and our runtime
+    ///   `Value` decodes the string just fine.
     #[serde(
         default,
         alias = "path",
         alias = "folder",
         alias = "directory",
+        alias = "dir",
         alias = "cwd",
         alias = "repo",
-        alias = "repoPath"
+        alias = "repoPath",
+        alias = "folderPath",
+        alias = "dirPath",
+        alias = "fullPath",
+        alias = "absolutePath"
     )]
-    repo_path: Option<String>,
+    #[schemars(with = "Option<String>")]
+    repo_path: Option<serde_json::Value>,
+    /// Catch-all for any other keys the LLM happened to produce —
+    /// most importantly wrappers like `{"args": {"repo_path": …}}`,
+    /// which our handler will recursively search.
+    #[serde(flatten)]
+    extras: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -424,26 +496,138 @@ struct SetAgentCwdParams {
     target: Option<String>,
     /// Art-name of the agent instance. Optional — only used when
     /// `target` is omitted or != "self". Accepts the alias `name`.
-    #[serde(default, alias = "name")]
-    instance_name: Option<String>,
+    /// Same `schemars(with = …)` rationale as `SetEditorRepoPathParams`.
+    #[serde(default, alias = "name", alias = "instanceName", alias = "column_name")]
+    #[schemars(with = "Option<String>")]
+    instance_name: Option<serde_json::Value>,
     /// UUID of the agent instance. Accepts the alias `id`.
-    #[serde(default, alias = "id")]
-    instance_id: Option<String>,
+    #[serde(default, alias = "id", alias = "instanceId", alias = "column_id")]
+    #[schemars(with = "Option<String>")]
+    instance_id: Option<serde_json::Value>,
     /// Absolute folder path to use as cwd. The change takes effect on
     /// the agent session's NEXT turn (the current turn keeps the old
     /// cwd it spawned with).
     ///
-    /// Aliases: `path`, `folder`, `directory`, `cwd`, `repo`, `repoPath`.
+    /// Aliases: `path`, `folder`, `directory`, `cwd`, `repo`, `repoPath`,
+    /// `folderPath`, `dirPath`, `fullPath`, `absolutePath`. Same Value
+    /// trick AND `schemars(with = …)` rationale as
+    /// `SetEditorRepoPathParams::repo_path` — without the schema
+    /// override, cursor-agent silently drops this field.
     #[serde(
         default,
         alias = "path",
         alias = "folder",
         alias = "directory",
+        alias = "dir",
         alias = "cwd",
         alias = "repo",
-        alias = "repoPath"
+        alias = "repoPath",
+        alias = "folderPath",
+        alias = "dirPath",
+        alias = "fullPath",
+        alias = "absolutePath"
     )]
-    repo_path: Option<String>,
+    #[schemars(with = "Option<String>")]
+    repo_path: Option<serde_json::Value>,
+    /// Catch-all — see `SetEditorRepoPathParams::extras`.
+    #[serde(flatten)]
+    extras: std::collections::BTreeMap<String, serde_json::Value>,
+}
+
+/// Coerce a Value into a non-empty trimmed string when possible. cursor-
+/// agent has shipped this field as:
+///   - String("/Users/me/repo")            — happy path
+///   - Array(["/Users/me/repo"])           — single-element wrap
+///   - Object({"path": "/Users/me/repo"}) — over-eager nesting
+///   - String("")                          — empty placeholder
+/// Any of these yields a valid path string; everything else returns None.
+fn coerce_to_string(v: &serde_json::Value) -> Option<String> {
+    match v {
+        serde_json::Value::String(s) => {
+            let t = s.trim();
+            if t.is_empty() { None } else { Some(t.to_string()) }
+        }
+        serde_json::Value::Array(arr) => arr.iter().find_map(coerce_to_string),
+        serde_json::Value::Object(obj) => {
+            // Common nested shapes: {"path": "..."}, {"value": "..."},
+            // {"text": "..."}. Prefer keys that look path-ish.
+            for k in REPO_PATH_KEYS.iter().chain(["value", "text", "string"].iter()) {
+                if let Some(inner) = obj.get(*k) {
+                    if let Some(s) = coerce_to_string(inner) {
+                        return Some(s);
+                    }
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+/// Recursively search a Value for the first key in `keys` whose value
+/// coerces to a non-empty string. Walks through wrapper objects like
+/// `{"args": …}` / `{"arguments": …}` / `{"params": …}` / `{"input": …}`
+/// up to a small depth so a malformed `{"args":{"args":{"repo_path":…}}}`
+/// still resolves. Stops at a fixed depth to avoid infinite recursion
+/// on cyclic structures (which serde_json::Value can't actually make,
+/// but we cap anyway).
+fn find_field_recursive(
+    value: &serde_json::Value,
+    keys: &[&str],
+    depth: u8,
+) -> Option<String> {
+    if depth == 0 {
+        return None;
+    }
+    let serde_json::Value::Object(map) = value else {
+        return None;
+    };
+    for key in keys {
+        if let Some(found) = map.get(*key) {
+            if let Some(s) = coerce_to_string(found) {
+                return Some(s);
+            }
+        }
+    }
+    // Walk known wrapper keys. cursor-agent / claude have both been seen
+    // wrapping arguments: `{"args": …}` is the most common, but other
+    // OpenAI-flavoured CLIs use `arguments`/`params`/`input`.
+    for wrapper in ["args", "arguments", "params", "parameters", "input", "data", "payload"] {
+        if let Some(inner) = map.get(wrapper) {
+            if let Some(s) = find_field_recursive(inner, keys, depth - 1) {
+                return Some(s);
+            }
+        }
+    }
+    None
+}
+
+/// Find a `repo_path` value across all the places we accept it. Order
+/// of precedence:
+///   1. The typed `repo_path` field (already covers all serde aliases).
+///   2. Recursive search through the typed extras map (catches
+///      `{"args": {"repo_path": …}}` and friends).
+fn extract_repo_path(
+    typed: &Option<serde_json::Value>,
+    extras: &std::collections::BTreeMap<String, serde_json::Value>,
+) -> Option<String> {
+    if let Some(v) = typed.as_ref().and_then(coerce_to_string) {
+        return Some(v);
+    }
+    let extras_value = serde_json::Value::Object(extras.clone().into_iter().collect());
+    find_field_recursive(&extras_value, REPO_PATH_KEYS, 4)
+}
+
+fn extract_typed_or_recursive(
+    typed: &Option<serde_json::Value>,
+    extras: &std::collections::BTreeMap<String, serde_json::Value>,
+    keys: &[&str],
+) -> Option<String> {
+    if let Some(v) = typed.as_ref().and_then(coerce_to_string) {
+        return Some(v);
+    }
+    let extras_value = serde_json::Value::Object(extras.clone().into_iter().collect());
+    find_field_recursive(&extras_value, keys, 4)
 }
 
 // ---------- Canvas (whiteboard) param shapes ----------
@@ -568,59 +752,99 @@ struct CanvasAddEdgeParams {
     /// Source shape id.
     ///
     /// Required, but typed as `Option<String>` so we can return a
-    /// helpful hint when an LLM forgets the field. Aliases: `from`,
-    /// `source`, `from_id`, `fromId`, `fromShapeId`.
+    /// helpful hint when an LLM forgets the field. Aliases:
+    /// `from`, `source`, `from_id`, `fromId`, `fromShapeId`,
+    /// `fromNode`, `fromBlock`, `start`, `start_id`, `startId`,
+    /// `src`, `sourceId`.
     #[serde(
         default,
         alias = "from",
         alias = "source",
         alias = "from_id",
         alias = "fromId",
-        alias = "fromShapeId"
+        alias = "fromShapeId",
+        alias = "fromNode",
+        alias = "fromBlock",
+        alias = "start",
+        alias = "start_id",
+        alias = "startId",
+        alias = "src",
+        alias = "sourceId"
     )]
     from_shape_id: Option<String>,
     /// Source anchor — one of: tl, tc, tr, ml, mc, mr, bl, bc, br.
     /// Defaults to `mr` (right-middle) for left-to-right flow.
-    /// Aliases: `fromAnchor`, `source_anchor`, `sourceAnchor`.
+    /// Aliases: `fromAnchor`, `source_anchor`, `sourceAnchor`,
+    /// `start_anchor`, `startAnchor`, `srcAnchor`.
     #[serde(
         default,
         alias = "fromAnchor",
         alias = "source_anchor",
-        alias = "sourceAnchor"
+        alias = "sourceAnchor",
+        alias = "start_anchor",
+        alias = "startAnchor",
+        alias = "srcAnchor"
     )]
     from_anchor: Option<String>,
-    /// Target shape id. Aliases: `to`, `target`, `to_id`, `toId`,
-    /// `toShapeId`.
+    /// Target shape id. Aliases:
+    /// `to`, `target`, `to_id`, `toId`, `toShapeId`, `toNode`,
+    /// `toBlock`, `end`, `end_id`, `endId`, `dest`, `dst`, `targetId`.
     #[serde(
         default,
         alias = "to",
         alias = "target",
         alias = "to_id",
         alias = "toId",
-        alias = "toShapeId"
+        alias = "toShapeId",
+        alias = "toNode",
+        alias = "toBlock",
+        alias = "end",
+        alias = "end_id",
+        alias = "endId",
+        alias = "dest",
+        alias = "dst",
+        alias = "targetId"
     )]
     to_shape_id: Option<String>,
     /// Target anchor — same options as `from_anchor`. Defaults to `ml`.
-    /// Aliases: `toAnchor`, `target_anchor`, `targetAnchor`.
+    /// Aliases: `toAnchor`, `target_anchor`, `targetAnchor`,
+    /// `end_anchor`, `endAnchor`, `destAnchor`.
     #[serde(
         default,
         alias = "toAnchor",
         alias = "target_anchor",
-        alias = "targetAnchor"
+        alias = "targetAnchor",
+        alias = "end_anchor",
+        alias = "endAnchor",
+        alias = "destAnchor"
     )]
     to_anchor: Option<String>,
     /// Visual style. One of: arrow (default — directed), line, dashed.
-    /// Accepts the alias `style`.
-    #[serde(default, alias = "style")]
+    /// Accepts the aliases `style`, `edge_kind`, `edgeKind`.
+    #[serde(default, alias = "style", alias = "edge_kind", alias = "edgeKind")]
     kind: Option<String>,
     /// Routing algorithm. One of: straight, orthogonal (default —
-    /// Manhattan elbow), curved (cubic bezier).
-    #[serde(default)]
+    /// Manhattan elbow), curved (cubic bezier). Aliases: `route`,
+    /// `path`, `pathing`.
+    #[serde(default, alias = "route", alias = "path", alias = "pathing")]
     routing: Option<String>,
-    /// Optional mid-line label. Accepts the alias `text`.
-    #[serde(default, alias = "text")]
+    /// Optional mid-line label. Accepts the aliases `text`, `caption`,
+    /// `title`.
+    #[serde(default, alias = "text", alias = "caption", alias = "title")]
     #[allow(dead_code)] /* read by the frontend dispatcher from raw JSON; the sidecar's confirmation doesn't surface it. */
     label: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct CanvasAddEdgesParams {
+    /// Batch of edge specs to insert atomically (single undo entry).
+    /// Each entry has the same fields as `canvas_add_edge` — including
+    /// the alias-friendly field names (`from`/`to` etc.). Use this
+    /// when wiring up a multi-edge diagram so it lands as one ⌘Z step
+    /// instead of N. Aliases for this top-level field: `connections`,
+    /// `links`, `arrows`.
+    #[serde(alias = "connections", alias = "links", alias = "arrows")]
+    edges: Vec<CanvasAddEdgeParams>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -1295,25 +1519,41 @@ impl App {
     )]
     async fn set_editor_repo_path(
         &self,
-        Parameters(SetEditorRepoPathParams { instance_name, instance_id, repo_path }): Parameters<SetEditorRepoPathParams>,
+        Parameters(SetEditorRepoPathParams { instance_name, instance_id, repo_path, extras }): Parameters<SetEditorRepoPathParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        let path = repo_path
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .ok_or_else(|| ErrorData::invalid_params(
-                "`repo_path` is required (canonical name; aliases also accepted: `path`, `folder`, `directory`, `cwd`, `repo`, `repoPath`). Pass an absolute folder path, e.g. `/Users/me/Repos/foo`.",
+        // Try the typed slot first, then walk extras for wrapper objects.
+        let path = extract_repo_path(&repo_path, &extras);
+        let name = extract_typed_or_recursive(&instance_name, &extras, INSTANCE_NAME_KEYS);
+        let id = extract_typed_or_recursive(&instance_id, &extras, INSTANCE_ID_KEYS);
+
+        let received_summary = format!(
+            "instance_name={:?}, instance_id={:?}, repo_path={:?}, extras_keys={:?}",
+            instance_name, instance_id, repo_path,
+            extras.keys().collect::<Vec<_>>()
+        );
+
+        let path = path.ok_or_else(|| {
+            eprintln!(
+                "[forgehold-app] set_editor_repo_path: could not resolve repo_path. {}",
+                received_summary
+            );
+            ErrorData::invalid_params(
+                format!("`repo_path` is required. Accepted top-level keys: `repo_path`, `path`, `folder`, `directory`, `dir`, `cwd`, `repo`, `repoPath`, `folderPath`, `dirPath`, `fullPath`, `absolutePath`. The value can be a string OR a single-element array. The whole arguments object can also be wrapped under `args` / `arguments` / `params` / `input`. Got: {}. Pass an absolute folder path, e.g. `/Users/me/Repos/foo`.", received_summary),
                 None,
-            ))?;
-        let by_name = instance_name.as_deref().map(str::trim).filter(|s| !s.is_empty());
-        let by_id = instance_id.as_deref().map(str::trim).filter(|s| !s.is_empty());
-        if by_name.is_none() && by_id.is_none() {
+            )
+        })?;
+
+        if name.is_none() && id.is_none() {
+            eprintln!(
+                "[forgehold-app] set_editor_repo_path: missing instance_name/instance_id. {}",
+                received_summary
+            );
             return Err(ErrorData::invalid_params(
-                "either `instance_name` (alias `name`) or `instance_id` (alias `id`) must be provided. The art-name is the one shown in the workbench column header — e.g. \"Sagrada-Familia\".",
+                format!("either `instance_name` (alias `name`, `instanceName`, `column_name`, `editor_name`, `label`) or `instance_id` (alias `id`, `instanceId`, `column_id`, `editor_id`, `uuid`) must be provided. Got: {}. The art-name is the one shown in the workbench column header — e.g. \"Sagrada-Familia\".", received_summary),
                 None,
             ));
         }
-        let label = by_name.or(by_id).unwrap_or("editor");
+        let label = name.as_deref().or(id.as_deref()).unwrap_or("editor");
         Ok(CallToolResult::success(vec![Content::text(format!(
             "Setting editor `{}` repo path → `{}`. Linked agent sessions (if any) update too.",
             label, path
@@ -1325,27 +1565,38 @@ impl App {
     )]
     async fn set_agent_cwd(
         &self,
-        Parameters(SetAgentCwdParams { target, instance_name, instance_id, repo_path }): Parameters<SetAgentCwdParams>,
+        Parameters(SetAgentCwdParams { target, instance_name, instance_id, repo_path, extras }): Parameters<SetAgentCwdParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        let path = repo_path
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .ok_or_else(|| ErrorData::invalid_params(
-                "`repo_path` is required (canonical name; aliases also accepted: `path`, `folder`, `directory`, `cwd`, `repo`, `repoPath`). Pass an absolute folder path, e.g. `/Users/me/Repos/foo`.",
+        let path = extract_repo_path(&repo_path, &extras);
+        let name = extract_typed_or_recursive(&instance_name, &extras, INSTANCE_NAME_KEYS);
+        let id = extract_typed_or_recursive(&instance_id, &extras, INSTANCE_ID_KEYS);
+
+        let received_summary = format!(
+            "target={:?}, instance_name={:?}, instance_id={:?}, repo_path={:?}, extras_keys={:?}",
+            target, instance_name, instance_id, repo_path,
+            extras.keys().collect::<Vec<_>>()
+        );
+
+        let path = path.ok_or_else(|| {
+            eprintln!(
+                "[forgehold-app] set_agent_cwd: could not resolve repo_path. {}",
+                received_summary
+            );
+            ErrorData::invalid_params(
+                format!("`repo_path` is required. Accepted top-level keys: `repo_path`, `path`, `folder`, `directory`, `dir`, `cwd`, `repo`, `repoPath`, `folderPath`, `dirPath`, `fullPath`, `absolutePath`. The value can be a string OR a single-element array. The whole arguments object can also be wrapped under `args` / `arguments` / `params` / `input`. Got: {}. Pass an absolute folder path, e.g. `/Users/me/Repos/foo`.", received_summary),
                 None,
-            ))?;
+            )
+        })?;
+
         let is_self = target.as_deref().map(str::trim).map(|s| s.eq_ignore_ascii_case("self")).unwrap_or(false);
         if !is_self {
-            let by_name = instance_name.as_deref().map(str::trim).filter(|s| !s.is_empty());
-            let by_id = instance_id.as_deref().map(str::trim).filter(|s| !s.is_empty());
-            if by_name.is_none() && by_id.is_none() {
+            if name.is_none() && id.is_none() {
                 return Err(ErrorData::invalid_params(
-                    "for non-self target, either `instance_name` (alias `name`) or `instance_id` (alias `id`) must be provided. To target the calling session itself, pass `target=\"self\"` instead.",
+                    format!("for non-self target, either `instance_name` (alias `name`, `instanceName`, `column_name`) or `instance_id` (alias `id`, `instanceId`, `column_id`) must be provided. To target the calling session itself, pass `target=\"self\"` instead. Got: {}", received_summary),
                     None,
                 ));
             }
-            let label = by_name.or(by_id).unwrap_or("agent");
+            let label = name.as_deref().or(id.as_deref()).unwrap_or("agent");
             return Ok(CallToolResult::success(vec![Content::text(format!(
                 "Setting agent `{}` cwd → `{}` (effective from its next turn).",
                 label, path
@@ -1479,24 +1730,44 @@ impl App {
         &self,
         Parameters(p): Parameters<CanvasAddEdgeParams>,
     ) -> Result<CallToolResult, ErrorData> {
+        /* Echo back what we received when something is missing. LLMs
+           that loop on this tool produce a lot of stderr noise, so
+           keep messages tight but unambiguous. */
+        let received_summary = format!(
+            "from_shape_id={:?}, to_shape_id={:?}, from_anchor={:?}, to_anchor={:?}, kind={:?}, routing={:?}, edge_id={:?}, label={:?}",
+            p.from_shape_id, p.to_shape_id, p.from_anchor, p.to_anchor,
+            p.kind, p.routing, p.edge_id, p.label
+        );
         let from = p
             .from_shape_id
             .as_deref()
             .map(str::trim)
             .filter(|s| !s.is_empty())
-            .ok_or_else(|| ErrorData::invalid_params(
-                "`from_shape_id` is required (aliases also accepted: `from`, `source`, `from_id`, `fromId`, `fromShapeId`). Use the shape id you minted in a previous `canvas_add_shape` call, or one from the canvas state preamble.",
-                None,
-            ))?;
+            .ok_or_else(|| {
+                eprintln!(
+                    "[forgehold-app] canvas_add_edge: missing from_shape_id. Received: {}",
+                    received_summary
+                );
+                ErrorData::invalid_params(
+                    format!("`from_shape_id` is required. Aliases accepted: `from`, `source`, `from_id`, `fromId`, `fromShapeId`, `fromNode`, `start`, `src`. Got: {}. Use a shape id from `canvas_add_shape` confirmations or the canvas-state preamble.", received_summary),
+                    None,
+                )
+            })?;
         let to = p
             .to_shape_id
             .as_deref()
             .map(str::trim)
             .filter(|s| !s.is_empty())
-            .ok_or_else(|| ErrorData::invalid_params(
-                "`to_shape_id` is required (aliases also accepted: `to`, `target`, `to_id`, `toId`, `toShapeId`).",
-                None,
-            ))?;
+            .ok_or_else(|| {
+                eprintln!(
+                    "[forgehold-app] canvas_add_edge: missing to_shape_id. Received: {}",
+                    received_summary
+                );
+                ErrorData::invalid_params(
+                    format!("`to_shape_id` is required. Aliases accepted: `to`, `target`, `to_id`, `toId`, `toShapeId`, `toNode`, `end`, `dest`, `dst`. Got: {}.", received_summary),
+                    None,
+                )
+            })?;
         if let Some(a) = p.from_anchor.as_deref() { validate_one_of(a, VALID_EDGE_ANCHORS, "from_anchor")?; }
         if let Some(a) = p.to_anchor.as_deref()   { validate_one_of(a, VALID_EDGE_ANCHORS, "to_anchor")?; }
         if let Some(k) = p.kind.as_deref()        { validate_one_of(k, VALID_EDGE_KINDS, "kind")?; }
@@ -1508,6 +1779,44 @@ impl App {
             to,
             id_label,
             p.routing.as_deref().unwrap_or("orthogonal")
+        ))]))
+    }
+
+    #[tool(
+        description = "Add MANY edges to the linked canvas in one atomic op (single ⌘Z entry). Use this when wiring up a flowchart — it lands as one history step instead of N. Each entry has the same fields as `canvas_add_edge` (including the alias-friendly names `from`/`to`). Top-level field is `edges`; aliases `connections`, `links`, `arrows` are also accepted."
+    )]
+    async fn canvas_add_edges(
+        &self,
+        Parameters(p): Parameters<CanvasAddEdgesParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        if p.edges.is_empty() {
+            return Err(ErrorData::invalid_params("`edges` array is empty — pass at least one edge spec.", None));
+        }
+        for (i, e) in p.edges.iter().enumerate() {
+            let from = e.from_shape_id.as_deref().map(str::trim).filter(|s| !s.is_empty());
+            let to = e.to_shape_id.as_deref().map(str::trim).filter(|s| !s.is_empty());
+            if from.is_none() || to.is_none() {
+                let summary = format!(
+                    "from_shape_id={:?}, to_shape_id={:?}",
+                    e.from_shape_id, e.to_shape_id
+                );
+                eprintln!(
+                    "[forgehold-app] canvas_add_edges: edge[{}] missing shape ids. Received: {}",
+                    i, summary
+                );
+                return Err(ErrorData::invalid_params(
+                    format!("edge[{}] missing shape ids — both `from_shape_id` and `to_shape_id` are required (aliases: from/to/source/target/...). Got: {}.", i, summary),
+                    None,
+                ));
+            }
+            if let Some(a) = e.from_anchor.as_deref() { validate_one_of(a, VALID_EDGE_ANCHORS, "from_anchor")?; }
+            if let Some(a) = e.to_anchor.as_deref()   { validate_one_of(a, VALID_EDGE_ANCHORS, "to_anchor")?; }
+            if let Some(k) = e.kind.as_deref()        { validate_one_of(k, VALID_EDGE_KINDS, "kind")?; }
+            if let Some(r) = e.routing.as_deref()     { validate_one_of(r, VALID_EDGE_ROUTINGS, "routing")?; }
+        }
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Connecting {} edge(s) on the linked canvas (atomic).",
+            p.edges.len()
         ))]))
     }
 
@@ -1772,8 +2081,8 @@ impl ServerHandler for App {
              - new_workbench — create a fresh workbench tab (with optional name). Activates it by default.\n\
              - switch_workbench — switch active workbench by name or index.\n\
              - add_workbench_instance — add a NEW column (github/jira/sentry/claude/cursor/editor). Use ONLY when the user explicitly asks for a new/another column. Do NOT use for \"switch the editor to /path\" — that's set_editor_repo_path.\n\
-             - set_editor_repo_path — change an EXISTING editor's open folder. Linked agents auto-follow.\n\
-             - set_agent_cwd — change an agent session's cwd. `target=self` for yourself, or `instance_name` for another column. Effective from the next turn.\n\
+             - set_editor_repo_path — change an EXISTING editor's open folder. Linked agents auto-follow. CANONICAL shape: `{\"instance_name\": \"<art-name>\", \"repo_path\": \"/abs/path\"}`. The handler is permissive: aliases accepted (`path`, `folder`, `directory`, `cwd`, `repo`, `repoPath`, `folderPath`, `dirPath`, `fullPath`, `absolutePath` for the path; `name`, `instanceName`, `column_name` for the name; `id`, `instanceId`, `column_id`, `uuid` for the id), and the whole arguments object can be wrapped under `args` / `arguments` / `params` / `input`. STILL prefer the canonical names — fewer round-trips when the wrapper isn't there.\n\
+             - set_agent_cwd — change an agent session's cwd. `target=self` for yourself, or `instance_name` (alias: `name`) for another column. `repo_path` accepts the same aliases and wrapper shapes as set_editor_repo_path. Effective from the next turn.\n\
              - focus_workbench_instance — scroll-to + highlight an existing column (creates one if none exists).\n\
              - list_instances — re-read the workbench layout if you think your preamble is stale.\n\
              - add_editor_instance — DEPRECATED, use add_workbench_instance with kind=`editor`. Kept for back-compat.\n\
@@ -1787,7 +2096,7 @@ impl ServerHandler for App {
              - canvas_add_shape / canvas_add_shapes — place new shapes (provide `shape_id` if you'll connect it next so you don't round-trip).\n\
              - canvas_update_shape — patch x/y/w/h/rot/props/label of a shape.\n\
              - canvas_delete_shape — remove shape(s); connected edges cascade.\n\
-             - canvas_add_edge / canvas_delete_edge — draw / drop connectors. Default `from_anchor=mr` + `to_anchor=ml` reads as left-to-right flow.\n\
+             - canvas_add_edge / canvas_add_edges / canvas_delete_edge — draw / drop connectors. PREFER `canvas_add_edges` (batch) over multiple `canvas_add_edge` calls when wiring up a flowchart — one ⌘Z entry, fewer round-trips. Required: `from_shape_id` + `to_shape_id` (aliases accepted: `from`/`to`/`source`/`target`/`fromId`/`toId`/`fromShapeId`/`toShapeId`/`src`/`dst`/`start`/`end`). Default `from_anchor=mr` + `to_anchor=ml` reads as left-to-right flow.\n\
              - canvas_arrange — auto-layout (dagre / grid / row / column). Run AFTER add_shapes so you don't have to position by hand.\n\
              - canvas_focus — smooth-pan the viewport onto a shape so the user sees what you just added.\n\
              - canvas_set_z — reorder z-stack (to-front / to-back / forward / backward) when shapes overlap.\n\
@@ -1813,4 +2122,181 @@ async fn main() -> anyhow::Result<()> {
     let service = app.serve(stdio()).await?;
     service.waiting().await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// Parse a JSON value into `SetEditorRepoPathParams` as if it
+    /// arrived from the LLM, then run the same extraction logic the
+    /// real handler runs. Returns `(repo_path, instance_name,
+    /// instance_id)` so the test can assert end-to-end resolution.
+    fn parse_editor(value: serde_json::Value) -> (Option<String>, Option<String>, Option<String>) {
+        let p: SetEditorRepoPathParams = serde_json::from_value(value).expect("must deserialize");
+        let repo = extract_repo_path(&p.repo_path, &p.extras);
+        let name = extract_typed_or_recursive(&p.instance_name, &p.extras, INSTANCE_NAME_KEYS);
+        let id = extract_typed_or_recursive(&p.instance_id, &p.extras, INSTANCE_ID_KEYS);
+        (repo, name, id)
+    }
+
+    #[test]
+    fn happy_path_canonical_keys() {
+        let v = json!({
+            "instance_name": "Sagrada-Familia",
+            "repo_path": "/Users/me/Repos/foo",
+        });
+        let (repo, name, id) = parse_editor(v);
+        assert_eq!(repo.as_deref(), Some("/Users/me/Repos/foo"));
+        assert_eq!(name.as_deref(), Some("Sagrada-Familia"));
+        assert!(id.is_none());
+    }
+
+    #[test]
+    fn alias_path_instead_of_repo_path() {
+        let v = json!({"name": "Sagrada-Familia", "path": "/x"});
+        let (repo, name, _) = parse_editor(v);
+        assert_eq!(repo.as_deref(), Some("/x"));
+        assert_eq!(name.as_deref(), Some("Sagrada-Familia"));
+    }
+
+    #[test]
+    fn wrapped_in_args() {
+        // cursor-agent has been observed nesting the whole arguments
+        // payload under `args`. The handler must search recursively.
+        let v = json!({"args": {"instance_name": "Raphael", "repo_path": "/y"}});
+        let (repo, name, _) = parse_editor(v);
+        assert_eq!(repo.as_deref(), Some("/y"));
+        assert_eq!(name.as_deref(), Some("Raphael"));
+    }
+
+    #[test]
+    fn wrapped_in_arguments_with_aliased_keys() {
+        let v = json!({"arguments": {"name": "Mona-Lisa", "folder": "/z"}});
+        let (repo, name, _) = parse_editor(v);
+        assert_eq!(repo.as_deref(), Some("/z"));
+        assert_eq!(name.as_deref(), Some("Mona-Lisa"));
+    }
+
+    #[test]
+    fn repo_path_as_array() {
+        // A single-element array still resolves to its only string.
+        let v = json!({"name": "Raphael", "repo_path": ["/a/b"]});
+        let (repo, _, _) = parse_editor(v);
+        assert_eq!(repo.as_deref(), Some("/a/b"));
+    }
+
+    #[test]
+    fn repo_path_as_object_with_path_key() {
+        let v = json!({"name": "Raphael", "repo_path": {"path": "/p"}});
+        let (repo, _, _) = parse_editor(v);
+        assert_eq!(repo.as_deref(), Some("/p"));
+    }
+
+    #[test]
+    fn empty_string_repo_path_falls_back_to_extras() {
+        // Empty string in the canonical slot should not block a
+        // recursive lookup elsewhere — the LLM sometimes ships both.
+        let v = json!({"name": "Raphael", "repo_path": "", "args": {"path": "/q"}});
+        let (repo, _, _) = parse_editor(v);
+        assert_eq!(repo.as_deref(), Some("/q"));
+    }
+
+    #[test]
+    fn missing_repo_path_returns_none() {
+        let v = json!({"name": "Raphael"});
+        let (repo, _, _) = parse_editor(v);
+        assert!(repo.is_none());
+    }
+
+    #[test]
+    fn instance_id_via_uuid_alias() {
+        let v = json!({"uuid": "abc-123", "path": "/r"});
+        let (repo, _, id) = parse_editor(v);
+        assert_eq!(repo.as_deref(), Some("/r"));
+        assert_eq!(id.as_deref(), Some("abc-123"));
+    }
+
+    #[test]
+    fn double_wrapped_args() {
+        // `{"args":{"args":{...}}}` — yes, this happens.
+        let v = json!({"args": {"args": {"name": "Raphael", "path": "/s"}}});
+        let (repo, name, _) = parse_editor(v);
+        assert_eq!(repo.as_deref(), Some("/s"));
+        assert_eq!(name.as_deref(), Some("Raphael"));
+    }
+
+    /// Regression guard: every field on `SetEditorRepoPathParams` and
+    /// `SetAgentCwdParams` MUST advertise a non-empty `"type"` in its
+    /// JSON Schema. cursor-agent's tool-binder silently strips fields
+    /// whose schema lacks `type`, so the LLM call lands argless on
+    /// the server (`repo_path=None`) regardless of what the model
+    /// emitted. The historical bug shape was typing the fields as
+    /// `Option<serde_json::Value>` without `#[schemars(with = …)]`,
+    /// which schemars renders as a property with only `description`
+    /// + `default` and no `type` key. If you change the typing or
+    /// drop the override, this test catches the regression before
+    /// users do.
+    fn assert_field_has_type<'a>(
+        schema: &'a serde_json::Value,
+        field: &str,
+    ) -> &'a serde_json::Value {
+        let prop = schema
+            .get("properties")
+            .and_then(|p| p.get(field))
+            .unwrap_or_else(|| panic!("schema is missing property `{}`", field));
+        let ty = prop.get("type").unwrap_or_else(|| {
+            panic!(
+                "field `{}` has no `type` in its schema (cursor-agent will strip it). prop = {}",
+                field, prop
+            )
+        });
+        assert!(
+            !ty.is_null(),
+            "field `{}` has explicit null `type` (cursor-agent will strip it)",
+            field
+        );
+        ty
+    }
+
+    #[test]
+    fn schema_advertises_string_type_for_editor_fields() {
+        let schema =
+            serde_json::to_value(schemars::schema_for!(SetEditorRepoPathParams)).unwrap();
+        for f in ["instance_name", "instance_id", "repo_path"] {
+            let ty = assert_field_has_type(&schema, f);
+            // Must accept "string" — either literally `"string"` or as
+            // an entry in the `["string", "null"]` array form schemars
+            // emits for `Option<String>`.
+            let accepts_string = match ty {
+                serde_json::Value::String(s) => s == "string",
+                serde_json::Value::Array(arr) => arr.iter().any(|v| v.as_str() == Some("string")),
+                _ => false,
+            };
+            assert!(
+                accepts_string,
+                "field `{}` doesn't advertise string type (got {})",
+                f, ty
+            );
+        }
+    }
+
+    #[test]
+    fn schema_advertises_string_type_for_agent_cwd_fields() {
+        let schema = serde_json::to_value(schemars::schema_for!(SetAgentCwdParams)).unwrap();
+        for f in ["instance_name", "instance_id", "repo_path", "target"] {
+            let ty = assert_field_has_type(&schema, f);
+            let accepts_string = match ty {
+                serde_json::Value::String(s) => s == "string",
+                serde_json::Value::Array(arr) => arr.iter().any(|v| v.as_str() == Some("string")),
+                _ => false,
+            };
+            assert!(
+                accepts_string,
+                "field `{}` doesn't advertise string type (got {})",
+                f, ty
+            );
+        }
+    }
 }

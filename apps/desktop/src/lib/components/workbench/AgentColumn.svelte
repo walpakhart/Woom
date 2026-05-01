@@ -102,6 +102,11 @@
      *  for the user's next normal turn. Errors bubble up so the
      *  caller can toast. */
     onCompactSession: (sessionId: string) => Promise<void>;
+    /** Optional — copy the chat transcript in the requested format
+     *  (`markdown` | `json`) to the system clipboard. Provided by
+     *  +page.svelte once the session-export service lands; falls
+     *  back to a no-op if the parent hasn't wired it. */
+    onExportSession?: (sessionId: string, format: 'markdown' | 'json') => void;
     onDeleteClaudeSession: (id: string) => void;
     onNewClaudeSession: (opts: { agentKind: Kind; columnInstanceId: string }) => void;
     onStartEditMessage: (sessionId: string, index: number, content: string) => void;
@@ -161,6 +166,7 @@
     onUpdateSessionClaudeModel,
     onUpdateSessionClaudeToolProfile,
     onCompactSession,
+    onExportSession,
     onDeleteClaudeSession,
     onNewClaudeSession,
     onStartEditMessage,
@@ -248,6 +254,58 @@
         )
       : 0
   );
+
+  /* Failure UX (M4 §2.2.6) — when the last turn errored, the agent
+   * stuffs `**Claude failed:**` / `**Cursor failed:**` into the
+   * trailing assistant message. Detect that and surface the
+   * preceding user prompt so the user can retry with one click. */
+  const lastFailureUserPrompt = $derived.by((): string | null => {
+    if (!activeSess || activeSess.sending) return null;
+    const msgs = activeSess.messages;
+    if (msgs.length < 2) return null;
+    const last = msgs[msgs.length - 1];
+    if (last.role !== 'assistant') return null;
+    if (!/^\*\*(Claude|Cursor) failed:\*\*/.test(last.content)) return null;
+    /* Walk back to find the user message that triggered this turn. */
+    for (let i = msgs.length - 2; i >= 0; i--) {
+      if (msgs[i].role === 'user') return msgs[i].content;
+    }
+    return null;
+  });
+
+  function retryLastTurn() {
+    if (!activeSess || !lastFailureUserPrompt) return;
+    const sid = activeSess.id;
+    /* Drop the failed assistant message so the retry doesn't visually
+     * stack a fresh attempt below the old error. */
+    const trimmedMessages = activeSess.messages.slice(0, -1);
+    activeSess.messages = trimmedMessages;
+    onSetSessionInput(sid, lastFailureUserPrompt);
+    onSendClaudeMessage();
+  }
+
+  /** Persist an assistant message to the forgehold-memory SQLite
+   *  store via the local Tauri command (mirrors the sidecar's
+   *  `memory_save`, no agent round-trip). Tagged `chat-export` so
+   *  later searches can scope to user-saved notes. */
+  async function saveAssistantAsNote(content: string) {
+    const trimmed = content.trim();
+    if (!trimmed) return;
+    try {
+      const id = await invoke<number>('memory_save_local', {
+        content: trimmed,
+        kind: 'note',
+        tags: ['chat-export']
+      });
+      notify({
+        kind: 'success',
+        title: 'Saved to memory',
+        body: `Note #${id} stored — searchable via memory_search.`
+      });
+    } catch (e) {
+      notifyError(e, { title: 'Save to memory failed' });
+    }
+  }
 
   // Diff cards in `applied` status — the agent's change is on disk
   // but the user hasn't decided yet (Keep would flip them to `kept`,
@@ -1138,6 +1196,20 @@
         <svg class="i i-sm" viewBox="0 0 24 24"><path d="M4 14h6v6M4 10h6V4M14 10h6V4M14 14h6v6"/></svg>
         <span>{compactingId === activeSess.id ? 'Compacting…' : 'Compact'}</span>
       </button>
+      {#if onExportSession && activeSess.messages.length > 0}
+        <!-- Export chip: copies the transcript to the clipboard.
+             Default click → Markdown (good for issue / doc paste).
+             Shift-click → JSON (full snapshot, support bundles).
+             Pure local action — no IPC beyond the clipboard write. -->
+        <button
+          class="wt-chip"
+          onclick={(e) => onExportSession?.(activeSess!.id, e.shiftKey ? 'json' : 'markdown')}
+          title="Copy transcript to clipboard. Click for Markdown, Shift+click for JSON."
+        >
+          <svg class="i i-sm" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
+          <span>Export</span>
+        </button>
+      {/if}
       {#if activeSess.lastContextSize > 0}
           {@const cw = contextWindowFor(effectiveModel, activeSess.agentKind)}
           {@const pct = Math.round(ctxRatio * 100)}
@@ -1471,6 +1543,23 @@
                     </button>
                   </div>
                 {/if}
+                {#if msg.role === 'assistant' && !sess.sending && msg.content}
+                  <!-- Save-as-note (M4 §2.2.11). Persists this
+                       assistant message into the forgehold-memory
+                       SQLite store as a `note` so future agent runs
+                       can pull it back via memory_search. Local IPC
+                       only; no agent round-trip. -->
+                  <div class="chat-msg-actions">
+                    <button
+                      class="chat-msg-act"
+                      onclick={() => void saveAssistantAsNote(msg.content)}
+                      title="Save this answer to long-term memory"
+                      aria-label="Save as note"
+                    >
+                      <svg class="i i-sm" viewBox="0 0 24 24"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
+                    </button>
+                  </div>
+                {/if}
               </div>
               <div class="chat-msg-body">
                 {#if msg.role === 'user' && msg.images && msg.images.length > 0}
@@ -1629,6 +1718,21 @@
                 {thinkingTick}s
               </span>
             {/if}
+          </div>
+        {/if}
+        {#if !sess.sending && lastFailureUserPrompt}
+          <!-- Failure UX (M4 §2.2.6). When the most recent assistant
+               turn ended with `**Claude failed:**` / `**Cursor
+               failed:**`, surface a one-click Retry that re-sends the
+               user prompt that caused it. We re-derive the prompt
+               from the message just before the error rather than
+               persisting it separately so existing sessions on disk
+               work without migration. -->
+          <div class="chat-retry">
+            <span class="chat-retry-label">Last turn failed.</span>
+            <button class="chat-retry-btn" onclick={retryLastTurn}>
+              ↻ Retry
+            </button>
           </div>
         {/if}
       </div>
@@ -2040,6 +2144,24 @@
     display: inline-flex; gap: 5px; align-items: center;
     padding-left: 30px;
   }
+  /* Retry banner shown when the last assistant turn errored. */
+  .chat-retry {
+    margin: 8px 30px 4px;
+    padding: 8px 12px;
+    background: rgba(248, 113, 113, 0.07);
+    border: 1px solid rgba(248, 113, 113, 0.28);
+    border-radius: 8px;
+    display: flex; align-items: center; gap: 10px;
+    font-size: 12px;
+  }
+  .chat-retry-label { color: #f87171; flex: 1; }
+  .chat-retry-btn {
+    padding: 4px 10px; border-radius: 6px;
+    background: var(--accent); color: var(--accent-fg);
+    border: none; cursor: pointer; font-weight: 600;
+    font-size: 11.5px;
+  }
+  .chat-retry-btn:hover { filter: brightness(1.07); }
   .thinking-time {
     margin-left: 8px;
     color: var(--text-mute); font-size: 10.5px;

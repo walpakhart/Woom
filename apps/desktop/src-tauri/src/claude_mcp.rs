@@ -234,6 +234,8 @@ pub(crate) fn build_mcp_config(
         allowed.push("mcp__memory__memory_save".into());
         allowed.push("mcp__memory__memory_search".into());
         allowed.push("mcp__memory__memory_list".into());
+        allowed.push("mcp__memory__memory_get".into());
+        allowed.push("mcp__memory__memory_update".into());
         allowed.push("mcp__memory__memory_delete".into());
     }
 

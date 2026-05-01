@@ -18,6 +18,7 @@ import {
   type SentryStatus
 } from '$lib/data';
 import {
+  lastEventForSource,
   recordConnectionEvent,
   type ConnectionEventSource
 } from './connectionEvents.svelte';
@@ -32,6 +33,14 @@ export const connectionsState = $state<{
   /** `true` while a per-source test is in flight. Drives the spinner
    *  on the `Test` button in `ConnectionsView`. */
   testing: Record<ConnectionEventSource, boolean>;
+  /** `true` while the boot retry/backoff loop is mid-attempt for a
+   *  source — i.e. the first refresh threw a transient error and we're
+   *  about to retry. Drives a "Retrying…" indicator in the rail and
+   *  the per-card status pill so a flaky network on launch doesn't
+   *  read as a permanent disconnect. Cleared once the source settles
+   *  (connected / disconnected / rate_limited) or the retry budget is
+   *  exhausted. */
+  retrying: Record<ConnectionEventSource, boolean>;
 }>({
   github: { kind: 'disconnected' },
   jira: { kind: 'disconnected' },
@@ -40,6 +49,13 @@ export const connectionsState = $state<{
   cursor: null,
   statusLoading: true,
   testing: {
+    github: false,
+    jira: false,
+    sentry: false,
+    claude: false,
+    cursor: false
+  },
+  retrying: {
     github: false,
     jira: false,
     sentry: false,
@@ -170,6 +186,74 @@ export async function refreshAllStatus() {
     refreshSentryStatus(),
     refreshClaudeStatus()
   ]);
+}
+
+/** Boot variant of `refreshAllStatus`. Wraps each per-source refresh
+ *  in an exponential-backoff retry so a single network blip during
+ *  app launch doesn't leave a source disconnected until the user hits
+ *  reconnect manually. Up to 4 attempts at 0s / 2s / 6s / 14s — total
+ *  budget ~22 s, well under the 30 s spec target.
+ *
+ *  Only `error` outcomes (transient: network blip, 5xx, DNS) are
+ *  retried. `disconnected` (no token in keychain — intentional) and
+ *  `rate_limited` (different remediation: wait for `Retry-After`) and
+ *  `connected` (already settled) all short-circuit. `connectionsState
+ *  .retrying[source]` flips true between attempts so the UI can render
+ *  a "Retrying…" cue instead of a permanent disconnect dot. */
+export async function refreshAllStatusOnBoot() {
+  await Promise.all([
+    refreshWithBootRetry('github', refreshGithubStatus),
+    refreshWithBootRetry('jira', refreshJiraStatus),
+    refreshWithBootRetry('sentry', refreshSentryStatus),
+    refreshAgentsWithBootRetry()
+  ]);
+}
+
+const BOOT_RETRY_DELAYS_MS = [0, 2_000, 6_000, 14_000];
+
+async function refreshWithBootRetry(
+  source: ConnectionEventSource,
+  refresh: () => Promise<void>
+): Promise<void> {
+  for (let attempt = 0; attempt < BOOT_RETRY_DELAYS_MS.length; attempt++) {
+    if (attempt > 0) {
+      connectionsState.retrying[source] = true;
+      await delay(BOOT_RETRY_DELAYS_MS[attempt]);
+    }
+    await refresh();
+    /* `refresh` swallows the error and records an event; inspect the
+     * latest event to decide whether to retry. Anything other than
+     * `error` is a settled outcome (connected / disconnected /
+     * rate_limited) and we stop. */
+    const last = lastEventForSource(source);
+    if (!last || last.kind !== 'error') break;
+  }
+  connectionsState.retrying[source] = false;
+}
+
+/** Claude + Cursor share a single Tauri call (`agent_status`), so the
+ *  retry loop has to look at *both* sources' last events to decide
+ *  whether to keep going. We retry while either is still erroring. */
+async function refreshAgentsWithBootRetry(): Promise<void> {
+  for (let attempt = 0; attempt < BOOT_RETRY_DELAYS_MS.length; attempt++) {
+    if (attempt > 0) {
+      connectionsState.retrying.claude = true;
+      connectionsState.retrying.cursor = true;
+      await delay(BOOT_RETRY_DELAYS_MS[attempt]);
+    }
+    await refreshClaudeStatus();
+    const claudeLast = lastEventForSource('claude');
+    const cursorLast = lastEventForSource('cursor');
+    const stillErroring =
+      (claudeLast?.kind === 'error') || (cursorLast?.kind === 'error');
+    if (!stillErroring) break;
+  }
+  connectionsState.retrying.claude = false;
+  connectionsState.retrying.cursor = false;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /** Manual "Test connection" trigger. Functionally identical to a refresh

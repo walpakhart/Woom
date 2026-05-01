@@ -1,8 +1,13 @@
 // Canvas (whiteboard) state — see [docs/CANVAS.md](../../../../docs/CANVAS.md).
 // M-canvas-1 scope: types, library index, per-instance active canvas + tabs,
-// viewport. Shapes / edges are typed but the renderer doesn't draw them yet
-// (that's M-canvas-2 onward). Persistence is localStorage for now; filesystem
-// JSON files arrive in M-canvas-3 alongside asset storage.
+// viewport. Persistence: per-canvas JSON files at
+// `~/Library/Application Support/Forgehold/canvases/<id>.json` plus a
+// thin `index.json`. localStorage stays as fallback when disk init fails
+// (e.g. SSR build, sandboxing weirdness). Migration from the legacy
+// `forgehold:canvas:v1:*` localStorage layout happens once on first
+// disk init (`initCanvasFromDisk`); the legacy keys are then cleared
+// to free the ~5 MB browser quota that big canvases would otherwise
+// blow.
 
 // ---- Types ---------------------------------------------------------------
 
@@ -153,6 +158,34 @@ const STORAGE_INDEX = 'forgehold:canvas:index:v1';
 const STORAGE_CANVAS_PREFIX = 'forgehold:canvas:v1:';
 const STORAGE_INSTANCE_STATE = 'forgehold:canvas:instances:v1';
 
+// ---- Disk persistence (M1 §1.1) -----------------------------------------
+// `_diskDir` is the resolved canvas folder once `initCanvasFromDisk` runs.
+// Until it's set, the legacy localStorage path is the source of truth — so
+// SSR / unit tests and the very-first launch keep working. After init, all
+// `persistCanvas` / `persistIndex` writes go to disk and localStorage stays
+// silent. Mirrors the same `_diskDir` pattern in `sessions.svelte.ts`
+// (commit 36eecee), so the failure modes (write quota, sandbox refusal)
+// surface consistently across both stores.
+
+import { invoke } from '@tauri-apps/api/core';
+import { notify } from '$lib/state/toaster.svelte';
+
+/** Throttle for the "shape is locked" hint toast. Without this, a
+ *  drag against a locked shape fires `patchShape` per pointermove
+ *  and would carpet the screen with N toasts. We emit one toast per
+ *  second per shape, rate-limited globally. */
+let lastLockedHintAt = 0;
+
+let _diskDir: string | null = null;
+
+function canvasFilePath(id: string): string {
+  return `${_diskDir}/${id}.json`;
+}
+
+function canvasIndexFilePath(): string {
+  return `${_diskDir}/index.json`;
+}
+
 // ---- Helpers -------------------------------------------------------------
 
 function genId(): string {
@@ -232,11 +265,16 @@ export const canvasState = $state<{
   /** Per-canvas ephemeral state (selection + undo stack). Created on
    *  open, dropped on close. */
   ephemeral: Record<string, CanvasEphemeral>;
+  /** Last persistCanvas() timestamp per canvas id. Drives the
+   *  auto-save indicator on CanvasColumn (M4 §2.10.1). UI flashes
+   *  for ~1 s after the value bumps. */
+  lastSavedAt: Record<string, number>;
 }>({
   index: [],
   open: {},
   byInstance: {},
-  ephemeral: {}
+  ephemeral: {},
+  lastSavedAt: {}
 });
 
 function ensureEphemeral(canvasId: string): CanvasEphemeral {
@@ -264,51 +302,189 @@ export function requestCanvasFocus(canvasId: string, shapeId: string) {
 // ---- Persistence ---------------------------------------------------------
 
 function persistIndex() {
+  /* Disk path: serialize once, fire-and-forget through the Tauri IPC.
+   * Any failure (sandbox / fs error) silently falls through to the
+   * localStorage write below — keeps the user's data accessible on
+   * the next launch even if the disk write tier is broken. */
+  const json = JSON.stringify({ entries: canvasState.index });
+  if (_diskDir) {
+    void invoke('fs_write_file', {
+      path: canvasIndexFilePath(),
+      contents: json
+    }).catch(() => { /* ignore — localStorage acts as the safety net */ });
+    return;
+  }
   try {
-    localStorage.setItem(STORAGE_INDEX, JSON.stringify({ entries: canvasState.index }));
+    localStorage.setItem(STORAGE_INDEX, json);
   } catch {
     /* quota / SSR — ignore */
   }
 }
 
 function persistInstanceState() {
+  /* Per-instance UI state (active tab, current tool) is small and
+   * frequently mutated — keep on localStorage even after the disk
+   * migration. Quota concerns are about big canvases, not which tab
+   * is open in column #2. */
   try {
     localStorage.setItem(STORAGE_INSTANCE_STATE, JSON.stringify(canvasState.byInstance));
   } catch { /* ignore */ }
 }
 
 function persistCanvas(canvas: Canvas) {
+  const json = JSON.stringify(canvas);
+  /* Stamp the auto-save indicator (M4 §2.10.1). UI watches
+   * `canvasState.lastSavedAt[canvas.id]` to flash a "saved" pulse
+   * on the column header. Stamp on the local-mem path too so the
+   * indicator works pre-disk-migration. */
+  canvasState.lastSavedAt[canvas.id] = Date.now();
+  if (_diskDir) {
+    void invoke('fs_write_file', {
+      path: canvasFilePath(canvas.id),
+      contents: json
+    }).catch(() => { /* ignore — see persistIndex */ });
+    return;
+  }
   try {
-    localStorage.setItem(STORAGE_CANVAS_PREFIX + canvas.id, JSON.stringify(canvas));
+    localStorage.setItem(STORAGE_CANVAS_PREFIX + canvas.id, json);
   } catch { /* ignore */ }
+}
+
+/** Hydrate a Canvas record with sensible defaults when older
+ *  serializations are missing optional fields. Used by both the
+ *  localStorage read path and the on-disk read path so additions to
+ *  the Canvas type only need one back-fill site. */
+function hydrateCanvas(parsed: Partial<Canvas>): Canvas | null {
+  if (typeof parsed.id !== 'string' || typeof parsed.name !== 'string') return null;
+  return {
+    id: parsed.id,
+    name: parsed.name,
+    createdAt: parsed.createdAt ?? Date.now(),
+    updatedAt: parsed.updatedAt ?? Date.now(),
+    archivedAt: parsed.archivedAt ?? null,
+    thumbnail: parsed.thumbnail ?? null,
+    background: parsed.background ?? 'dot',
+    gridSize: parsed.gridSize ?? 8,
+    viewport: parsed.viewport ?? { x: 0, y: 0, zoom: 1 },
+    shapes: Array.isArray(parsed.shapes) ? parsed.shapes : [],
+    edges: Array.isArray(parsed.edges) ? parsed.edges : [],
+    version: parsed.version ?? 0,
+    schemaVersion: 1
+  };
 }
 
 function readCanvasFromStorage(id: string): Canvas | null {
   try {
     const raw = localStorage.getItem(STORAGE_CANVAS_PREFIX + id);
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as Partial<Canvas>;
-    // Basic shape check + back-fill defaults so older records hydrate safely
-    // when we add fields later. We only validate the must-haves here.
-    if (typeof parsed.id !== 'string' || typeof parsed.name !== 'string') return null;
-    return {
-      id: parsed.id,
-      name: parsed.name,
-      createdAt: parsed.createdAt ?? Date.now(),
-      updatedAt: parsed.updatedAt ?? Date.now(),
-      archivedAt: parsed.archivedAt ?? null,
-      thumbnail: parsed.thumbnail ?? null,
-      background: parsed.background ?? 'dot',
-      gridSize: parsed.gridSize ?? 8,
-      viewport: parsed.viewport ?? { x: 0, y: 0, zoom: 1 },
-      shapes: Array.isArray(parsed.shapes) ? parsed.shapes : [],
-      edges: Array.isArray(parsed.edges) ? parsed.edges : [],
-      version: parsed.version ?? 0,
-      schemaVersion: 1
-    };
+    return hydrateCanvas(JSON.parse(raw) as Partial<Canvas>);
   } catch {
     return null;
   }
+}
+
+/** Disk-backed analogue of `readCanvasFromStorage`. Used by
+ *  `loadCanvas` once `initCanvasFromDisk` has resolved the canvas
+ *  directory; falls back through to the localStorage path when the
+ *  read fails or returns no body. */
+async function readCanvasFromDisk(id: string): Promise<Canvas | null> {
+  if (!_diskDir) return null;
+  try {
+    const exists = await invoke<boolean>('fs_path_exists', {
+      path: canvasFilePath(id)
+    });
+    if (!exists) return null;
+    const raw = await invoke<string>('fs_read_file', {
+      path: canvasFilePath(id)
+    });
+    return hydrateCanvas(JSON.parse(raw) as Partial<Canvas>);
+  } catch {
+    return null;
+  }
+}
+
+/** Initialize disk persistence. Called from +page.svelte onMount with
+ *  the resolved app-data dir (`~/Library/Application Support/Forgehold`
+ *  on macOS).
+ *
+ *  - First launch with no `index.json` on disk: migrate every
+ *    `forgehold:canvas:v1:*` localStorage entry to disk, write
+ *    `index.json`, then clear those localStorage keys to free quota.
+ *  - Subsequent launches: read `index.json` (lightweight — just the
+ *    library entries) and let `loadCanvas` lazy-fetch the per-canvas
+ *    JSON files on demand.
+ *
+ *  Failures fall back transparently to localStorage so the app keeps
+ *  working on first run if the disk write tier is broken (sandbox
+ *  refusal, missing parent dir we can't create, etc.). */
+export async function initCanvasFromDisk(appDataDir: string): Promise<void> {
+  _diskDir = `${appDataDir}/canvases`;
+  try {
+    const indexExists = await invoke<boolean>('fs_path_exists', {
+      path: canvasIndexFilePath()
+    });
+    if (indexExists) {
+      const raw = await invoke<string>('fs_read_file', {
+        path: canvasIndexFilePath()
+      });
+      const parsed = JSON.parse(raw) as { entries?: CanvasIndexEntry[] };
+      if (Array.isArray(parsed.entries)) {
+        canvasState.index = parsed.entries.filter(
+          (e): e is CanvasIndexEntry =>
+            !!e && typeof e.id === 'string' && typeof e.name === 'string'
+        );
+      }
+      /* Eager-load every canvas referenced by the index so the sync
+       * `ensureCanvasLoaded` callers (the renderer, the agent system
+       * prompt) keep working without a refactor to async. Mirrors
+       * what `initSessionsFromDisk` does for session bodies. Bounded
+       * by the user's library size (typically <50 canvases × <100KB),
+       * well within the renderer's memory budget. */
+      for (const entry of canvasState.index) {
+        const c = await readCanvasFromDisk(entry.id);
+        if (c) canvasState.open[entry.id] = c;
+      }
+    } else {
+      /* Fresh-on-disk install. Pull whatever's in localStorage right
+       * now (already loaded by `restoreCanvasState` earlier in onMount)
+       * and write each canvas + the index file to disk. */
+      for (const entry of canvasState.index) {
+        const c = readCanvasFromStorage(entry.id);
+        if (c) {
+          await invoke('fs_write_file', {
+            path: canvasFilePath(c.id),
+            contents: JSON.stringify(c)
+          });
+        }
+      }
+      await invoke('fs_write_file', {
+        path: canvasIndexFilePath(),
+        contents: JSON.stringify({ entries: canvasState.index })
+      });
+    }
+    /* localStorage is no longer the source of truth. Clear the bulk
+     * of it so the ~5 MB origin quota doesn't get squeezed by old
+     * snapshots. The lighter index/instance keys stay so the legacy
+     * boot path still works if the disk init ever fails on a future
+     * launch. */
+    try {
+      const toRemove: string[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith(STORAGE_CANVAS_PREFIX)) toRemove.push(k);
+      }
+      for (const k of toRemove) localStorage.removeItem(k);
+    } catch { /* ignore */ }
+  } catch (e) {
+    console.error('[canvas] disk init failed, falling back to localStorage:', e);
+    _diskDir = null;
+  }
+}
+
+/** True once the disk persistence tier is active. Mostly for tests +
+ *  Settings diagnostics. */
+export function canvasUsesDisk(): boolean {
+  return _diskDir !== null;
 }
 
 /** One-shot: hydrate `canvasState` from localStorage. Called from the
@@ -533,7 +709,16 @@ export function deleteCanvas(id: string) {
     inst.tabs = inst.tabs.filter((t) => t !== id);
     if (inst.activeId === id) inst.activeId = inst.tabs[0] ?? null;
   }
+  /* Belt + braces: clear from BOTH stores even when only one is
+   * active. The disk path is the live one in production, but when
+   * the legacy localStorage entry is still there from a pre-migration
+   * launch it'd silently re-appear next boot if we don't sweep it. */
   try { localStorage.removeItem(STORAGE_CANVAS_PREFIX + id); } catch { /* ignore */ }
+  if (_diskDir) {
+    void invoke('fs_remove_file', { path: canvasFilePath(id) }).catch(() => {
+      /* file already gone on disk — nothing to do */
+    });
+  }
   persistIndex();
   persistInstanceState();
 }
@@ -842,7 +1027,22 @@ export function patchShape(
   const c = ensureCanvasLoaded(canvasId);
   if (!c) return;
   const shape = c.shapes.find((s) => s.id === shapeId);
-  if (!shape || shape.locked) return;
+  if (!shape) return;
+  if (shape.locked) {
+    /* Surface a hint so the user understands why their drag /
+     * edit no-op'd (M4 §2.10.8). Throttled because a real drag
+     * fires this 60+ times a second. */
+    const now = Date.now();
+    if (now - lastLockedHintAt > 1500 && !opts?.transient) {
+      lastLockedHintAt = now;
+      notify({
+        kind: 'info',
+        title: 'Shape is locked',
+        body: 'Right-click → Unlock or hit ⇧⌘L to edit.'
+      });
+    }
+    return;
+  }
   if (opts?.transient) {
     Object.assign(shape, patch, { updatedAt: Date.now() });
     return;

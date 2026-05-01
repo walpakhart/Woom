@@ -3,6 +3,7 @@ mod biometry;
 mod claude;
 mod claude_mcp;
 mod claude_quota;
+mod crash_reporting;
 mod cursor;
 mod cursor_mcp;
 mod fs;
@@ -10,6 +11,7 @@ mod git;
 mod github;
 mod jira;
 mod keychain;
+mod memory_local;
 mod sentry;
 mod watch;
 mod worktree;
@@ -100,9 +102,146 @@ fn hydrate_path_from_login_shell() {
     }
 }
 
+/// In-app docs viewer (`docs/ROADMAP_1.0.md §1.10`).
+///
+/// Loads bundled Markdown specs from the .app's `Contents/Resources`
+/// dir. The dev path falls back to the repo's `docs/` folder so
+/// `pnpm tauri dev` works without re-bundling.
+///
+/// Returns an alphabetised list of `*.md` filenames (without
+/// extension) so the frontend can render a picker. Hidden files are
+/// skipped.
+#[tauri::command]
+fn list_bundled_docs(app: tauri::AppHandle) -> Result<Vec<String>, String> {
+    let dir = bundled_docs_dir(&app)?;
+    let mut names = Vec::new();
+    let entries = std::fs::read_dir(&dir).map_err(|e| {
+        format!("read docs dir {}: {e}", dir.display())
+    })?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("md") {
+            continue;
+        }
+        let stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .filter(|s| !s.starts_with('.'))
+            .map(String::from);
+        if let Some(s) = stem {
+            names.push(s);
+        }
+    }
+    names.sort();
+    Ok(names)
+}
+
+#[tauri::command]
+fn read_bundled_doc(app: tauri::AppHandle, name: String) -> Result<String, String> {
+    /* Hard sanitization: the doc name is a frontend-supplied string,
+     * so prevent any path-traversal joys. Only accept `[A-Za-z0-9_]+`,
+     * which matches every spec we ship. */
+    if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+        return Err(format!("invalid doc name: {name}"));
+    }
+    let dir = bundled_docs_dir(&app)?;
+    let path = dir.join(format!("{name}.md"));
+    /* Belt + suspenders: re-canonicalize and verify it's still
+     * under `dir` after the join. Defensive against rare symlink-
+     * resolution edge cases. */
+    let canonical_dir = std::fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone());
+    let canonical_path =
+        std::fs::canonicalize(&path).map_err(|e| format!("doc not found: {e}"))?;
+    if !canonical_path.starts_with(&canonical_dir) {
+        return Err(format!("doc {name} resolved outside docs dir"));
+    }
+    std::fs::read_to_string(&canonical_path)
+        .map_err(|e| format!("read {}: {e}", canonical_path.display()))
+}
+
+/// Resolve where bundled docs live. In production this is the .app's
+/// resource dir; in dev (`pnpm tauri dev`) the resource dir doesn't
+/// exist, so we fall back to the repo's `docs/` two levels up from
+/// the cwd (matches the workspace structure: `apps/desktop/`).
+fn bundled_docs_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    use tauri::Manager;
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        let docs = resource_dir.join("docs");
+        if docs.is_dir() {
+            return Ok(docs);
+        }
+    }
+    /* Dev fallback. Walk up from the executable until we find a
+     * `docs/` sibling. Bounded to 8 hops so a misconfigured launch
+     * doesn't spin. */
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let mut cur = exe.parent().map(|p| p.to_path_buf());
+    for _ in 0..8 {
+        if let Some(p) = &cur {
+            let candidate = p.join("docs");
+            if candidate.is_dir() {
+                return Ok(candidate);
+            }
+            cur = p.parent().map(|x| x.to_path_buf());
+        } else {
+            break;
+        }
+    }
+    Err("docs directory not found (build with bundle resources or run from repo)".into())
+}
+
+/// Kill any Forgehold sidecar processes left running from a previous
+/// session. See `run()` for why this matters — Cursor's MCP client
+/// keeps sidecars alive across restarts and serves their (old) tool
+/// schema until the process dies.
+///
+/// Uses `pkill -f` matching on the bundled binary names. Best-effort:
+/// if pkill isn't available or no matches exist, exit is non-zero and
+/// we just shrug. Runs synchronously before the Tauri event loop so
+/// the cursor_mcp::sync() that follows writes config for fresh
+/// processes.
+fn kill_stale_sidecars() {
+    /* `pkill -f` matches against the full command line, so paths like
+       /Applications/Forgehold.app/Contents/MacOS/forgehold-app match
+       cleanly. We pkill each sidecar binary by exact suffix name —
+       avoids any regex-alternation portability questions and keeps
+       the match deliberately scoped to our bundled binaries (never
+       touches forgehold-desktop, which is the main process). */
+    for name in ["forgehold-app", "forgehold-github", "forgehold-jira", "forgehold-sentry", "forgehold-memory"] {
+        let _ = std::process::Command::new("pkill")
+            .arg("-f")
+            .arg(name)
+            .output();
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     hydrate_path_from_login_shell();
+    /* Crash reporting (`docs/ROADMAP_1.0.md §1.3`). Opt-out file lives
+     * under app-support — checked here before any potentially-
+     * panicking code so a user who's flipped the toggle never gets
+     * a panic-handler swap. The actual SDK init is currently a no-
+     * op; the toggle still functions and the plumbing is in place
+     * for the moment a Sentry DSN ships with the build. See
+     * `crash_reporting::init_if_enabled` for the wiring. */
+    crash_reporting::init_if_enabled();
+    // Kill any stale Forgehold sidecars left behind by Cursor / Claude
+    // from a previous Forgehold version. Cursor's MCP client spawns
+    // sidecars on first handshake and keeps them alive across Cursor
+    // restarts and Forgehold restarts — `ps aux | grep forgehold-app`
+    // shows the original PID days later. After a DMG update, those
+    // long-lived sidecars run the OLD binary's tool schema; the new
+    // tools / aliases / batch endpoints simply aren't there for the
+    // agent to call. Killing them here forces Cursor (and any
+    // already-running Claude session) to spawn fresh ones from the
+    // bundle we're about to register, which solves the "I just
+    // updated Forgehold but Cursor still says missing field
+    // from_shape_id" class of bugs.
+    //
+    // Single-user macOS app, so there's never a "kill the other
+    // user's Forgehold sidecars" risk to worry about.
+    kill_stale_sidecars();
     // Push the current set of Forgehold-owned MCP entries (jira / github /
     // sentry / memory / app) into `~/.cursor/mcp.json` once at startup.
     // Without this, an existing user wouldn't pick up new sidecars (most
@@ -114,6 +253,15 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
+        // Auto-updater plugin (`docs/ROADMAP_1.0.md §1.3`).
+        // Reads the update endpoint + pubkey from `tauri.conf.json
+        // > plugins > updater`. The pubkey there is a placeholder
+        // until the release pipeline lands a real signing key (see
+        // README → "Releasing 1.0"). The plugin itself is harmless to
+        // ship without a key — frontend calls to `check()` simply
+        // return `null` (no update available) when the manifest URL
+        // is unreachable.
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(claude::new_runners())
         .manage(watch::new_state())
         .invoke_handler(tauri::generate_handler![
@@ -236,9 +384,38 @@ pub fn run() {
             worktree_diff,
             worktree_apply,
             biometric_unlock,
+            crash_reporting::get_telemetry_opt_out,
+            crash_reporting::set_telemetry_opt_out,
+            list_bundled_docs,
+            read_bundled_doc,
+            fs_remove_file,
+            fs_rename,
+            fs_reveal_in_finder,
+            mcp_sidecar_health,
+            memory_local::memory_save_local,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app, event| {
+            // Kill our sidecars when Forgehold quits. Tauri owns the
+            // main `forgehold-desktop` process, but the `forgehold-app
+            // / -github / -jira / -sentry / -memory` MCP sidecars are
+            // spawned by Cursor (and Claude Code) on their first
+            // handshake, NOT by us — they become Cursor's children, so
+            // a normal cmd-Q on Forgehold leaves them happily running
+            // for hours / days / until reboot, serving the OLD tool
+            // schema to whatever agent connects to them next.
+            //
+            // `RunEvent::Exit` fires after the last window closes and
+            // we're about to leave the event loop — best moment to
+            // sweep them. We use the same `pkill -f` matching the
+            // startup `kill_stale_sidecars` does, so the next launch
+            // of Forgehold (or Cursor immediately reconnecting via
+            // MCP) gets a clean slate.
+            if let tauri::RunEvent::Exit = event {
+                kill_stale_sidecars();
+            }
+        });
 }
 
 async fn token() -> Result<String, String> {
@@ -1077,6 +1254,99 @@ fn fs_read_file(path: String) -> Result<String, String> {
 #[tauri::command]
 fn fs_write_file(path: String, contents: String) -> Result<(), String> {
     fs::write_file(&path, &contents)
+}
+
+/// Generic single-file delete. Idempotent on missing paths. Used by
+/// the canvas-on-disk garbage collection (`canvasState`) and any
+/// other caller that needs to drop a file without surfacing a
+/// "doesn't exist" error.
+#[tauri::command]
+fn fs_remove_file(path: String) -> Result<(), String> {
+    fs::remove_file_if_exists(&path)
+}
+
+/// Rename / move a path. Refuses to overwrite an existing
+/// destination so a caller "rename to existing-name" doesn't
+/// silently nuke the other file. Used by the FileTree right-click
+/// menu (M4 §2.1.2).
+#[tauri::command]
+fn fs_rename(from: String, to: String) -> Result<(), String> {
+    use std::path::Path;
+    let from_p = Path::new(&from);
+    let to_p = Path::new(&to);
+    if !from_p.exists() {
+        return Err(format!("source {from} does not exist"));
+    }
+    if to_p.exists() {
+        return Err(format!("destination {to} already exists"));
+    }
+    std::fs::rename(from_p, to_p).map_err(|e| format!("rename {from} -> {to}: {e}"))
+}
+
+/// Open the system file manager scrolled to and highlighting the
+/// given path. macOS-only via `open -R` ("reveal"). On other
+/// platforms we'd need a different shell-out; not in 1.0 scope.
+#[tauri::command]
+fn fs_reveal_in_finder(path: String) -> Result<(), String> {
+    let status = std::process::Command::new("open")
+        .arg("-R")
+        .arg(&path)
+        .status()
+        .map_err(|e| format!("spawn open: {e}"))?;
+    if !status.success() {
+        return Err(format!("open -R exited with status {status}"));
+    }
+    Ok(())
+}
+
+#[derive(Debug, Serialize)]
+pub struct SidecarHealth {
+    pub name: String,
+    pub running: bool,
+    pub pid_count: usize,
+}
+
+/// Snapshot of which Forgehold MCP sidecars are alive. Sidecars are
+/// spawned by Claude / Cursor on first MCP handshake (not by us),
+/// so a `running: false` row means no agent has yet asked that
+/// sidecar to start in this session — not that it crashed. Drives
+/// the Settings → "MCP servers" diagnostic card (M4 §2.9.8).
+#[tauri::command]
+fn mcp_sidecar_health() -> Vec<SidecarHealth> {
+    let names = [
+        "forgehold-app",
+        "forgehold-github",
+        "forgehold-jira",
+        "forgehold-sentry",
+        "forgehold-memory",
+    ];
+    names
+        .iter()
+        .map(|name| {
+            /* `pgrep -fc` returns the count of matches on stdout (or 0
+             * exit + empty when nothing matched, depending on the
+             * pgrep flavor). We just count newlines from `pgrep -f`
+             * since `-c` semantics differ between BSD/macOS pgrep
+             * and Linux pgrep. */
+            let count = std::process::Command::new("pgrep")
+                .arg("-f")
+                .arg(name)
+                .output()
+                .ok()
+                .map(|out| {
+                    String::from_utf8_lossy(&out.stdout)
+                        .lines()
+                        .filter(|l| !l.trim().is_empty())
+                        .count()
+                })
+                .unwrap_or(0);
+            SidecarHealth {
+                name: (*name).to_string(),
+                running: count > 0,
+                pid_count: count,
+            }
+        })
+        .collect()
 }
 
 /// Revert one Edit / MultiEdit chunk: replace `new_text` (what the agent

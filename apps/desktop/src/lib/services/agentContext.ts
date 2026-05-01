@@ -219,7 +219,13 @@ function buildCanvasSummary(canvasId: string): string {
   lines.push(
     'Use the `mcp__app__canvas_*` tools to draw, patch, or delete on this canvas. '
       + 'Shape ids below are STABLE — reuse them in `canvas_add_edge`, '
-      + '`canvas_update_shape`, `canvas_delete_shape`, `canvas_focus`.'
+      + '`canvas_update_shape`, `canvas_delete_shape`, `canvas_focus`. '
+      + 'When wiring up multiple connectors at once, prefer the batch '
+      + '`canvas_add_edges` tool ({"edges":[{from, to}, …]}) over calling '
+      + '`canvas_add_edge` N times — it lands as one ⌘Z step and saves '
+      + 'round-trips. Edge specs accept short field names too: '
+      + '`from`/`to`/`source`/`target` are aliases for `from_shape_id`/'
+      + '`to_shape_id`.'
   );
   lines.push(
     'A PNG snapshot of this canvas is attached to the user\'s current '

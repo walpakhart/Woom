@@ -30,7 +30,7 @@
   //   - Forge live cards via drag-from-other-columns (M-canvas-6).
   //   - Agent link + MCP tools (M-canvas-7+).
 
-  import { onMount, untrack } from 'svelte';
+  import { onMount, onDestroy, untrack } from 'svelte';
   import { slide } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
   import ColumnControls from '$lib/components/workbench/ColumnControls.svelte';
@@ -1595,7 +1595,15 @@
     groupShapes(activeCanvas.id, ids);
   }
 
+  /* Tick for the auto-save indicator. We can't use the global
+   * `now` from +page.svelte because it's parent-owned; rolling our
+   * own keeps this column self-contained. 200 ms tick is plenty for
+   * a 1.2 s pulse window. */
+  let nowTick = $state(Date.now());
+  let saveTickTimer: ReturnType<typeof setInterval> | null = null;
+
   onMount(() => {
+    saveTickTimer = setInterval(() => (nowTick = Date.now()), 200);
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keydown', onKeyDownDuplicate);
     window.addEventListener('keydown', onKeyDownGroup);
@@ -1606,6 +1614,7 @@
        paste). */
     window.addEventListener('paste', onPaste);
     return () => {
+      if (saveTickTimer) clearInterval(saveTickTimer);
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keydown', onKeyDownDuplicate);
       window.removeEventListener('keydown', onKeyDownGroup);
@@ -1810,6 +1819,20 @@
       >
         <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
       </button>
+      {#if activeCanvasId && canvasState.lastSavedAt[activeCanvasId]}
+        {@const savedAt = canvasState.lastSavedAt[activeCanvasId]}
+        {@const flashing = nowTick - savedAt < 1200}
+        <!-- Auto-save indicator (M4 §2.10.1). Pulses for ~1 s after
+             every persistCanvas() write so the user has visual
+             confirmation their drag/edit landed on disk. Hover
+             reveals the precise timestamp. -->
+        <span
+          class="canvas-saved"
+          class:canvas-saved--flash={flashing}
+          title={`Last saved ${new Date(savedAt).toLocaleTimeString()}`}
+          aria-live="polite"
+        >saved</span>
+      {/if}
     </div>
 
     <div class="tab-strip" role="tablist">
@@ -2126,6 +2149,24 @@
   .source-mark svg { width: 13px; height: 13px; stroke: currentColor; fill: none; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
   .brand-word { font-size: 14px; font-weight: 600; color: var(--text-0); letter-spacing: -0.01em; }
   .bench-name { font-size: 11px; color: var(--text-2); padding: 2px 6px; border-radius: 5px; background: var(--bg-2); border: 1px solid var(--border-neutral); }
+  /* Auto-save indicator. Idle state is muted text; flash state
+     pulses using the accent so the user gets clear "wrote to disk"
+     feedback. Honors prefers-reduced-motion per the 1.0 a11y bar. */
+  .canvas-saved {
+    font-size: 10px; color: var(--text-mute);
+    padding: 2px 6px; border-radius: 4px;
+    border: 1px solid var(--border-neutral);
+    background: var(--bg-2);
+    transition: color 280ms ease, background 280ms ease, border-color 280ms ease;
+  }
+  .canvas-saved--flash {
+    color: var(--accent-bright);
+    border-color: var(--accent);
+    background: var(--accent-soft);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .canvas-saved { transition: none; }
+  }
   .library-btn {
     width: 18px;
     height: 18px;

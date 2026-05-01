@@ -843,6 +843,7 @@ kbd {
 }
 .icon-btn:hover:not(:disabled) { background: var(--bg-1); color: var(--text-0); }
 .icon-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.icon-btn.pinned-on { color: var(--accent); }
 
 /* Agent column — cwd bar, repo info, worktree chips */
 .cwd-bar {

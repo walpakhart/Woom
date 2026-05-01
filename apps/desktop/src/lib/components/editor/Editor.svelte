@@ -7,6 +7,7 @@
   import { languageFor } from '$lib/components/editor/codemirrorLang';
   import { editorThemeExtension } from '$lib/components/editor/editorTheme';
   import { themeState } from '$lib/state/theme.svelte';
+  import { recordCursor, readCursor } from '$lib/state/editorCursors.svelte';
 
   interface Props {
     path: string;
@@ -63,11 +64,36 @@
       dirty = false;
       onDirty?.(false);
 
+      /* Persist the previous file's cursor before swapping to the
+       * new file's. Without this, the user's last position in
+       * `oldPath` is lost when they switch tabs. */
+      if (view && lastLoadedPath && lastLoadedPath !== p) {
+        const sel = view.state.selection.main;
+        recordCursor(lastLoadedPath, {
+          from: sel.from,
+          to: sel.to,
+          scrollTop: view.scrollDOM.scrollTop
+        });
+      }
       view?.destroy();
+      /* Restore the new file's saved selection (clamped to the
+       * current doc length, which may have changed since last visit
+       * if the file was edited externally). Returns null when there
+       * is no saved record, in which case CodeMirror defaults to
+       * caret at offset 0. */
+      const stored = readCursor(p);
+      const docLen = contents.length;
+      const initialSel = stored
+        ? {
+            anchor: Math.min(Math.max(0, stored.from), docLen),
+            head: Math.min(Math.max(0, stored.to), docLen)
+          }
+        : undefined;
       view = new EditorView({
         parent: editorEl,
         state: EditorState.create({
           doc: contents,
+          selection: initialSel,
           extensions: [
             basicSetup,
             themeCompartment.of(editorThemeExtension(themeState.name)),
@@ -100,6 +126,18 @@
                 u.geometryChanged ||
                 u.viewportChanged
               ) {
+                /* Persist the cursor on every selection change.
+                 * `recordCursor` debounces the localStorage write
+                 * itself, so we can fire on every dispatch without
+                 * worrying about IO storms. */
+                if (lastLoadedPath && u.view.scrollDOM) {
+                  const sel = u.state.selection.main;
+                  recordCursor(lastLoadedPath, {
+                    from: sel.from,
+                    to: sel.to,
+                    scrollTop: u.view.scrollDOM.scrollTop
+                  });
+                }
                 if (onSelectionChange) {
                   const sel = u.state.selection.main;
                   if (sel.from === sel.to) {
@@ -134,6 +172,16 @@
           ]
         })
       });
+      /* Restore scroll position after CodeMirror has measured. The
+       * raf-then-microtask dance avoids a flicker where the editor
+       * mounts at scrollTop=0 then jumps; we delay the restore until
+       * after the first paint when geometry is real. */
+      if (stored && stored.scrollTop > 0) {
+        const v = view;
+        requestAnimationFrame(() => {
+          if (v && v.scrollDOM) v.scrollDOM.scrollTop = stored.scrollTop;
+        });
+      }
     } catch (e: unknown) {
       error = e instanceof Error ? e.message : String(e);
     } finally {
@@ -181,7 +229,22 @@
     });
   });
 
-  onDestroy(() => view?.destroy());
+  onDestroy(() => {
+    /* Last-chance flush of the current cursor so a quit (or column
+     * close) doesn't lose the user's position. The updateListener
+     * already records most positions on the fly; this catches the
+     * tail-end case where the user typed and immediately quit
+     * before the debounce flushed. */
+    if (view && lastLoadedPath) {
+      const sel = view.state.selection.main;
+      recordCursor(lastLoadedPath, {
+        from: sel.from,
+        to: sel.to,
+        scrollTop: view.scrollDOM?.scrollTop ?? 0
+      });
+    }
+    view?.destroy();
+  });
 </script>
 
 <div class="ed">

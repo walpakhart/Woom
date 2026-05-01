@@ -256,20 +256,24 @@ pub async fn ask(
         system_parts.push(
             "Forgehold memory (persistent across sessions): you have \
              `mcp__memory__memory_search`, `memory_save`, `memory_list`, \
-             `memory_delete`. Behavior:\n\
+             `memory_get`, `memory_update`, `memory_delete`. Behavior:\n\
              - At the START of a non-trivial turn, run `memory_search` with \
-               the user's keywords (or a paraphrase). If it returns relevant \
-               facts/preferences/context, lean on them — don't ask the user \
-               to repeat themselves.\n\
+               the user's keywords (or a paraphrase). FTS5 with `unicode61` \
+               tokenizer — Russian and English work the same way. If it \
+               returns relevant facts/preferences/context, lean on them — \
+               don't ask the user to repeat themselves.\n\
              - When the user states a preference, gives feedback on your \
-               approach, or shares persistent context (their role, project, \
-               tools, conventions), call `memory_save` to record it. Tag \
-               with category like `preference`, `project`, `feedback`, \
-               `reference`. Keep entries terse (1-3 sentences).\n\
+               approach, or shares persistent context, call `memory_save` \
+               with a `kind`: `user` (about the user), `feedback` (how to \
+               approach work), `project` (ongoing initiatives), `reference` \
+               (pointers to external systems), or `note` (catch-all). Keep \
+               entries terse (1-3 sentences).\n\
+             - When a stored fact changes, prefer `memory_update` over \
+               delete+save so the row id stays stable across references.\n\
              - Don't save ephemeral task state, code, or anything already in \
                git/the codebase. Only save what would be lost across restarts.\n\
              - If a recalled memory conflicts with current state, trust what \
-               you see now and update or delete the stale memory."
+               you see now and `memory_update` (or delete) the stale entry."
                 .to_string(),
         );
     }

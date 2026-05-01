@@ -78,6 +78,18 @@ pub fn path_exists(path: &str) -> bool {
     std::path::Path::new(path).exists()
 }
 
+/// Delete a single file. Used for canvas-on-disk garbage collection
+/// and similar straightforward removals. Idempotent on missing
+/// files — no error when the path is already gone, since the
+/// operational intent ("ensure the file isn't there") is satisfied.
+pub fn remove_file_if_exists(path: &str) -> Result<(), String> {
+    let p = std::path::Path::new(path);
+    if !p.exists() {
+        return Ok(());
+    }
+    std::fs::remove_file(p).map_err(|e| format!("remove {}: {}", path, e))
+}
+
 #[derive(Debug, Serialize, Clone)]
 pub struct BashResult {
     pub stdout: String,

@@ -4,6 +4,9 @@
   import { openUrl } from '@tauri-apps/plugin-opener';
   import { open as openDialog } from '@tauri-apps/plugin-dialog';
   import Sigil from '$lib/components/ui/Sigil.svelte';
+  import Cheatsheet from '$lib/components/ui/Cheatsheet.svelte';
+  import Welcome from '$lib/components/ui/Welcome.svelte';
+  import { welcomeState } from '$lib/state/welcome.svelte';
   import WorktreeDiffModal from '$lib/components/editor/WorktreeDiffModal.svelte';
   import JiraDetailPane from '$lib/components/inbox/JiraDetailPane.svelte';
   import SentryDetailPane from '$lib/components/inbox/SentryDetailPane.svelte';
@@ -49,15 +52,24 @@
     makeShape,
     makeEdge,
     canvasState,
+    initCanvasFromDisk,
     type ShapeKind,
     type EdgeAnchor,
-    type Shape
+    type Shape,
+    type Edge
   } from '$lib/state/canvas.svelte';
   import { applyLayout as canvasApplyLayout, type LayoutAlgorithm } from '$lib/services/canvasLayout';
   import { saveCanvasScreenshot } from '$lib/services/canvasScreenshot';
   import { buildAgentAppContext } from '$lib/services/agentContext';
   import { applySessionCwd } from '$lib/services/sessionCwd';
   import { runCompactSession as runCompactSessionService } from '$lib/services/agentCompact';
+  import { exportSessionMarkdown, exportSessionJson } from '$lib/services/sessionExport';
+  import {
+    parseSlashCommand,
+    clearSessionHistory,
+    appendUsageBreakdown,
+    appendSlashHelp
+  } from '$lib/services/slashCommands';
   import { openFileInEditor } from '$lib/services/editorNavigation';
   import { refreshPlanUsage } from '$lib/state/quota.svelte';
   import {
@@ -81,7 +93,8 @@
     goToInstance,
     moveInstanceToWorkbench,
     registerInstanceRemovedHook,
-    restoreMaximized
+    restoreMaximized,
+    toggleMaximize
   } from '$lib/state/layout.svelte';
   import {
     sessionsState,
@@ -115,8 +128,12 @@
     refreshJiraStatus,
     refreshSentryStatus,
     refreshClaudeStatus,
-    refreshAllStatus
+    refreshAllStatusOnBoot
   } from '$lib/state/connections.svelte';
+  import {
+    markTokenInstalled,
+    clearTokenInstalled
+  } from '$lib/state/tokenAge.svelte';
   import {
     inboxState,
     refreshInbox,
@@ -198,6 +215,9 @@
   // View & layout state
   let view = $state<View>('workbench');
   let paletteOpen = $state(false);
+  /* Cheatsheet overlay (`?` toggles). Owned at +page level so any
+   * shortcut, anywhere, can flip it without prop-drilling. */
+  let cheatsheetOpen = $state(false);
   let tab = $state<DetailTab>('conversation');
 
   // Biometric gate. Before first unlock the UI shows a "Locked" overlay so
@@ -216,7 +236,12 @@
       await invoke('biometric_unlock', { reason: 'Unlock Forgehold to access your stored credentials' });
       appLocked = false;
       // Now that we're allowed through, pull connection status + inboxes.
-      await refreshAllStatus();
+      // `refreshAllStatusOnBoot` wraps each source's status call in an
+      // exponential-backoff retry (0/2/6/14 s) so a single network
+      // blip on launch doesn't leave a connected source reading as
+      // disconnected. The first attempt fires immediately; we don't
+      // wait for retries to start dependent fetches.
+      await refreshAllStatusOnBoot();
       if (connectedGithub) void refreshAllInboxes();
       if (connectedJira) void refreshAllJiraInboxes();
       if (connectedSentry) void refreshAllSentryInboxes();
@@ -400,6 +425,103 @@
   const claudeStatus = $derived(connectionsState.claude);
   const cursorStatus = $derived(connectionsState.cursor);
   const statusLoading = $derived(connectionsState.statusLoading);
+  /* `anyRetrying` is true while the boot retry/backoff loop has at
+   *  least one source mid-attempt after a transient failure. Rail
+   *  uses it to render a pulsing "retrying" dot in place of the plain
+   *  disconnected dot — distinguishes "nothing connected" from
+   *  "trying to connect, network was flaky on launch". */
+  const anyRetrying = $derived(
+    connectionsState.retrying.github ||
+      connectionsState.retrying.jira ||
+      connectionsState.retrying.sentry ||
+      connectionsState.retrying.claude ||
+      connectionsState.retrying.cursor
+  );
+
+  /* Top-level palette actions (M4 §2.8.6 — action verbs). Built as a
+   * derived so connect/disconnect labels flip based on the live
+   * `connectionsState` — typing "connect github" surfaces the connect
+   * verb when disconnected and the disconnect verb when already on. */
+  const paletteActions = $derived.by(() => {
+    type PA = { id: string; label: string; sub?: string; keywords?: string; pick: () => void };
+    const a: PA[] = [];
+    /* Source connect / disconnect. Use the connectionsMeta source list
+     * so this stays in sync if a new source is added. */
+    for (const conn of sourceConns) {
+      if (!conn.implemented) continue;
+      const status = connectionsState[conn.id as 'github' | 'jira' | 'sentry'];
+      const isConnected = status?.kind === 'connected';
+      a.push({
+        id: `connect:${conn.id}`,
+        label: isConnected ? `Reconnect ${conn.name}` : `Connect ${conn.name}`,
+        sub: isConnected ? 'Re-enter token in the modal' : 'Open the connect modal',
+        keywords: `${conn.id} pat token auth`,
+        pick: () => openConnectModal(conn)
+      });
+      if (isConnected) {
+        a.push({
+          id: `disconnect:${conn.id}`,
+          label: `Disconnect ${conn.name}`,
+          sub: 'Drop the token from Keychain',
+          keywords: `${conn.id} sign out logout`,
+          pick: () => {
+            if (conn.id === 'github') void disconnectGithub();
+            else if (conn.id === 'jira') void disconnectJiraAll();
+            else if (conn.id === 'sentry') void disconnectSentryAll();
+          }
+        });
+      }
+    }
+    /* Agents — open status modals so the user can verify the binary
+     * is detected. */
+    for (const conn of agentConns) {
+      if (!conn.implemented) continue;
+      a.push({
+        id: `status:${conn.id}`,
+        label: `Check ${conn.name} status`,
+        sub: 'Detect binary + version',
+        keywords: `${conn.id} cli agent`,
+        pick: () => openConnectModal(conn)
+      });
+    }
+    a.push({
+      id: 'cheatsheet',
+      label: 'Show keyboard shortcuts',
+      sub: 'Cheatsheet of every binding',
+      keywords: 'help ? shortcuts hotkeys',
+      pick: () => (cheatsheetOpen = true)
+    });
+    a.push({
+      id: 'workbench:new',
+      label: 'New workbench',
+      sub: 'Create a fresh column tab',
+      keywords: 'create add tab',
+      pick: () => {
+        const id = addWorkbench('Workbench ' + (layoutState.workbenches.length + 1));
+        setActiveWorkbench(id);
+        view = 'workbench';
+      }
+    });
+    a.push({
+      id: 'view:settings',
+      label: 'Open settings',
+      keywords: 'preferences config theme privacy updates docs',
+      pick: () => (view = 'settings')
+    });
+    a.push({
+      id: 'view:connections',
+      label: 'Open connections',
+      keywords: 'sources tokens auth',
+      pick: () => (view = 'connections')
+    });
+    a.push({
+      id: 'view:rules',
+      label: 'Open rules',
+      keywords: 'system prompt agent',
+      pick: () => (view = 'rules')
+    });
+    return a;
+  });
   const connectedGithub = $derived(githubStatus.kind === 'connected');
   const connectedJira = $derived(jiraStatus.kind === 'connected');
   const connectedSentry = $derived(sentryStatus.kind === 'connected');
@@ -475,6 +597,15 @@
     const appDataDir = await invoke<string>('app_data_dir');
     cachedAppDataDir = appDataDir;
     await initSessionsFromDisk(appDataDir);
+    /* Same migration shape for canvases (M1 §1.1). `restoreCanvasState`
+       above already populated `canvasState.index` and `byInstance`
+       from localStorage; `initCanvasFromDisk` either upgrades that
+       layout to per-canvas JSON files on disk, or — when an
+       `index.json` is already present — re-hydrates from disk
+       (which IS now the source of truth) and clears the legacy
+       `forgehold:canvas:v1:*` localStorage keys to free origin
+       quota. Failures fall back to localStorage transparently. */
+    await initCanvasFromDisk(appDataDir);
     // One-shot v1 → v2 migration: seed the legacy `forgehold:editor:root`
     // localStorage value into the first editor instance, ONLY if that
     // instance has no persisted v2 state yet. Without this guard the
@@ -1498,6 +1629,56 @@
     });
   }
 
+  /* Session transcript export (M4 §2.2.8). Copies the rendered
+   * Markdown / JSON to the clipboard — caller picks the format via
+   * the AgentColumn export-chip click handler. Toast confirms so
+   * the user knows the clipboard now holds something. */
+  async function exportSession(sessionId: string, format: 'markdown' | 'json') {
+    const session = sessionsState.list.find((s) => s.id === sessionId);
+    if (!session) return;
+    const body = format === 'markdown'
+      ? exportSessionMarkdown(session)
+      : exportSessionJson(session);
+    try {
+      await navigator.clipboard.writeText(body);
+      notify({
+        kind: 'success',
+        title: format === 'markdown' ? 'Markdown transcript copied' : 'JSON snapshot copied',
+        body: 'Paste into an issue, doc, or wherever you need it.'
+      });
+    } catch (e) {
+      notifyError(e, { title: 'Copy failed' });
+    }
+  }
+
+  /* Slash-command interceptor for `/compact`, `/clear`, `/usage`,
+   * `/help` (M4 §2.2.4). Returns `true` when the input was a known
+   * command and dispatched locally; the caller then short-circuits
+   * the agent send. */
+  async function handleSlashCommand(
+    text: string,
+    session: ClaudeSession
+  ): Promise<boolean> {
+    const cmd = parseSlashCommand(text);
+    if (!cmd) return false;
+    /* Clear the composer + capture an `at` for any follow-up. The
+     * synthetic assistant messages we append below all carry their
+     * own timestamps. */
+    setSessionInput(session.id, '');
+    if (cmd === 'compact') {
+      await runCompactSession(session.id);
+    } else if (cmd === 'clear') {
+      clearSessionHistory(session);
+    } else if (cmd === 'usage') {
+      appendUsageBreakdown(session);
+      void scrollChatBottom();
+    } else if (cmd === 'help') {
+      appendSlashHelp(session);
+      void scrollChatBottom();
+    }
+    return true;
+  }
+
   async function sendClaudeMessage() {
     const s = activeSession;
     if (!s || s.sending) return;
@@ -1506,6 +1687,12 @@
     // turn (the image goes to the model as a vision content block).
     if (!s.input.trim() && s.mentions.length === 0) return;
     const text = s.input.trim();
+    /* Slash-command interceptor — handle `/compact`, `/clear`,
+     * `/usage`, `/help` locally and short-circuit before any agent
+     * call. `parseSlashCommand` only matches when the WHOLE message
+     * is the command, so a regular message that happens to start
+     * with `/` falls through to the normal path. */
+    if (await handleSlashCommand(text, s)) return;
     const id = s.id;
     // Snapshot the mentions BEFORE clearing so we can still bake them into
     // the prompt below + stamp the image refs onto the user-message bubble
@@ -1874,12 +2061,134 @@
        `#[serde(alias = "...")]` set on the sidecar's params struct
        so the frontend dispatcher accepts the same shapes the sidecar
        does — LLMs love shortening field names. */
-    const pick = (...keys: string[]): string => {
+    const pick = (...keys: string[]): string => pickFrom(input, ...keys);
+    /* `pickFrom` is the same idea but works against any object — used
+       by batch handlers (`canvas_add_edges`) that walk an array of
+       sub-records, each of which may have its own alias-renamed
+       fields. */
+    const pickFrom = (obj: Record<string, unknown>, ...keys: string[]): string => {
       for (const k of keys) {
-        const v = input[k];
+        const v = obj[k];
         if (typeof v === 'string' && v.trim()) return v.trim();
       }
       return '';
+    };
+    /* `coerceString` mirrors the sidecar's `coerce_to_string` —
+       cursor-agent has shipped the same field as a string, a single-
+       element array, or even a wrapped object with an inner `path`/
+       `value` key. We accept any of those shapes and return the first
+       plausible non-empty string (or empty string when nothing
+       resolves). */
+    const coerceString = (v: unknown): string => {
+      if (typeof v === 'string') return v.trim();
+      if (Array.isArray(v)) {
+        for (const x of v) {
+          const s = coerceString(x);
+          if (s) return s;
+        }
+        return '';
+      }
+      if (v && typeof v === 'object') {
+        const obj = v as Record<string, unknown>;
+        for (const k of ['repo_path', 'path', 'folder', 'directory', 'dir', 'cwd', 'value', 'text', 'string']) {
+          if (k in obj) {
+            const s = coerceString(obj[k]);
+            if (s) return s;
+          }
+        }
+      }
+      return '';
+    };
+    /* `pickDeep` is the alias-aware analogue of `pickFrom` that ALSO
+       drills into the wrapper objects cursor-agent / claude have been
+       known to nest payloads under (`args` / `arguments` / `params` /
+       `input`). Used by `set_editor_repo_path` / `set_agent_cwd` —
+       both have been observed receiving fully-wrapped payloads where
+       `repo_path` is two levels deep. Walks up to depth 4 to cover
+       the `{"args":{"args":{...}}}` case we've seen in the wild. */
+    const pickDeep = (obj: Record<string, unknown> | null | undefined, keys: string[], depth = 4): string => {
+      if (!obj || typeof obj !== 'object' || depth === 0) return '';
+      for (const k of keys) {
+        if (k in obj) {
+          const s = coerceString(obj[k]);
+          if (s) return s;
+        }
+      }
+      for (const wrap of ['args', 'arguments', 'params', 'parameters', 'input', 'data', 'payload']) {
+        const inner = obj[wrap];
+        if (inner && typeof inner === 'object' && !Array.isArray(inner)) {
+          const s = pickDeep(inner as Record<string, unknown>, keys, depth - 1);
+          if (s) return s;
+        }
+      }
+      return '';
+    };
+    /* Canonical alias lists for the deep extractors — kept in sync
+       with the sidecar's `REPO_PATH_KEYS` / `INSTANCE_NAME_KEYS` /
+       `INSTANCE_ID_KEYS` so both halves of the round-trip recognise
+       the same payload shapes. */
+    const REPO_PATH_KEYS_DEEP = [
+      'repo_path', 'repoPath', 'path', 'folder', 'directory', 'dir',
+      'cwd', 'repo', 'repository_path', 'folderPath', 'dirPath',
+      'fullPath', 'absolutePath', 'target_path', 'target'
+    ];
+    const INSTANCE_NAME_KEYS_DEEP = [
+      'instance_name', 'instanceName', 'name', 'column_name', 'columnName',
+      'editor_name', 'agent_name', 'label'
+    ];
+    const INSTANCE_ID_KEYS_DEEP = [
+      'instance_id', 'instanceId', 'id', 'column_id', 'columnId',
+      'editor_id', 'agent_id', 'uuid'
+    ];
+    /* Shared edge-spec parser used by both `canvas_add_edge` (single)
+       and `canvas_add_edges` (batch). Mirrors the alias set on the
+       sidecar's CanvasAddEdgeParams; returns null when required ids
+       are missing so the caller can skip the entry instead of throwing. */
+    const parseEdgeSpec = (obj: Record<string, unknown>): Edge | null => {
+      const fromId = pickFrom(
+        obj,
+        'from_shape_id', 'from', 'source', 'from_id', 'fromId',
+        'fromShapeId', 'fromNode', 'fromBlock', 'start', 'start_id',
+        'startId', 'src', 'sourceId'
+      );
+      const toId = pickFrom(
+        obj,
+        'to_shape_id', 'to', 'target', 'to_id', 'toId', 'toShapeId',
+        'toNode', 'toBlock', 'end', 'end_id', 'endId', 'dest', 'dst',
+        'targetId'
+      );
+      if (!fromId || !toId) return null;
+      type AnchorName = 'tl'|'tc'|'tr'|'ml'|'mc'|'mr'|'bl'|'bc'|'br';
+      const validAnchors: AnchorName[] = ['tl','tc','tr','ml','mc','mr','bl','bc','br'];
+      const fromAnchorRaw = pickFrom(
+        obj,
+        'from_anchor', 'fromAnchor', 'source_anchor', 'sourceAnchor',
+        'start_anchor', 'startAnchor', 'srcAnchor'
+      ) || 'mr';
+      const toAnchorRaw = pickFrom(
+        obj,
+        'to_anchor', 'toAnchor', 'target_anchor', 'targetAnchor',
+        'end_anchor', 'endAnchor', 'destAnchor'
+      ) || 'ml';
+      const fromAnchor = (validAnchors as string[]).includes(fromAnchorRaw)
+        ? (fromAnchorRaw as AnchorName) : 'mr';
+      const toAnchor = (validAnchors as string[]).includes(toAnchorRaw)
+        ? (toAnchorRaw as AnchorName) : 'ml';
+      const kindRaw = pickFrom(obj, 'kind', 'style', 'edge_kind', 'edgeKind');
+      const kind = (kindRaw === 'line' || kindRaw === 'dashed') ? kindRaw : 'arrow';
+      const routingRaw = pickFrom(obj, 'routing', 'route', 'path', 'pathing');
+      const routing = (routingRaw === 'straight' || routingRaw === 'curved')
+        ? routingRaw : 'orthogonal';
+      const labelRaw = pickFrom(obj, 'label', 'text', 'caption', 'title');
+      const edge = makeEdge({
+        from: { shapeId: fromId, anchor: fromAnchor },
+        to: { shapeId: toId, anchor: toAnchor },
+        kind, routing,
+        label: labelRaw || null
+      });
+      const desiredId = pickFrom(obj, 'edge_id', 'id', 'edgeId');
+      if (desiredId) edge.id = desiredId;
+      return edge;
     };
     switch (name) {
       case 'mcp__app__open_jira_issue': {
@@ -2133,9 +2442,15 @@
         return;
       }
       case 'mcp__app__set_editor_repo_path': {
-        const repoPath = pick('repo_path', 'path', 'folder', 'directory', 'cwd', 'repo', 'repoPath');
-        const instName = pick('instance_name', 'name');
-        const instId = pick('instance_id', 'id');
+        // Use `pickDeep` instead of `pick`: cursor-agent has shipped
+        // this payload wrapped in `args` / `arguments`, with
+        // `repo_path` as a single-element array, and with non-canonical
+        // keys (`folderPath`, `fullPath`, …). pickDeep mirrors the
+        // sidecar's recursive search so frontend and backend accept
+        // the exact same shapes.
+        const repoPath = pickDeep(input as Record<string, unknown>, REPO_PATH_KEYS_DEEP);
+        const instName = pickDeep(input as Record<string, unknown>, INSTANCE_NAME_KEYS_DEEP);
+        const instId = pickDeep(input as Record<string, unknown>, INSTANCE_ID_KEYS_DEEP);
         if (!repoPath) return;
         const editor = findInstanceByNameOrId('editor', instName, instId);
         if (!editor) return;
@@ -2155,15 +2470,18 @@
         return;
       }
       case 'mcp__app__set_agent_cwd': {
-        const repoPath = pick('repo_path', 'path', 'folder', 'directory', 'cwd', 'repo', 'repoPath');
+        // Same pickDeep contract as set_editor_repo_path — keep the
+        // two in sync so the LLM doesn't need a different schema for
+        // each.
+        const repoPath = pickDeep(input as Record<string, unknown>, REPO_PATH_KEYS_DEEP);
         if (!repoPath) return;
         const target = str('target').toLowerCase();
         let sessId: string | null = null;
         if (target === 'self') {
           sessId = _sessionId;
         } else {
-          const instName = pick('instance_name', 'name');
-          const instId = pick('instance_id', 'id');
+          const instName = pickDeep(input as Record<string, unknown>, INSTANCE_NAME_KEYS_DEEP);
+          const instId = pickDeep(input as Record<string, unknown>, INSTANCE_ID_KEYS_DEEP);
           // Try claude first, then cursor — same pool from the user's POV.
           const inst = findInstanceByNameOrId('claude', instName, instId)
             ?? findInstanceByNameOrId('cursor', instName, instId);
@@ -2267,35 +2585,22 @@
       case 'mcp__app__canvas_add_edge': {
         const canvasId = linkedCanvasIdFor(_sessionId);
         if (!canvasId) return;
-        /* Accept the same alias set as the sidecar's CanvasAddEdgeParams.
-           LLMs frequently shorten field names (`from`/`to`) on terse
-           tools like edge inserts. */
-        const fromId = pick('from_shape_id', 'from', 'source', 'from_id', 'fromId', 'fromShapeId');
-        const toId = pick('to_shape_id', 'to', 'target', 'to_id', 'toId', 'toShapeId');
-        if (!fromId || !toId) return;
-        type AnchorName = 'tl'|'tc'|'tr'|'ml'|'mc'|'mr'|'bl'|'bc'|'br';
-        const validAnchors: AnchorName[] = ['tl','tc','tr','ml','mc','mr','bl','bc','br'];
-        const fromAnchorRaw = pick('from_anchor', 'fromAnchor', 'source_anchor', 'sourceAnchor') || 'mr';
-        const toAnchorRaw = pick('to_anchor', 'toAnchor', 'target_anchor', 'targetAnchor') || 'ml';
-        const fromAnchor = (validAnchors as string[]).includes(fromAnchorRaw)
-          ? (fromAnchorRaw as AnchorName) : 'mr';
-        const toAnchor = (validAnchors as string[]).includes(toAnchorRaw)
-          ? (toAnchorRaw as AnchorName) : 'ml';
-        const kindRaw = pick('kind', 'style');
-        const kind = (kindRaw === 'line' || kindRaw === 'dashed') ? kindRaw : 'arrow';
-        const routingRaw = pick('routing');
-        const routing = (routingRaw === 'straight' || routingRaw === 'curved')
-          ? routingRaw : 'orthogonal';
-        const from: EdgeAnchor = { shapeId: fromId, anchor: fromAnchor };
-        const to: EdgeAnchor = { shapeId: toId, anchor: toAnchor };
-        const labelRaw = pick('label', 'text');
-        const edge = makeEdge({
-          from, to, kind, routing,
-          label: labelRaw || null
-        });
-        const desiredId = pick('edge_id', 'id', 'edgeId');
-        if (desiredId) edge.id = desiredId;
-        canvasAddEdge(canvasId, edge);
+        const edge = parseEdgeSpec(input);
+        if (edge) canvasAddEdge(canvasId, edge);
+        return;
+      }
+      case 'mcp__app__canvas_add_edges': {
+        const canvasId = linkedCanvasIdFor(_sessionId);
+        if (!canvasId) return;
+        /* Accept the canonical `edges` plus the same aliases the
+           sidecar declares (`connections` / `links` / `arrows`). */
+        const arr = (input.edges ?? input.connections ?? input.links ?? input.arrows);
+        if (!Array.isArray(arr)) return;
+        for (const raw of arr) {
+          if (!raw || typeof raw !== 'object') continue;
+          const edge = parseEdgeSpec(raw as Record<string, unknown>);
+          if (edge) canvasAddEdge(canvasId, edge);
+        }
         return;
       }
       case 'mcp__app__canvas_delete_edge': {
@@ -3310,6 +3615,7 @@
     patchModal('jiraConnect', { busy: true, error: null });
     try {
       await invoke<JiraUser>('jira_connect', { workspace, email, token });
+      markTokenInstalled('jira');
       closeModal('jiraConnect');
       await refreshJiraStatus();
     } catch (e) {
@@ -3319,6 +3625,7 @@
 
   async function disconnectJira() {
     await invoke('jira_disconnect');
+    clearTokenInstalled('jira');
     await refreshJiraStatus();
   }
 
@@ -3341,6 +3648,7 @@
         organizationSlug: organization_slug,
         token
       });
+      markTokenInstalled('sentry');
       closeModal('sentryConnect');
       await refreshSentryStatus();
       void refreshAllSentryInboxes();
@@ -3352,6 +3660,7 @@
   async function disconnectSentryAll() {
     try {
       await invoke('sentry_disconnect');
+      clearTokenInstalled('sentry');
       await refreshSentryStatus();
       resetSentryInbox();
       notify({ kind: 'success', title: 'Disconnected from Sentry' });
@@ -3371,6 +3680,7 @@
     try {
       const user = await invoke<GithubUser>('github_connect_pat', { token });
       connectionsState.github = { kind: 'connected', user };
+      markTokenInstalled('github');
       closeModal('pat');
       await refreshAllInboxes();
       view = 'workbench';
@@ -3382,6 +3692,7 @@
   async function disconnectGithub() {
     try {
       await invoke('github_disconnect');
+      clearTokenInstalled('github');
       await refreshGithubStatus();
       resetGithubInbox();
       notify({ kind: 'success', title: 'Disconnected from GitHub' });
@@ -3395,6 +3706,7 @@
   async function disconnectJiraAll() {
     try {
       await invoke('jira_disconnect');
+      clearTokenInstalled('jira');
       await refreshJiraStatus();
       resetJiraInbox();
       notify({ kind: 'success', title: 'Disconnected from Jira' });
@@ -3413,6 +3725,12 @@
       e.preventDefault();
       paletteOpen = !paletteOpen;
     } else if (e.key === 'Escape') {
+      /* Cheatsheet wins on its own Escape — keep the existing modal
+         cascade for everything else. */
+      if (cheatsheetOpen) {
+        cheatsheetOpen = false;
+        return;
+      }
       paletteOpen = false;
       if (patModal && !patModal.busy) closeModal('pat');
       if (jiraModal && !jiraModal.busy) closeModal('jiraConnect');
@@ -3442,11 +3760,89 @@
       ) {
         restoreMaximized();
       }
+    } else if (e.key === '?' && !isTextInput(e.target) && !anyModalOpen()) {
+      /* `?` toggles the cheatsheet. Skip when an input/textarea has
+         focus so it doesn't hijack a literal `?` the user is typing. */
+      e.preventDefault();
+      cheatsheetOpen = !cheatsheetOpen;
+    } else if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'm' || e.key === 'M')) {
+      /* ⌘⇧M — toggle maximize. If a column is already maximized
+         (any column), this un-maximizes it. Otherwise we pick the
+         first instance in the active workbench as the maximize
+         target — there's no "focused column" concept in inboxState
+         today, so going by panel order is the least-surprising
+         fallback. Power users tend to hit the keyboard from a
+         specific column anyway and can re-press to cycle. */
+      e.preventDefault();
+      const target =
+        layoutState.maximizedInstanceId
+          ?? activeInstances()[0]?.id
+          ?? null;
+      if (target) toggleMaximize(target);
+    } else if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && /^[1-9]$/.test(e.key)) {
+      /* ⌘1..⌘9 — jump to the Nth workbench tab. Silently no-op when
+         the index is out of range so an idle ⌘5 in a 2-workbench
+         setup doesn't surprise the user. */
+      const idx = Number(e.key) - 1;
+      const target = layoutState.workbenches[idx];
+      if (target) {
+        e.preventDefault();
+        setActiveWorkbench(target.id);
+      }
     } else if (e.key === 'j' && view === 'workbench' && !anyModalOpen()) {
       moveSelection(1);
     } else if (e.key === 'k' && view === 'workbench' && !(e.metaKey || e.ctrlKey) && !anyModalOpen()) {
       moveSelection(-1);
+    } else if (e.key === 'o' && !isTextInput(e.target) && !anyModalOpen() && !(e.metaKey || e.ctrlKey)) {
+      /* Open the focused inbox row in the system browser
+       * (M4 §2.3.6 — same shape as GitHub's `gh pr view --web`).
+       * GitHub's focused PR/issue uses `focusItem.url`; Jira and
+       * Sentry resolve the URL from the open detail object since
+       * `jiraFocusKey` / `sentryFocusId` are bare ids. Silently
+       * no-ops when nothing is focused — keyboard ergonomics, not
+       * a destructive action. */
+      const targetUrl = focusedRowUrl();
+      if (targetUrl) {
+        e.preventDefault();
+        void openUrl(targetUrl);
+      }
     }
+  }
+
+  function focusedRowUrl(): string | null {
+    if (inboxState.focusItem?.url) return inboxState.focusItem.url;
+    if (inboxState.jiraFocusKey) {
+      /* Look up the focused Jira issue across both the tab slice and
+       * every column slice — JiraItem carries the upstream `url`
+       * straight from `/rest/api/3/issue/{key}`, so we don't need
+       * to reconstruct it from the workspace + key. */
+      for (const list of Object.values(inboxState.jiraItemsByInstance)) {
+        const hit = list.find((it) => it.key === inboxState.jiraFocusKey);
+        if (hit) return hit.url;
+      }
+      const hitTab = inboxState.jiraTabItems.find((it) => it.key === inboxState.jiraFocusKey);
+      if (hitTab) return hitTab.url;
+    }
+    if (inboxState.sentryFocusId) {
+      for (const list of Object.values(inboxState.sentryItemsByInstance)) {
+        const hit = list.find((it) => it.id === inboxState.sentryFocusId);
+        if (hit?.permalink) return hit.permalink;
+      }
+      const hitTab = inboxState.sentryTabItems.find((it) => it.id === inboxState.sentryFocusId);
+      if (hitTab?.permalink) return hitTab.permalink;
+    }
+    return null;
+  }
+
+  /** Heuristic: is the keyboard event aimed at a text-entry surface
+   *  (input / textarea / contenteditable)? Used to keep `?` from
+   *  swallowing a literal question mark the user is typing. */
+  function isTextInput(target: EventTarget | null): boolean {
+    if (!(target instanceof HTMLElement)) return false;
+    const tag = target.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA') return true;
+    if (target.isContentEditable) return true;
+    return false;
   }
 
   function anyModalOpen() {
@@ -3465,7 +3861,8 @@
       inboxState.focusItem ||
       inboxState.jiraFocusKey ||
       inboxState.sentryFocusId ||
-      paletteOpen
+      paletteOpen ||
+      cheatsheetOpen
     );
   }
 
@@ -3787,6 +4184,24 @@
 
 <svelte:window onkeydown={onKey} />
 
+<Cheatsheet open={cheatsheetOpen} onClose={() => (cheatsheetOpen = false)} />
+
+<!-- First-launch welcome flow. Renders only when (a) the user has
+     unlocked through the biometric gate (no point showing it under
+     the lock screen) and (b) they haven't already completed it.
+     Connecting a source from the welcome step opens the regular
+     connect modal so the auth UX stays in one place. -->
+{#if !appLocked && !welcomeState.completed}
+  <Welcome
+    sources={[...sourceConns, ...agentConns]}
+    onConnect={(id) => {
+      const conn = [...sourceConns, ...agentConns].find((c) => c.id === id);
+      if (conn) openConnectModal(conn);
+    }}
+    onClose={() => { /* welcome state handles persistence */ }}
+  />
+{/if}
+
 <div class="bg"></div>
 
 {#if appLocked}
@@ -3819,7 +4234,12 @@
     inboxCount={Object.values(inboxState.itemsByInstance).reduce((sum, list) => sum + list.length, 0)}
     {anythingConnected}
     {statusLoading}
+    {anyRetrying}
     {githubStatus}
+    {jiraStatus}
+    {sentryStatus}
+    {claudeStatus}
+    {cursorStatus}
   />
 
   <div class="main">
@@ -4026,6 +4446,20 @@
           </button>
         </div>
         <div class="wb-columns">
+          {#if instances.length === 0}
+            <!-- Empty workbench hint (M4 §2.6.8). Shown when the
+                 active workbench has zero columns but at least one
+                 source is connected — a fresh "Workbench 2" tab,
+                 say. The pill bar is the canonical place to add
+                 columns; this is a discoverability nudge, not a
+                 button itself. -->
+            <div class="wb-empty-hint" role="note">
+              <div class="wb-empty-hint-title">This workbench is empty</div>
+              <div class="wb-empty-hint-sub">
+                Drag a chip from the bar above to add a column, or press <span class="mono">⌘K</span> and search "new column".
+              </div>
+            </div>
+          {/if}
           {#each instances as inst (inst.id)}
             {#if inst.kind === 'github' && connectedGithub}
               <GithubColumn
@@ -4117,6 +4551,7 @@
                 onUpdateSessionClaudeModel={(id, model) => updateSession(id, { claudeModel: model })}
                 onUpdateSessionClaudeToolProfile={(id, profile) => updateSession(id, { claudeToolProfile: profile })}
                 onCompactSession={runCompactSession}
+                onExportSession={exportSession}
                 onDeleteClaudeSession={deleteClaudeSession}
                 onNewClaudeSession={newClaudeSession}
                 onStartEditMessage={startEditMessage}
@@ -4170,6 +4605,7 @@
                 onUpdateSessionClaudeModel={(id, model) => updateSession(id, { claudeModel: model })}
                 onUpdateSessionClaudeToolProfile={(id, profile) => updateSession(id, { claudeToolProfile: profile })}
                 onCompactSession={runCompactSession}
+                onExportSession={exportSession}
                 onDeleteClaudeSession={deleteClaudeSession}
                 onNewClaudeSession={newClaudeSession}
                 onStartEditMessage={startEditMessage}
@@ -4360,6 +4796,7 @@
 <CommandPalette
   bind:open={paletteOpen}
   setView={(v) => (view = v)}
+  actions={paletteActions}
 />
 
 <style>
@@ -4781,6 +5218,32 @@
     background-clip: padding-box;
   }
   .wb-columns::-webkit-scrollbar-thumb:hover { background: var(--accent); background-clip: padding-box; }
+
+  /* Empty-workbench discoverability nudge. Centered with generous
+     padding so it reads as guidance rather than a permanent fixture. */
+  :global(.wb-empty-hint) {
+    margin: auto;
+    padding: 28px 36px;
+    max-width: 520px;
+    text-align: center;
+    color: var(--text-2);
+    border: 1px dashed var(--border-neutral);
+    border-radius: 14px;
+    background: var(--bg-1);
+  }
+  :global(.wb-empty-hint-title) {
+    font-size: 15px; font-weight: 600; color: var(--text-0);
+    margin-bottom: 8px;
+  }
+  :global(.wb-empty-hint-sub) {
+    font-size: 12.5px; line-height: 1.6;
+  }
+  :global(.wb-empty-hint-sub .mono) {
+    background: var(--bg-2);
+    border: 1px solid var(--border-neutral);
+    padding: 1px 6px; border-radius: 5px;
+    color: var(--text-1);
+  }
 
   /* ======================================================================
      Maximize-overlay: one column expanded to fill the whole workbench area.

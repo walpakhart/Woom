@@ -569,10 +569,18 @@ pub async fn generate_commit_message(
 /// emitted text (NOT the previous delta) and forwarding only the
 /// strict-suffix tail / collapsing self-doubled bodies / dropping
 /// on exact match. A non-`assistant` event (tool_call, system,
-/// result) resets the baseline — partials only stream contiguously
-/// inside one assistant message; once anything else lands the model
-/// has moved on (started a tool, ended the turn) and the next
-/// assistant text is a fresh message.
+/// result) resets the *active* baseline — partials only stream
+/// contiguously inside one assistant message; once anything else
+/// lands the model has moved on (started a tool, ended the turn) and
+/// the next assistant text is a fresh message.
+///
+/// BUT cursor-agent's LLM has been observed shipping a duplicate of
+/// the *just-completed* paragraph as the first chunk of the new
+/// message after a `tool_call` (it likes to "recap context" before
+/// taking the next action). That doubles the visible bubble. So in
+/// addition to clearing the active baseline we ALSO snapshot the
+/// just-completed text into `prev_completed_text` and use it to drop
+/// (or chop the overlap off) the very next assistant chunk.
 struct StreamNormalizer {
     /// Accumulated visible text we've already streamed on the current
     /// assistant turn — i.e. the concatenation of every delta we've
@@ -583,12 +591,31 @@ struct StreamNormalizer {
     /// chunk caused the cumulative chunk to fall through and get
     /// emitted in full, doubling the message.
     last_assistant_text: String,
+    /// Snapshot of `last_assistant_text` at the moment a non-assistant
+    /// event landed (tool_call / system / result / user). Cleared
+    /// once the next assistant chunk has been processed against it,
+    /// so we only suppress the immediate post-tool repeat — later
+    /// genuine repetition by the LLM is allowed to show.
+    prev_completed_text: String,
 }
 
 impl StreamNormalizer {
     fn new() -> Self {
         Self {
             last_assistant_text: String::new(),
+            prev_completed_text: String::new(),
+        }
+    }
+
+    /// Snapshot the current message into `prev_completed_text` and
+    /// reset the active baseline. Called whenever a non-assistant
+    /// event lands so the next assistant chunk can be checked for a
+    /// verbatim recap and chopped down.
+    fn close_message(&mut self) {
+        if !self.last_assistant_text.is_empty() {
+            self.prev_completed_text = std::mem::take(&mut self.last_assistant_text);
+        } else {
+            self.last_assistant_text.clear();
         }
     }
 
@@ -626,7 +653,7 @@ impl StreamNormalizer {
                 self.handle_assistant(v)
             }
             "result" | "system" | "user" => {
-                self.last_assistant_text.clear();
+                self.close_message();
                 vec![v]
             }
             // tool_call: cursor-agent fires `started` (immediately on
@@ -646,7 +673,7 @@ impl StreamNormalizer {
             //     immediate "_using …_" feedback. The completed event is
             //     dropped to avoid double-pills.
             "tool_call" => {
-                self.last_assistant_text.clear();
+                self.close_message();
                 let subtype = v.get("subtype").and_then(|s| s.as_str()).unwrap_or("");
                 // Same reasoning as edit/write: `started` doesn't have the
                 // pre-deletion file body, only `completed` does (in
@@ -712,6 +739,43 @@ impl StreamNormalizer {
         // exact char-boundary split so we never slice inside a multi-
         // byte codepoint.
         let text = collapse_doubled(&text);
+
+        // Post-tool recap dedupe. cursor-agent's LLM has been observed
+        // opening the very next assistant chunk after a `tool_call`
+        // with a verbatim repeat of the paragraph it just shipped
+        // ("Папки с именем `ops` рядом с `efficiently` нет; открываю
+        // efficiently--operations" — said once before the tool call,
+        // then said again right after as "context" before the next
+        // action). Without trimming, the frontend renders both and
+        // the user sees the same paragraph twice. `close_message`
+        // snapshots the just-completed text into `prev_completed_text`
+        // exactly for this; we look at it here, ONCE, against the
+        // first chunk of the new message, then drop it so subsequent
+        // chunks (or genuinely repetitive output later in the turn)
+        // aren't accidentally suppressed.
+        let text = if !self.prev_completed_text.is_empty()
+            && self.last_assistant_text.is_empty()
+        {
+            let prev = std::mem::take(&mut self.prev_completed_text);
+            if text == prev {
+                return Vec::new();
+            }
+            if text.starts_with(&prev) {
+                text[prev.len()..].to_string()
+            } else if prev.starts_with(&text) {
+                return Vec::new();
+            } else {
+                text
+            }
+        } else {
+            self.prev_completed_text.clear();
+            text
+        };
+
+        // Empty after recap chop — nothing genuinely new in this chunk.
+        if text.is_empty() {
+            return Vec::new();
+        }
 
         // Exact repeat — same chunk we just shipped. Either a CLI
         // retransmit OR cumulative-mode reporting "no progress yet".
@@ -1611,7 +1675,14 @@ mod tests {
     }
 
     #[test]
-    fn dedupe_resets_baseline_after_tool_call() {
+    fn dedupe_resets_baseline_after_tool_call_different_text() {
+        // After a `tool_call` the active baseline must reset so a
+        // genuinely-new continuation isn't accidentally treated as a
+        // cumulative chunk of the prior message. Use *different* text
+        // here — the verbatim-recap case is covered by
+        // `dedupe_drops_post_tool_recap_repeat`, and that's a stronger
+        // dedupe (one-shot, gated on `prev_completed_text`) that
+        // co-exists with this baseline-reset behaviour.
         let mut n = StreamNormalizer::new();
         let assistant = |t: &str| {
             format!(
@@ -1619,17 +1690,13 @@ mod tests {
                 t
             )
         };
-        // First assistant message
         let _ = n.normalize(&assistant("Done."));
-        // Tool call between messages — clears baseline
         let tool_line = r#"{"type":"tool_call","subtype":"started","call_id":"x","tool_call":{"shellToolCall":{"args":{"command":"ls"}}}}"#;
         let _ = n.normalize(tool_line);
-        // Second assistant message with the SAME text — must NOT be dropped
-        // (different message; cursor-agent does this when re-introducing
-        // a topic after a tool result).
-        let p2 = n.normalize(&assistant("Done."));
-        assert_eq!(p2.len(), 1, "post-tool same-text partial must pass");
-        assert_eq!(assistant_text(&p2[0]), Some("Done."));
+        // Genuinely-new follow-up after the tool ran. Must pass.
+        let p2 = n.normalize(&assistant("Now switching files."));
+        assert_eq!(p2.len(), 1, "unrelated post-tool text must pass");
+        assert_eq!(assistant_text(&p2[0]), Some("Now switching files."));
     }
 
     #[test]
@@ -1757,6 +1824,94 @@ mod tests {
         // instead of panicking.
         assert_eq!(collapse_doubled("ы:ы:"), "ы:");
         assert_eq!(collapse_doubled("ы"), "ы");
+    }
+
+    #[test]
+    fn dedupe_drops_post_tool_recap_repeat() {
+        // The exact scenario from the editor screenshot: cursor-agent
+        // shipped a paragraph, fired a `tool_call` (read file), then
+        // shipped the SAME paragraph again as the first chunk of the
+        // next assistant message. Without `prev_completed_text` snap-
+        // shot the second chunk fell through and rendered as a
+        // duplicate bubble.
+        let mut n = StreamNormalizer::new();
+        let assistant = |t: &str| {
+            format!(
+                r#"{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"text","text":"{}"}}]}},"timestamp_ms":1}}"#,
+                t
+            )
+        };
+        // Minimal `tool_call` started event with a non-mutating tool
+        // (read) so the normalizer keeps it; details don't matter for
+        // this test, only that close_message() runs.
+        let tool_call = r#"{"type":"tool_call","subtype":"started","tool_call":{"readToolCall":{"args":{"path":"foo"}}}}"#;
+
+        let body = "Папки с именем `ops` рядом с `efficiently` нет; открываю efficiently--operations.";
+        let p1 = n.normalize(&assistant(body));
+        let _tc = n.normalize(tool_call);
+        let p2 = n.normalize(&assistant(body));
+
+        assert_eq!(assistant_text(&p1[0]), Some(body));
+        assert!(
+            p2.is_empty(),
+            "post-tool verbatim recap must be dropped; got {:?}",
+            p2
+        );
+    }
+
+    #[test]
+    fn dedupe_chops_post_tool_recap_prefix_keeps_continuation() {
+        // Variant where the LLM doesn't just verbatim-recap — it
+        // recaps THEN continues. We must chop the prefix so the bubble
+        // shows only the genuinely new tail.
+        let mut n = StreamNormalizer::new();
+        let assistant = |t: &str| {
+            format!(
+                r#"{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"text","text":"{}"}}]}},"timestamp_ms":1}}"#,
+                t
+            )
+        };
+        let tool_call = r#"{"type":"tool_call","subtype":"started","tool_call":{"readToolCall":{"args":{"path":"foo"}}}}"#;
+
+        let body = "Открываю efficiently--operations.";
+        let body_extended = "Открываю efficiently--operations. Вот что я нашёл там.";
+        let p1 = n.normalize(&assistant(body));
+        let _tc = n.normalize(tool_call);
+        let p2 = n.normalize(&assistant(body_extended));
+
+        assert_eq!(assistant_text(&p1[0]), Some(body));
+        assert_eq!(
+            assistant_text(&p2[0]),
+            Some(" Вот что я нашёл там."),
+            "recap prefix must be chopped; only the continuation should reach the bubble"
+        );
+    }
+
+    #[test]
+    fn dedupe_lets_genuinely_different_post_tool_text_through() {
+        // Sanity: a brand-new paragraph after a tool_call (no overlap
+        // with the pre-tool text) must NOT be silenced. The recap
+        // dedupe is a one-shot suppression — if the new chunk is
+        // unrelated to `prev_completed_text` we forward it intact.
+        let mut n = StreamNormalizer::new();
+        let assistant = |t: &str| {
+            format!(
+                r#"{{"type":"assistant","message":{{"role":"assistant","content":[{{"type":"text","text":"{}"}}]}},"timestamp_ms":1}}"#,
+                t
+            )
+        };
+        let tool_call = r#"{"type":"tool_call","subtype":"started","tool_call":{"readToolCall":{"args":{"path":"foo"}}}}"#;
+
+        let p1 = n.normalize(&assistant("Сначала ищу путь."));
+        let _tc = n.normalize(tool_call);
+        let p2 = n.normalize(&assistant("Готово, вот результат."));
+
+        assert_eq!(assistant_text(&p1[0]), Some("Сначала ищу путь."));
+        assert_eq!(
+            assistant_text(&p2[0]),
+            Some("Готово, вот результат."),
+            "unrelated post-tool text must pass through unchanged"
+        );
     }
 
     /// `extract_tool_shape` consumes the inner `tool_call` payload — the

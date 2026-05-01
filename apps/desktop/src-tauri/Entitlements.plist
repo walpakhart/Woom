@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  macOS hardened-runtime entitlements for the Forgehold .app.
+  Used by `scripts/build-dmg.sh` ONLY when `APPLE_SIGNING_IDENTITY` is
+  set — the local ad-hoc path skips entitlements entirely (the
+  hardened runtime is opt-in and must be paired with notarization to
+  get past Gatekeeper anyway).
+
+  The three flags below are the standard Tauri / WKWebView set:
+    - allow-jit            : V8 JIT in the embedded webview
+    - allow-unsigned-…     : legacy fallback for older macOS that don't
+                             trust JIT-only signing
+    - disable-library-     : load the externalBin sidecars + Tauri
+      validation             frameworks without forcing each one to
+                             share the parent's Team ID
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+</dict>
+</plist>

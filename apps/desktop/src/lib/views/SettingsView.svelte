@@ -1,6 +1,10 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
-  import { openPath } from '@tauri-apps/plugin-opener';
+  import { openPath, openUrl } from '@tauri-apps/plugin-opener';
+  import { check, type Update } from '@tauri-apps/plugin-updater';
+  import { marked } from 'marked';
+  import { buildBugReport, bugReportGithubIssueUrl } from '$lib/services/bugReport';
+  import { resetWelcome, welcomeState } from '$lib/state/welcome.svelte';
   import { sessionsState, persistError, SESSIONS_STORAGE_KEY, RULES_STORAGE_KEY } from '$lib/state/sessions.svelte';
   import { layoutState } from '$lib/state/layout.svelte';
   import { notify, notifyError } from '$lib/state/toaster.svelte';
@@ -192,6 +196,263 @@
     );
     if (ok) clearConnectionEvents();
   }
+
+  /* ------------------------------------------------------------------ */
+  /* Auto-updater (`docs/ROADMAP_1.0.md §1.3`).                         */
+  /* The plugin reads its endpoints + pubkey from `tauri.conf.json     */
+  /* > plugins > updater`. Until a real signing key is wired up, the   */
+  /* manifest URL doesn't resolve and `check()` either returns null or */
+  /* throws — both surfaced here as a friendly status.                 */
+  /* ------------------------------------------------------------------ */
+
+  let updateCheckBusy = $state(false);
+  let updateInstallBusy = $state(false);
+  let updateLastCheckedAt = $state<string | null>(null);
+  let updateAvailable = $state<Update | null>(null);
+  let updateStatusMessage = $state<string | null>(null);
+  /* 0..1 progress when a download is in flight; null when idle. */
+  let updateDownloadProgress = $state<number | null>(null);
+  let updateDownloadTotal = $state<number | null>(null);
+  let updateInstalledOk = $state(false);
+
+  async function checkForUpdates() {
+    updateCheckBusy = true;
+    updateStatusMessage = null;
+    try {
+      const u = await check();
+      updateLastCheckedAt = new Date().toISOString();
+      if (u) {
+        updateAvailable = u;
+        updateStatusMessage = `Update ${u.version} ready to install.`;
+      } else {
+        updateAvailable = null;
+        updateStatusMessage = 'You’re on the latest version.';
+      }
+    } catch (e) {
+      /* The PLACEHOLDER pubkey + unreachable endpoint will land here
+       * until a real signing key is wired up; surface as a hint
+       * rather than a scary error. */
+      updateAvailable = null;
+      updateStatusMessage = `Couldn’t check for updates: ${
+        typeof e === 'string' ? e : (e as Error).message ?? 'unknown error'
+      }`;
+    } finally {
+      updateCheckBusy = false;
+    }
+  }
+
+  async function installUpdate() {
+    if (!updateAvailable) return;
+    updateInstallBusy = true;
+    updateDownloadProgress = 0;
+    updateDownloadTotal = null;
+    try {
+      let downloaded = 0;
+      await updateAvailable.downloadAndInstall((event) => {
+        if (event.event === 'Started') {
+          updateDownloadTotal =
+            typeof event.data.contentLength === 'number'
+              ? event.data.contentLength
+              : null;
+          downloaded = 0;
+          updateDownloadProgress = 0;
+        } else if (event.event === 'Progress') {
+          downloaded += event.data.chunkLength;
+          if (updateDownloadTotal && updateDownloadTotal > 0) {
+            updateDownloadProgress = Math.min(1, downloaded / updateDownloadTotal);
+          }
+        } else if (event.event === 'Finished') {
+          updateDownloadProgress = 1;
+        }
+      });
+      updateInstalledOk = true;
+      updateStatusMessage = 'Update installed. Quit and reopen Forgehold to finish.';
+    } catch (e) {
+      updateStatusMessage = `Install failed: ${
+        typeof e === 'string' ? e : (e as Error).message ?? 'unknown error'
+      }`;
+    } finally {
+      updateInstallBusy = false;
+    }
+  }
+
+  function fmtSize(bytes: number): string {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+    return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  }
+
+  /* MCP sidecar health (M4 §2.9.8). One row per bundled sidecar with
+   * a live "running / not running" indicator. Sidecars are spawned
+   * lazily by Claude / Cursor on first MCP handshake — a
+   * `not running` state just means no agent has called any of that
+   * sidecar's tools yet in this Forgehold launch (or the sidecar
+   * crashed; either way the next agent call will respawn it). */
+  type SidecarHealth = { name: string; running: boolean; pid_count: number };
+  let sidecarHealth = $state<SidecarHealth[] | null>(null);
+  let sidecarHealthLoading = $state(false);
+
+  async function refreshSidecarHealth() {
+    sidecarHealthLoading = true;
+    try {
+      sidecarHealth = await invoke<SidecarHealth[]>('mcp_sidecar_health');
+    } catch (e) {
+      notifyError(e, { title: 'Probe failed' });
+    } finally {
+      sidecarHealthLoading = false;
+    }
+  }
+  /* Fire once on mount so the section isn't empty on first view. */
+  $effect(() => {
+    if (sidecarHealth === null) void refreshSidecarHealth();
+  });
+
+  /* ------------------------------------------------------------------ */
+  /* Crash-report opt-out (`docs/ROADMAP_1.0.md §1.3`).                  */
+  /* The opt-out is file-backed (presence == opted out); see             */
+  /* `crash_reporting.rs` for the path. Initial fetch happens on mount   */
+  /* below so the toggle reflects the live filesystem state.             */
+  /* ------------------------------------------------------------------ */
+  let telemetryOptOut = $state(false);
+  let telemetryBusy = $state(false);
+
+  async function loadTelemetryPref() {
+    try {
+      telemetryOptOut = await invoke<boolean>('get_telemetry_opt_out');
+    } catch {
+      /* Pre-update binary doesn't expose the command; treat as
+       * "default off". */
+      telemetryOptOut = false;
+    }
+  }
+
+  async function toggleTelemetry(next: boolean) {
+    telemetryBusy = true;
+    try {
+      await invoke('set_telemetry_opt_out', { optOut: next });
+      telemetryOptOut = next;
+      notify({
+        kind: 'success',
+        title: next ? 'Crash reports disabled' : 'Crash reports enabled',
+        body: 'Takes effect on next app launch.'
+      });
+    } catch (e) {
+      notifyError(e, { title: 'Toggle failed' });
+    } finally {
+      telemetryBusy = false;
+    }
+  }
+
+  /* Pull the persisted preference on first mount. Effect runs once
+   * because we don't depend on any reactive read inside. */
+  $effect(() => {
+    void loadTelemetryPref();
+  });
+
+  /* ------------------------------------------------------------------ */
+  /* Report-bug form (`docs/ROADMAP_1.0.md §1.3`).                       */
+  /* Builds a Markdown bundle locally — connection state, last 50       */
+  /* status events, layout snapshot, user description — for the user    */
+  /* to copy or paste into a GitHub issue. Nothing leaves the machine   */
+  /* unless they explicitly click "Open issue" / paste the bundle       */
+  /* themselves.                                                        */
+  /* ------------------------------------------------------------------ */
+
+  /* Repo target for the "Open GitHub issue" button. Configured at
+   * build time (or runtime via env when desired); we deliberately
+   * don't autodetect from the current working repo — the user might
+   * have multiple Forgehold checkouts. Empty string disables the
+   * "Open issue" path; the user can still copy or download. */
+  const BUG_REPORT_GITHUB_REPO = ''; /* e.g. "forgehold/forgehold" — wire up at 1.0 */
+
+  let bugReportDescription = $state('');
+  let bugReportPreview = $state<string | null>(null);
+  let bugReportCopiedAt = $state<number | null>(null);
+
+  function refreshBugReportPreview() {
+    bugReportPreview = buildBugReport({
+      description: bugReportDescription,
+      appVersion: 'Forgehold 1.0.0'
+    });
+  }
+
+  async function copyBugReport() {
+    refreshBugReportPreview();
+    if (!bugReportPreview) return;
+    try {
+      await navigator.clipboard.writeText(bugReportPreview);
+      bugReportCopiedAt = Date.now();
+      notify({ kind: 'success', title: 'Bug report copied', body: 'Paste it into an issue or email.' });
+    } catch (e) {
+      notifyError(e, { title: 'Copy failed' });
+    }
+  }
+
+  function openBugReportIssue() {
+    refreshBugReportPreview();
+    const url =
+      bugReportPreview && BUG_REPORT_GITHUB_REPO
+        ? bugReportGithubIssueUrl(bugReportPreview, BUG_REPORT_GITHUB_REPO)
+        : null;
+    if (!url) {
+      notify({ kind: 'info', title: 'No issue tracker configured', body: 'Copy the bundle and paste it into your tracker manually.' });
+      return;
+    }
+    void openUrl(url);
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* In-app docs viewer (`docs/ROADMAP_1.0.md §1.10`).                   */
+  /* Reads bundled Markdown specs via the `list_bundled_docs` /          */
+  /* `read_bundled_doc` Tauri commands and renders with `marked`. The    */
+  /* Rust side handles path-traversal sanitization and falls back to     */
+  /* the repo's `docs/` folder during dev so `pnpm tauri dev` works      */
+  /* without re-bundling.                                                */
+  /* ------------------------------------------------------------------ */
+
+  let docsList = $state<string[] | null>(null);
+  let docsListError = $state<string | null>(null);
+  let activeDoc = $state<string | null>(null);
+  let activeDocBody = $state<string | null>(null);
+  let activeDocLoading = $state(false);
+  let activeDocError = $state<string | null>(null);
+
+  async function loadDocsList() {
+    if (docsList !== null) return;
+    try {
+      docsList = await invoke<string[]>('list_bundled_docs');
+    } catch (e) {
+      docsListError = typeof e === 'string' ? e : (e as Error).message ?? 'unknown error';
+    }
+  }
+
+  async function openDoc(name: string) {
+    activeDoc = name;
+    activeDocBody = null;
+    activeDocError = null;
+    activeDocLoading = true;
+    try {
+      const md = await invoke<string>('read_bundled_doc', { name });
+      /* `marked.parse` is sync when no async extensions registered;
+       * cast to string explicitly to satisfy TS now that the
+       * declared return is `string | Promise<string>`. */
+      activeDocBody = await Promise.resolve(marked.parse(md) as string | Promise<string>);
+    } catch (e) {
+      activeDocError = typeof e === 'string' ? e : (e as Error).message ?? 'unknown error';
+    } finally {
+      activeDocLoading = false;
+    }
+  }
+
+  function closeDoc() {
+    activeDoc = null;
+    activeDocBody = null;
+    activeDocError = null;
+  }
+
+  $effect(() => {
+    void loadDocsList();
+  });
 </script>
 
 <section class="settings-view">
@@ -385,6 +646,194 @@
       </div>
     </div>
 
+    <!-- Updates -->
+    <div class="card">
+      <header class="card-head">
+        <h2 class="card-title">Updates</h2>
+        <p class="card-sub">
+          Auto-update channel for new Forgehold builds. Signed and notarized releases pull from the public manifest configured in <span class="mono">tauri.conf.json</span>.
+        </p>
+      </header>
+      <div class="grid">
+        <div class="stat">
+          <div class="stat-label">Current version</div>
+          <div class="stat-value mono">Forgehold 1.0.0</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">Last checked</div>
+          <div class="stat-value mono">
+            {updateLastCheckedAt ? relativeTime(updateLastCheckedAt) : 'never'}
+          </div>
+        </div>
+      </div>
+      <div class="update-actions">
+        <button
+          class="btn btn--ghost"
+          onclick={checkForUpdates}
+          disabled={updateCheckBusy || updateInstallBusy}
+        >
+          {updateCheckBusy ? 'Checking…' : 'Check for updates'}
+        </button>
+      </div>
+      {#if updateStatusMessage}
+        <div class="update-status" class:update-status--ready={updateAvailable !== null} class:update-status--installed={updateInstalledOk}>
+          {updateStatusMessage}
+        </div>
+      {/if}
+      {#if updateAvailable && !updateInstalledOk}
+        <div class="update-detail">
+          <div class="update-version mono">v{updateAvailable.version}</div>
+          {#if updateAvailable.body}
+            <pre class="update-notes">{updateAvailable.body}</pre>
+          {/if}
+          <div class="update-actions">
+            <button
+              class="btn btn--primary"
+              onclick={installUpdate}
+              disabled={updateInstallBusy}
+            >
+              {updateInstallBusy ? 'Installing…' : 'Download & install'}
+            </button>
+          </div>
+          {#if updateDownloadProgress !== null}
+            <div class="update-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100"
+                 aria-valuenow={Math.round(updateDownloadProgress * 100)}>
+              <div class="update-progress-bar" style="width: {Math.round(updateDownloadProgress * 100)}%"></div>
+              <div class="update-progress-label mono">
+                {updateDownloadTotal ? `${fmtSize(Math.round(updateDownloadProgress * updateDownloadTotal))} / ${fmtSize(updateDownloadTotal)}` : `${Math.round(updateDownloadProgress * 100)}%`}
+              </div>
+            </div>
+          {/if}
+        </div>
+      {/if}
+    </div>
+
+    <!-- Privacy / crash reports -->
+    <div class="card">
+      <header class="card-head">
+        <h2 class="card-title">Privacy</h2>
+        <p class="card-sub">
+          Crash reports help us spot panics that wouldn’t otherwise reach you. Reports never include token bodies or chat content; user can opt out at any time.
+        </p>
+      </header>
+      <label class="telemetry-row">
+        <input
+          type="checkbox"
+          checked={telemetryOptOut}
+          disabled={telemetryBusy}
+          onchange={(e) => void toggleTelemetry((e.currentTarget as HTMLInputElement).checked)}
+        />
+        <span class="telemetry-row-label">Opt out of crash reports</span>
+        <span class="telemetry-row-hint">Takes effect on next app launch.</span>
+      </label>
+    </div>
+
+    <!-- Report a bug -->
+    <div class="card">
+      <header class="card-head">
+        <h2 class="card-title">Report a bug</h2>
+        <p class="card-sub">
+          Bundles your description with current connection state, the last 50 status events, and a snapshot of your layout. Generated locally — nothing leaves the machine until you copy or open it yourself.
+        </p>
+      </header>
+      <textarea
+        class="bug-report-textarea"
+        rows="6"
+        placeholder="What happened? What did you expect to happen?"
+        bind:value={bugReportDescription}
+        oninput={refreshBugReportPreview}
+      ></textarea>
+      <div class="update-actions">
+        <button class="btn btn--ghost" onclick={copyBugReport}>
+          {bugReportCopiedAt && Date.now() - bugReportCopiedAt < 4000 ? 'Copied!' : 'Copy bundle to clipboard'}
+        </button>
+        <button class="btn btn--primary" onclick={openBugReportIssue} disabled={!BUG_REPORT_GITHUB_REPO}>
+          Open GitHub issue
+        </button>
+      </div>
+      {#if bugReportPreview}
+        <details class="bug-report-preview">
+          <summary>Preview bundle</summary>
+          <pre class="bug-report-preview-pre">{bugReportPreview}</pre>
+        </details>
+      {/if}
+    </div>
+
+    <!-- MCP servers diagnostic (M4 §2.9.8) -->
+    <div class="card">
+      <header class="card-head">
+        <h2 class="card-title">MCP servers</h2>
+        <p class="card-sub">
+          Forgehold's bundled sidecars. Spawned by Claude / Cursor on first MCP handshake; "not running" means no agent has talked to that sidecar yet this launch.
+        </p>
+      </header>
+      <div class="update-actions">
+        <button
+          class="btn btn--ghost"
+          onclick={() => void refreshSidecarHealth()}
+          disabled={sidecarHealthLoading}
+        >
+          {sidecarHealthLoading ? 'Checking…' : 'Refresh'}
+        </button>
+      </div>
+      {#if sidecarHealth}
+        <ul class="sidecar-list">
+          {#each sidecarHealth as s (s.name)}
+            <li class="sidecar-row" class:running={s.running}>
+              <span class="sidecar-dot" aria-hidden="true"></span>
+              <span class="sidecar-name mono">{s.name}</span>
+              <span class="sidecar-status">
+                {s.running ? `running · ${s.pid_count} pid${s.pid_count === 1 ? '' : 's'}` : 'not running'}
+              </span>
+            </li>
+          {/each}
+        </ul>
+      {/if}
+    </div>
+
+    <!-- Documentation -->
+    <div class="card">
+      <header class="card-head">
+        <h2 class="card-title">Documentation</h2>
+        <p class="card-sub">
+          The full Forgehold spec set, bundled with the app. Each entry is rendered from <span class="mono">docs/*.md</span> in the repo. Pick one to read inline, or open the file in Finder.
+        </p>
+      </header>
+      {#if docsListError}
+        <div class="alert alert--error">{docsListError}</div>
+      {:else if docsList === null}
+        <div class="docs-loading">Loading…</div>
+      {:else if docsList.length === 0}
+        <div class="docs-empty">No bundled docs found.</div>
+      {:else if activeDoc === null}
+        <ul class="docs-list">
+          {#each docsList as name (name)}
+            <li>
+              <button class="docs-link" onclick={() => void openDoc(name)}>
+                <span class="mono">{name}.md</span>
+              </button>
+            </li>
+          {/each}
+        </ul>
+      {:else}
+        <div class="docs-active">
+          <div class="docs-active-bar">
+            <button class="btn btn--ghost" onclick={closeDoc}>← Back</button>
+            <span class="docs-active-name mono">{activeDoc}.md</span>
+          </div>
+          {#if activeDocLoading}
+            <div class="docs-loading">Loading…</div>
+          {:else if activeDocError}
+            <div class="alert alert--error">{activeDocError}</div>
+          {:else if activeDocBody}
+            <article class="docs-md">
+              {@html activeDocBody}
+            </article>
+          {/if}
+        </div>
+      {/if}
+    </div>
+
     <!-- Build / app info -->
     <div class="card">
       <header class="card-head">
@@ -393,12 +842,22 @@
       <div class="grid">
         <div class="stat">
           <div class="stat-label">Build</div>
-          <div class="stat-value mono">Forgehold 0.1.0 · aarch64</div>
+          <div class="stat-value mono">Forgehold 1.0.0 · aarch64</div>
         </div>
         <div class="stat">
           <div class="stat-label">Storage keys</div>
           <div class="stat-value mono">{SESSIONS_STORAGE_KEY}, {RULES_STORAGE_KEY}</div>
         </div>
+      </div>
+      <div class="update-actions">
+        <button
+          class="btn btn--ghost"
+          onclick={() => resetWelcome()}
+          disabled={!welcomeState.completed}
+          title="Re-open the first-launch welcome flow"
+        >
+          {welcomeState.completed ? 'Show welcome flow again' : 'Welcome flow active'}
+        </button>
       </div>
     </div>
   </div>
@@ -605,4 +1064,200 @@
     border-radius: 8px; text-align: center;
     font-size: 12px; color: var(--text-mute);
   }
+
+  /* Updates card */
+  .update-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  .update-status {
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: var(--bg-2);
+    border: 1px solid var(--border-neutral);
+    color: var(--text-1);
+    font-size: 12.5px; line-height: 1.5;
+  }
+  .update-status--ready {
+    background: rgba(16, 185, 129, 0.08);
+    border-color: rgba(16, 185, 129, 0.35);
+    color: var(--accent-bright);
+  }
+  .update-status--installed {
+    background: rgba(16, 185, 129, 0.14);
+    border-color: rgba(16, 185, 129, 0.5);
+    color: var(--accent-bright);
+    font-weight: 500;
+  }
+  .update-detail {
+    display: flex; flex-direction: column; gap: 10px;
+    padding: 12px; border-radius: 10px;
+    background: var(--bg-0); border: 1px solid var(--border-neutral);
+  }
+  .update-version { font-size: 13px; color: var(--text-0); }
+  .update-notes {
+    margin: 0; padding: 10px 12px;
+    background: var(--bg-2); border-radius: 6px;
+    font-size: 12px; color: var(--text-1); line-height: 1.55;
+    white-space: pre-wrap;
+  }
+  .update-progress {
+    position: relative; height: 18px; border-radius: 4px;
+    background: var(--bg-2); overflow: hidden;
+  }
+  .update-progress-bar {
+    position: absolute; left: 0; top: 0; bottom: 0;
+    background: linear-gradient(90deg, var(--accent), var(--accent-bright));
+    transition: width 200ms ease;
+  }
+  .update-progress-label {
+    position: relative; z-index: 1; font-size: 10.5px;
+    text-align: center; line-height: 18px; color: var(--text-0);
+    text-shadow: 0 0 2px var(--bg-0);
+  }
+
+  /* Bug-report card */
+  .bug-report-textarea {
+    width: 100%;
+    padding: 10px 12px;
+    background: var(--bg-0);
+    border: 1px solid var(--border-neutral);
+    border-radius: 8px;
+    color: var(--text-0);
+    font-family: inherit;
+    font-size: 12.5px;
+    line-height: 1.5;
+    resize: vertical;
+  }
+  .bug-report-textarea:focus {
+    outline: none;
+    border-color: var(--border-hi2);
+    box-shadow: 0 0 0 2px var(--accent-glow);
+  }
+  .bug-report-preview {
+    background: var(--bg-0); border: 1px solid var(--border-neutral);
+    border-radius: 8px; padding: 6px 12px; font-size: 12px;
+  }
+  .bug-report-preview > summary {
+    cursor: pointer; color: var(--text-2);
+    padding: 4px 0; user-select: none;
+  }
+  .bug-report-preview-pre {
+    margin: 6px 0 4px;
+    padding: 10px 12px;
+    background: var(--bg-2);
+    border-radius: 6px;
+    font-size: 11px; line-height: 1.5;
+    color: var(--text-1);
+    max-height: 320px; overflow: auto;
+    white-space: pre-wrap; word-break: break-word;
+  }
+
+  /* Documentation card */
+  .docs-loading, .docs-empty {
+    padding: 14px; text-align: center;
+    color: var(--text-mute); font-size: 12.5px;
+    border: 1px dashed var(--border-neutral); border-radius: 8px;
+  }
+  .docs-list { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 6px; }
+  .docs-link {
+    display: inline-flex; width: 100%;
+    padding: 8px 10px;
+    background: var(--bg-0);
+    border: 1px solid var(--border-neutral);
+    border-radius: 6px;
+    color: var(--text-1);
+    cursor: pointer;
+    text-align: left;
+    transition: all 120ms ease;
+  }
+  .docs-link:hover {
+    background: var(--bg-2);
+    border-color: var(--border-hi2);
+    color: var(--text-0);
+  }
+  .docs-active { display: flex; flex-direction: column; gap: 12px; }
+  .docs-active-bar {
+    display: flex; align-items: center; gap: 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border-neutral);
+  }
+  .docs-active-name { color: var(--text-mute); font-size: 11.5px; }
+  .docs-md {
+    max-height: 70vh; overflow-y: auto;
+    padding: 4px 8px;
+    font-size: 13px; line-height: 1.55;
+    color: var(--text-1);
+  }
+  .docs-md :global(h1) { font-size: 20px; margin: 18px 0 10px; color: var(--text-0); }
+  .docs-md :global(h2) { font-size: 16px; margin: 16px 0 8px; color: var(--text-0); border-bottom: 1px solid var(--border-neutral); padding-bottom: 4px; }
+  .docs-md :global(h3) { font-size: 14px; margin: 14px 0 6px; color: var(--text-0); }
+  .docs-md :global(h4) { font-size: 13px; margin: 12px 0 6px; color: var(--text-0); }
+  .docs-md :global(p) { margin: 0 0 10px; }
+  .docs-md :global(ul), .docs-md :global(ol) { margin: 0 0 10px; padding-left: 22px; }
+  .docs-md :global(li) { margin: 2px 0; }
+  .docs-md :global(code) {
+    background: var(--bg-2); padding: 1px 5px; border-radius: 4px;
+    font-size: 11.5px; color: var(--text-0);
+  }
+  .docs-md :global(pre) {
+    background: var(--bg-2); padding: 10px 12px; border-radius: 8px;
+    overflow-x: auto; font-size: 11.5px; line-height: 1.5;
+    margin: 0 0 12px;
+  }
+  .docs-md :global(pre code) { background: none; padding: 0; }
+  .docs-md :global(blockquote) {
+    margin: 0 0 10px; padding: 6px 14px;
+    border-left: 3px solid var(--accent);
+    color: var(--text-2);
+    background: var(--bg-2); border-radius: 0 6px 6px 0;
+  }
+  .docs-md :global(table) { border-collapse: collapse; margin: 0 0 12px; font-size: 12px; }
+  .docs-md :global(th), .docs-md :global(td) {
+    border: 1px solid var(--border-neutral);
+    padding: 4px 8px;
+  }
+  .docs-md :global(a) { color: var(--accent-bright); }
+
+  /* MCP sidecar list */
+  .sidecar-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 4px; }
+  .sidecar-row {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: 10px; align-items: center;
+    padding: 6px 12px;
+    background: var(--bg-0);
+    border: 1px solid var(--border-neutral);
+    border-radius: 7px;
+    font-size: 12px;
+  }
+  .sidecar-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--text-mute);
+  }
+  .sidecar-row.running .sidecar-dot {
+    background: var(--accent-bright);
+    box-shadow: 0 0 6px var(--accent-glow);
+  }
+  .sidecar-name { color: var(--text-0); }
+  .sidecar-status { color: var(--text-mute); font-size: 10.5px; }
+  .sidecar-row.running .sidecar-status { color: var(--accent-bright); }
+
+  /* Privacy toggle */
+  .telemetry-row {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    grid-row-gap: 2px;
+    column-gap: 10px;
+    align-items: center;
+    padding: 8px 12px;
+    border-radius: 8px;
+    background: var(--bg-0);
+    border: 1px solid var(--border-neutral);
+    cursor: pointer;
+  }
+  .telemetry-row input[type='checkbox'] {
+    grid-row: 1 / span 2;
+    width: 16px; height: 16px;
+    accent-color: var(--accent);
+  }
+  .telemetry-row-label { font-size: 12.5px; color: var(--text-0); font-weight: 500; }
+  .telemetry-row-hint  { font-size: 11px; color: var(--text-mute); }
 </style>
