@@ -4,7 +4,7 @@
 // models. Re-exporting these from the columns (plus +page.svelte) keeps
 // the import graph flat.
 
-export type PanelKind = 'github' | 'jira' | 'sentry' | 'claude' | 'cursor' | 'editor' | 'canvas';
+export type PanelKind = 'github' | 'jira' | 'sentry' | 'claude' | 'cursor' | 'editor' | 'canvas' | 'terminal';
 
 /** One live instance of a column in a workbench. Every kind supports multiple
  *  side-by-side instances — two GitHub columns can browse different repos,

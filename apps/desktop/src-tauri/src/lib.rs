@@ -13,6 +13,7 @@ mod jira;
 mod keychain;
 mod memory_local;
 mod sentry;
+mod terminal;
 mod watch;
 mod worktree;
 
@@ -264,6 +265,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(claude::new_runners())
         .manage(watch::new_state())
+        .manage(terminal::TerminalRegistry::default())
         .invoke_handler(tauri::generate_handler![
             github_connect_pat,
             github_status,
@@ -393,6 +395,14 @@ pub fn run() {
             fs_reveal_in_finder,
             mcp_sidecar_health,
             memory_local::memory_save_local,
+            // Terminal column — PTY-backed shell per workbench instance.
+            // Spawn returns a stable id; output streams over
+            // `terminal:output:<id>` Tauri events; write/resize/kill
+            // address by id. See `terminal.rs`.
+            terminal::terminal_spawn,
+            terminal::terminal_write,
+            terminal::terminal_resize,
+            terminal::terminal_kill,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

@@ -38,6 +38,12 @@ notify = "8"
 base64 = "0.22"
 urlencoding = "2"
 rusqlite = { version = "0.32", features = ["bundled"] }
+# Terminal column — PTY-backed shell session per workbench instance.
+# `portable-pty` spawns a real /bin/zsh attached to a master/slave pair;
+# `parking_lot` is the cheap RwLock for the active-instance map.
+portable-pty = "0.9"
+parking_lot = "0.12"
+uuid = { version = "1", features = ["v4"] }
 
 [profile.release]
 panic = "abort"

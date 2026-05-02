@@ -7,7 +7,7 @@ import { tick } from 'svelte';
 import { connectionsState } from '$lib/state/connections.svelte';
 import type { PanelInstance, PanelKind, Workbench } from '$lib/types';
 
-export const DEFAULT_PANEL_ORDER: PanelKind[] = ['github', 'jira', 'sentry', 'claude', 'cursor', 'editor', 'canvas'];
+export const DEFAULT_PANEL_ORDER: PanelKind[] = ['github', 'jira', 'sentry', 'claude', 'cursor', 'editor', 'canvas', 'terminal'];
 export const DEFAULT_PANEL_WIDTHS: Record<PanelKind, number> = {
   github: 420,
   jira: 420,
@@ -15,7 +15,8 @@ export const DEFAULT_PANEL_WIDTHS: Record<PanelKind, number> = {
   claude: 520,
   cursor: 520,
   editor: 720,
-  canvas: 720
+  canvas: 720,
+  terminal: 560
 };
 
 // px — how close to a snap point before we grab
@@ -326,7 +327,8 @@ export function restorePanelState() {
         claude: true,
         cursor: false,
         editor: false,
-        canvas: false
+        canvas: false,
+        terminal: false
       };
       const resolved: Record<PanelKind, boolean> = { ...defaults };
       for (const k of DEFAULT_PANEL_ORDER) {

@@ -7,7 +7,7 @@
 // DOM at the moment of `dragstart`. We append it off-screen then remove
 // on the next tick — by then the browser has already snapshotted it.
 
-export type DragChipKind = 'file' | 'dir' | 'jira' | 'github' | 'sentry' | 'cursor' | 'claude' | 'editor' | 'canvas';
+export type DragChipKind = 'file' | 'dir' | 'jira' | 'github' | 'sentry' | 'cursor' | 'claude' | 'editor' | 'canvas' | 'terminal';
 
 const KIND_GLYPH: Record<DragChipKind, string> = {
   file: '📄',
@@ -18,7 +18,8 @@ const KIND_GLYPH: Record<DragChipKind, string> = {
   cursor: 'Cr',
   claude: 'C',
   editor: 'E',
-  canvas: 'Cv'
+  canvas: 'Cv',
+  terminal: 'T'
 };
 
 const KIND_ACCENT: Record<DragChipKind, string> = {
@@ -30,7 +31,8 @@ const KIND_ACCENT: Record<DragChipKind, string> = {
   cursor: 'rgba(177, 153, 246, 0.95)',
   claude: 'rgba(232, 163, 58, 0.95)',
   editor: 'rgba(232, 163, 58, 0.95)',
-  canvas: 'rgba(232, 163, 58, 0.95)'
+  canvas: 'rgba(232, 163, 58, 0.95)',
+  terminal: 'rgba(101, 211, 150, 0.95)'
 };
 
 /** Attach a styled drag chip to the event. Call inside an `ondragstart`

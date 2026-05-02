@@ -125,7 +125,7 @@ export interface McpDispatchContext {
 }
 
 const VALID_PANEL_KINDS: PanelKind[] =
-  ['github', 'jira', 'sentry', 'claude', 'cursor', 'editor', 'canvas'];
+  ['github', 'jira', 'sentry', 'claude', 'cursor', 'editor', 'canvas', 'terminal'];
 
 const Z_MODES = ['to-front', 'to-back', 'forward', 'backward'] as const;
 const ALIGN_AXES: AlignAxis[] =

@@ -26,6 +26,7 @@
   import AgentColumn from '$lib/components/workbench/AgentColumn.svelte';
   import EditorColumn from '$lib/components/workbench/EditorColumn.svelte';
   import CanvasColumn from '$lib/components/workbench/CanvasColumn.svelte';
+  import TerminalColumn from '$lib/components/workbench/TerminalColumn.svelte';
   import {
     restoreCanvasState,
     dropCanvasInstance,
@@ -4353,6 +4354,11 @@
                        brand mark so the Canvas identity is consistent
                        across pill / header / library tile. -->
                   <span class="pill-icon pill-icon--canvas"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="14" rx="2"/><rect x="6" y="6" width="9" height="6" rx="1"/><rect x="13" y="13" width="5" height="3" rx="0.5"/></svg></span>
+                {:else if kind === 'terminal'}
+                  <!-- Chevron-prompt icon — same as TerminalColumn brand
+                       so the Terminal identity reads the same in pill +
+                       column header. -->
+                  <span class="pill-icon pill-icon--terminal"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg></span>
                 {/if}
                 <span class="pill-label">{label}</span>
                 {#if count > 0}
@@ -4439,6 +4445,7 @@
           {/if}
           {@render pill('editor', 'Editor', undefined)}
           {@render pill('canvas', 'Canvas', undefined)}
+          {@render pill('terminal', 'Terminal', undefined)}
 
           <div style="flex:1"></div>
           <button class="icon-btn" title="Search" aria-label="Search" onclick={() => (paletteOpen = true)}>
@@ -4630,6 +4637,8 @@
               />
             {:else if inst.kind === 'canvas'}
               <CanvasColumn instanceId={inst.id} onCardOpen={openCanvasCardSource} />
+            {:else if inst.kind === 'terminal'}
+              <TerminalColumn instanceId={inst.id} cwd={editorRepoPath || null} />
             {/if}
           {/each}
 
@@ -5032,6 +5041,7 @@
   }
   .pill-icon svg { width: 12px; height: 12px; display: block; color: currentColor; }
   .pill-icon--editor { color: var(--warning); }
+  .pill-icon--terminal { color: var(--success); }
   .pill-label { letter-spacing: -0.005em; }
   .pill-count {
     padding: 0 6px;

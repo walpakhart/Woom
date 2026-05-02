@@ -16,7 +16,7 @@
      *  labels read it. After the per-instance refactor every kind is
      *  free to appear multiple times per workbench, so there is no
      *  singleton guard here anymore. */
-    kind: 'github' | 'jira' | 'sentry' | 'claude' | 'cursor' | 'editor' | 'canvas';
+    kind: 'github' | 'jira' | 'sentry' | 'claude' | 'cursor' | 'editor' | 'canvas' | 'terminal';
   }
   let { instanceId, kind }: Props = $props();
 
