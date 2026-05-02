@@ -46,12 +46,6 @@
     revertAllPendingEdits,
     keepAllPendingEdits
   } from '$lib/services/diffActions';
-  import {
-    buildMentionCandidates,
-    highlightMentions,
-    readMentionAtCaret,
-    type MentionCandidate
-  } from '$lib/services/mentionAutocomplete';
   import { notify, notifyError } from '$lib/state/toaster.svelte';
   import {
     layoutState,
@@ -593,11 +587,20 @@
   // whitespace from `@` to caret) and pops a filtered list of Jira issues,
   // GitHub inbox items, Sentry issues, and repo files. Picking an item
   // replaces the query with `@<externalId>` and attaches a Mention to the
-  // session so the prompt builder can bake context in on send. Pure
-  // helpers (highlight, scoring, candidate ranking) live in
-  // `lib/services/mentionAutocomplete.ts`; this component owns only the
-  // textarea / popover state and the tiny session-bound side-effects
-  // (file index lookup, send-on-Enter, clearing the popover on blur).
+  // session so the prompt builder can bake context in on send.
+
+  type MentionCandidate = {
+    source: 'jira' | 'github' | 'sentry' | 'file';
+    externalId: string;
+    title: string;
+    hint: string;
+    isDir?: boolean;
+    absPath?: string;
+    /** Sentry-only — compact context (`type: value · culprit · level`)
+        baked into the resulting Mention's `body` so prompt builder
+        forwards it to Claude before MCP follow-up calls. */
+    sentryBody?: string;
+  };
 
   let textareaEl = $state<HTMLTextAreaElement | null>(null);
   let backdropEl = $state<HTMLDivElement | null>(null);
@@ -606,6 +609,86 @@
   let mentionSelectedIdx = $state(0);
   let fileIndex = $state<{ repo: string; paths: string[] } | null>(null);
 
+  /** HTML-escape a string so we can wrap @tokens in spans without letting
+      `<` / `&` from the user's text turn into real markup. Keeps the
+      backdrop a faithful mirror of the textarea content. */
+  function escapeHtml(s: string): string {
+    return s.replace(/[&<>"']/g, (c) => {
+      switch (c) {
+        case '&': return '&amp;';
+        case '<': return '&lt;';
+        case '>': return '&gt;';
+        case '"': return '&quot;';
+        case "'": return '&#39;';
+      }
+      return c;
+    });
+  }
+
+  /** A `@<token>` earns a highlight only when it resolves to something
+      real. Keeps random strings like `@bla-bla-bla` as plain text so the
+      chip style stays meaningful. The rules, in priority order:
+        1. Jira-style key: `DEVOPS-437` / `EFF-21190`
+        2. GitHub-style shorthand: `#482`
+        3. Already attached to the session via the popover or drop
+        4. Any path containing `/` (assume the user is referring to one)
+        5. Exact match in the current repo's `git ls-files` index
+      Rule (4) is intentionally permissive — partial paths like `@src/f`
+      get a chip as soon as the slash appears, so typing doesn't feel
+      laggy; (5) catches single-segment filenames at repo root like
+      `@README.md` where no slash is present. */
+  function isKnownMention(
+    token: string,
+    mentions: { externalId: string }[],
+    fileSet: Set<string>
+  ): boolean {
+    // Single-segment Jira keys (DEVOPS-437) + multi-segment Sentry short
+    // ids (CATALOG-API-76, BMS-API-J6). Trailing segment alphanumeric so
+    // base-32-suffix Sentry ids match too.
+    if (/^[A-Z][A-Z0-9_]*(?:-[A-Z0-9_]+)+$/.test(token)) return true;
+    if (/^#\d+$/.test(token)) return true;
+    if (mentions.some((m) => m.externalId === token)) return true;
+    if (token.includes('/')) return true;
+    if (fileSet.has(token)) return true;
+    return false;
+  }
+
+  /** Build the highlighted HTML for the textarea backdrop. Wraps known
+      `@<token>`s in a span; unknown ones pass through as plain escaped
+      text. The span intentionally has NO padding / border / margin —
+      otherwise it would widen the glyphs and the backdrop's line-wrapping
+      would drift out of sync with the actual textarea wrapping. */
+  function highlightMentions(
+    text: string,
+    mentions: { externalId: string }[],
+    fileSet: Set<string>
+  ): string {
+    const re = /(^|\s)(@[^\s]+)/g;
+    let out = '';
+    let last = 0;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text)) !== null) {
+      const boundary = m[1];
+      const tokenFull = m[2]; // includes leading '@'
+      const token = tokenFull.slice(1);
+      const tokenStart = m.index + boundary.length;
+      const tokenEnd = tokenStart + tokenFull.length;
+      out += escapeHtml(text.slice(last, m.index));
+      out += escapeHtml(boundary);
+      if (isKnownMention(token, mentions, fileSet)) {
+        out += `<span class="mention-hl">${escapeHtml(tokenFull)}</span>`;
+      } else {
+        out += escapeHtml(tokenFull);
+      }
+      last = tokenEnd;
+    }
+    out += escapeHtml(text.slice(last));
+    // Trailing newline: browsers collapse a pure trailing `\n` in white-space:
+    // pre-wrap DIVs, so add a zero-width placeholder to keep the backdrop
+    // one line taller (matching the textarea's trailing-newline behavior).
+    if (out.endsWith('\n')) out += '\u200b';
+    return out;
+  }
 
   // `git ls-files` output as a set for O(1) exact-match lookups. Pre-seeded
   // lazily on repo change so the backdrop can validate `@README.md`-style
@@ -662,17 +745,28 @@
   function syncMentionFromTextarea(el: HTMLTextAreaElement) {
     const value = el.value;
     const pos = el.selectionStart ?? value.length;
-    const found = readMentionAtCaret(value, pos);
-    if (!found) {
-      mentionQuery = null;
-      return;
+    let i = pos - 1;
+    while (i >= 0) {
+      const c = value[i];
+      if (c === '@') {
+        // Require whitespace or start-of-string before the '@' so e.g.
+        // an email address isn't mistaken for a mention.
+        if (i === 0 || /\s/.test(value[i - 1])) {
+          const nextQuery = value.slice(i + 1, pos);
+          mentionAt = i;
+          if (nextQuery !== mentionQuery) {
+            mentionQuery = nextQuery;
+            mentionSelectedIdx = 0;
+          }
+          void ensureFileIndex();
+          return;
+        }
+        break;
+      }
+      if (/\s/.test(c)) break;
+      i--;
     }
-    mentionAt = found.start;
-    if (found.query !== mentionQuery) {
-      mentionQuery = found.query;
-      mentionSelectedIdx = 0;
-    }
-    void ensureFileIndex();
+    mentionQuery = null;
   }
 
   function closeMentionPopover() {
@@ -680,20 +774,119 @@
     mentionSelectedIdx = 0;
   }
 
-  // Top-12 ranked candidate list for the popover. The pure ranking
-  // logic lives in `buildMentionCandidates`; we just feed it the live
-  // inbox snapshot + repo-local file index, and re-derive on every
-  // input change.
+  /** Rank-one fuzzy score — case-insensitive substring match, with a
+      big bonus for prefix and a small bonus for contiguous matches near
+      the start of the string. Good-enough for a composer popover. */
+  function score(haystack: string, needle: string): number {
+    if (!needle) return 1;
+    const h = haystack.toLowerCase();
+    const n = needle.toLowerCase();
+    if (h.startsWith(n)) return 1000 - h.length;
+    const idx = h.indexOf(n);
+    if (idx < 0) return -1;
+    return 500 - idx - h.length;
+  }
+
   const mentionCandidates = $derived<MentionCandidate[]>(
-    mentionQuery === null
-      ? []
-      : buildMentionCandidates(mentionQuery, {
-          jiraItems: Object.values(inboxState.jiraItemsByInstance).flat(),
-          githubItems: Object.values(inboxState.itemsByInstance).flat(),
-          sentryItems: Object.values(inboxState.sentryItemsByInstance).flat(),
-          fileIndex,
-          activeRepo
-        })
+    (() => {
+      if (mentionQuery === null) return [];
+      const q = mentionQuery;
+      const out: { cand: MentionCandidate; s: number }[] = [];
+
+      /* Walk every Jira / GitHub / Sentry column's loaded items —
+         post per-instance refactor each column has its own list, but
+         @-mention candidates draw from anything the user has open. */
+      const allJiraItems = Object.values(inboxState.jiraItemsByInstance).flat();
+      const allGhItems = Object.values(inboxState.itemsByInstance).flat();
+      const allSentryItems = Object.values(inboxState.sentryItemsByInstance).flat();
+
+      // Jira issues — externalId is the key (e.g. DEVOPS-437).
+      for (const j of allJiraItems) {
+        const s = Math.max(score(j.key, q), score(j.summary, q));
+        if (s < 0) continue;
+        out.push({
+          cand: {
+            source: 'jira',
+            externalId: j.key,
+            title: j.summary,
+            hint: `Jira · ${j.status.toLowerCase()}`
+          },
+          s: s + 10 // small boost: tickets feel most "reference-y"
+        });
+      }
+
+      // GitHub issues/PRs — externalId is `#<number>` for @mention parity
+      // with how the Markdown renderer styles them.
+      for (const it of allGhItems) {
+        const id = `#${it.number}`;
+        const s = Math.max(score(id, q), score(it.title, q));
+        if (s < 0) continue;
+        out.push({
+          cand: {
+            source: 'github',
+            externalId: id,
+            title: it.title,
+            hint: it.is_pull_request ? 'PR' : 'Issue'
+          },
+          s
+        });
+      }
+
+      // Sentry issues — externalId is the short id (e.g. `BMS-API-J6`).
+      // `sentryBody` is the compact context block stitched into the Mention
+      // so Claude can answer "what's @CATALOG-API-76?" without an MCP
+      // round-trip for the basics.
+      for (const it of allSentryItems) {
+        const s = Math.max(score(it.short_id, q), score(it.title, q));
+        if (s < 0) continue;
+        const bodyParts: string[] = [];
+        if (it.metadata_type || it.metadata_value) {
+          const t = it.metadata_type ?? '';
+          const v = it.metadata_value ?? '';
+          bodyParts.push(`${t}${t && v ? ': ' : ''}${v}`.trim());
+        }
+        if (it.culprit) bodyParts.push(`at ${it.culprit}`);
+        bodyParts.push(`level=${it.level}`);
+        if (it.project_slug) bodyParts.push(`project=${it.project_slug}`);
+        if (it.permalink) bodyParts.push(it.permalink);
+        out.push({
+          cand: {
+            source: 'sentry',
+            externalId: it.short_id,
+            title: it.title,
+            hint: `Sentry · ${it.level}`,
+            sentryBody: bodyParts.join(' · ')
+          },
+          s: s + 8 // small boost — Sentry short-ids are reference-y too
+        });
+      }
+
+      // Files + folders — filter only when the user has typed at least
+      // one char; otherwise the popover would dump the whole repo.
+      if (q.length > 0 && fileIndex) {
+        for (const p of fileIndex.paths) {
+          const s = score(p, q);
+          if (s < 0) continue;
+          const slash = p.lastIndexOf('/');
+          const name = slash >= 0 ? p.slice(slash + 1) : p;
+          const dir = slash >= 0 ? p.slice(0, slash) : '';
+          out.push({
+            cand: {
+              source: 'file',
+              externalId: p,
+              title: name,
+              hint: dir || 'file',
+              isDir: false,
+              absPath: `${activeRepo.replace(/\/$/, '')}/${p}`
+            },
+            s: s - 2 // slight deprioritization vs tickets
+          });
+        }
+      }
+
+      out.sort((a, b) => b.s - a.s);
+      return out.slice(0, 12).map((x) => x.cand);
+    })()
   );
 
   /** Replace the live `@query` span in the textarea with `@<externalId>`,
@@ -1781,50 +1974,19 @@
     background: rgba(16, 185, 129, 0.05);
     box-shadow: inset 0 0 0 2px rgba(16, 185, 129, 0.4);
   }
-  .claude-col .inbox-brand { border-bottom: 1px solid var(--border); }
+  .claude-col .inbox-brand { border-bottom: 1px solid var(--border-neutral); }
 
-  /* v7 brutalist session header — single 30px row, mono uppercase. */
   .inbox-brand {
-    height: 30px;
-    padding: 0 12px;
-    display: flex; align-items: center; gap: 10px;
-    background: var(--bg-0);
+    padding: 16px 20px 10px; display: flex; align-items: center; gap: 10px;
   }
-  .brand-icon { width: 16px; height: 16px; flex-shrink: 0; }
-  .brand-icon img { width: 100%; height: 100%; object-fit: contain; }
-  .brand-word {
-    font-family: 'JetBrains Mono', ui-monospace, monospace;
-    font-size: 11px;
-    font-weight: 700;
-    color: var(--text-0);
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-  }
-  .brand-word::before { content: '▸ '; color: var(--accent); font-weight: 700; }
-  .bench-name {
-    font-family: 'JetBrains Mono', ui-monospace, monospace;
-    font-size: 10px;
-    font-weight: 600;
-    color: var(--text-1);
-    padding: 1px 6px;
-    border: 1px solid var(--border);
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-  }
-  .brand-sub {
-    font-family: 'JetBrains Mono', ui-monospace, monospace;
-    font-size: 10px;
-    color: var(--text-2);
-    margin-left: auto;
-    letter-spacing: 0.02em;
-  }
+  .brand-word { font-size: 14px; font-weight: 600; color: var(--text-0); letter-spacing: -0.01em; }
+  .brand-sub { font-size: 11.5px; color: var(--text-2); margin-left: auto; }
   .source-mark {
-    width: 18px; height: 18px;
+    width: 22px; height: 22px; border-radius: 5px;
     display: inline-flex; align-items: center; justify-content: center;
-    font-family: 'JetBrains Mono', ui-monospace, monospace;
-    font-size: 9.5px; font-weight: 700; letter-spacing: 0;
+    font-size: 10.5px; font-weight: 700; letter-spacing: -0.02em;
     background: var(--bg-2); color: var(--text-1);
-    border: 1px solid var(--border);
+    border: 1px solid var(--border-neutral-hi);
   }
 
   .claude-drop {
@@ -1908,48 +2070,29 @@
   }
   :global(.btn-tiny:disabled) { opacity: 0.5; cursor: not-allowed; }
 
-  /* v5 chat message — was a card with a circle avatar; now a left-bordered
-     timeline entry (mockup §1). The 1.5px hairline + colored dot at the
-     top of each entry distinguishes user / assistant / system without
-     painting per-role chrome on every message. */
   .chat-msg {
     display: flex; flex-direction: column; gap: 6px;
-    padding-left: 18px;
-    border-left: 1.5px solid var(--border-neutral);
-    position: relative;
   }
-  .chat-msg::before {
-    content: '';
-    position: absolute; left: -4px; top: 4px;
-    width: 7px; height: 7px; border-radius: 50%;
-    background: var(--bg-0);
-    box-shadow: inset 0 0 0 1.5px var(--border-neutral-hi);
-  }
-  .chat-msg--user::before { box-shadow: inset 0 0 0 1.5px var(--text-2); background: var(--bg-2); }
-  .chat-msg--assistant::before { box-shadow: inset 0 0 0 1.5px var(--accent); background: var(--accent-soft); }
-  .chat-msg--system::before { box-shadow: inset 0 0 0 1.5px var(--blue); background: var(--bg-2); }
-
   .chat-msg-head {
-    display: flex; align-items: center; gap: 10px;
-    font-size: 11.5px;
+    display: flex; align-items: center; gap: 8px;
+    font-size: 12px;
   }
-  /* v5: avatars retreat to a small neutral square with a letter or
-     brand image, kept for orientation but no longer the visual anchor —
-     the timeline dot owns that. */
   .chat-avatar {
-    width: 20px; height: 20px; border-radius: 4px;
+    width: 22px; height: 22px; border-radius: 50%;
     display: inline-flex; align-items: center; justify-content: center;
-    font-size: 9px; font-weight: 700;
+    font-size: 10px; font-weight: 700;
     background: var(--bg-2); color: var(--text-1);
-    border: 1px solid var(--border-neutral);
+    border: 1px solid var(--border-neutral-hi);
     flex-shrink: 0;
     object-fit: cover;
   }
   .chat-avatar--claude {
-    background: var(--bg-2);
-    color: var(--src-claude);
-    border-color: var(--border-neutral);
+    background: rgba(16, 185, 129, 0.14);
+    color: var(--accent-bright);
+    border-color: rgba(16, 185, 129, 0.3);
   }
+  /* PNG/SVG brand mark variant — fills the circle with the actual logo
+     (Anthropic A for Claude, hex prism for Cursor) instead of a letter. */
   .chat-avatar--brand {
     padding: 0;
     background: var(--bg-2);
@@ -1961,32 +2104,17 @@
     display: block;
   }
   .chat-avatar--system {
-    background: var(--bg-2);
-    color: var(--blue);
-    border-color: var(--border-neutral);
-    font-size: 12px;
+    background: rgba(59, 130, 246, 0.12);
+    color: var(--blue-bright);
+    border-color: rgba(59, 130, 246, 0.24);
+    font-size: 14px;
   }
-  .chat-who {
-    font-family: 'Inter Tight', 'Inter', sans-serif;
-    font-weight: 600;
-    color: var(--text-0);
-    letter-spacing: -0.01em;
-    font-size: 12px;
-  }
-  .chat-time {
-    margin-left: auto;
-    font-family: 'JetBrains Mono', monospace;
-    color: var(--text-mute);
-    font-size: 10px;
-    letter-spacing: 0.04em;
-  }
+  .chat-who { font-weight: 600; color: var(--text-1); }
+  .chat-time { margin-left: auto; color: var(--text-mute); font-size: 10.5px; }
 
-  /* v5: body sits flush under the head (no extra left indent — the
-     timeline rail is already drawn by `.chat-msg`'s left border, and
-     pushing the body further would orphan it from the dot. */
   .chat-msg-body {
-    padding-left: 0;
-    font-size: 13.5px; line-height: 1.65; color: var(--text-0);
+    padding-left: 30px;
+    font-size: 13px; line-height: 1.55; color: var(--text-0);
   }
   .chat-plain {
     color: var(--text-1);
@@ -2014,21 +2142,21 @@
 
   .chat-typing {
     display: inline-flex; gap: 5px; align-items: center;
-    padding-left: 0;
+    padding-left: 30px;
   }
   /* Retry banner shown when the last assistant turn errored. */
   .chat-retry {
-    margin: 8px 0 4px;
+    margin: 8px 30px 4px;
     padding: 8px 12px;
-    background: color-mix(in srgb, var(--error) 8%, transparent);
-    border: 1px solid color-mix(in srgb, var(--error) 28%, transparent);
-    border-radius: 7px;
+    background: rgba(248, 113, 113, 0.07);
+    border: 1px solid rgba(248, 113, 113, 0.28);
+    border-radius: 8px;
     display: flex; align-items: center; gap: 10px;
     font-size: 12px;
   }
-  .chat-retry-label { color: var(--error); flex: 1; }
+  .chat-retry-label { color: #f87171; flex: 1; }
   .chat-retry-btn {
-    padding: 4px 10px; border-radius: 5px;
+    padding: 4px 10px; border-radius: 6px;
     background: var(--accent); color: var(--accent-fg);
     border: none; cursor: pointer; font-weight: 600;
     font-size: 11.5px;
@@ -2219,30 +2347,29 @@
   .attach-remove:hover { color: var(--error); background: var(--bg-3); }
   .attach-remove svg { width: 12px; height: 12px; }
 
-  /* v7 brutalist composer — square edges, mono input, accent send. */
   .chat-input {
-    display: flex; align-items: stretch; gap: 0;
-    padding: 0;
-    border-top: 1px solid var(--border);
-    background: var(--bg-0);
+    display: flex; align-items: flex-end; gap: 8px;
+    padding: 12px 14px;
+    border-top: 1px solid var(--border-neutral);
+    background: var(--bg-1);
   }
   .chat-attach {
-    width: 32px; min-height: 36px;
+    width: 38px; height: 38px; border-radius: 8px;
     display: inline-flex; align-items: center; justify-content: center;
     color: var(--text-2);
-    background: transparent;
-    border: 0;
-    border-right: 1px solid var(--border);
-    transition: color 60ms, background 60ms;
+    background: var(--bg-0);
+    border: 1px dashed var(--border-neutral-hi);
+    transition: all 120ms;
     flex-shrink: 0;
     cursor: pointer;
   }
   .chat-attach:hover:not(:disabled) {
-    color: var(--accent);
-    background: var(--bg-1);
+    color: var(--accent-bright);
+    border-color: var(--border-hi);
+    background: var(--accent-soft);
   }
   .chat-attach:disabled { opacity: 0.4; cursor: not-allowed; }
-  .chat-attach svg { width: 14px; height: 14px; }
+  .chat-attach svg { width: 18px; height: 18px; }
   /* Composite composer: wrapper owns the border + background, the textarea
      is transparent on top, and a backdrop DIV underneath renders the same
      text with @tokens highlighted. Both children share the exact same
@@ -2251,74 +2378,82 @@
   .chat-textarea-wrap {
     flex: 1; position: relative; display: flex; min-width: 0;
     background: var(--bg-0);
-    border: 0;
-    border-radius: 0;
-    transition: background 60ms;
+    border: 1px solid var(--border-neutral-hi);
+    border-radius: 8px;
+    transition: border-color 120ms;
   }
-  .chat-textarea-wrap:focus-within { background: var(--bg-1); }
+  .chat-textarea-wrap:focus-within { border-color: var(--accent); }
   .chat-textarea-backdrop {
     position: absolute; inset: 0;
-    padding: 8px 12px;
-    font-family: 'JetBrains Mono', ui-monospace, monospace;
-    font-size: 12px;
+    padding: 10px 12px;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    font-size: 13px;
     line-height: 1.5;
-    letter-spacing: 0;
+    letter-spacing: -0.005em;
     color: var(--text-0);
     white-space: pre-wrap;
     word-wrap: break-word;
     overflow: hidden;
     pointer-events: none;
+    /* Use same bg-transparent surface so caret/selection on top read right. */
     background: transparent;
   }
   .chat-textarea-backdrop :global(.mention-hl) {
     /* No padding / border / margin — otherwise the span inflates glyph
        widths and wrapping desyncs from the textarea. Pure background +
-       color. */
-    color: var(--accent);
-    background: var(--accent-soft);
-    box-shadow: 0 0 0 1px var(--accent-glow);
+       color. Rounded corners via border-radius only (doesn't affect
+       layout). */
+    color: var(--accent-bright);
+    background: rgba(232, 163, 58, 0.18);
+    border-radius: 3px;
+    box-shadow: 0 0 0 1px rgba(232, 163, 58, 0.24);
+    /* `box-shadow` draws the 1px "outline" OUTSIDE the box-model, so it
+       doesn't shift adjacent glyphs — keeps wrap alignment intact. */
   }
   .chat-textarea {
     flex: 1;
-    min-height: 36px; max-height: 200px;
-    padding: 8px 12px;
+    min-height: 40px; max-height: 140px;
+    padding: 10px 12px;
     background: transparent;
     border: 0;
-    border-radius: 0;
+    border-radius: 8px;
     color: transparent;
-    caret-color: var(--accent);
-    font-family: 'JetBrains Mono', ui-monospace, monospace;
-    font-size: 12px;
+    caret-color: var(--text-0);
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    font-size: 13px;
     line-height: 1.5;
-    letter-spacing: 0;
+    letter-spacing: -0.005em;
     resize: vertical;
     position: relative; z-index: 1;
   }
-  .chat-textarea::selection { color: transparent; background: var(--accent-glow); }
+  .chat-textarea::selection { color: transparent; background: rgba(232, 163, 58, 0.35); }
   .chat-textarea:focus { outline: none; }
   .chat-textarea:disabled { opacity: 0.5; }
 
-  /* v7 send — square accent block, uppercase mono "SEND" hint via SVG. */
   .chat-send {
-    width: 36px; min-height: 36px;
+    width: 38px; height: 38px; border-radius: 8px;
     display: inline-flex; align-items: center; justify-content: center;
-    color: var(--accent-fg);
-    background: var(--accent);
-    border: 0;
-    border-left: 1px solid var(--accent);
-    transition: background 60ms;
+    color: var(--accent-bright);
+    background: var(--accent-soft);
+    border: 1px solid rgba(16, 185, 129, 0.3);
+    transition: all 120ms;
     flex-shrink: 0;
   }
-  .chat-send:hover:not(:disabled) { background: var(--accent-bright); }
+  .chat-send:hover:not(:disabled) {
+    background: rgba(16, 185, 129, 0.18);
+    border-color: rgba(16, 185, 129, 0.5);
+  }
   .chat-send:disabled { opacity: 0.4; cursor: not-allowed; }
-  .chat-send svg { width: 14px; height: 14px; }
 
   .chat-stop {
-    color: var(--accent-fg);
-    background: var(--crit);
-    border-color: var(--crit);
+    color: var(--error);
+    background: rgba(214, 72, 44, 0.12);
+    border-color: rgba(214, 72, 44, 0.3);
   }
-  .chat-stop:hover { background: var(--crit); filter: brightness(1.1); }
+  .chat-stop:hover {
+    background: rgba(214, 72, 44, 0.22);
+    border-color: rgba(214, 72, 44, 0.5);
+  }
 
   /* Cwd bar */
   .cwd-bar {

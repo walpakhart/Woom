@@ -40,13 +40,6 @@
   import CanvasLibrary from '$lib/components/canvas/CanvasLibrary.svelte';
   import CanvasMinimap from '$lib/components/canvas/CanvasMinimap.svelte';
   import { applyLayout, type LayoutAlgorithm } from '$lib/services/canvasLayout';
-  import {
-    fitImageDimensions,
-    intrinsicFromDataUrl,
-    looksLikeImage,
-    MAX_IMAGE_BYTES,
-    readAsDataUrl
-  } from '$lib/services/canvasImageInput';
   import { dragState, type DragPayload } from '$lib/state/drag.svelte';
   import {
     layoutState,
@@ -981,11 +974,44 @@
   }
 
   // ---- Image (paste / pick / drop) -------------------------------------
-  //
-  // Pure utilities (looksLikeImage, readAsDataUrl, intrinsicFromDataUrl,
-  // fitImageDimensions) live in `lib/services/canvasImageInput.ts` so
-  // tests + non-canvas callers can reuse them. The 1.5MB cap is a
-  // stop-gap until canvas storage moves to disk (CANVAS.md §11.1).
+
+  /** Max accepted image bytes when pasted / dropped / picked. localStorage
+   *  has a ~5–10 MB hard limit per origin; a single 4 MB image would
+   *  blow it instantly. We reject large pastes early with a toast and
+   *  document the move-to-disk migration in CANVAS.md §11.1. */
+  const MAX_IMAGE_BYTES = 1_500_000;
+
+  function looksLikeImage(file: { type: string; name: string }): boolean {
+    if (file.type.startsWith('image/')) return true;
+    const lower = file.name.toLowerCase();
+    return /\.(png|jpg|jpeg|gif|webp|svg)$/.test(lower);
+  }
+
+  /** Read a Blob/File as base64 dataURL. Resolves with `null` on error
+   *  so callers can branch silently. */
+  function readAsDataUrl(blob: Blob): Promise<string | null> {
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onerror = () => resolve(null);
+      reader.onload = () => {
+        const r = reader.result;
+        resolve(typeof r === 'string' ? r : null);
+      };
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  /** Decode a dataURL into intrinsic dimensions so the placed shape
+   *  starts at native size (capped to a max so a giant screenshot
+   *  doesn't dominate the canvas). */
+  function intrinsicFromDataUrl(dataUrl: string): Promise<{ w: number; h: number }> {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onerror = () => resolve({ w: 320, h: 200 });
+      img.onload = () => resolve({ w: img.naturalWidth || 320, h: img.naturalHeight || 200 });
+      img.src = dataUrl;
+    });
+  }
 
   /** Drop the image on the canvas at `at` (canvas px). `at` is the
    *  desired *center* of the inserted shape, so the image lands under
@@ -1002,7 +1028,13 @@
     const dataUrl = await readAsDataUrl(blob);
     if (!dataUrl) return;
     const { w, h } = await intrinsicFromDataUrl(dataUrl);
-    const { w: outW, h: outH } = fitImageDimensions(w, h);
+    const MAX_DIM = 480;
+    let outW = w, outH = h;
+    if (w > MAX_DIM || h > MAX_DIM) {
+      const k = Math.min(MAX_DIM / w, MAX_DIM / h);
+      outW = Math.round(w * k);
+      outH = Math.round(h * k);
+    }
     const shape = makeShape({
       kind: 'image',
       x: at.x - outW / 2,
@@ -2097,41 +2129,26 @@
 
   /* ---- Header ------------------------------------------------------- */
 
-  /* v7 brutalist canvas header — slim mono uppercase. */
   .canvas-head {
     display: flex;
     align-items: center;
-    gap: 12px;
-    height: 30px;
-    padding: 0 12px;
-    border-bottom: 1px solid var(--border);
-    background: var(--bg-0);
+    gap: 14px;
+    padding: 14px 18px 10px;
+    border-bottom: 1px solid var(--border-neutral);
+    background: var(--bg-1);
     flex-shrink: 0;
+    min-height: 0;
   }
   .canvas-brand { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
   .source-mark {
-    width: 16px; height: 16px;
+    width: 22px; height: 22px; border-radius: 5px;
     display: inline-flex; align-items: center; justify-content: center;
-    color: var(--text-1);
+    background: var(--bg-2); color: var(--text-1);
+    border: 1px solid var(--border-neutral-hi);
   }
-  .source-mark svg { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
-  .brand-word {
-    font-family: 'JetBrains Mono', ui-monospace, monospace;
-    font-size: 11px; font-weight: 700;
-    color: var(--text-0);
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-  }
-  .brand-word::before { content: '▌ '; color: var(--accent); font-weight: 700; }
-  .bench-name {
-    font-family: 'JetBrains Mono', ui-monospace, monospace;
-    font-size: 10px; font-weight: 600;
-    color: var(--text-1);
-    padding: 1px 6px;
-    border: 1px solid var(--border);
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-  }
+  .source-mark svg { width: 13px; height: 13px; stroke: currentColor; fill: none; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+  .brand-word { font-size: 14px; font-weight: 600; color: var(--text-0); letter-spacing: -0.01em; }
+  .bench-name { font-size: 11px; color: var(--text-2); padding: 2px 6px; border-radius: 5px; background: var(--bg-2); border: 1px solid var(--border-neutral); }
   /* Auto-save indicator. Idle state is muted text; flash state
      pulses using the accent so the user gets clear "wrote to disk"
      feedback. Honors prefers-reduced-motion per the 1.0 a11y bar. */
