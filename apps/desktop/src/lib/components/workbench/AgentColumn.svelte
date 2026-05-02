@@ -1038,98 +1038,78 @@
 
   {#if activeSess}
     <div class="cwd-bar" class:cwd-bar--linked={activeSess.linkedToEditor}>
-      {#if activeSess.linkedToEditor}
-        <!-- Tight linked strip. Folder + branch are visible in the Editor
-             column right next to this one — no need to repeat them here.
-             Isolate stays available so you can still spin up a worktree
-             even when linked. Click the 🔗 pill to jump to the Editor. -->
-        <button
-          class="linked-pill"
-          onclick={() => { focusLocalSession(activeSess.id); onOpenSessionFolderInEditor(); }}
-          title={editorRepoPath ? `Reveal in Editor: ${editorRepoPath}` : 'Editor has no folder open'}
-        >
-          <span class="linked-pill-dot"></span>
-          <svg class="i i-sm" viewBox="0 0 24 24"><path d="M9 17H7A5 5 0 1 1 7 7h2M15 7h2a5 5 0 1 1 0 10h-2M8 12h8"/></svg>
-          <span class="linked-pill-label">Linked to Editor</span>
-          {#if linkedEditor}
-            <span class="linked-pill-bench mono">{linkedEditor.name}</span>
+      <!-- cwd chip — always visible. When linked-to-editor it shows
+           the editor's repoPath as a `↳` hint; otherwise the
+           session's explicit cwd or a "pick folder" prompt. Click =
+           open folder picker either way (overrides the editor link). -->
+      <button
+        class="cwd-chip"
+        class:has-cwd={activeSess.cwd}
+        class:editor-linked={activeSess.linkedToEditor || (!activeSess.cwd && editorRepoPath)}
+        class:muted={!!activeSess.worktreePath}
+        onclick={() => { focusLocalSession(activeSess.id); onPickCwd(); }}
+        title={activeSess.worktreePath ? `Overridden by worktree below` : (activeSess.cwd ?? (editorRepoPath ? `Editor folder: ${editorRepoPath}` : 'Pick working directory'))}
+      >
+        <svg class="i i-sm" viewBox="0 0 24 24"><path d="M3 7v11a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-7L10 5H5a2 2 0 0 0-2 2z" /></svg>
+        <span class="cwd-label mono">
+          {#if activeSess.cwd}
+            {shortPath(activeSess.cwd)}
+          {:else if editorRepoPath}
+            ↳ {shortenFsPath(editorRepoPath)}
+          {:else}
+            No folder
           {/if}
+        </span>
+      </button>
+      {#if activeSess.cwd}
+        <button class="icon-btn" onclick={() => { focusLocalSession(activeSess.id); onClearCwd(); }} title="Clear folder override" aria-label="Clear folder">
+          <svg class="i i-sm" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>
         </button>
-        <div style="flex:1"></div>
-        {#if !activeSess.worktreePath}
-          <button
-            class="wt-chip wt-chip--create"
-            onclick={() => { focusLocalSession(activeSess.id); onCreateWorktree(); }}
-            disabled={worktreeBusy === 'creating' || !editorRepoPath}
-            title={editorRepoPath ? 'Run in an isolated git worktree. Safer for parallel agents — your main working tree stays untouched.' : 'Editor has no folder open'}
-          >
-            <svg class="i i-sm" viewBox="0 0 24 24"><path d="M6 3v18M6 9a3 3 0 0 0 3 3h4a3 3 0 0 1 3 3v6M18 3a3 3 0 1 1 0 6 3 3 0 0 1 0-6z"/></svg>
-            <span>{worktreeBusy === 'creating' ? 'Isolating…' : 'Isolate'}</span>
-          </button>
-        {/if}
+      {/if}
+
+      <!-- Editor link — same chip-or-dropdown UX as canvas / terminal.
+           When linked: chip with editor name + X to unlink. When not
+           linked but editors exist: Dropdown picker. The standalone
+           "LINKED TO EDITOR" pill that used to dominate this row is
+           gone — surface area now matches its peers. -->
+      {#if activeSess.linkedToEditor && linkedEditor}
         <button
-          class="unlink-btn"
+          class="canvas-link-chip"
           onclick={() => { focusLocalSession(activeSess.id); onToggleEditorLink(); }}
-          title="Unlink — the chat keeps its current folder as an explicit cwd"
+          title={editorRepoPath ? `Linked to Editor · ${editorRepoPath} — click to unlink` : 'Linked to Editor — click to unlink'}
         >
-          <svg class="i i-sm" viewBox="0 0 24 24"><path d="M9 17H7A5 5 0 1 1 7 7h2M15 7h2a5 5 0 0 1 4 8M3 3l18 18"/></svg>
-          <span>Unlink</span>
+          <svg class="i i-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v11a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-7L10 5H5a2 2 0 0 0-2 2z"/></svg>
+          <span class="canvas-link-name">{linkedEditor.name}</span>
+          <svg class="i i-sm canvas-link-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>
         </button>
-      {:else}
+      {:else if editorInstances.length > 0}
+        <div class="link-canvas-picker">
+          <Dropdown
+            value=""
+            options={editorInstances.map((e) => ({
+              value: e.id,
+              label: `Link to ${e.name}`
+            }))}
+            onChange={(id) => { focusLocalSession(activeSess.id); onLinkToEditorInstance(id); }}
+            placeholder="Link editor…"
+            ariaLabel="Link to editor bench"
+          />
+        </div>
+      {/if}
+
+      <!-- Isolate (worktree) button — always available when no
+           worktree exists yet. Disabled until a folder is in scope
+           (either explicit cwd or a linked editor). -->
+      {#if !activeSess.worktreePath}
         <button
-          class="cwd-chip"
-          class:has-cwd={activeSess.cwd}
-          class:editor-linked={!activeSess.cwd && editorRepoPath}
-          class:muted={!!activeSess.worktreePath}
-          onclick={() => { focusLocalSession(activeSess.id); onPickCwd(); }}
-          title={activeSess.worktreePath ? `Overridden by worktree below` : (activeSess.cwd ?? (editorRepoPath ? `Editor folder: ${editorRepoPath}` : 'Pick working directory'))}
+          class="wt-chip wt-chip--create"
+          onclick={() => { focusLocalSession(activeSess.id); onCreateWorktree(); }}
+          disabled={worktreeBusy === 'creating' || (!activeSess.cwd && !editorRepoPath)}
+          title={activeSess.cwd || editorRepoPath ? 'Run in an isolated git worktree. Safer for parallel agents — your main working tree stays untouched.' : 'Pick a folder first'}
         >
-          <svg class="i i-sm" viewBox="0 0 24 24"><path d="M3 7v11a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-7L10 5H5a2 2 0 0 0-2 2z" /></svg>
-          <span class="cwd-label mono">
-            {#if activeSess.cwd}
-              {shortPath(activeSess.cwd)}
-            {:else if editorRepoPath}
-              ↳ {shortenFsPath(editorRepoPath)}
-            {:else}
-              No folder
-            {/if}
-          </span>
+          <svg class="i i-sm" viewBox="0 0 24 24"><path d="M6 3v18M6 9a3 3 0 0 0 3 3h4a3 3 0 0 1 3 3v6M18 3a3 3 0 1 1 0 6 3 3 0 0 1 0-6z"/></svg>
+          <span>{worktreeBusy === 'creating' ? 'Isolating…' : 'Isolate'}</span>
         </button>
-        {#if activeSess.cwd}
-          <button class="icon-btn" onclick={() => { focusLocalSession(activeSess.id); onClearCwd(); }} title="Clear folder override" aria-label="Clear folder">
-            <svg class="i i-sm" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>
-          </button>
-        {/if}
-        {#if editorInstances.length > 0}
-          <!-- Always-visible picker — mirrors the canvas-link UX so
-               linking-by-name is the same gesture across surfaces.
-               Dropdown shows even with a single editor (no special
-               case for "if exactly one"); list-of-one is still useful
-               feedback that something IS available. -->
-          <div class="link-editor-picker">
-            <Dropdown
-              value=""
-              options={editorInstances.map((e) => ({
-                value: e.id,
-                label: `Link to ${e.name}`
-              }))}
-              onChange={(id) => { focusLocalSession(activeSess.id); onLinkToEditorInstance(id); }}
-              placeholder="Link editor…"
-              ariaLabel="Link to editor bench"
-            />
-          </div>
-        {/if}
-        {#if !activeSess.worktreePath}
-          <button
-            class="wt-chip wt-chip--create"
-            onclick={() => { focusLocalSession(activeSess.id); onCreateWorktree(); }}
-            disabled={worktreeBusy === 'creating' || (!activeSess.cwd && !editorRepoPath)}
-            title={activeSess.cwd || editorRepoPath ? 'Run in an isolated git worktree. Safer for parallel agents — your main working tree stays untouched.' : 'Pick a folder first'}
-          >
-            <svg class="i i-sm" viewBox="0 0 24 24"><path d="M6 3v18M6 9a3 3 0 0 0 3 3h4a3 3 0 0 1 3 3v6M18 3a3 3 0 1 1 0 6 3 3 0 0 1 0-6z"/></svg>
-            <span>{worktreeBusy === 'creating' ? 'Isolating…' : 'Isolate'}</span>
-          </button>
-        {/if}
       {/if}
 
       <!-- Canvas link control. Lives after the editor-link area so the
