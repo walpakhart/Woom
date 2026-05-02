@@ -7,10 +7,12 @@
 //! chunks (xterm.js handles the ANSI). `terminal_write` /
 //! `terminal_resize` / `terminal_kill` close the loop.
 //!
-//! Phase 2 (MCP) calls into the same registry — when a Claude / Cursor
-//! agent runs `terminal.run_command(id, cmd)`, the bytes go through
-//! the same master fd the user is staring at, so the session is a
-//! single shared shell rather than two parallel ones.
+//! Phase 2 (MCP) — the same Session is exposed via a localhost HTTP
+//! bridge in `terminal_bridge.rs`. Agents (Claude / Cursor) call MCP
+//! tools in `forgehold-app` that POST to the bridge and read/write
+//! the same master fd the user is staring at. Each Session keeps a
+//! ring buffer of its last ~64 KB of output so `run_command` can
+//! sentinel-detect "command finished" without re-spawning a shell.
 //!
 //! Cleanup: instances drop on `terminal_kill` OR when the Tauri app
 //! exits (the OS reaps PTY children automatically).
@@ -26,24 +28,50 @@ use parking_lot::Mutex;
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
+use tokio::sync::Notify;
 use uuid::Uuid;
+
+/// Cap on the per-session ring buffer. 64 KB is plenty for the
+/// sentinel-detection scan (`run_command` pumps chunks every ~50 ms,
+/// so 64 KB ≈ multiple seconds of dense output). Drain-from-front
+/// on overflow — Vec drain is O(n) but n is bounded.
+const BUFFER_CAP: usize = 64 * 1024;
 
 /// One live PTY session. The master fd survives until either the
 /// frontend kills it or the app exits. The reader thread owns the
 /// reader half and emits events; `master` is shared (Mutex) so write
 /// + resize calls from the Tauri command handlers can poke it.
-struct Session {
-    master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
-    writer: Arc<Mutex<Box<dyn Write + Send>>>,
+pub struct Session {
+    pub master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
+    pub writer: Arc<Mutex<Box<dyn Write + Send>>>,
     /// Kept so `Drop` can `kill()` the child if the user forcibly
     /// closes the column. Without this the shell lingers as an
     /// orphan until the parent app exits.
-    child: Arc<Mutex<Box<dyn portable_pty::Child + Send + Sync>>>,
+    pub child: Arc<Mutex<Box<dyn portable_pty::Child + Send + Sync>>>,
+    /// Rolling buffer of the last [`BUFFER_CAP`] bytes the PTY has
+    /// emitted. The MCP `run_command` waiter scans this for its
+    /// sentinel; `read_buffer` peeks the tail.
+    pub output_buf: Arc<Mutex<Vec<u8>>>,
+    /// Wakes anyone waiting on new output (the run-command sentinel
+    /// loop). Reader thread calls `notify_waiters` after each chunk.
+    pub output_notify: Arc<Notify>,
 }
 
 #[derive(Default)]
 pub struct TerminalRegistry {
-    sessions: Mutex<HashMap<String, Session>>,
+    pub sessions: Mutex<HashMap<String, Arc<Session>>>,
+}
+
+impl TerminalRegistry {
+    /// Snapshot of every live session's id. Used by the bridge `list`
+    /// endpoint so the lock isn't held across `await`.
+    pub fn ids(&self) -> Vec<String> {
+        self.sessions.lock().keys().cloned().collect()
+    }
+
+    pub fn get(&self, id: &str) -> Option<Arc<Session>> {
+        self.sessions.lock().get(id).cloned()
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -129,18 +157,23 @@ pub fn terminal_spawn(
         .map_err(|e| format!("clone_reader: {e}"))?;
 
     let id = Uuid::new_v4().to_string();
-    let session = Session {
+    let output_buf = Arc::new(Mutex::new(Vec::with_capacity(BUFFER_CAP)));
+    let output_notify = Arc::new(Notify::new());
+    let session = Arc::new(Session {
         master: Arc::new(Mutex::new(pair.master)),
         writer: Arc::new(Mutex::new(writer)),
         child: Arc::new(Mutex::new(child)),
-    };
+        output_buf: output_buf.clone(),
+        output_notify: output_notify.clone(),
+    });
     state.sessions.lock().insert(id.clone(), session);
 
     // Reader pump. Runs on its own OS thread because `portable-pty`'s
     // reader is blocking — putting it on the tokio runtime would tie
     // up a worker waiting on read. Each chunk is base64-encoded and
     // emitted on `terminal:output:<id>` so xterm.js can write it
-    // verbatim. We exit when the child closes its end of the PTY.
+    // verbatim. We also append to the rolling buffer + notify so
+    // `run_command` waiters can sentinel-detect.
     let event_id = id.clone();
     thread::spawn(move || {
         let mut reader = reader;
@@ -149,8 +182,22 @@ pub fn terminal_spawn(
             match reader.read(&mut buf) {
                 Ok(0) => break, // EOF — child exited
                 Ok(n) => {
-                    let payload = STANDARD.encode(&buf[..n]);
+                    let chunk = &buf[..n];
+                    let payload = STANDARD.encode(chunk);
                     let _ = app.emit(&format!("terminal:output:{event_id}"), payload);
+                    {
+                        let mut b = output_buf.lock();
+                        b.extend_from_slice(chunk);
+                        if b.len() > BUFFER_CAP {
+                            // Drain from the front to keep the buffer
+                            // bounded. The drain itself is O(n) but n
+                            // is bounded by BUFFER_CAP so each call is
+                            // O(64 KB) max.
+                            let excess = b.len() - BUFFER_CAP;
+                            b.drain(..excess);
+                        }
+                    }
+                    output_notify.notify_waiters();
                 }
                 Err(e) => {
                     let _ = app.emit(

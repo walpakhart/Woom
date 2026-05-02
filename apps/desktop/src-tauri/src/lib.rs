@@ -14,6 +14,7 @@ mod keychain;
 mod memory_local;
 mod sentry;
 mod terminal;
+mod terminal_bridge;
 mod watch;
 mod worktree;
 
@@ -404,9 +405,29 @@ pub fn run() {
             terminal::terminal_resize,
             terminal::terminal_kill,
         ])
+        .setup(|app| {
+            // Spawn the localhost terminal-MCP bridge. Failure is
+            // non-fatal — desktop still works, agents just lose
+            // `terminal.run_command` etc. Port goes to
+            // `<app_data>/bridge.port` for sidecar discovery.
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                match terminal_bridge::start(handle.clone()).await {
+                    Ok(port) => {
+                        eprintln!(
+                            "[forgehold] terminal MCP bridge listening on 127.0.0.1:{port}"
+                        );
+                    }
+                    Err(e) => {
+                        eprintln!("[forgehold] terminal bridge failed to start: {e}");
+                    }
+                }
+            });
+            Ok(())
+        })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|_app, event| {
+        .run(|app, event| {
             // Kill our sidecars when Forgehold quits. Tauri owns the
             // main `forgehold-desktop` process, but the `forgehold-app
             // / -github / -jira / -sentry / -memory` MCP sidecars are
@@ -423,6 +444,7 @@ pub fn run() {
             // of Forgehold (or Cursor immediately reconnecting via
             // MCP) gets a clean slate.
             if let tauri::RunEvent::Exit = event {
+                terminal_bridge::clear_port_file(app);
                 kill_stale_sidecars();
             }
         });

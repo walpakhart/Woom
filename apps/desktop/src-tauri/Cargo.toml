@@ -44,6 +44,12 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 portable-pty = "0.9"
 parking_lot = "0.12"
 uuid = { version = "1", features = ["v4"] }
+# Terminal MCP bridge — axum HTTP server on 127.0.0.1 so the
+# `forgehold-app` sidecar (separate process spawned by Claude/Cursor)
+# can drive the same PTYs the user sees in their workbench column.
+# Port is published to `<app_data>/bridge.port` for sidecar discovery.
+axum = "0.8"
+strip-ansi-escapes = "0.2"
 
 [profile.release]
 panic = "abort"

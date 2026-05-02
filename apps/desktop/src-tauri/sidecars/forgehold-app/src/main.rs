@@ -29,6 +29,9 @@ use rmcp::{
 };
 use serde::Deserialize;
 
+mod terminal_bridge_client;
+use terminal_bridge_client::BridgeClient;
+
 /// Top-level view identifiers exposed to the agent. Named after the
 /// platform (`github` / `jira` / `sentry`) rather than the generic noun
 /// the UI used to show ("Repositories" / "Tasks" / "Issues") because:
@@ -2056,6 +2059,159 @@ impl App {
             p.base64.len() * 3 / 4 / 1024
         ))]))
     }
+
+    // ---- Terminal MCP ----------------------------------------------------
+    //
+    // The user's workbench can host Terminal columns — full PTY-backed
+    // shells. These four tools let an agent drive the SAME PTY the
+    // user is staring at: keystroke-level visibility into agent work,
+    // no parallel-shell drift, no extra surface to switch to. Every
+    // call goes through the desktop's localhost bridge (see
+    // `terminal_bridge_client`).
+
+    #[tool(
+        description = "List every Terminal column open in the user's Forgehold workbench. Returns each terminal's stable id — pass it to terminal_run, terminal_write, or terminal_buffer below. Empty list = the user has no Terminal columns yet (suggest they add one from the workbench pill bar).\n\nUse this BEFORE issuing other terminal_* tools so you have a real id."
+    )]
+    async fn terminal_list(&self) -> Result<CallToolResult, ErrorData> {
+        let client = BridgeClient::discover().map_err(bridge_to_mcp)?;
+        let resp = client.list().await.map_err(bridge_to_mcp)?;
+        if resp.instances.is_empty() {
+            return Ok(CallToolResult::success(vec![Content::text(
+                "No Terminal columns open. Ask the user to add one from the workbench pill bar (Terminal +)."
+                    .to_string(),
+            )]));
+        }
+        let lines: Vec<String> = resp
+            .instances
+            .iter()
+            .map(|i| format!("- id: {}", i.id))
+            .collect();
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "{} terminal{} open:\n{}",
+            resp.instances.len(),
+            if resp.instances.len() == 1 { "" } else { "s" },
+            lines.join("\n")
+        ))]))
+    }
+
+    #[tool(
+        description = "Run a shell command in one of the user's Terminal columns and return stdout + exit code. The command runs in the SAME shell the user sees — they watch it execute live. Wrapped automatically so `$?` reflects the user command's exit (not printf's). Output is ANSI-stripped before return.\n\nPrefer this over the generic `bash` tool when you want the user to see what you're doing — debugging, exploratory commands, anything where keystroke-level visibility matters. For long jobs (build, tests) bump `timeout_ms` (default 60s).\n\nReturns `timed_out: true` + partial stdout if the deadline hits — useful for hung processes."
+    )]
+    async fn terminal_run(
+        &self,
+        Parameters(TerminalRunParams { id, cmd, timeout_ms }): Parameters<TerminalRunParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        if id.trim().is_empty() {
+            return Err(ErrorData::invalid_params("`id` is empty", None));
+        }
+        if cmd.trim().is_empty() {
+            return Err(ErrorData::invalid_params("`cmd` is empty", None));
+        }
+        let client = BridgeClient::discover().map_err(bridge_to_mcp)?;
+        let resp = client
+            .run(
+                &id,
+                terminal_bridge_client::RunReq { cmd, timeout_ms },
+            )
+            .await
+            .map_err(bridge_to_mcp)?;
+        let mut text = String::new();
+        if resp.timed_out {
+            text.push_str(&format!(
+                "TIMED OUT after deadline; partial output below.\nexit_code (unknown): {}\n\n",
+                resp.exit_code
+            ));
+        } else {
+            text.push_str(&format!("exit_code: {}\n\n", resp.exit_code));
+        }
+        text.push_str(&resp.stdout);
+        Ok(CallToolResult::success(vec![Content::text(text)]))
+    }
+
+    #[tool(
+        description = "Send raw input to a Terminal column. Use this for INTERACTIVE prompts the shell is waiting on — `git commit` opening $EDITOR, an `ssh` password prompt, a TUI like `htop`. Pass `text` as plain UTF-8; we base64-encode for the wire. Append `\\n` yourself when you want to submit; without it the bytes go straight into the line buffer (the user can finish typing).\n\nFor non-interactive command execution prefer `terminal_run` — it captures stdout for you. Use `terminal_write` only when you specifically need to drive an interactive flow."
+    )]
+    async fn terminal_write(
+        &self,
+        Parameters(TerminalWriteParams { id, text }): Parameters<TerminalWriteParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        use base64::Engine;
+        if id.trim().is_empty() {
+            return Err(ErrorData::invalid_params("`id` is empty", None));
+        }
+        let client = BridgeClient::discover().map_err(bridge_to_mcp)?;
+        let data_b64 = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
+        client
+            .write(
+                &id,
+                terminal_bridge_client::WriteReq { data_b64 },
+            )
+            .await
+            .map_err(bridge_to_mcp)?;
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Wrote {} byte(s) to terminal {}.",
+            text.len(),
+            id
+        ))]))
+    }
+
+    #[tool(
+        description = "Read the recent scrollback of a Terminal column. Returns the last `lines` lines (default 200) of accumulated output, ANSI-stripped. Use this to inspect output the user produced themselves (or output from a previous tool call you forgot to capture) — e.g. \"what did the test runner print last?\" or \"what's the user's $PATH?\".\n\n`total_bytes` in the response counts every byte the session has emitted since spawn (mod the 64 KB ring buffer cap)."
+    )]
+    async fn terminal_buffer(
+        &self,
+        Parameters(TerminalBufferParams { id, lines }): Parameters<TerminalBufferParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        if id.trim().is_empty() {
+            return Err(ErrorData::invalid_params("`id` is empty", None));
+        }
+        let client = BridgeClient::discover().map_err(bridge_to_mcp)?;
+        let resp = client.buffer(&id, lines).await.map_err(bridge_to_mcp)?;
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "(total {} bytes since spawn)\n\n{}",
+            resp.total_bytes, resp.text
+        ))]))
+    }
+}
+
+/// Map a `BridgeError` to the MCP tool error shape. We surface the
+/// underlying message verbatim — the agent reads it directly and can
+/// suggest concrete user actions ("open a Terminal column", "restart
+/// Forgehold").
+fn bridge_to_mcp(err: terminal_bridge_client::BridgeError) -> ErrorData {
+    ErrorData::internal_error(err.to_string(), None)
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct TerminalRunParams {
+    /// Stable terminal id from `terminal_list`. Per-spawn uuid; not
+    /// the human-readable column "art name" — that one isn't unique.
+    id: String,
+    /// Shell command (zsh syntax) to run. Wrapped server-side as
+    /// `{ <cmd>; }; printf 'sentinel%d\n' $?` so $? captures the
+    /// user command's exit, not printf's.
+    cmd: String,
+    /// Hard deadline for sentinel detection. Default 60_000 (60s);
+    /// bump for `cargo build`, `npm install`, etc. The tool returns
+    /// `timed_out: true` + partial stdout instead of erroring on
+    /// deadline so the agent can decide what to do.
+    timeout_ms: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct TerminalWriteParams {
+    id: String,
+    /// Raw UTF-8 to send. Append `\n` to submit; omit to leave bytes
+    /// in the line buffer.
+    text: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct TerminalBufferParams {
+    id: String,
+    /// How many trailing lines of the scrollback to return. Default
+    /// 200. `0` = whole buffer (capped at ~64 KB by the desktop).
+    lines: Option<usize>,
 }
 
 #[tool_handler]
@@ -2107,6 +2263,13 @@ impl ServerHandler for App {
              - canvas_align / canvas_distribute — align selection on an axis or equalize gaps (Figma's \"align then distribute\" combo).\n\
              - canvas_set_viewport — pan/zoom the camera programmatically (use to zoom out after a layout so the user sees the whole graph).\n\
              - canvas_upload_image — paste a base64-encoded image onto the canvas; useful when you've generated a chart externally.\n\
+             \n\
+             ## Terminal — drive the user's PTY column\n\
+             Forgehold workbench can host Terminal columns (real /bin/zsh PTY). The user SEES every keystroke in real time — so prefer these over the generic `bash` tool whenever transparency / debuggability matters.\n\
+             - terminal_list — discover open terminals (returns ids).\n\
+             - terminal_run(id, cmd, timeout_ms?) — run a command and get stdout + exit_code back. Wrapped so $? is correct. Default timeout 60s.\n\
+             - terminal_write(id, text) — raw input for INTERACTIVE prompts (git editor, ssh password, htop keys). Append \\n to submit.\n\
+             - terminal_buffer(id, lines?) — read the recent scrollback (default last 200 lines).\n\
              \n\
              # When to chain calls\n\
              These tools compose. \"Open the actions tab for forge\" → open_github_repo(owner=…, repo=forge, section=actions) — one call, no need to switch_view first. \"Make a new workbench called Hotfix and add a Claude column there\" → new_workbench + add_workbench_instance(kind=claude). Don't ask for confirmation — these are harmless navigation that gives the user the same view they'd get clicking through manually."
