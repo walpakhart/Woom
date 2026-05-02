@@ -24,13 +24,25 @@
   let { instanceId, onLinkToAgent }: Props = $props();
 
   // Sessions currently linked to THIS editor instance. Drives the
-  // "Linked to <agent>" pills in the Editor header so the bidirectional
+  // "Linked to <session>" pills in the Editor header so the bidirectional
   // connection is visible from both sides. Resolves the agent's column
   // via `findInstanceAnywhere` so the link survives moving the editor or
   // the agent column to a different workbench — the link is between
   // identities, not workbench-bound.
+  //
+  // `name` is the SESSION title (e.g. "Sagrada-Familia 2") not the
+  // column's art-name — column = the surface, session = the actual
+  // chat conversation. Showing the column name was misleading when a
+  // user had multiple sessions in the same column: every link looked
+  // identical even though they pointed at different threads.
   const linkedAgents = $derived.by(() => {
-    const out: { sessionId: string; agentInstanceId: string; kind: 'claude' | 'cursor'; name: string }[] = [];
+    const out: {
+      sessionId: string;
+      agentInstanceId: string;
+      kind: 'claude' | 'cursor';
+      name: string;       // session title — what the user sees in the chat tab
+      columnName: string; // column art-name (kept for tooltip context)
+    }[] = [];
     for (const s of sessionsState.list) {
       if (!s.linkedToEditor) continue;
       if (s.linkedToEditorInstanceId !== instanceId) continue;
@@ -43,7 +55,8 @@
         sessionId: s.id,
         agentInstanceId: col.id,
         kind: col.kind as 'claude' | 'cursor',
-        name: col.name
+        name: s.title || col.name,
+        columnName: col.name
       });
     }
     return out;

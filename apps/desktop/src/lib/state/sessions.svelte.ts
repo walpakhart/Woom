@@ -46,6 +46,7 @@ function serializeSession(s: ClaudeSession): object {
     linkedToEditor: s.linkedToEditor,
     linkedToEditorInstanceId: s.linkedToEditorInstanceId,
     linkedCanvasId: s.linkedCanvasId,
+    linkedTerminalInstanceId: s.linkedTerminalInstanceId,
     columnInstanceId: s.columnInstanceId,
     cwdSwitchRecap: s.cwdSwitchRecap,
     cwdUuids: s.cwdUuids,
@@ -258,6 +259,8 @@ function hydrateSession(s: ClaudeSession): ClaudeSession {
       (s as { linkedToEditorInstanceId?: string | null }).linkedToEditorInstanceId ?? null,
     linkedCanvasId:
       (s as { linkedCanvasId?: string | null }).linkedCanvasId ?? null,
+    linkedTerminalInstanceId:
+      (s as { linkedTerminalInstanceId?: string | null }).linkedTerminalInstanceId ?? null,
     columnInstanceId:
       (s as { columnInstanceId?: string | null }).columnInstanceId ?? null,
     cwdSwitchRecap:
@@ -472,6 +475,7 @@ export function newClaudeSession(
       linkedToEditor: !!opts.linkedToEditor,
       linkedToEditorInstanceId: opts.linkedToEditorInstanceId ?? null,
       linkedCanvasId: null,
+      linkedTerminalInstanceId: null,
       columnInstanceId,
       cwdSwitchRecap: null,
       cwdUuids: {},

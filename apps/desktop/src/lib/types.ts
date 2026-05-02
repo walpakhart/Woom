@@ -275,6 +275,14 @@ export type ClaudeSession = {
       active workbench. Explicit id lets the user keep a stable target even
       when multiple Editor columns are open. */
   linkedToEditorInstanceId: string | null;
+  /** Which Terminal instance this session is bound to. When set, the
+   *  agent's MCP `terminal_run` / `terminal_write` tools default to
+   *  this id (it's still listed by `terminal_list` so the agent can
+   *  pick a different one if it wants). Auto-link convention: linking
+   *  here also writes the linked-editor's repoPath into the terminal's
+   *  cwd on next spawn — see `linkSessionToTerminal` in
+   *  `sessions.svelte.ts`. */
+  linkedTerminalInstanceId: string | null;
   /** Which column instance this session is attached to. Null means the session
       "floats" and will reattach to the first matching-kind column it finds. */
   columnInstanceId: string | null;

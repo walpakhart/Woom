@@ -468,6 +468,42 @@
     updateSession(sess.id, { linkedCanvasId: null });
   }
 
+  // ---- Terminal link (mirrors canvas-link UX) ------------------------
+  //
+  // Picker lists every Terminal column in every workbench. Linking
+  // binds the agent's MCP `terminal_run` / `terminal_write` defaults
+  // to this id — agent can still address other terminals by passing
+  // an explicit id, but linked-by-default removes a round-trip.
+  //
+  // Auto-link convention: when the chat already has a linked editor,
+  // the linked terminal will pick up that editor's repoPath as its
+  // working directory on next spawn (TerminalColumn reads it).
+  const linkableTerminals = $derived(
+    activeInstances().filter((i) => i.kind === 'terminal')
+      .concat(
+        layoutState.workbenches
+          .filter((w) => w.id !== layoutState.activeWorkbenchId)
+          .flatMap((w) => w.instances)
+          .filter((i) => i.kind === 'terminal')
+      )
+  );
+  const linkedTerminalEntry = $derived.by(() => {
+    const sess = sessionsState.list.find((s) => s.id === sessionsState.activeByInstance[instanceId]);
+    if (!sess?.linkedTerminalInstanceId) return null;
+    return findInstanceAnywhere(sess.linkedTerminalInstanceId)?.inst ?? null;
+  });
+
+  function linkSessionToTerminal(termId: string) {
+    const sess = sessionsState.list.find((s) => s.id === sessionsState.activeByInstance[instanceId]);
+    if (!sess) return;
+    updateSession(sess.id, { linkedTerminalInstanceId: termId || null });
+  }
+  function unlinkSessionFromTerminal() {
+    const sess = sessionsState.list.find((s) => s.id === sessionsState.activeByInstance[instanceId]);
+    if (!sess) return;
+    updateSession(sess.id, { linkedTerminalInstanceId: null });
+  }
+
   /** Start dragging a chat message — drop onto a Canvas column to pin it
    *  as a `chat-message-card`. Snapshot captures role + agent kind +
    *  excerpt so the card stays meaningful even if the source session
@@ -1064,9 +1100,12 @@
             <svg class="i i-sm" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>
           </button>
         {/if}
-        {#if editorInstances.length > 1}
-          <!-- Multiple Editor benches open — let the user pick which one to
-               attach this chat to by bench name. -->
+        {#if editorInstances.length > 0}
+          <!-- Always-visible picker — mirrors the canvas-link UX so
+               linking-by-name is the same gesture across surfaces.
+               Dropdown shows even with a single editor (no special
+               case for "if exactly one"); list-of-one is still useful
+               feedback that something IS available. -->
           <div class="link-editor-picker">
             <Dropdown
               value=""
@@ -1079,18 +1118,6 @@
               ariaLabel="Link to editor bench"
             />
           </div>
-        {:else}
-          <button
-            class="link-editor-btn"
-            onclick={() => { focusLocalSession(activeSess.id); onToggleEditorLink(); }}
-            disabled={editorInstances.length === 0}
-            title={editorInstances.length === 0
-              ? 'Open an Editor column first to link this chat to its folder.'
-              : 'Link this chat to the Editor folder so the cwd tracks the Editor live.'}
-          >
-            <svg class="i i-sm" viewBox="0 0 24 24"><path d="M9 17H7A5 5 0 1 1 7 7h2M15 7h2a5 5 0 1 1 0 10h-2M8 12h8"/></svg>
-            <span>Link editor</span>
-          </button>
         {/if}
         {#if !activeSess.worktreePath}
           <button
@@ -1128,6 +1155,32 @@
             onChange={(id) => { focusLocalSession(activeSess.id); linkSessionToCanvas(id); }}
             placeholder="Link canvas…"
             ariaLabel="Link to canvas"
+          />
+        </div>
+      {/if}
+
+      <!-- Terminal link control. Same Dropdown UX as canvas-link.
+           When set, the agent's MCP `terminal_run` defaults to this
+           id without an explicit pick. Hidden when no Terminal
+           columns are open AND no link exists. -->
+      {#if linkedTerminalEntry}
+        <button
+          class="canvas-link-chip"
+          onclick={() => { focusLocalSession(activeSess.id); unlinkSessionFromTerminal(); }}
+          title="Unlink terminal — agent loses default target for terminal_run"
+        >
+          <svg class="i i-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+          <span class="canvas-link-name">{linkedTerminalEntry.name}</span>
+          <svg class="i i-sm canvas-link-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
+      {:else if linkableTerminals.length > 0}
+        <div class="link-canvas-picker">
+          <Dropdown
+            value=""
+            options={linkableTerminals.map((t) => ({ value: t.id, label: `Link to ${t.name}` }))}
+            onChange={(id) => { focusLocalSession(activeSess.id); linkSessionToTerminal(id); }}
+            placeholder="Link terminal…"
+            ariaLabel="Link to terminal"
           />
         </div>
       {/if}

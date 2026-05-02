@@ -29,8 +29,10 @@
   import {
     layoutState,
     startResizeById,
-    activeInstances
+    activeInstances,
+    findInstanceAnywhere
   } from '$lib/state/layout.svelte';
+  import { sessionsState } from '$lib/state/sessions.svelte';
   import ColumnControls from '$lib/components/workbench/ColumnControls.svelte';
 
   interface Props {
@@ -42,6 +44,42 @@
 
   const inst = $derived(activeInstances().find((i) => i.id === instanceId));
   const order = $derived(activeInstances().findIndex((i) => i.id === instanceId));
+
+  /**
+   * Sessions that link THIS terminal (`linkedTerminalInstanceId === instanceId`).
+   * Drives the "Linked: <session>" pill in the header so the user knows
+   * which agent will land here when it calls `terminal_run`.
+   *
+   * Auto-link convention surfaced to the user: if any of those sessions
+   * also link an editor, the editor's repoPath wins as the spawn cwd
+   * (over the explicit `cwd` prop). Lets the user "make a chat-bound
+   * terminal that follows the chat's project" with one click in the
+   * AgentColumn.
+   */
+  const linkedSessions = $derived.by(() => {
+    const out: { sessionId: string; title: string; kind: 'claude' | 'cursor' }[] = [];
+    for (const s of sessionsState.list) {
+      if (s.linkedTerminalInstanceId !== instanceId) continue;
+      out.push({
+        sessionId: s.id,
+        title: s.title,
+        kind: s.agentKind
+      });
+    }
+    return out;
+  });
+
+  /** Most recent linked-session whose chat ALSO links an editor — we use
+   *  that editor's repoPath as the auto-cwd. Picks the first match deterministically. */
+  const autoLinkedCwd = $derived.by(() => {
+    for (const s of sessionsState.list) {
+      if (s.linkedTerminalInstanceId !== instanceId) continue;
+      if (!s.linkedToEditor || !s.linkedToEditorInstanceId) continue;
+      const slot = sessionsState.editorInstanceState[s.linkedToEditorInstanceId];
+      if (slot?.repoPath) return slot.repoPath;
+    }
+    return null;
+  });
 
   let host = $state<HTMLDivElement | null>(null);
   let term: Terminal | null = null;
@@ -156,7 +194,7 @@
         const cols = term.cols;
         const rows = term.rows;
         const result = await invoke<{ id: string }>('terminal_spawn', {
-          opts: { cwd, cols, rows }
+          opts: { cwd: autoLinkedCwd ?? cwd, cols, rows }
         });
         sessionId = result.id;
 
@@ -254,6 +292,12 @@
     </span>
     <span class="brand-word">Terminal</span>
     {#if inst?.name}<span class="bench-name mono" title="Bench id">{inst.name}</span>{/if}
+    {#each linkedSessions as ls (ls.sessionId)}
+      <span class="linked-session-chip" title="Bound to chat session — agent's terminal_run targets this terminal by default">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9 17H7A5 5 0 1 1 7 7h2M15 7h2a5 5 0 1 1 0 10h-2M8 12h8"/></svg>
+        <span class="linked-session-name">{ls.title}</span>
+      </span>
+    {/each}
     {#if exited}
       <span class="state-tag state-tag--exited">exited</span>
     {:else if busy}
@@ -318,6 +362,24 @@
     padding: 1px 6px;
     border: 1px solid var(--border-neutral);
     border-radius: 4px;
+  }
+  /* "Linked: <session>" chip — surfaces which agent will land here
+     via MCP `terminal_run`. Same shape as the editor-side linked-pill
+     so the visual vocabulary stays consistent across columns. */
+  .linked-session-chip {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 1px 6px 1px 5px;
+    border-radius: 4px;
+    background: var(--accent-soft);
+    border: 1px solid var(--border-hi);
+    color: var(--accent-bright);
+    font-size: 11px;
+    font-weight: 500;
+    max-width: 180px;
+  }
+  .linked-session-chip svg { width: 11px; height: 11px; flex-shrink: 0; }
+  .linked-session-name {
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   .state-tag {
     margin-left: auto;
