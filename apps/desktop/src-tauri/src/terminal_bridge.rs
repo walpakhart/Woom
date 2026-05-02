@@ -53,6 +53,12 @@ struct ListResp {
 #[derive(Serialize)]
 struct InstanceLite {
     id: String,
+    /// Human-readable column name from the workbench (e.g.
+    /// "Notre-Dame"). Optional because legacy spawns may not have
+    /// passed it. Surfaced in the MCP `terminal_list` reply so the
+    /// agent can address terminals by name in its response text.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -109,9 +115,9 @@ impl From<String> for BridgeErr {
 async fn list(State(s): State<BridgeState>) -> Json<ListResp> {
     let reg = s.app.state::<TerminalRegistry>();
     let instances = reg
-        .ids()
+        .list()
         .into_iter()
-        .map(|id| InstanceLite { id })
+        .map(|(id, name)| InstanceLite { id, name })
         .collect();
     Json(ListResp { instances })
 }

@@ -5041,7 +5041,11 @@
   }
   .pill-icon svg { width: 12px; height: 12px; display: block; color: currentColor; }
   .pill-icon--editor { color: var(--warning); }
-  .pill-icon--terminal { color: var(--success); }
+  /* Terminal pill — share the editor's amber so the chrome cluster
+     reads as "live workbench surfaces" rather than singling out the
+     terminal with a green badge. Internal column is still the same
+     phosphor-green inside (matches the cursor / selection colour). */
+  .pill-icon--terminal { color: var(--warning); }
   .pill-label { letter-spacing: -0.005em; }
   .pill-count {
     padding: 0 6px;

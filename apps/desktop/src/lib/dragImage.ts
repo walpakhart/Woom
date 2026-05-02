@@ -32,7 +32,7 @@ const KIND_ACCENT: Record<DragChipKind, string> = {
   claude: 'rgba(232, 163, 58, 0.95)',
   editor: 'rgba(232, 163, 58, 0.95)',
   canvas: 'rgba(232, 163, 58, 0.95)',
-  terminal: 'rgba(101, 211, 150, 0.95)'
+  terminal: 'rgba(232, 163, 58, 0.95)'
 };
 
 /** Attach a styled drag chip to the event. Call inside an `ondragstart`

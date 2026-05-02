@@ -55,6 +55,11 @@ pub struct Session {
     /// Wakes anyone waiting on new output (the run-command sentinel
     /// loop). Reader thread calls `notify_waiters` after each chunk.
     pub output_notify: Arc<Notify>,
+    /// Human-readable column name (e.g. "Notre-Dame") the frontend
+    /// passed at spawn. Surfaced in `terminal_list` so the MCP agent
+    /// (and the user reading the trace) sees readable column names
+    /// alongside the opaque uuids.
+    pub name: Option<String>,
 }
 
 #[derive(Default)]
@@ -63,10 +68,14 @@ pub struct TerminalRegistry {
 }
 
 impl TerminalRegistry {
-    /// Snapshot of every live session's id. Used by the bridge `list`
-    /// endpoint so the lock isn't held across `await`.
-    pub fn ids(&self) -> Vec<String> {
-        self.sessions.lock().keys().cloned().collect()
+    /// Snapshot of every live session as `(id, name)`. Used by the
+    /// bridge `list` endpoint so the lock isn't held across `await`.
+    pub fn list(&self) -> Vec<(String, Option<String>)> {
+        self.sessions
+            .lock()
+            .iter()
+            .map(|(id, s)| (id.clone(), s.name.clone()))
+            .collect()
     }
 
     pub fn get(&self, id: &str) -> Option<Arc<Session>> {
@@ -90,6 +99,10 @@ pub struct SpawnOpts {
     pub shell: Option<String>,
     pub cols: Option<u16>,
     pub rows: Option<u16>,
+    /// Human-readable column name (art-name like "Notre-Dame"). Stored
+    /// on the Session and returned by `terminal_list` so MCP agents
+    /// see readable names rather than just uuids.
+    pub name: Option<String>,
 }
 
 /// Spawn a shell attached to a PTY. Returns a stable id the frontend
@@ -165,6 +178,7 @@ pub fn terminal_spawn(
         child: Arc::new(Mutex::new(child)),
         output_buf: output_buf.clone(),
         output_notify: output_notify.clone(),
+        name: opts.name.clone(),
     });
     state.sessions.lock().insert(id.clone(), session);
 

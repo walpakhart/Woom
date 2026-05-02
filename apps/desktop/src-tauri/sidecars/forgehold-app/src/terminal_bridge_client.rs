@@ -47,6 +47,10 @@ pub struct ListResp {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct InstanceLite {
     pub id: String,
+    /// Workbench column display name (e.g. "Notre-Dame"). Optional —
+    /// older sessions spawned before this field landed have no name.
+    #[serde(default)]
+    pub name: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

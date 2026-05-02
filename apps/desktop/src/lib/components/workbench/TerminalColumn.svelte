@@ -194,7 +194,7 @@
         const cols = term.cols;
         const rows = term.rows;
         const result = await invoke<{ id: string }>('terminal_spawn', {
-          opts: { cwd: autoLinkedCwd ?? cwd, cols, rows }
+          opts: { cwd: autoLinkedCwd ?? cwd, cols, rows, name: inst?.name ?? null }
         });
         sessionId = result.id;
 
@@ -334,12 +334,16 @@
     position: relative;
   }
 
+  /* Match `.inbox-brand` height + padding from the other column kinds
+     (Github/Jira/Sentry/Editor) so column headers line up across the
+     workbench at the exact same Y. Was 48px tall + 12/14/8 padding,
+     which made Terminal stick out by ~6px in the bar. */
   .term-brand {
-    padding: 12px 14px 8px;
+    padding: 16px 20px 10px;
     display: flex; align-items: center; gap: 10px;
     border-bottom: 1px solid var(--border-neutral);
     flex-shrink: 0;
-    height: 48px;
+    height: 54px;
     box-sizing: border-box;
   }
   .brand-icon {

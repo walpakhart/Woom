@@ -41,6 +41,7 @@
   import CanvasMinimap from '$lib/components/canvas/CanvasMinimap.svelte';
   import { applyLayout, type LayoutAlgorithm } from '$lib/services/canvasLayout';
   import { dragState, type DragPayload } from '$lib/state/drag.svelte';
+  import { sessionsState } from '$lib/state/sessions.svelte';
   import {
     layoutState,
     startResizeById,
@@ -100,6 +101,20 @@
   const instState = $derived(canvasState.byInstance[instanceId]);
   const activeCanvasId = $derived(instState?.activeId ?? null);
   const activeCanvas = $derived(activeCanvasId ? canvasState.open[activeCanvasId] : null);
+
+  /** Sessions whose `linkedCanvasId === activeCanvasId`. Drives the
+   *  "Linked: <session>" chip in the header (parity with the
+   *  TerminalColumn chip) so the user sees from the canvas side
+   *  which agent has the canvas-tools wired in. */
+  const linkedSessions = $derived.by(() => {
+    if (!activeCanvasId) return [];
+    const out: { sessionId: string; title: string; kind: 'claude' | 'cursor' }[] = [];
+    for (const s of sessionsState.list) {
+      if (s.linkedCanvasId !== activeCanvasId) continue;
+      out.push({ sessionId: s.id, title: s.title, kind: s.agentKind });
+    }
+    return out;
+  });
   const tool = $derived<CanvasTool>(instState?.tool ?? 'select');
 
   // ---- Camera (local mirror of viewport) -------------------------------
@@ -1811,6 +1826,16 @@
       </span>
       <span class="brand-word">Canvas</span>
       {#if inst?.name}<span class="bench-name mono" title="Bench id">{inst.name}</span>{/if}
+      {#each linkedSessions as ls (ls.sessionId)}
+        <!-- Linked-session chip — same shape as the TerminalColumn one
+             so the linkage signal reads identically across columns.
+             Hover tooltip carries the kind so the user knows whether
+             a Claude or Cursor session is wired in. -->
+        <span class="linked-session-chip" title={`Linked to ${ls.kind === 'claude' ? 'Claude' : 'Cursor'} chat — agent has the canvas_* tools wired to this canvas`}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9 17H7A5 5 0 1 1 7 7h2M15 7h2a5 5 0 1 1 0 10h-2M8 12h8"/></svg>
+          <span class="linked-session-name">{ls.title}</span>
+        </span>
+      {/each}
       <button
         class="library-btn"
         onclick={openLibrary}
@@ -2149,6 +2174,24 @@
   .source-mark svg { width: 13px; height: 13px; stroke: currentColor; fill: none; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
   .brand-word { font-size: 14px; font-weight: 600; color: var(--text-0); letter-spacing: -0.01em; }
   .bench-name { font-size: 11px; color: var(--text-2); padding: 2px 6px; border-radius: 5px; background: var(--bg-2); border: 1px solid var(--border-neutral); }
+  /* Linked-session chip in the canvas header — parity with the
+     identical chip in TerminalColumn so the linkage signal reads
+     the same on both ends. */
+  .linked-session-chip {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 1px 6px 1px 5px;
+    border-radius: 4px;
+    background: var(--accent-soft);
+    border: 1px solid var(--border-hi);
+    color: var(--accent-bright);
+    font-size: 11px;
+    font-weight: 500;
+    max-width: 180px;
+  }
+  .linked-session-chip svg { width: 11px; height: 11px; flex-shrink: 0; }
+  .linked-session-name {
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
   /* Auto-save indicator. Idle state is muted text; flash state
      pulses using the accent so the user gets clear "wrote to disk"
      feedback. Honors prefers-reduced-motion per the 1.0 a11y bar. */

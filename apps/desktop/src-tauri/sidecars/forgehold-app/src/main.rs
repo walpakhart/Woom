@@ -2084,10 +2084,13 @@ impl App {
         let lines: Vec<String> = resp
             .instances
             .iter()
-            .map(|i| format!("- id: {}", i.id))
+            .map(|i| match &i.name {
+                Some(n) => format!("- {} (id: {})", n, i.id),
+                None => format!("- (unnamed) (id: {})", i.id),
+            })
             .collect();
         Ok(CallToolResult::success(vec![Content::text(format!(
-            "{} terminal{} open:\n{}",
+            "{} terminal{} open:\n{}\n\nWhen referring to a terminal in your reply to the user, prefer the human-readable name (e.g. `Notre-Dame`) over the id.",
             resp.instances.len(),
             if resp.instances.len() == 1 { "" } else { "s" },
             lines.join("\n")
