@@ -209,11 +209,6 @@ export const sessionsState = $state<{
   editorInstanceState: loadStoredEditorState()
 });
 
-/** Currently focused session across both columns. */
-export function getActiveSession(): ClaudeSession | null {
-  return sessionsState.list.find((s) => s.id === sessionsState.activeClaudeId) ?? null;
-}
-
 // ---- Persistence ----
 // `initSessionsFromDisk` is called from +page.svelte onMount and migrates
 // sessions from localStorage → disk on first run, then keeps disk as the

@@ -1,151 +1,48 @@
-// Canvas (whiteboard) state — see [docs/CANVAS.md](../../../../docs/CANVAS.md).
-// M-canvas-1 scope: types, library index, per-instance active canvas + tabs,
-// viewport. Persistence: per-canvas JSON files at
+// Canvas (whiteboard) reactive state + mutation API. Type definitions
+// live in `canvas-types.ts` (no Svelte runtime); this module re-exports
+// them so legacy `import { Shape } from '$lib/state/canvas.svelte'`
+// callers keep working without a churn.
+//
+// Persistence: per-canvas JSON files at
 // `~/Library/Application Support/Forgehold/canvases/<id>.json` plus a
-// thin `index.json`. localStorage stays as fallback when disk init fails
-// (e.g. SSR build, sandboxing weirdness). Migration from the legacy
-// `forgehold:canvas:v1:*` localStorage layout happens once on first
-// disk init (`initCanvasFromDisk`); the legacy keys are then cleared
-// to free the ~5 MB browser quota that big canvases would otherwise
-// blow.
+// thin `index.json`. localStorage stays as fallback when disk init
+// fails (e.g. SSR build, sandboxing weirdness). Migration from the
+// legacy `forgehold:canvas:v1:*` localStorage layout happens once on
+// first disk init (`initCanvasFromDisk`); the legacy keys are then
+// cleared to free the ~5 MB browser quota that big canvases would
+// otherwise blow.
 
 // ---- Types ---------------------------------------------------------------
 
-/** Closed catalog of shape kinds. Adding one = code change in this file +
- *  the renderer + the agent tool catalog. Never extend at runtime. */
-export type ShapeKind =
-  | 'rect' | 'ellipse' | 'arrow-shape' | 'line' | 'text' | 'sticky'
-  | 'mermaid' | 'dot' | 'plantuml' | 'code' | 'image' | 'freehand'
-  | 'frame' | 'group'
-  | 'jira-card' | 'github-pr-card' | 'github-issue-card'
-  | 'sentry-event-card' | 'file-card' | 'chat-message-card';
+export type {
+  ShapeKind,
+  Shape,
+  EdgeAnchor,
+  Edge,
+  CanvasViewport,
+  Canvas,
+  CanvasIndexEntry,
+  CanvasTool,
+  Op,
+  HistoryEntry,
+  CanvasInstanceState,
+  CanvasEphemeral
+} from './canvas-types';
 
-/** Shape envelope — every shape has a bounding box, a kind, optional parent
- *  (frame / group), and kind-specific `props` whose schema is enforced by the
- *  renderer rather than at type level (we'd need a discriminated union per
- *  kind for that — deferred until shapes actually render). */
-export type Shape = {
-  id: string;
-  kind: ShapeKind;
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-  rot: number;
-  z: number;
-  parentId: string | null;
-  locked: boolean;
-  hidden: boolean;
-  label: string | null;
-  props: Record<string, unknown>;
-  createdAt: number;
-  createdBy: 'user' | 'agent';
-  updatedAt: number;
-};
-
-/** Endpoint of an Edge. Either snaps to one of nine canonical anchors on a
- *  shape's bbox, or is a free offset (in canvas px) from the shape's
- *  top-left. The free offset is used for arrows that point at *part* of an
- *  image (e.g. "this button in the screenshot"). */
-export type EdgeAnchor =
-  | { shapeId: string; anchor: 'tl'|'tc'|'tr'|'ml'|'mc'|'mr'|'bl'|'bc'|'br' }
-  | { shapeId: string; offset: { dx: number; dy: number } };
-
-export type Edge = {
-  id: string;
-  from: EdgeAnchor;
-  to: EdgeAnchor;
-  kind: 'arrow' | 'line' | 'dashed';
-  routing: 'straight' | 'orthogonal' | 'curved';
-  label: string | null;
-  color: string | null;
-  thickness: 1 | 2 | 3;
-  z: number;
-};
-
-export type CanvasViewport = { x: number; y: number; zoom: number };
-
-export type Canvas = {
-  id: string;
-  name: string;
-  createdAt: number;
-  updatedAt: number;
-  archivedAt: number | null;
-  /** PNG data URL, regenerated on autosave. Null until first thumbnail
-   *  pass runs. M-canvas-1 leaves this null since nothing is drawable. */
-  thumbnail: string | null;
-  background: 'dot' | 'grid' | 'plain';
-  /** Canvas pixels between grid lines (and the snap step). Default 8 to
-   *  match the design system's 4/8 px scale. */
-  gridSize: number;
-  viewport: CanvasViewport;
-  shapes: Shape[];
-  edges: Edge[];
-  /** Bumped on every applied operation so the agent can detect stale reads
-   *  via `canvas.diff_since(version)`. Starts at 0. */
-  version: number;
-  /** Schema version of the persisted record. Bumped on breaking changes;
-   *  M-canvas-1 ships v1. */
-  schemaVersion: 1;
-};
-
-/** Compact entry the library overlay reads. Full canvas JSON lives under
- *  the `STORAGE_CANVAS_PREFIX + id` key (or, in a later milestone, on disk)
- *  and is loaded lazily on open. */
-export type CanvasIndexEntry = {
-  id: string;
-  name: string;
-  updatedAt: number;
-  archivedAt: number | null;
-  shapeCount: number;
-  thumbnail: string | null;
-};
-
-// ---- Tool kinds ----------------------------------------------------------
-
-/** Active tool for a Canvas column. Drives pointer-down behavior on the
- *  surface — `select` lets the user pick / move shapes, the rest start
- *  drawing a fresh shape on click+drag. Persisted per column-instance so
- *  switching tabs and coming back keeps the active tool. */
-export type CanvasTool =
-  | 'select'
-  | 'rect'
-  | 'ellipse'
-  | 'line'
-  | 'arrow'
-  | 'text'
-  | 'sticky'
-  | 'mermaid'
-  | 'code'
-  | 'image'
-  | 'freehand'
-  | 'frame';
-
-// ---- Op log / history ----------------------------------------------------
-
-/** Single mutation. Inverse is computed from the op itself: `add` ⇄ `remove`,
- *  `patch.before` undoes `patch.after`. Kept tiny so history is cheap to
- *  hold in memory; one HistoryEntry can carry many ops (e.g., a multi-select
- *  drag commits one entry holding N patch ops). */
-export type Op =
-  | { kind: 'add'; shape: Shape }
-  | { kind: 'remove'; shape: Shape }
-  | {
-      kind: 'patch';
-      shapeId: string;
-      before: Partial<Shape>;
-      after: Partial<Shape>;
-    }
-  | { kind: 'edge-add'; edge: Edge }
-  | { kind: 'edge-remove'; edge: Edge }
-  | {
-      kind: 'edge-patch';
-      edgeId: string;
-      before: Partial<Edge>;
-      after: Partial<Edge>;
-    };
-
-export type HistoryEntry = { ops: Op[]; ts: number };
+import type {
+  Canvas,
+  CanvasEphemeral,
+  CanvasIndexEntry,
+  CanvasInstanceState,
+  CanvasTool,
+  CanvasViewport,
+  Edge,
+  EdgeAnchor,
+  HistoryEntry,
+  Op,
+  Shape,
+  ShapeKind
+} from './canvas-types';
 
 /** History bound — older entries discarded so a long-running session
  *  doesn't accumulate unbounded memory. Matches the 50-op cap mentioned
@@ -169,6 +66,40 @@ const STORAGE_INSTANCE_STATE = 'forgehold:canvas:instances:v1';
 
 import { invoke } from '@tauri-apps/api/core';
 import { notify } from '$lib/state/toaster.svelte';
+import {
+  blankCanvas,
+  defaultPropsFor,
+  genEdgeId,
+  genId,
+  genShapeId,
+  getDescendants,
+  getEdgeEndpoint,
+  hydrateCanvas,
+  indexEntryFor,
+  makeEdge,
+  makeShape,
+  nearestAnchor,
+  snapToGrid
+} from './canvas-helpers';
+
+/* Re-export the pure helpers so legacy callers that did
+ * `import { makeShape } from '$lib/state/canvas.svelte'` keep
+ * working. New callers can import directly from `canvas-helpers`. */
+export {
+  blankCanvas,
+  defaultPropsFor,
+  genEdgeId,
+  genId,
+  genShapeId,
+  getDescendants,
+  getEdgeEndpoint,
+  hydrateCanvas,
+  indexEntryFor,
+  makeEdge,
+  makeShape,
+  nearestAnchor,
+  snapToGrid
+};
 
 /** Throttle for the "shape is locked" hint toast. Without this, a
  *  drag against a locked shape fires `patchShape` per pointermove
@@ -186,72 +117,7 @@ function canvasIndexFilePath(): string {
   return `${_diskDir}/index.json`;
 }
 
-// ---- Helpers -------------------------------------------------------------
-
-function genId(): string {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return crypto.randomUUID();
-  }
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-    const r = (Math.random() * 16) | 0;
-    const v = c === 'x' ? r : (r & 0x3) | 0x8;
-    return v.toString(16);
-  });
-}
-
-function blankCanvas(name: string): Canvas {
-  const now = Date.now();
-  return {
-    id: genId(),
-    name,
-    createdAt: now,
-    updatedAt: now,
-    archivedAt: null,
-    thumbnail: null,
-    background: 'dot',
-    gridSize: 8,
-    viewport: { x: 0, y: 0, zoom: 1 },
-    shapes: [],
-    edges: [],
-    version: 0,
-    schemaVersion: 1
-  };
-}
-
 // ---- Reactive state ------------------------------------------------------
-
-/** Per-column-instance state. `tabs` is the ordered list of canvas ids
- *  pinned to this column (the strip of tabs in the header). `activeId`
- *  is whichever tab is currently rendered. Both reset to empty when the
- *  column is created and survive workbench-tab switches because they're
- *  keyed on `instanceId`, not on the workbench. */
-export type CanvasInstanceState = {
-  tabs: string[];
-  activeId: string | null;
-  /** Currently selected drawing tool. Defaults to `'select'` on a fresh
-   *  column. Persisted so re-opening a column lands in the tool the user
-   *  left it in. */
-  tool: CanvasTool;
-};
-
-/** Per-canvas ephemeral state (selection, history). NOT persisted — a
- *  reload starts fresh on selection / undo stack. Lives in a parallel
- *  store rather than on `Canvas` so the persisted JSON stays small and
- *  serialization round-trips cleanly. */
-export type CanvasEphemeral = {
-  selection: string[];
-  history: HistoryEntry[];
-  /** Index of the next entry to apply on redo. Entries `[0..historyIndex)`
-   *  are "applied"; entries `[historyIndex..)` are pending redo. A new op
-   *  truncates everything from `historyIndex` onward. */
-  historyIndex: number;
-  /** Shape id the agent's `canvas_focus` tool wants the viewport to
-   *  center on. The CanvasColumn watches this via `$effect`, animates
-   *  the camera, and clears the field. Null = no pending focus.
-   *  `ts` lets the column distinguish back-to-back focus calls onto
-   *  the same shape (which would otherwise look like a no-op). */
-  pendingFocus: { shapeId: string; ts: number } | null;
-};
 
 export const canvasState = $state<{
   index: CanvasIndexEntry[];
@@ -348,29 +214,6 @@ function persistCanvas(canvas: Canvas) {
   try {
     localStorage.setItem(STORAGE_CANVAS_PREFIX + canvas.id, json);
   } catch { /* ignore */ }
-}
-
-/** Hydrate a Canvas record with sensible defaults when older
- *  serializations are missing optional fields. Used by both the
- *  localStorage read path and the on-disk read path so additions to
- *  the Canvas type only need one back-fill site. */
-function hydrateCanvas(parsed: Partial<Canvas>): Canvas | null {
-  if (typeof parsed.id !== 'string' || typeof parsed.name !== 'string') return null;
-  return {
-    id: parsed.id,
-    name: parsed.name,
-    createdAt: parsed.createdAt ?? Date.now(),
-    updatedAt: parsed.updatedAt ?? Date.now(),
-    archivedAt: parsed.archivedAt ?? null,
-    thumbnail: parsed.thumbnail ?? null,
-    background: parsed.background ?? 'dot',
-    gridSize: parsed.gridSize ?? 8,
-    viewport: parsed.viewport ?? { x: 0, y: 0, zoom: 1 },
-    shapes: Array.isArray(parsed.shapes) ? parsed.shapes : [],
-    edges: Array.isArray(parsed.edges) ? parsed.edges : [],
-    version: parsed.version ?? 0,
-    schemaVersion: 1
-  };
 }
 
 function readCanvasFromStorage(id: string): Canvas | null {
@@ -530,17 +373,6 @@ export function restoreCanvasState() {
 }
 
 // ---- Library operations --------------------------------------------------
-
-function indexEntryFor(canvas: Canvas): CanvasIndexEntry {
-  return {
-    id: canvas.id,
-    name: canvas.name,
-    updatedAt: canvas.updatedAt,
-    archivedAt: canvas.archivedAt,
-    shapeCount: canvas.shapes.length,
-    thumbnail: canvas.thumbnail
-  };
-}
 
 function upsertIndexEntry(entry: CanvasIndexEntry) {
   const i = canvasState.index.findIndex((e) => e.id === entry.id);
@@ -810,18 +642,12 @@ export function dropCanvasInstance(instanceId: string) {
   persistInstanceState();
 }
 
-// ---- Snap & geometry helpers --------------------------------------------
+/* Snap, geometry, and shape factories all live in `canvas-helpers.ts`
+ * (re-exported above). The persistence helper below stays here
+ * because it bumps `canvasState.lastSavedAt[id]` via `persistCanvas`. */
 
-/** Round `v` to the nearest multiple of `step`. Used for grid-snap during
- *  translate / resize. `step <= 0` short-circuits to no-op so callers can
- *  flip snapping off without an extra branch. */
-export function snapToGrid(v: number, step: number): number {
-  if (step <= 0) return v;
-  return Math.round(v / step) * step;
-}
-
-/** Persist the canvas's `updatedAt` + index entry. Debounced so a chatty
- *  drag-resize doesn't write to localStorage on every frame. */
+/** Persist the canvas's `updatedAt` + index entry. Debounced so a
+ *  chatty drag-resize doesn't write to localStorage on every frame. */
 let canvasPersistTimer: ReturnType<typeof setTimeout> | null = null;
 function schedulePersist(canvas: Canvas) {
   canvas.updatedAt = Date.now();
@@ -830,99 +656,6 @@ function schedulePersist(canvas: Canvas) {
     persistCanvas(canvas);
     upsertIndexEntry(indexEntryFor(canvas));
   }, 600);
-}
-
-// ---- Shape factories -----------------------------------------------------
-
-function genShapeId(): string { return genId(); }
-
-/** Default props per shape kind. The renderer is the source of truth for
- *  `props` schema — these defaults intentionally lean minimal so a freshly
- *  drawn shape is "blank but legible". Themed colors come from CSS vars at
- *  render time, not from props (so theme switches re-tint everything). */
-function defaultPropsFor(kind: ShapeKind): Record<string, unknown> {
-  switch (kind) {
-    case 'rect':         return { fill: null, stroke: 'border-hi', strokeWidth: 2, radius: 6 };
-    case 'ellipse':      return { fill: null, stroke: 'border-hi', strokeWidth: 2 };
-    case 'line':         return { thickness: 2, dash: 'solid' };
-    case 'arrow-shape':  return { thickness: 2, head: 'filled' };
-    case 'text':         return { text: 'Text', fontSize: 16, fontWeight: 500, align: 'left', color: null };
-    case 'sticky':       return { markdown: 'Note…', tint: 'forge', fontSize: 13 };
-    /* `theme: 'forge-dark'` is implemented as a custom mermaid theme
-       inside CanvasShape so the diagram tints match the warm dark
-       palette. Default source is a tiny flowchart so the freshly
-       inserted shape isn't blank. */
-    case 'mermaid':      return { source: 'flowchart LR\n  A[Start] --> B(Step) --> C{Done?}\n  C -->|yes| D[Ship]\n  C -->|no| B', theme: 'forge-dark' };
-    case 'dot':          return { source: 'digraph G { rankdir=LR; A -> B -> C; }', engine: 'dot' };
-    /* Code shapes render via CodeMirror 6 (read-only by default; M-canvas-3
-       leaves edit-on-double-click for a follow-up). `language` is matched
-       against the lang autoload table in [`codemirrorLang.ts`](../components/editor/codemirrorLang.ts). */
-    case 'code':         return { source: '// Click to edit\nfunction hello() {\n  console.log("hi");\n}', language: 'javascript', theme: 'one-dark', lineNumbers: true, highlight: [] };
-    /* Images carry the asset payload as a base64 data URL inline in
-       v0.1 (localStorage-backed canvas state means we have no
-       filesystem to point at yet). Kept under a 1 MB pasted-size cap
-       to avoid blowing the localStorage quota. Migration to
-       `<canvas-id>.assets/<asset-id>.png` lives at the same time as
-       canvases move from localStorage to disk JSON files. */
-    case 'image':        return { dataUrl: '', intrinsicWidth: 0, intrinsicHeight: 0, alt: null };
-    /* `points` is a list of `[x, y, pressure]` in **bbox-local** canvas
-       px. Bbox is the AABB of the points, recomputed on commit. The
-       renderer turns this into an SVG path via `perfect-freehand`. */
-    case 'freehand':     return { points: [], color: 'text-0', thickness: 2, smoothing: 0.5 };
-    /* Frame: a labeled rectangle that acts as a container. `title`
-       renders in the top-bar; `tint` (null for now) overrides the
-       border color when set. Children get their `parentId` set to
-       the frame's id via `canvas_group` or by drag-into-frame. */
-    case 'frame':        return { title: 'Frame', tint: null };
-    case 'group':        return {};
-    /* Forge live cards: store the LOOKUP KEY (ticketKey, repo+number,
-       etc.) + a SNAPSHOT of the source object captured at drop time.
-       Renderer prefers live data from inbox state when available;
-       falls back to the snapshot when no column has the object loaded
-       (e.g., user closed the source column). Snapshot is intentionally
-       small — title + status, not full body — so a 50-card canvas
-       doesn't bloat localStorage. */
-    case 'jira-card':           return { ticketKey: '', snapshot: null };
-    case 'github-pr-card':      return { owner: '', repo: '', number: 0, snapshot: null };
-    case 'github-issue-card':   return { owner: '', repo: '', number: 0, snapshot: null };
-    case 'sentry-event-card':   return { projectSlug: '', issueId: '', shortId: null, snapshot: null };
-    case 'file-card':           return { repoRoot: null, relPath: '', isDir: false };
-    case 'chat-message-card':   return { sessionId: '', messageIndex: 0, snapshot: null };
-    default:             return {};
-  }
-}
-
-/** Build a fresh shape at `(x, y)` with `(w, h)` size. `kind` picks the
- *  default-props recipe; caller can patch fields after via `updateShape`. */
-export function makeShape(args: {
-  kind: ShapeKind;
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-  createdBy?: 'user' | 'agent';
-  label?: string | null;
-  props?: Record<string, unknown>;
-}): Shape {
-  const now = Date.now();
-  return {
-    id: genShapeId(),
-    kind: args.kind,
-    x: args.x,
-    y: args.y,
-    w: Math.max(1, args.w),
-    h: Math.max(1, args.h),
-    rot: 0,
-    z: now,
-    parentId: null,
-    locked: false,
-    hidden: false,
-    label: args.label ?? null,
-    props: { ...defaultPropsFor(args.kind), ...(args.props ?? {}) },
-    createdAt: now,
-    createdBy: args.createdBy ?? 'user',
-    updatedAt: now
-  };
 }
 
 // ---- Op application ------------------------------------------------------
@@ -1110,33 +843,6 @@ export function deleteShapes(canvasId: string, shapeIds: string[]) {
 
 // ---- Edge ops ------------------------------------------------------------
 
-function genEdgeId(): string { return genId(); }
-
-/** Build a fresh Edge with sensible defaults. The agent's MCP tool and
- *  the user's drag-from-anchor gesture both go through this — keeping
- *  one place to change defaults (`'arrow'`, orthogonal routing, 2px). */
-export function makeEdge(args: {
-  from: EdgeAnchor;
-  to: EdgeAnchor;
-  kind?: 'arrow' | 'line' | 'dashed';
-  routing?: 'straight' | 'orthogonal' | 'curved';
-  label?: string | null;
-  color?: string | null;
-  thickness?: 1 | 2 | 3;
-}): Edge {
-  return {
-    id: genEdgeId(),
-    from: args.from,
-    to: args.to,
-    kind: args.kind ?? 'arrow',
-    routing: args.routing ?? 'orthogonal',
-    label: args.label ?? null,
-    color: args.color ?? null,
-    thickness: args.thickness ?? 2,
-    z: Date.now()
-  };
-}
-
 export function addEdge(canvasId: string, edge: Edge): string | null {
   const c = ensureCanvasLoaded(canvasId);
   if (!c) return null;
@@ -1177,62 +883,6 @@ export function deleteEdges(canvasId: string, edgeIds: string[]) {
   eph.selection = eph.selection.filter((id) => !edgeIds.includes(id));
 }
 
-/** Resolve an EdgeAnchor to the world-coord point it represents. Returns
- *  null when the anchored shape is missing — the renderer treats null as
- *  "ghost edge, draw with a warning glyph or skip". */
-export function getEdgeEndpoint(canvas: Canvas, anchor: EdgeAnchor): { x: number; y: number } | null {
-  const shape = canvas.shapes.find((s) => s.id === anchor.shapeId);
-  if (!shape) return null;
-  if ('offset' in anchor) {
-    return { x: shape.x + anchor.offset.dx, y: shape.y + anchor.offset.dy };
-  }
-  /* Canonical anchors. Origin is the shape's top-left; left/top mid/right
-     × top/middle/bottom = 9 anchor points. */
-  const cx = shape.x + shape.w / 2;
-  const cy = shape.y + shape.h / 2;
-  const lx = shape.x;
-  const rx = shape.x + shape.w;
-  const ty = shape.y;
-  const by = shape.y + shape.h;
-  switch (anchor.anchor) {
-    case 'tl': return { x: lx, y: ty };
-    case 'tc': return { x: cx, y: ty };
-    case 'tr': return { x: rx, y: ty };
-    case 'ml': return { x: lx, y: cy };
-    case 'mc': return { x: cx, y: cy };
-    case 'mr': return { x: rx, y: cy };
-    case 'bl': return { x: lx, y: by };
-    case 'bc': return { x: cx, y: by };
-    case 'br': return { x: rx, y: by };
-  }
-}
-
-/** Pick the canonical anchor on `shape` whose world position is nearest
- *  to `point`. Used when an edge gesture lands on a shape body — we
- *  snap to the closest of its 9 anchors instead of the click point. */
-export function nearestAnchor(shape: Shape, point: { x: number; y: number }): 'tl'|'tc'|'tr'|'ml'|'mc'|'mr'|'bl'|'bc'|'br' {
-  const candidates: Array<['tl'|'tc'|'tr'|'ml'|'mc'|'mr'|'bl'|'bc'|'br', number, number]> = [
-    ['tl', shape.x, shape.y],
-    ['tc', shape.x + shape.w / 2, shape.y],
-    ['tr', shape.x + shape.w, shape.y],
-    ['ml', shape.x, shape.y + shape.h / 2],
-    ['mc', shape.x + shape.w / 2, shape.y + shape.h / 2],
-    ['mr', shape.x + shape.w, shape.y + shape.h / 2],
-    ['bl', shape.x, shape.y + shape.h],
-    ['bc', shape.x + shape.w / 2, shape.y + shape.h],
-    ['br', shape.x + shape.w, shape.y + shape.h]
-  ];
-  let best: typeof candidates[number] = candidates[4];
-  let bestDist = Infinity;
-  for (const c of candidates) {
-    const dx = c[1] - point.x;
-    const dy = c[2] - point.y;
-    const d = dx * dx + dy * dy;
-    if (d < bestDist) { bestDist = d; best = c; }
-  }
-  return best[0];
-}
-
 /** Duplicate the given shape ids by `(dx, dy)` canvas px. New shape ids
  *  are returned in the same order. Used by ⌘D and copy/paste. */
 export function duplicateShapes(
@@ -1266,28 +916,6 @@ export function duplicateShapes(
 }
 
 // ---- Hierarchy / parents ------------------------------------------------
-
-/** All shapes whose `parentId` chain reaches `shapeId`. Used by the
- *  drag-translate gesture to make frames into proper containers — when
- *  the user drags a frame, its children follow. Transitive: a frame
- *  inside a frame collects children of children. Cycle-safe via a
- *  visited set so a corrupt save with a parent-cycle doesn't loop. */
-export function getDescendants(canvas: Canvas, shapeId: string): Shape[] {
-  const out: Shape[] = [];
-  const visited = new Set<string>([shapeId]);
-  const queue: string[] = [shapeId];
-  while (queue.length > 0) {
-    const id = queue.shift()!;
-    for (const s of canvas.shapes) {
-      if (s.parentId === id && !visited.has(s.id)) {
-        visited.add(s.id);
-        out.push(s);
-        queue.push(s.id);
-      }
-    }
-  }
-  return out;
-}
 
 /** Assign / clear a shape's parentId. Used by group / ungroup helpers
  *  and by future drop-into-frame UX. Refuses to introduce cycles

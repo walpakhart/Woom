@@ -752,8 +752,3 @@ export function reviewStateLabel(s: string): { text: string; className: string }
   }
 }
 
-// ---------- Repo helpers ----------
-
-export function repoKey(r: RepoRef): string {
-  return `${r.owner}/${r.name}`;
-}
