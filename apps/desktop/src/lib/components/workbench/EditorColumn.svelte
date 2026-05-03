@@ -185,6 +185,8 @@
   .editor-bench-head {
     display: flex; align-items: center; gap: 10px;
     padding: 16px 20px 10px;
+    height: 54px;
+    box-sizing: border-box;
     border-bottom: 1px solid var(--border-neutral);
     background: var(--bg-1);
     flex-shrink: 0;

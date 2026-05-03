@@ -2154,15 +2154,21 @@
 
   /* ---- Header ------------------------------------------------------- */
 
+  /* Match `.inbox-brand` height + padding from the other column kinds
+     (Github/Jira/Sentry/Editor/Terminal) so column headers line up
+     across the workbench at the exact same Y. Was 14/18/10 padding
+     with no explicit height — sat ~4 px taller than the others when
+     the tab strip wrapped a second row. */
   .canvas-head {
     display: flex;
     align-items: center;
     gap: 14px;
-    padding: 14px 18px 10px;
+    padding: 16px 20px 10px;
+    height: 54px;
+    box-sizing: border-box;
     border-bottom: 1px solid var(--border-neutral);
     background: var(--bg-1);
     flex-shrink: 0;
-    min-height: 0;
   }
   .canvas-brand { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
   .source-mark {
