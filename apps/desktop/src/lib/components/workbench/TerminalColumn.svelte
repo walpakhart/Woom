@@ -136,19 +136,21 @@
   onMount(() => {
     if (!host) return;
 
-    /* Pull live palette values so the terminal matches whatever
-     * theme is currently active (Iconic / Light / Dark). xterm.js
-     * needs literal hex strings — it doesn't observe CSS vars — so
-     * we resolve them once at mount via getComputedStyle. Theme
-     * switches at runtime won't repaint xterm's saved colours; that
-     * would need a follow-up listener. Negligible until users start
-     * flipping theme mid-session. */
+    /* Pull text + accent from the live theme so a Light-mode terminal
+     * has dark text and an Iconic-mode one has cream — but use a
+     * dedicated NEUTRAL DARK for the terminal background regardless
+     * of theme. Iconic's `--bg-0: #0C1117` has a deliberate blue
+     * undertone (cold-steel brand) which reads "tinted" in a terminal
+     * column; macOS Terminal.app sets a precedent that the shell
+     * surface is pure grey-black. Picking one neutral for every
+     * theme keeps the column anchored visually instead of drifting
+     * with the rest of the chrome. */
     const css = getComputedStyle(document.documentElement);
     const v = (name: string, fallback: string) =>
       (css.getPropertyValue(name) || fallback).trim() || fallback;
-    const bg0 = v('--bg-0', '#0C1117');
     const text0 = v('--text-0', '#EDE5D1');
     const accentBright = v('--accent-bright', '#E8A33A');
+    const TERM_BG = '#15151A';
 
     term = new Terminal({
       fontFamily: '"JetBrains Mono", "SF Mono", ui-monospace, monospace',
@@ -164,10 +166,10 @@
       // on every theme — those are content colours from `ls`,
       // `git status`, etc., not chrome.
       theme: {
-        background: bg0,
+        background: TERM_BG,
         foreground: text0,
         cursor: accentBright,
-        cursorAccent: bg0,
+        cursorAccent: TERM_BG,
         selectionBackground: 'rgba(232, 163, 58, 0.32)',
         black: '#1A1410',
         red: '#D4664A',
@@ -433,7 +435,10 @@
     flex: 1;
     min-height: 0;
     padding: 8px 4px 4px 8px;
-    background: var(--bg-0);
+    /* Neutral dark grey, theme-independent — see comment in the
+       TS section. Avoids Iconic's blue undertone reading as a
+       tinted terminal. */
+    background: #15151A;
     overflow: hidden;
   }
   /* xterm.js draws into a sized child div — make it fill the host. */
