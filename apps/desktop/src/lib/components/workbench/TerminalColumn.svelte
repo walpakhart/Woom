@@ -136,6 +136,20 @@
   onMount(() => {
     if (!host) return;
 
+    /* Pull live palette values so the terminal matches whatever
+     * theme is currently active (Iconic / Light / Dark). xterm.js
+     * needs literal hex strings — it doesn't observe CSS vars — so
+     * we resolve them once at mount via getComputedStyle. Theme
+     * switches at runtime won't repaint xterm's saved colours; that
+     * would need a follow-up listener. Negligible until users start
+     * flipping theme mid-session. */
+    const css = getComputedStyle(document.documentElement);
+    const v = (name: string, fallback: string) =>
+      (css.getPropertyValue(name) || fallback).trim() || fallback;
+    const bg0 = v('--bg-0', '#0C1117');
+    const text0 = v('--text-0', '#EDE5D1');
+    const accentBright = v('--accent-bright', '#E8A33A');
+
     term = new Terminal({
       fontFamily: '"JetBrains Mono", "SF Mono", ui-monospace, monospace',
       fontSize: 12.5,
@@ -144,30 +158,33 @@
       scrollback: 5000,
       allowProposedApi: true,
       convertEol: false,
-      // Match Forgehold's v5 palette so the terminal feels native to
-      // the column it sits in (not a chunky "external app embed").
+      // Use the live theme's surface + foreground so the column
+      // doesn't look like an embed of a different app. Per-source
+      // palette below stays a fixed warm/blue mix that reads well
+      // on every theme — those are content colours from `ls`,
+      // `git status`, etc., not chrome.
       theme: {
-        background: '#0A0C10',
-        foreground: '#E9EAEE',
-        cursor: '#D9772E',
-        cursorAccent: '#0A0C10',
-        selectionBackground: 'rgba(217, 119, 46, 0.32)',
-        black: '#1A1E24',
-        red: '#E5715C',
-        green: '#65D396',
-        yellow: '#E0B33A',
+        background: bg0,
+        foreground: text0,
+        cursor: accentBright,
+        cursorAccent: bg0,
+        selectionBackground: 'rgba(232, 163, 58, 0.32)',
+        black: '#1A1410',
+        red: '#D4664A',
+        green: '#6FAE88',
+        yellow: '#D99540',
         blue: '#6FA9F2',
         magenta: '#B289F2',
         cyan: '#7FD9D9',
-        white: '#C8D0DC',
-        brightBlack: '#494D55',
-        brightRed: '#FF8B72',
-        brightGreen: '#86E5AA',
-        brightYellow: '#FFCB5C',
+        white: '#C8C0AE',
+        brightBlack: '#5E5648',
+        brightRed: '#E48C70',
+        brightGreen: '#8FCAA0',
+        brightYellow: '#E5B574',
         brightBlue: '#92BFFF',
         brightMagenta: '#CBA9FF',
         brightCyan: '#A1ECEC',
-        brightWhite: '#E9EAEE'
+        brightWhite: '#FAEEE0'
       }
     });
     fit = new FitAddon();
@@ -416,7 +433,7 @@
     flex: 1;
     min-height: 0;
     padding: 8px 4px 4px 8px;
-    background: #0A0C10;
+    background: var(--bg-0);
     overflow: hidden;
   }
   /* xterm.js draws into a sized child div — make it fill the host. */
