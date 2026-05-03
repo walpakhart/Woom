@@ -78,8 +78,25 @@ impl TerminalRegistry {
             .collect()
     }
 
-    pub fn get(&self, id: &str) -> Option<Arc<Session>> {
-        self.sessions.lock().get(id).cloned()
+    /// Resolve an id-or-name to a Session. Tries direct uuid lookup
+    /// first; if that misses, scans for a session whose `name`
+    /// matches the input (case-insensitive). Lets MCP callers pass
+    /// readable column names (e.g. "Notre-Dame") instead of forcing
+    /// every tool call to drag a uuid through chat history.
+    pub fn get_by_id_or_name(&self, key: &str) -> Option<Arc<Session>> {
+        let map = self.sessions.lock();
+        if let Some(s) = map.get(key) {
+            return Some(s.clone());
+        }
+        let lower = key.to_ascii_lowercase();
+        for s in map.values() {
+            if let Some(n) = s.name.as_deref() {
+                if n.eq_ignore_ascii_case(&lower) || n.to_ascii_lowercase() == lower {
+                    return Some(s.clone());
+                }
+            }
+        }
+        None
     }
 }
 

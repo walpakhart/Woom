@@ -2070,7 +2070,7 @@ impl App {
     // `terminal_bridge_client`).
 
     #[tool(
-        description = "List every Terminal column open in the user's Forgehold workbench. Returns each terminal's stable id — pass it to terminal_run, terminal_write, or terminal_buffer below. Empty list = the user has no Terminal columns yet (suggest they add one from the workbench pill bar).\n\nUse this BEFORE issuing other terminal_* tools so you have a real id."
+        description = "List every Terminal column open in the user's Forgehold workbench. Returns each terminal's human-readable column name (e.g. `Notre-Dame`) AND a stable uuid. PREFER THE NAME when calling other terminal_* tools — both work, but the name reads clearly in your reply text and in the tool-call trace the user sees.\n\nUse this BEFORE issuing other terminal_* tools so you have a real id. Empty list = the user has no Terminal columns yet (suggest they add one from the workbench pill bar)."
     )]
     async fn terminal_list(&self) -> Result<CallToolResult, ErrorData> {
         let client = BridgeClient::discover().map_err(bridge_to_mcp)?;
@@ -2098,7 +2098,7 @@ impl App {
     }
 
     #[tool(
-        description = "Run a shell command in one of the user's Terminal columns and return stdout + exit code. The command runs in the SAME shell the user sees — they watch it execute live. Wrapped automatically so `$?` reflects the user command's exit (not printf's). Output is ANSI-stripped before return.\n\nPrefer this over the generic `bash` tool when you want the user to see what you're doing — debugging, exploratory commands, anything where keystroke-level visibility matters. For long jobs (build, tests) bump `timeout_ms` (default 60s).\n\nReturns `timed_out: true` + partial stdout if the deadline hits — useful for hung processes."
+        description = "Run a shell command in one of the user's Terminal columns and BLOCK until it finishes (or until `timeout_ms` elapses). Returns `exit_code` + ANSI-stripped `stdout`. The command runs in the SAME PTY the user sees — they watch it execute live. Wrapped automatically so `$?` tracks the user command, not printf's exit.\n\n`id` accepts EITHER the column name (`Notre-Dame`) OR the uuid from terminal_list. Prefer the name in your reply text.\n\nDefault `timeout_ms` is 60_000 (60s). For long jobs (`brew install`, `cargo build`, `npm install`, `pytest`) raise it to 180_000–600_000 ms. This tool BLOCKS until the wrapped command actually finishes — do NOT poll the buffer or assume early completion based on prior output. The returned stdout is ONLY what the command emitted on this run; output from earlier runs / from the user typing is not included.\n\nReturns `timed_out: true` + partial stdout if the deadline hits — treat that as inconclusive (don't decide a command failed just because the timeout fired)."
     )]
     async fn terminal_run(
         &self,
@@ -2132,7 +2132,7 @@ impl App {
     }
 
     #[tool(
-        description = "Send raw input to a Terminal column. Use this for INTERACTIVE prompts the shell is waiting on — `git commit` opening $EDITOR, an `ssh` password prompt, a TUI like `htop`. Pass `text` as plain UTF-8; we base64-encode for the wire. Append `\\n` yourself when you want to submit; without it the bytes go straight into the line buffer (the user can finish typing).\n\nFor non-interactive command execution prefer `terminal_run` — it captures stdout for you. Use `terminal_write` only when you specifically need to drive an interactive flow."
+        description = "Send raw input to a Terminal column. Use this for INTERACTIVE prompts the shell is waiting on — `git commit` opening $EDITOR, an `ssh` password prompt, a TUI like `htop`. `id` accepts the column name (`Notre-Dame`) or uuid; prefer name. Pass `text` as plain UTF-8; we base64-encode for the wire. Append `\\n` yourself when you want to submit; without it the bytes go straight into the line buffer (the user can finish typing).\n\nFor non-interactive command execution prefer `terminal_run` — it captures stdout AND blocks until the command finishes. Use `terminal_write` only when you specifically need to drive an interactive flow."
     )]
     async fn terminal_write(
         &self,
@@ -2159,7 +2159,7 @@ impl App {
     }
 
     #[tool(
-        description = "Read the recent scrollback of a Terminal column. Returns the last `lines` lines (default 200) of accumulated output, ANSI-stripped. Use this to inspect output the user produced themselves (or output from a previous tool call you forgot to capture) — e.g. \"what did the test runner print last?\" or \"what's the user's $PATH?\".\n\n`total_bytes` in the response counts every byte the session has emitted since spawn (mod the 64 KB ring buffer cap)."
+        description = "Read the recent scrollback of a Terminal column. Returns the last `lines` lines (default 200) of accumulated output, ANSI-stripped. `id` accepts the column name (`Notre-Dame`) or uuid; prefer name.\n\nUse this to inspect output the user produced themselves (or output from a previous tool call you forgot to capture) — e.g. \"what did the test runner print last?\" or \"what's the user's $PATH?\". Be careful: this returns OLD output that may include prior user attempts. To run a fresh command and capture ONLY its result, use `terminal_run` (the buffer view will include both old and new bytes).\n\n`total_bytes` in the response counts every byte the session has emitted since spawn (mod the 64 KB ring buffer cap)."
     )]
     async fn terminal_buffer(
         &self,
@@ -2268,11 +2268,11 @@ impl ServerHandler for App {
              - canvas_upload_image — paste a base64-encoded image onto the canvas; useful when you've generated a chart externally.\n\
              \n\
              ## Terminal — drive the user's PTY column\n\
-             Forgehold workbench can host Terminal columns (real /bin/zsh PTY). The user SEES every keystroke in real time — so prefer these over the generic `bash` tool whenever transparency / debuggability matters.\n\
-             - terminal_list — discover open terminals (returns ids).\n\
-             - terminal_run(id, cmd, timeout_ms?) — run a command and get stdout + exit_code back. Wrapped so $? is correct. Default timeout 60s.\n\
+             Forgehold workbench can host Terminal columns (real /bin/zsh PTY). The user SEES every keystroke in real time — so prefer these over the generic `bash` tool whenever transparency / debuggability matters. EVERY terminal_* tool's `id` parameter accepts EITHER the column name (`Notre-Dame`) or the uuid from terminal_list — PREFER NAME so the call reads cleanly in chat history.\n\
+             - terminal_list — discover open terminals (returns name + uuid pairs).\n\
+             - terminal_run(id, cmd, timeout_ms?) — BLOCKS on a command, returns stdout + exit_code. Stdout is ONLY this run's output (echoes of input + prior scrollback are excluded). Default timeout 60s; use 180000–600000 ms for build / install / test commands. Treat `timed_out: true` as inconclusive — don't decide failure on timeout alone.\n\
              - terminal_write(id, text) — raw input for INTERACTIVE prompts (git editor, ssh password, htop keys). Append \\n to submit.\n\
-             - terminal_buffer(id, lines?) — read the recent scrollback (default last 200 lines).\n\
+             - terminal_buffer(id, lines?) — read recent scrollback (default last 200 lines). NOTE: includes prior user input AND prior tool runs — don't infer command results from buffer bytes; use terminal_run to actually run + capture cleanly.\n\
              \n\
              # When to chain calls\n\
              These tools compose. \"Open the actions tab for forge\" → open_github_repo(owner=…, repo=forge, section=actions) — one call, no need to switch_view first. \"Make a new workbench called Hotfix and add a Claude column there\" → new_workbench + add_workbench_instance(kind=claude). Don't ask for confirmation — these are harmless navigation that gives the user the same view they'd get clicking through manually."

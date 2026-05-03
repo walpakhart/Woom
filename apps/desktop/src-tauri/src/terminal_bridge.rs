@@ -133,8 +133,8 @@ async fn write(
     let session = s
         .app
         .state::<TerminalRegistry>()
-        .get(&id)
-        .ok_or_else(|| BridgeErr(StatusCode::NOT_FOUND, "unknown id".into()))?;
+        .get_by_id_or_name(&id)
+        .ok_or_else(|| BridgeErr(StatusCode::NOT_FOUND, format!("unknown terminal id-or-name: {id}")))?;
     let mut w = session.writer.lock();
     w.write_all(&bytes).map_err(|e| format!("write: {e}"))?;
     w.flush().map_err(|e| format!("flush: {e}"))?;
@@ -149,8 +149,8 @@ async fn run(
     let session = s
         .app
         .state::<TerminalRegistry>()
-        .get(&id)
-        .ok_or_else(|| BridgeErr(StatusCode::NOT_FOUND, "unknown id".into()))?;
+        .get_by_id_or_name(&id)
+        .ok_or_else(|| BridgeErr(StatusCode::NOT_FOUND, format!("unknown terminal id-or-name: {id}")))?;
     let timeout = Duration::from_millis(req.timeout_ms.unwrap_or(60_000));
     let sentinel_uuid = Uuid::new_v4().simple().to_string();
     let sentinel_marker = format!("__FGH_DONE_{sentinel_uuid}__");
@@ -267,8 +267,8 @@ async fn buffer(
     let session = s
         .app
         .state::<TerminalRegistry>()
-        .get(&id)
-        .ok_or_else(|| BridgeErr(StatusCode::NOT_FOUND, "unknown id".into()))?;
+        .get_by_id_or_name(&id)
+        .ok_or_else(|| BridgeErr(StatusCode::NOT_FOUND, format!("unknown terminal id-or-name: {id}")))?;
     let buf = session.output_buf.lock();
     let total = buf.len() as u64;
     let stripped = strip_ansi_escapes::strip(&*buf);
