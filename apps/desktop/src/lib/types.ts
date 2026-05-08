@@ -170,6 +170,15 @@ export type Mention = {
   isDir?: boolean;
 };
 
+/** `waitId` is set on cards created via the synchronous IPC path
+ *  (sidecar's `propose_*` blocks the agent's MCP call until the card
+ *  resolves). When present, the action executor calls
+ *  `resolve_action_wait` with this id after running the action so
+ *  the sidecar's MCP response carries the actual outcome — and the
+ *  agent reacts in the SAME turn. Cards from the legacy fire-and-
+ *  forget path (no IPC available) leave waitId undefined; their
+ *  outcome rides the old `pendingActionResults` queue + manual
+ *  next-turn drain. */
 export type ClaudeAction =
   | {
       id: string;
@@ -180,6 +189,7 @@ export type ClaudeAction =
       note: string;
       status: 'pending' | 'executing' | 'done' | 'error';
       result?: string;
+      waitId?: string;
     }
   | {
       id: string;
@@ -191,6 +201,7 @@ export type ClaudeAction =
       note: string;
       status: 'pending' | 'executing' | 'done' | 'error';
       result?: string;
+      waitId?: string;
     }
   | {
       id: string;
@@ -199,6 +210,7 @@ export type ClaudeAction =
       reason: string;
       status: 'pending' | 'executing' | 'done' | 'error';
       result?: string;
+      waitId?: string;
     }
   | {
       id: string;
@@ -208,6 +220,7 @@ export type ClaudeAction =
       status: 'pending' | 'executing' | 'done' | 'error';
       result?: string;
       exitCode?: number;
+      waitId?: string;
     };
 
 export type ClaudeSession = {
@@ -309,6 +322,50 @@ export type ClaudeSession = {
       shows a "waiting for your approval" hint instead of the idle
       input prompt so the user knows the agent is paused on them. */
   awaitingApproval: boolean;
+  /** Outcomes from action cards (commit / PR / bash / switch_cwd) that
+      have run since the agent's last turn. Two consumers:
+        1. UI: each outcome gets appended to `messages` as an action-
+           result chip when the chat is quiescent (after streaming
+           ends). Mid-stream appends would shift "last message"
+           position and silently drop assistant deltas — see
+           `flushActionResultsToUI`.
+        2. Agent: drained on the NEXT runAgentRequest call (manual or
+           auto-fired) and prepended to the prompt as a "since-last-
+           turn outcomes" block. The CLI's `--resume` history doesn't
+           include these (Forgehold-side annotations), so this is the
+           only channel the agent has for learning whether its commit
+           push succeeded, what stderr a bash card returned, etc.
+      Persisted across app restarts so a result that arrived right
+      before quit isn't lost when the user reopens. Items have a
+      `flushedToUI` flag to track UI-side delivery independently from
+      agent-side delivery. */
+  pendingActionResults: PendingActionResult[];
+};
+
+/** One outcome from an action card. Lives on the session until both
+ *  `flushedToUI` is true (chip has been appended to `messages`) AND
+ *  the next agent turn has fired (drained for prompt prefix). */
+export type PendingActionResult = {
+  /** True for `done`-status outcomes, false for `error`. Drives the
+      ✓/✗ marker the UI chip and agent prompt prefix display. */
+  ok: boolean;
+  /** The action kind — used to label outcomes in the agent's prompt
+      block ("commit: …", "bash: …") so the agent doesn't have to
+      infer kind from prose. */
+  kind: 'commit' | 'pr' | 'bash' | 'switch_cwd';
+  /** Multi-line summary as built by the executor. Includes commit
+      message + sha + push diagnostics, or bash command + stdout/
+      stderr + exit code, or PR title + URL, etc. Free-form prose
+      because every kind has different relevant fields. */
+  summary: string;
+  /** ISO timestamp of when the action resolved. Used as the chat
+      message's `at` when flushed to UI, so chips appear in
+      chronological context. */
+  at: string;
+  /** True after the result has been appended to `messages` for the UI
+      chip. The drain-for-agent step doesn't gate on this — agent
+      delivery and UI display are tracked independently. */
+  flushedToUI: boolean;
 };
 
 export interface RepoInfo {

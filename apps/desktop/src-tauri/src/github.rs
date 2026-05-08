@@ -1461,6 +1461,231 @@ pub async fn merge_pr(
     handle_unit(resp).await
 }
 
+/// PATCH the title and/or body of an existing PR. Either field can be
+/// `None` to leave it unchanged — GitHub's PATCH semantics ignore
+/// missing keys, so callers can update just the title without
+/// clobbering the body. The PR-edit endpoint is the same one used to
+/// open/close (`set_issue_state`); we send only `title`/`body` here so
+/// state isn't accidentally toggled.
+pub async fn edit_pr(
+    token: &str,
+    owner: &str,
+    repo: &str,
+    number: u64,
+    title: Option<&str>,
+    body: Option<&str>,
+) -> Result<(), GithubError> {
+    let c = client()?;
+    let url = format!("{API_BASE}/repos/{owner}/{repo}/pulls/{number}");
+    let mut payload = serde_json::Map::new();
+    if let Some(t) = title {
+        payload.insert("title".into(), serde_json::Value::String(t.to_string()));
+    }
+    if let Some(b) = body {
+        payload.insert("body".into(), serde_json::Value::String(b.to_string()));
+    }
+    if payload.is_empty() {
+        // No-op — caller passed nothing to change. Treat as success
+        // rather than firing a wasted API call.
+        return Ok(());
+    }
+    let resp = request(&c, reqwest::Method::PATCH, token, url)
+        .json(&serde_json::Value::Object(payload))
+        .send()
+        .await?;
+    handle_unit(resp).await
+}
+
+/// Add reviewers (users and/or teams) to a PR. Existing reviewers are
+/// preserved — this is additive. Team reviewers are slugs without the
+/// org prefix; users are logins. GitHub silently de-dupes if a
+/// reviewer is already on the request, so callers can be sloppy.
+pub async fn request_pr_reviewers(
+    token: &str,
+    owner: &str,
+    repo: &str,
+    number: u64,
+    user_logins: &[String],
+    team_slugs: &[String],
+) -> Result<(), GithubError> {
+    let c = client()?;
+    let url = format!(
+        "{API_BASE}/repos/{owner}/{repo}/pulls/{number}/requested_reviewers"
+    );
+    let resp = request(&c, reqwest::Method::POST, token, url)
+        .json(&json!({
+            "reviewers": user_logins,
+            "team_reviewers": team_slugs,
+        }))
+        .send()
+        .await?;
+    handle_unit(resp).await
+}
+
+/// Remove reviewers from a PR. Mirror of `request_pr_reviewers`; same
+/// (users, teams) split.
+pub async fn remove_pr_reviewers(
+    token: &str,
+    owner: &str,
+    repo: &str,
+    number: u64,
+    user_logins: &[String],
+    team_slugs: &[String],
+) -> Result<(), GithubError> {
+    let c = client()?;
+    let url = format!(
+        "{API_BASE}/repos/{owner}/{repo}/pulls/{number}/requested_reviewers"
+    );
+    let resp = request(&c, reqwest::Method::DELETE, token, url)
+        .json(&json!({
+            "reviewers": user_logins,
+            "team_reviewers": team_slugs,
+        }))
+        .send()
+        .await?;
+    handle_unit(resp).await
+}
+
+/// Add labels to an issue or PR. PRs are issues at the API level for
+/// labels/assignees, hence the `/issues/<n>/labels` URL even when the
+/// number refers to a PR — that's how GitHub's REST surface is
+/// shaped. Additive (existing labels stay).
+pub async fn add_issue_labels(
+    token: &str,
+    owner: &str,
+    repo: &str,
+    number: u64,
+    labels: &[String],
+) -> Result<(), GithubError> {
+    let c = client()?;
+    let url = format!("{API_BASE}/repos/{owner}/{repo}/issues/{number}/labels");
+    let resp = request(&c, reqwest::Method::POST, token, url)
+        .json(&json!({ "labels": labels }))
+        .send()
+        .await?;
+    handle_unit(resp).await
+}
+
+/// Remove a single label from an issue/PR. GitHub's REST API removes
+/// one label per call; for bulk-remove the caller loops. We expose
+/// per-label so each removal's success/failure is independently
+/// surfaced (and a missing-label 404 doesn't poison the whole batch).
+pub async fn remove_issue_label(
+    token: &str,
+    owner: &str,
+    repo: &str,
+    number: u64,
+    label: &str,
+) -> Result<(), GithubError> {
+    let c = client()?;
+    let enc = urlencoding::encode(label);
+    let url = format!("{API_BASE}/repos/{owner}/{repo}/issues/{number}/labels/{enc}");
+    let resp = request(&c, reqwest::Method::DELETE, token, url).send().await?;
+    handle_unit(resp).await
+}
+
+/// Add assignees to an issue/PR. Additive; same `/issues/` shape as
+/// labels because GitHub treats PRs as issues for the assignee
+/// surface.
+pub async fn add_issue_assignees(
+    token: &str,
+    owner: &str,
+    repo: &str,
+    number: u64,
+    logins: &[String],
+) -> Result<(), GithubError> {
+    let c = client()?;
+    let url = format!("{API_BASE}/repos/{owner}/{repo}/issues/{number}/assignees");
+    let resp = request(&c, reqwest::Method::POST, token, url)
+        .json(&json!({ "assignees": logins }))
+        .send()
+        .await?;
+    handle_unit(resp).await
+}
+
+/// Remove assignees from an issue/PR. DELETE on the same endpoint
+/// with a body listing the logins to remove (REST quirk — most DELETEs
+/// take no body, but this one does).
+pub async fn remove_issue_assignees(
+    token: &str,
+    owner: &str,
+    repo: &str,
+    number: u64,
+    logins: &[String],
+) -> Result<(), GithubError> {
+    let c = client()?;
+    let url = format!("{API_BASE}/repos/{owner}/{repo}/issues/{number}/assignees");
+    let resp = request(&c, reqwest::Method::DELETE, token, url)
+        .json(&json!({ "assignees": logins }))
+        .send()
+        .await?;
+    handle_unit(resp).await
+}
+
+/// Toggle a PR's draft state. REST doesn't expose this — must use
+/// GraphQL `convertPullRequestToDraft` / `markPullRequestReadyForReview`.
+/// Both take the PR's GraphQL node id (not the integer number); we look
+/// it up via REST first since the caller naturally has owner/repo/number.
+pub async fn set_pr_draft(
+    token: &str,
+    owner: &str,
+    repo: &str,
+    number: u64,
+    draft: bool,
+) -> Result<(), GithubError> {
+    let c = client()?;
+    // Step 1: REST call to get the PR's `node_id` (GraphQL global id).
+    let pr_url = format!("{API_BASE}/repos/{owner}/{repo}/pulls/{number}");
+    let pr_resp = request(&c, reqwest::Method::GET, token, pr_url).send().await?;
+    if !pr_resp.status().is_success() {
+        return Err(api_error(pr_resp).await);
+    }
+    #[derive(Deserialize)]
+    struct PrNodeId {
+        node_id: String,
+    }
+    let pr_node: PrNodeId = pr_resp.json().await?;
+    // Step 2: GraphQL mutation. The two mutations have identical
+    // shapes (one input, one output); pick by the requested toggle.
+    let mutation = if draft {
+        "mutation($id:ID!) { convertPullRequestToDraft(input:{pullRequestId:$id}) { pullRequest { id isDraft } } }"
+    } else {
+        "mutation($id:ID!) { markPullRequestReadyForReview(input:{pullRequestId:$id}) { pullRequest { id isDraft } } }"
+    };
+    let resp = request(
+        &c,
+        reqwest::Method::POST,
+        token,
+        format!("{API_BASE}/graphql"),
+    )
+    .json(&json!({
+        "query": mutation,
+        "variables": { "id": pr_node.node_id },
+    }))
+    .send()
+    .await?;
+    if !resp.status().is_success() {
+        return Err(api_error(resp).await);
+    }
+    // GraphQL returns 200 with errors in the body for mutation failures
+    // (e.g. "PR is already a draft"). Parse and surface them so the
+    // caller doesn't think the call succeeded silently.
+    let body: serde_json::Value = resp.json().await?;
+    if let Some(errors) = body.get("errors").and_then(|e| e.as_array()) {
+        if !errors.is_empty() {
+            let msg = errors
+                .iter()
+                .filter_map(|e| e.get("message").and_then(|m| m.as_str()))
+                .collect::<Vec<_>>()
+                .join("; ");
+            return Err(GithubError::Message(format!(
+                "GraphQL mutation failed: {msg}"
+            )));
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug, Serialize, Clone)]
 pub struct CheckRun {
     /// GitHub's internal id — stable across refetches, useful for keying.

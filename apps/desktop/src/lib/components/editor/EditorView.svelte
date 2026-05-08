@@ -212,16 +212,25 @@
   let statusDebounce: ReturnType<typeof setTimeout> | null = null;
   let statusInFlight = false;
   let lastStatusAt = 0;
+  // True after `onDestroy` runs — tells in-flight async paths to bail
+  // before writing to parent state. The `git_status` invoke can take
+  // hundreds of ms; if the editor column is removed mid-call, the
+  // promise still resolves and would otherwise call
+  // `onGitStatusChange(...)` on a parent that's no longer interested.
+  let destroyed = false;
 
   /** Authoritative git-status refresh. Guarded against overlapping calls —
       if one is in flight we just skip (the next scheduleGitStatus will catch
       up). Called from: save hook, fs watcher (debounced), branch switch,
       polling timer. */
   async function refreshGitStatus() {
-    if (!repoPath || statusInFlight) return;
+    if (!repoPath || statusInFlight || destroyed) return;
     statusInFlight = true;
     try {
       const s = await invoke<GitStatusPayload>('git_status', { repo: repoPath });
+      // Destroy could have landed during the await above. Stop here
+      // so we don't invoke the parent callback with stale data.
+      if (destroyed) return;
       onGitStatusChange(s.files);
       lastStatusAt = Date.now();
     } catch (e) {
@@ -282,6 +291,7 @@
   });
 
   onDestroy(() => {
+    destroyed = true;
     watchUnlisten?.();
     if (pollTimer) clearInterval(pollTimer);
     if (statusDebounce) clearTimeout(statusDebounce);
@@ -728,7 +738,16 @@
 
   /* Sidebar body fills the remaining vertical space — tabs sit pinned
      at the bottom under it so the active pane gets the maximum room. */
-  .ev-sidebar-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .ev-sidebar-body { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; overflow-x: hidden; }
+  /* Belt-and-braces: any descendant scroll container that ends up
+     showing a horizontal track (FileTree / GitPanel / HistoryPanel —
+     all of which already clip+ellipsis their content) gets its
+     horizontal bar hidden. Without this, narrow column widths
+     produced a thin horizontal scrollbar wedged between the list
+     and the bottom tab strip that read as visual noise. Vertical
+     scrollbars stay intact. */
+  .ev-sidebar-body :global(*) { scrollbar-width: thin; }
+  .ev-sidebar-body :global(*::-webkit-scrollbar:horizontal) { height: 0; display: none; }
   .ev-sidebar-tabs {
     display: flex; align-items: stretch;
     border-top: 1px solid var(--border-neutral);
@@ -754,6 +773,15 @@
   .ev-sidebar-tab :global(svg) { width: 12px; height: 12px; }
 
   .ev-main { flex: 1; display: flex; flex-direction: column; min-width: 0; height: 100%; min-height: 0; }
+  /* Hide horizontal scrollbar on the editor content (CodeMirror's
+     `.cm-scroller`) and any other descendant that would otherwise
+     paint a thin track at the bottom of the right pane. Content stays
+     horizontally scrollable via two-finger swipe / shift+scroll —
+     this just removes the visible track which read as visual noise
+     under the file tabs. Vertical scrollbars are untouched. */
+  .ev-main :global(*::-webkit-scrollbar:horizontal) { height: 0; display: none; }
+  .ev-main :global(.cm-scroller) { scrollbar-width: none; }
+  .ev-main :global(.cm-scroller::-webkit-scrollbar:horizontal) { height: 0; display: none; }
   .ev-tabbar {
     display: flex; align-items: stretch; gap: 1px;
     padding: 0;

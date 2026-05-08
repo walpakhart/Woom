@@ -268,8 +268,10 @@
       <div class="inbox-state">No issues match the current query.</div>
     {:else}
       {#each items as issue (issue.id)}
+        {@const levelClass = sentryLevelClass(issue.level)}
+        {@const dupeExcerpt = issue.metadata_value && issue.title.includes(issue.metadata_value)}
         <div
-          class="inbox-item sentry-item"
+          class="inbox-item sentry-item {levelClass}"
           draggable="true"
           role="button"
           tabindex="0"
@@ -279,26 +281,23 @@
           onclick={(e) => { if (isClickNotDrag(e)) openSentryFocus(issue.id); }}
           onkeydown={(e) => { if (e.key === 'Enter') openSentryFocus(issue.id); }}
         >
-          <div class="inbox-item-top">
-            <span class="source-mark sentry-mark" aria-hidden="true">St</span>
+          <div class="inbox-item-row1">
+            <span class="state-dot"></span>
             <span class="inbox-item-id mono">{issue.short_id || issue.id}</span>
-            <span class="mini-tag {sentryLevelClass(issue.level)}">{issue.level}</span>
+            <span class="state-pill {levelClass}">{issue.level}</span>
+            {#if issue.status !== 'unresolved'}
+              <span class="kind-tag">{issue.status}</span>
+            {/if}
+            <span class="events-chip mono" title="event count · users affected">
+              {issue.count}{#if issue.user_count > 0}·{issue.user_count}u{/if}
+            </span>
             <span class="inbox-item-time mono">{relativeTime(issue.last_seen, now)}</span>
           </div>
-          <div class="inbox-item-title">{shortText(issue.title, 120)}</div>
-          {#if issue.metadata_value}
-            <div class="inbox-item-sub mono">{shortText(issue.metadata_value, 110)}</div>
+          <div class="inbox-item-title">{shortText(issue.title, 140)}</div>
+          {#if issue.metadata_value && !dupeExcerpt}
+            <div class="inbox-item-sub mono">{shortText(issue.metadata_value, 120)}</div>
           {/if}
-          <div class="inbox-item-meta">
-            <span class="mini-kind">{issue.project_slug}</span>
-            <span class="mini-repo">· {issue.count} event{issue.count === '1' ? '' : 's'}</span>
-            {#if issue.user_count > 0}
-              <span class="mini-repo">· {issue.user_count} user{issue.user_count === 1 ? '' : 's'}</span>
-            {/if}
-            {#if issue.status !== 'unresolved'}
-              <span class="mini-repo">· {issue.status}</span>
-            {/if}
-          </div>
+          <div class="inbox-item-row3 mono">{issue.project_slug}</div>
         </div>
       {/each}
     {/if}
@@ -372,37 +371,32 @@
   .inbox-state--error { color: var(--error); }
   .link-inline { color: var(--accent-bright); margin-left: 6px; cursor: pointer; background: none; border: none; padding: 0; text-decoration: underline; }
 
-  .inbox-item {
-    background: var(--bg-1); border: 1px solid var(--border-neutral);
-    border-radius: 8px; padding: 10px 12px;
-    display: flex; flex-direction: column; gap: 5px;
-    cursor: grab; transition: all 120ms;
-  }
-  .inbox-item:hover { border-color: var(--border-neutral-hi); background: var(--bg-2); }
-  .inbox-item:active { cursor: grabbing; }
-  .inbox-item-top {
-    display: flex; align-items: center; gap: 8px;
-    font-size: 11px;
-  }
-  .inbox-item-id { color: var(--text-1); font-weight: 600; }
-  .inbox-item-time { margin-left: auto; color: var(--text-mute); font-size: 10.5px; }
-  .inbox-item-title {
-    font-size: 13px; color: var(--text-0); line-height: 1.4;
-    display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical;
-    overflow: hidden;
-  }
+  /* `.inbox-item` base layout + state-pill colors live in app.css
+     (shared with GitHub / Jira). This component only adds Sentry-
+     specific bits: the optional metadata-excerpt sub-line and the
+     events-count chip on the right of row 1. */
   .inbox-item-sub {
     font-size: 11px; color: var(--text-2);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
-  .inbox-item-meta {
-    display: flex; align-items: center; gap: 6px;
-    font-size: 10.5px; color: var(--text-mute);
+  /* Events / users count — pushed to the right next to the
+     timestamp. Tabular-numerics + a tighter background so the
+     "10420" digit count doesn't shove the time off the row. The
+     chip itself doesn't have its own bg in dark mode (would be
+     visual noise alongside the state-pill); just dim text. */
+  .events-chip {
+    margin-left: auto;
+    font-size: 10.5px;
+    color: var(--text-mute);
+    font-variant-numeric: tabular-nums;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: rgba(139, 150, 171, 0.10);
   }
-  .mini-tag {
-    padding: 1px 6px; border-radius: 3px; font-weight: 600;
-    text-transform: uppercase; font-size: 9.5px; letter-spacing: 0.04em;
-  }
+  /* Push the time AFTER the events-chip — both want margin-left: auto
+     but the chip claims it first; this keeps the time pinned to the
+     end of the row regardless of chip width. */
+  .inbox-item-row1 .events-chip + .inbox-item-time { margin-left: 6px; }
   .mini-kind { font-size: 10.5px; color: var(--text-1); }
   .mini-repo { color: var(--text-mute); }
 </style>

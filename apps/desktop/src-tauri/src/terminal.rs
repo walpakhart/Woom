@@ -42,6 +42,11 @@ const BUFFER_CAP: usize = 64 * 1024;
 /// reader half and emits events; `master` is shared (Mutex) so write
 /// + resize calls from the Tauri command handlers can poke it.
 pub struct Session {
+    /// Stable id (uuid) used to address this terminal in events and
+    /// MCP calls. Stored so Session methods can emit
+    /// `terminal:output:<id>` Tauri events without the registry
+    /// having to thread the id through every callsite.
+    pub id: String,
     pub master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
     pub writer: Arc<Mutex<Box<dyn Write + Send>>>,
     /// Kept so `Drop` can `kill()` the child if the user forcibly
@@ -49,17 +54,26 @@ pub struct Session {
     /// orphan until the parent app exits.
     pub child: Arc<Mutex<Box<dyn portable_pty::Child + Send + Sync>>>,
     /// Rolling buffer of the last [`BUFFER_CAP`] bytes the PTY has
-    /// emitted. The MCP `run_command` waiter scans this for its
-    /// sentinel; `read_buffer` peeks the tail.
+    /// emitted. Used by `terminal_buffer` MCP tool for scrollback
+    /// peek. Bridge's `run` ALSO appends the agent-subprocess
+    /// header/output/footer here so the rolling buffer mirrors what
+    /// the user sees in xterm.
     pub output_buf: Arc<Mutex<Vec<u8>>>,
-    /// Wakes anyone waiting on new output (the run-command sentinel
-    /// loop). Reader thread calls `notify_waiters` after each chunk.
+    /// Wakes anyone waiting on new output (legacy sentinel loop;
+    /// kept for `terminal_buffer` polling consumers).
     pub output_notify: Arc<Notify>,
     /// Human-readable column name (e.g. "Notre-Dame") the frontend
     /// passed at spawn. Surfaced in `terminal_list` so the MCP agent
     /// (and the user reading the trace) sees readable column names
     /// alongside the opaque uuids.
     pub name: Option<String>,
+    /// Working directory the shell was spawned in. Used by the
+    /// bridge as the cwd for agent subprocesses (`bash -c <cmd>`)
+    /// so agent commands run in the same place the user expects,
+    /// even though they're NOT executed through the shell PTY.
+    /// `None` means inherit from the Forgehold process cwd
+    /// (rarely the right thing, but safe fallback).
+    pub spawn_cwd: Option<std::path::PathBuf>,
 }
 
 #[derive(Default)]
@@ -189,13 +203,23 @@ pub fn terminal_spawn(
     let id = Uuid::new_v4().to_string();
     let output_buf = Arc::new(Mutex::new(Vec::with_capacity(BUFFER_CAP)));
     let output_notify = Arc::new(Notify::new());
+    // Capture the cwd we actually spawned the shell with — bridge
+    // uses this for agent-subprocess cwd. Stored as PathBuf so we
+    // don't have to re-parse the string later.
+    let spawn_cwd: Option<std::path::PathBuf> = opts
+        .cwd
+        .as_deref()
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var("HOME").ok().map(std::path::PathBuf::from));
     let session = Arc::new(Session {
+        id: id.clone(),
         master: Arc::new(Mutex::new(pair.master)),
         writer: Arc::new(Mutex::new(writer)),
         child: Arc::new(Mutex::new(child)),
         output_buf: output_buf.clone(),
         output_notify: output_notify.clone(),
         name: opts.name.clone(),
+        spawn_cwd,
     });
     state.sessions.lock().insert(id.clone(), session);
 
@@ -228,7 +252,21 @@ pub fn terminal_spawn(
                             b.drain(..excess);
                         }
                     }
-                    output_notify.notify_waiters();
+                    // notify_one() (NOT notify_waiters): waiters has a
+                    // missed-notify race — if no one is currently parked
+                    // on .notified() at the moment we call it (very
+                    // common: the run-loop is between buffer-scan and
+                    // await), the notification is dropped on the floor.
+                    // The waiter then sleeps the full heartbeat (~50ms)
+                    // before re-checking, adding latency to every
+                    // sub-second terminal_run. notify_one() stores a
+                    // permit if no waiter is parked yet; the next
+                    // .notified() call consumes it instantly. For our
+                    // shape (one waiter per terminal_run, sessions
+                    // never share waiters across calls in practice)
+                    // notify_one == notify_waiters semantically, but
+                    // race-free.
+                    output_notify.notify_one();
                 }
                 Err(e) => {
                     let _ = app.emit(

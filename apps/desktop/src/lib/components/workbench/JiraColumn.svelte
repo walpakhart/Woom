@@ -4,7 +4,6 @@
   import Dropdown, { type DropdownOption } from '$lib/components/ui/Dropdown.svelte';
   import {
     connectionsMeta,
-    jiraStatusClass,
     jiraStatusColor,
     relativeTime,
     type JiraItem,
@@ -113,6 +112,30 @@
       void loadJiraSprints(f.boardIds[0]);
     }
   });
+
+  /** Map a Jira ticket's status to one of the shared `tag--*` classes
+   *  app.css uses to color the inbox card's left stripe + state pill.
+   *  We look at the human status name FIRST (more granular — we want
+   *  "in review" distinct from "in progress") and fall back to Jira's
+   *  three-bucket `status_category` (`new` | `indeterminate` | `done`)
+   *  for projects with custom workflows we don't recognise.
+   *
+   *  The four buckets we surface: todo (grey), inprogress (orange),
+   *  inreview (blue), done (green). They cover the lifecycle Jira
+   *  customers actually scan for. */
+  function jiraStripeClass(statusName: string, statusCategory: string): string {
+    const s = statusName.toLowerCase();
+    if (s.includes('review') || s.includes('qa') || s.includes('test')) return 'tag--inreview';
+    if (s.includes('progress') || s.includes('doing') || s.includes('dev')) return 'tag--inprogress';
+    if (s.includes('done') || s.includes('closed') || s.includes('resolved')) return 'tag--done';
+    if (s.includes('todo') || s.includes('to do') || s.includes('open') || s.includes('backlog')) return 'tag--todo';
+    // Fallback by status_category — covers custom workflow names.
+    switch (statusCategory) {
+      case 'done': return 'tag--done';
+      case 'indeterminate': return 'tag--inprogress';
+      default: return 'tag--todo';
+    }
+  }
 
   // Lazy loaders — fire when a Dropdown opens, so disconnected users /
   // Free-tier workspaces don't pay the round-trip cost before the filter
@@ -441,7 +464,7 @@
         <div class="inbox-group-head mono">{group.project} <span class="inbox-group-count">{group.items.length}</span></div>
         {#each group.items as j (j.id)}
           <div
-            class="inbox-item"
+            class="inbox-item {jiraStripeClass(j.status, j.status_category)}"
             draggable="true"
             role="button"
             tabindex="0"
@@ -451,9 +474,12 @@
             onclick={(e) => { if (isClickNotDrag(e)) inboxState.jiraFocusKey = j.key; }}
             onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); inboxState.jiraFocusKey = j.key; } }}
           >
-            <div class="inbox-item-top">
-              <span class="source-mark">J</span>
+            <div class="inbox-item-row1">
+              <span class="state-dot"></span>
               <span class="inbox-item-id mono">{j.key}</span>
+              <span class="state-pill {jiraStripeClass(j.status, j.status_category)}">{j.status.toLowerCase()}</span>
+              <span class="kind-tag">{j.issue_type.toLowerCase()}</span>
+              {#if j.priority}<span class="prio-tag prio--{j.priority.toLowerCase()}">{j.priority.toLowerCase()}</span>{/if}
               <button
                 class="inbox-item-ext"
                 onclick={(e) => { e.stopPropagation(); onOpenBrowser(j.url); }}
@@ -465,18 +491,13 @@
               <span class="inbox-item-time mono">{relativeTime(j.updated, now)}</span>
             </div>
             <div class="inbox-item-title">{j.summary}</div>
-            <div class="inbox-item-meta">
-              <span class="mini-tag {jiraStatusClass(j.status_category)}">{j.status.toLowerCase()}</span>
-              <span class="mini-kind">{j.issue_type.toLowerCase()}</span>
-              {#if j.priority}<span class="mini-repo">· {j.priority.toLowerCase()}</span>{/if}
-            </div>
           </div>
         {/each}
       {/each}
     {:else}
       {#each items as j (j.id)}
         <div
-          class="inbox-item"
+          class="inbox-item {jiraStripeClass(j.status, j.status_category)}"
           draggable="true"
           role="button"
           tabindex="0"
@@ -486,9 +507,12 @@
           onclick={(e) => { if (isClickNotDrag(e)) inboxState.jiraFocusKey = j.key; }}
           onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); inboxState.jiraFocusKey = j.key; } }}
         >
-          <div class="inbox-item-top">
-            <span class="source-mark">J</span>
+          <div class="inbox-item-row1">
+            <span class="state-dot"></span>
             <span class="inbox-item-id mono">{j.key}</span>
+            <span class="state-pill {jiraStripeClass(j.status, j.status_category)}">{j.status.toLowerCase()}</span>
+            <span class="kind-tag">{j.issue_type.toLowerCase()}</span>
+            {#if j.priority}<span class="prio-tag prio--{j.priority.toLowerCase()}">{j.priority.toLowerCase()}</span>{/if}
             <button
               class="inbox-item-ext"
               onclick={(e) => { e.stopPropagation(); onOpenBrowser(j.url); }}
@@ -500,11 +524,6 @@
             <span class="inbox-item-time mono">{relativeTime(j.updated, now)}</span>
           </div>
           <div class="inbox-item-title">{j.summary}</div>
-          <div class="inbox-item-meta">
-            <span class="mini-tag {jiraStatusClass(j.status_category)}">{j.status.toLowerCase()}</span>
-            <span class="mini-kind">{j.issue_type.toLowerCase()}</span>
-            {#if j.priority}<span class="mini-repo">· {j.priority.toLowerCase()}</span>{/if}
-          </div>
         </div>
       {/each}
     {/if}
@@ -615,46 +634,40 @@
   .inbox-state { padding: 40px 16px; text-align: center; font-size: 12.5px; color: var(--text-2); }
   .inbox-state--error { color: #fca5a5; }
 
-  .inbox-item {
-    padding: 10px 12px;
-    border-radius: 8px;
-    background: var(--bg-1); border: 1px solid var(--border-neutral);
-    cursor: pointer;
-    transition: all 120ms;
-    display: flex; flex-direction: column; gap: 5px;
-  }
-  .inbox-item:hover { background: var(--bg-2); border-color: var(--border-neutral-hi); }
-  .inbox-item:active { cursor: grabbing; transform: scale(0.99); }
-  .inbox-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-  .inbox-item-top { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
-
-  .source-mark {
-    width: 22px; height: 22px; border-radius: 5px;
-    display: inline-flex; align-items: center; justify-content: center;
-    font-size: 10.5px; font-weight: 700; letter-spacing: -0.02em;
-    background: var(--bg-2); color: var(--text-1);
-    border: 1px solid var(--border-neutral-hi);
-  }
-  .inbox-item-id { font-size: 11px; color: var(--text-2); font-weight: 500; }
-  .inbox-item-ext {
-    display: inline-flex; align-items: center; justify-content: center;
-    width: 18px; height: 18px; border-radius: 4px;
-    color: var(--text-mute); opacity: 0;
-    transition: all 120ms;
-  }
+  /* `.inbox-item` base layout + state-pill colors live in `app.css`
+     (shared with GitHub / Sentry columns). This component adds Jira-
+     specific bits — priority pill colors and the existing
+     inbox-item-ext SVG button override. */
   .inbox-item-ext :global(svg) { width: 10px; height: 10px; }
-  .inbox-item:hover .inbox-item-ext { opacity: 1; }
-  .inbox-item-ext:hover { color: var(--accent-bright); background: var(--bg-2); }
-  .inbox-item-time { margin-left: auto; font-size: 10.5px; color: var(--text-mute); font-variant-numeric: tabular-nums; }
-  .inbox-item-title {
-    font-size: 13px; color: var(--text-0); font-weight: 500;
-    line-height: 1.4; margin-bottom: 6px; word-break: break-word;
-  }
-  .inbox-item-meta { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-2); flex-wrap: wrap; }
 
-  .mini-tag { padding: 1px 6px; border-radius: 4px; font-size: 10px; font-weight: 600; text-transform: lowercase; }
-  .mini-kind { color: var(--text-2); text-transform: lowercase; }
-  .mini-repo { color: var(--text-mute); font-size: 10.5px; }
+  /* Priority pill — colored by name. Highest/Critical jump out red,
+     High orange, Medium muted, Low/Lowest dimmed. Project-specific
+     names like "Blocker" map to the highest tier via the substring
+     heuristic — `prio--blocker` and `prio--critical` are aliases for
+     red. Unknown priority = neutral grey, harmless. */
+  .prio-tag {
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    line-height: 1.5;
+    color: var(--text-mute);
+    background: rgba(139, 150, 171, 0.10);
+  }
+  .prio-tag.prio--highest, .prio-tag.prio--critical, .prio-tag.prio--blocker {
+    color: #f87171; background: rgba(248, 113, 113, 0.16);
+  }
+  .prio-tag.prio--high {
+    color: #f59e0b; background: rgba(245, 158, 11, 0.16);
+  }
+  .prio-tag.prio--medium {
+    color: var(--text-2); background: rgba(139, 150, 171, 0.14);
+  }
+  .prio-tag.prio--low, .prio-tag.prio--lowest, .prio-tag.prio--trivial {
+    color: var(--text-mute); background: rgba(139, 150, 171, 0.06);
+  }
 
   .assignee-chip {
     display: inline-flex; align-items: center; gap: 8px;

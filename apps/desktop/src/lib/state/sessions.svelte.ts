@@ -5,9 +5,18 @@
 // fs commands; rules stay in localStorage (small + frequently mutated).
 
 import { invoke } from '@tauri-apps/api/core';
-import type { ClaudeAction, ClaudeMessage, ClaudeSession, ClaudeUsage, Mention, MessageEvent } from '$lib/types';
+import type {
+  ClaudeAction,
+  ClaudeMessage,
+  ClaudeSession,
+  ClaudeUsage,
+  Mention,
+  MessageEvent,
+  PendingActionResult
+} from '$lib/types';
 import { notify } from '$lib/state/toaster.svelte';
 import { isImagePath } from '$lib/format';
+import { contextWindowFor } from '$lib/usage';
 
 export const SESSIONS_STORAGE_KEY = 'forgehold:claude-sessions:v1';
 export const RULES_STORAGE_KEY = 'forgehold:claude-rules:v1';
@@ -50,7 +59,8 @@ function serializeSession(s: ClaudeSession): object {
     columnInstanceId: s.columnInstanceId,
     cwdSwitchRecap: s.cwdSwitchRecap,
     cwdUuids: s.cwdUuids,
-    awaitingApproval: s.awaitingApproval
+    awaitingApproval: s.awaitingApproval,
+    pendingActionResults: s.pendingActionResults
   };
 }
 
@@ -268,7 +278,9 @@ function hydrateSession(s: ClaudeSession): ClaudeSession {
     cwdUuids:
       (s as { cwdUuids?: Record<string, string> }).cwdUuids ?? {},
     awaitingApproval:
-      Boolean((s as { awaitingApproval?: boolean }).awaitingApproval)
+      Boolean((s as { awaitingApproval?: boolean }).awaitingApproval),
+    pendingActionResults:
+      (s as { pendingActionResults?: PendingActionResult[] }).pendingActionResults ?? []
   };
 }
 
@@ -282,16 +294,24 @@ export async function initSessionsFromDisk(appDataDir: string): Promise<void> {
     if (exists) {
       const raw = await invoke<string>('fs_read_file', { path: sessionIndexPath() });
       const index = JSON.parse(raw) as { activeId: string | null; ids: string[] };
-      const sessions: ClaudeSession[] = [];
-      for (const id of index.ids ?? []) {
-        try {
-          const sessionRaw = await invoke<string>('fs_read_file', { path: sessionFilePath(id) });
-          sessions.push(hydrateSession(JSON.parse(sessionRaw) as ClaudeSession));
-        } catch {
-          // Skip corrupt or missing session files — they may have been manually
-          // deleted or lost to a partial write.
-        }
-      }
+      // Read every session file in parallel — sequential `for ... await`
+      // here used to scale boot time linearly with N sessions (one IPC
+      // round-trip each). Promise.all collapses that to a single round-
+      // trip's worth of wall clock. Settle-style filtering preserves the
+      // skip-on-corrupt behavior: a single bad file shouldn't stop the
+      // others from loading.
+      const ids = index.ids ?? [];
+      const settled = await Promise.all(
+        ids.map(async (id): Promise<ClaudeSession | null> => {
+          try {
+            const sessionRaw = await invoke<string>('fs_read_file', { path: sessionFilePath(id) });
+            return hydrateSession(JSON.parse(sessionRaw) as ClaudeSession);
+          } catch {
+            return null;
+          }
+        })
+      );
+      const sessions = settled.filter((s): s is ClaudeSession => s !== null);
       sessionsState.list = sessions;
       sessionsState.activeClaudeId = index.activeId ?? sessions[0]?.id ?? null;
       const active = sessions.find((s) => s.id === sessionsState.activeClaudeId);
@@ -479,7 +499,8 @@ export function newClaudeSession(
       columnInstanceId,
       cwdSwitchRecap: null,
       cwdUuids: {},
-      awaitingApproval: false
+      awaitingApproval: false,
+      pendingActionResults: []
     },
     ...sessionsState.list
   ];
@@ -754,6 +775,129 @@ export function appendSessionMessage(id: string, msg: ClaudeMessage) {
   );
 }
 
+// ---- Pending action results queue ----
+//
+// Action cards (commit / PR / bash / switch_cwd) resolve asynchronously
+// from the agent's turn, sometimes mid-stream. Their outcomes need to
+// reach two consumers:
+//
+//   1. UI: an action-result chip in the chat transcript, parseable by
+//      `parseActionResult` in AgentColumn. This MUST NOT happen while
+//      a turn is streaming — `appendSessionMessage` would shift the
+//      "last message" position and silently drop subsequent assistant
+//      deltas, cutting off the agent's reply mid-sentence.
+//
+//   2. Agent: a "since-last-turn outcomes" block prepended to the next
+//      `runAgentRequest` prompt. The CLI's `--resume` history doesn't
+//      include these (they're Forgehold annotations); inline prepend
+//      is the only channel.
+//
+// The queue lets us decouple WHEN we record from WHEN each consumer
+// reads. Action executors enqueue immediately on resolve. UI flush
+// happens lazily when the session is quiescent (deferred until turn
+// ends if streaming). Agent drain happens at the head of the next
+// runAgentRequest call, manual or auto-fired.
+
+/** Push an outcome onto the queue. If the session isn't currently
+ *  streaming, the chip is flushed to the UI right away — same UX as
+ *  the old direct-append path. Mid-stream resolves defer until the
+ *  caller invokes `flushActionResultsToUI` (typically from the
+ *  send-finally block). */
+export function enqueuePendingActionResult(
+  sessionId: string,
+  result: { ok: boolean; kind: 'commit' | 'pr' | 'bash' | 'switch_cwd'; summary: string }
+) {
+  const sess = sessionsState.list.find((s) => s.id === sessionId);
+  if (!sess) return;
+  const entry: PendingActionResult = {
+    ok: result.ok,
+    kind: result.kind,
+    summary: result.summary,
+    at: new Date().toISOString(),
+    flushedToUI: false
+  };
+  // Append to the queue first; the immediate-flush path below mirrors
+  // it into messages[] and flips `flushedToUI` so the deferred-flush
+  // path (turn-end) is a no-op for this entry.
+  updateSession(sessionId, {
+    pendingActionResults: [...sess.pendingActionResults, entry]
+  });
+  if (!sess.sending) {
+    flushActionResultsToUI(sessionId);
+  }
+}
+
+/** Append every queued result that hasn't yet hit the UI as a chat
+ *  message. Safe to call repeatedly — items with `flushedToUI=true`
+ *  are skipped. Caller invokes after a streaming turn ends so the
+ *  chip lands in chronological order without breaking deltas. */
+export function flushActionResultsToUI(sessionId: string) {
+  const sess = sessionsState.list.find((s) => s.id === sessionId);
+  if (!sess) return;
+  const toFlush = sess.pendingActionResults.filter((r) => !r.flushedToUI);
+  if (toFlush.length === 0) return;
+  // One pass: build the new pendingActionResults (with flags flipped)
+  // and append messages. Doing this in two state updates would mean
+  // two reactive ticks and a brief window where the chip is appended
+  // but the queue still flags it as unflushed.
+  const updated = sess.pendingActionResults.map((r) =>
+    r.flushedToUI ? r : { ...r, flushedToUI: true }
+  );
+  const newMessages = [
+    ...sess.messages,
+    ...toFlush.map((r) => ({
+      role: 'system' as const,
+      content: `[Forgehold action result] ${r.ok ? '✓' : '✗'} ${r.summary}`,
+      at: r.at
+    }))
+  ];
+  sessionsState.list = sessionsState.list.map((s) =>
+    s.id === sessionId
+      ? { ...s, messages: newMessages, pendingActionResults: updated }
+      : s
+  );
+}
+
+/** Take and clear the queue. Returns the items so the caller can
+ *  build a prompt prefix from them. Called at the head of the next
+ *  `runAgentRequest` (manual send or auto-continueAgentTurn) — the
+ *  agent sees these results exactly once. UI-side flushing is
+ *  independent: `flushedToUI=true` items have already been shown as
+ *  chips and stay in `messages` regardless of this drain. */
+export function drainPendingActionResultsForAgent(
+  sessionId: string
+): PendingActionResult[] {
+  const sess = sessionsState.list.find((s) => s.id === sessionId);
+  if (!sess || sess.pendingActionResults.length === 0) return [];
+  const drained = sess.pendingActionResults;
+  updateSession(sessionId, { pendingActionResults: [] });
+  return drained;
+}
+
+/** Render the drained queue as the agent-facing prompt prefix. Empty
+ *  string when there's nothing to report — caller can `${prefix}${prompt}`
+ *  unconditionally. Format is deliberately structured (markdown bullet
+ *  list with kind + ✓/✗ marker) so the agent can parse it without
+ *  prose ambiguity. */
+export function formatActionResultsForPrompt(results: PendingActionResult[]): string {
+  if (results.length === 0) return '';
+  const lines = ['[Forgehold: action card outcomes since your last turn]'];
+  for (const r of results) {
+    const marker = r.ok ? '✓' : '✗';
+    // Indent the multi-line summary so it groups under the bullet
+    // visually. Trim to keep prompt size bounded — full output is on
+    // the chip in the UI when the user wants to inspect.
+    const indented = r.summary
+      .split('\n')
+      .map((l) => `  ${l}`)
+      .join('\n');
+    lines.push(`- ${marker} ${r.kind}:\n${indented}`);
+  }
+  lines.push('');
+  lines.push('Continue from where you were.');
+  return lines.join('\n');
+}
+
 /** Swap the agent CLI for a session. Rotates `claudeUuid` and resets the
     resumable flag because each CLI keeps its own session store — resuming
     a Claude id against cursor-agent (or vice versa) would fail. Also
@@ -832,22 +976,92 @@ export function appendToLastThinking(sessionId: string, delta: string) {
         order, instead of the old "all pills at top + all text below". */
 export function appendToLastTrace(sessionId: string, segment: string) {
   if (!segment.trim()) return;
+  // Wrap in ‹toolcall›…‹/toolcall› markers so AssistantContent can
+  // render the call (and any later-attached output, see
+  // attachOutputToLastTrace) as a single unified card with INPUT
+  // and OUTPUT sections — instead of two separate visual blocks
+  // (a plain command block + a free-floating output card).
+  const wrapped = `‹toolcall›\n${segment}\n‹/toolcall›`;
   sessionsState.list = sessionsState.list.map((s) => {
     if (s.id !== sessionId) return s;
     const msgs = [...s.messages];
     const last = msgs[msgs.length - 1];
     if (last && last.role === 'assistant') {
       const prev = last.trace ?? '';
-      const nextTrace = prev ? `${prev}\n\n${segment}` : segment;
+      const nextTrace = prev ? `${prev}\n\n${wrapped}` : wrapped;
       const events = [...(last.events ?? [])];
       const lastEv = events[events.length - 1];
       if (lastEv && lastEv.kind === 'trace') {
-        events[events.length - 1] = { kind: 'trace', segments: [...lastEv.segments, segment] };
+        events[events.length - 1] = { kind: 'trace', segments: [...lastEv.segments, wrapped] };
       } else {
-        events.push({ kind: 'trace', segments: [segment] });
+        events.push({ kind: 'trace', segments: [wrapped] });
       }
       msgs[msgs.length - 1] = { ...last, trace: nextTrace, events };
     }
+    return { ...s, messages: msgs };
+  });
+}
+
+/** Attach a tool's output to the LAST segment of the LAST trace event
+    on the last assistant message. Visually pairs the tool call with
+    its result inside the same "✓ N steps" pill — when the user expands
+    the pill they see `<cmd>` and below it a collapsible output card,
+    grouped as one logical unit instead of the call appearing in the
+    pill and the output floating below as a separate text bubble.
+
+    The output is wrapped in `‹output›…‹/output›` markers so the
+    AssistantContent renderer can fold it into a collapsible card.
+    Markers also keep recap parsing unambiguous if we ever want to
+    extract them programmatically.
+
+    No-op when there's no trace event yet (e.g. a tool_result fires
+    for a non-trace tool like Edit, whose result lands on the diff
+    card directly). */
+export function attachOutputToLastTrace(sessionId: string, output: string) {
+  const trimmed = output.trim();
+  if (!trimmed) return;
+  // Cap to 1500 chars per result — file dumps and tree outputs would
+  // otherwise blow the trace pill out of proportion. The agent's
+  // CLI session has the full text anyway.
+  const capped = trimmed.length > 1500 ? `${trimmed.slice(0, 1499)}…` : trimmed;
+  // We splice the output INSIDE the last `‹toolcall›…‹/toolcall›`
+  // wrapper of the last segment — right before its closing marker.
+  // This way the call + its output stay co-located inside one
+  // toolcall block, which AssistantContent renders as a single
+  // bordered card with two sections (INPUT / OUTPUT).
+  const closeMarker = '‹/toolcall›';
+  const outputBlock = `\n‹output›\n${capped}\n‹/output›`;
+  const splice = (s: string) => {
+    const idx = s.lastIndexOf(closeMarker);
+    if (idx < 0) {
+      // Fallback for any stray legacy segment: just append the
+      // output block at the end. Renders as a free-floating card,
+      // same as the old behavior — better than dropping the data.
+      return `${s}${outputBlock}`;
+    }
+    return `${s.slice(0, idx)}${outputBlock}\n${s.slice(idx)}`;
+  };
+  sessionsState.list = sessionsState.list.map((s) => {
+    if (s.id !== sessionId) return s;
+    const msgs = [...s.messages];
+    const last = msgs[msgs.length - 1];
+    if (!last || last.role !== 'assistant') return s;
+    const events = [...(last.events ?? [])];
+    let lastTraceIdx = -1;
+    for (let i = events.length - 1; i >= 0; i--) {
+      if (events[i].kind === 'trace') {
+        lastTraceIdx = i;
+        break;
+      }
+    }
+    if (lastTraceIdx < 0) return s;
+    const ev = events[lastTraceIdx];
+    if (ev.kind !== 'trace') return s;
+    const segs = [...ev.segments];
+    if (segs.length === 0) return s;
+    segs[segs.length - 1] = splice(segs[segs.length - 1]);
+    events[lastTraceIdx] = { kind: 'trace', segments: segs };
+    msgs[msgs.length - 1] = { ...last, trace: splice(last.trace ?? ''), events };
     return { ...s, messages: msgs };
   });
 }
@@ -861,10 +1075,33 @@ export function appendToLastTrace(sessionId: string, segment: string) {
  *  number to surface in the per-message badge. The session-level
  *  `lastContextSize` is similarly the most-recent value, since it
  *  represents "how much context did Claude actually look at on the
- *  last hop" — drives the context-window % indicator. */
+ *  last hop" — drives the context-window % indicator.
+ *
+ *  Cumulative-usage guard: some Claude CLI versions emit the final
+ *  `result` event with a `usage` block that sums across every
+ *  internal tool step in the turn, not just the final step. That
+ *  inflates `contextSize` past what's physically possible for a
+ *  single API call — we've seen 2M reported on a 200K-window Sonnet
+ *  turn — and jumps the UI's context-window % indicator to 100% in
+ *  one frame. A single API call CAN'T have more input tokens than
+ *  the model's context window, so anything larger is the cumulative
+ *  artifact and gets ignored: the prior assistant event already gave
+ *  us the correct final-step snapshot. The `+ 8K` slack is for cache-
+ *  creation chunks that nominally fit the window but get rounded up
+ *  by tokenizer differences. */
 export function updateLastAssistantUsage(sessionId: string, usage: ClaudeUsage) {
   sessionsState.list = sessionsState.list.map((s) => {
     if (s.id !== sessionId) return s;
+    const cap = contextWindowFor(
+      usage.model ?? (s.agentKind === 'claude' ? s.claudeModel : s.cursorModel),
+      s.agentKind
+    );
+    const looksCumulative = usage.contextSize > cap + 8_192;
+    if (looksCumulative) {
+      // Drop the inflated usage entirely — keep whatever the last
+      // legitimate assistant event left on the message + session.
+      return s;
+    }
     const msgs = [...s.messages];
     const last = msgs[msgs.length - 1];
     if (last && last.role === 'assistant') {

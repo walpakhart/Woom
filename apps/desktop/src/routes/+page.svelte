@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy, tick } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
+  import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import { openUrl } from '@tauri-apps/plugin-opener';
   import { open as openDialog } from '@tauri-apps/plugin-dialog';
   import Sigil from '$lib/components/ui/Sigil.svelte';
@@ -62,7 +63,7 @@
   import { applyLayout as canvasApplyLayout, type LayoutAlgorithm } from '$lib/services/canvasLayout';
   import { saveCanvasScreenshot } from '$lib/services/canvasScreenshot';
   import { buildAgentAppContext } from '$lib/services/agentContext';
-  import { applySessionCwd } from '$lib/services/sessionCwd';
+  import { applySessionCwd, extractCompactSummary, buildContinuationRecap } from '$lib/services/sessionCwd';
   import { runCompactSession as runCompactSessionService } from '$lib/services/agentCompact';
   import { exportSessionMarkdown, exportSessionJson } from '$lib/services/sessionExport';
   import {
@@ -108,6 +109,9 @@
     updateSession,
     focusSession,
     appendSessionMessage,
+    flushActionResultsToUI,
+    drainPendingActionResultsForAgent,
+    formatActionResultsForPrompt,
     appendToLastAssistant,
     replaceLastAssistant,
     addAction,
@@ -125,6 +129,7 @@
     connectionsState,
     sourceConns,
     agentConns,
+    refreshAllStatus,
     refreshGithubStatus,
     refreshJiraStatus,
     refreshSentryStatus,
@@ -173,7 +178,12 @@
   } from '$lib/state/inbox.svelte';
   import { initTheme } from '$lib/state/theme.svelte';
   import { initScale } from '$lib/state/scale.svelte';
-  import { dragState, setDragPayload, type DragPayload } from '$lib/state/drag.svelte';
+  import {
+    dragState,
+    setDragPayload,
+    installGlobalDragSafetyNet,
+    type DragPayload
+  } from '$lib/state/drag.svelte';
   import { attachDragChip } from '$lib/dragImage';
   import { notify, notifyError } from '$lib/state/toaster.svelte';
   import {
@@ -186,7 +196,14 @@
   } from '$lib/state/modals.svelte';
   import { appHasFocus, notifyClaudeRunComplete } from '$lib/notifications';
   import { effectiveCwd, dispatchAction } from '$lib/exec/actions';
-  import { runAgentRequest, stopAgentRequest } from '$lib/exec/claude';
+  import {
+    runAgentRequest,
+    stopAgentRequest,
+    prewarmAgent,
+    dropPrewarm,
+    isResumeOrphanError,
+    RESUME_ORPHAN_PREFIX
+  } from '$lib/exec/claude';
   import type { ClaudeAction, ClaudeSession, Mention, PanelInstance, PanelKind, RepoInfo } from '$lib/types';
   import {
     connectionsMeta,
@@ -543,6 +560,142 @@
   let jiraPollInterval: ReturnType<typeof setInterval> | null = null;
   let sentryPollInterval: ReturnType<typeof setInterval> | null = null;
   let tickInterval: ReturnType<typeof setInterval> | null = null;
+  /* Heartbeat that periodically re-checks every connection's status.
+     Without this, a transient network blip / token rotation / sleep-
+     wake leaves the cards reading whatever the boot retry settled on,
+     and the user has to click "Test connection" by hand to recover.
+     5 minutes is a comfortable cadence — long enough to not hammer
+     the GitHub/Jira/Sentry APIs (each call uses 1 quota unit per
+     5-minute window per source), short enough that a flaky-network
+     recovery is visible within a coffee break. */
+  let connectionRefreshInterval: ReturnType<typeof setInterval> | null = null;
+  /** Last time we re-ran `refreshAllStatus` from any trigger. Used
+   *  by the focus listener to coalesce — a sequence of rapid focus
+   *  events (e.g. macOS Mission Control switching apps) shouldn't
+   *  fire more than one refresh per minute. */
+  let lastConnectionRefreshAt = 0;
+  /** Listener removal fn, populated on mount + called on destroy.
+   *  Stored so the cleanup path can release the listener even if the
+   *  app is torn down via Tauri rather than navigation. */
+  let removeFocusListener: (() => void) | null = null;
+
+  /** Unlisten for the action-IPC event from MCP sidecars. Each
+   *  forgehold-github `propose_*` MCP call ends up emitting this
+   *  event; the handler attaches the IPC `wait_id` to the matching
+   *  pending action card so its eventual resolution routes back to
+   *  the sidecar via `resolve_action_wait`. */
+  let actionIpcUnlisten: UnlistenFn | null = null;
+
+  type ActionRequestPayload = {
+    session_id: string;
+    wait_id: string;
+    kind: 'bash' | 'commit' | 'pr' | 'switch_cwd';
+    params: Record<string, unknown>;
+  };
+
+  /** Match an IPC `propose_*` request to a pending action card and
+   *  attach its `waitId`. Two arrival orderings need to work:
+   *
+   *  1. Stream parser fires first (sees the agent's tool_use block,
+   *     creates the card with no waitId). Then the IPC request lands
+   *     here moments later — we find the card by kind+command/title
+   *     and stamp the waitId on it.
+   *
+   *  2. IPC fires first (race; not common but possible). No matching
+   *     card yet — we create one ourselves from the IPC params with
+   *     the waitId already set. The stream parser later sees the
+   *     same tool_use; it'll create a SECOND card by id (different
+   *     id, no waitId). To avoid that double-up, the stream parser
+   *     also checks for an existing waitId-marked card with matching
+   *     params and skips creation if one exists. (See agentStream.ts.)
+   */
+  function handleActionRequest(payload: ActionRequestPayload) {
+    const sess = sessionsState.list.find((s) => s.id === payload.session_id);
+    if (!sess) return;
+    const matching = sess.actions.find(
+      (a) =>
+        a.status === 'pending' && !a.waitId && actionMatchesIpcParams(a, payload.kind, payload.params)
+    );
+    if (matching) {
+      updateAction(payload.session_id, matching.id, { waitId: payload.wait_id });
+      return;
+    }
+    // No stream-parser-created card yet (or none matchable). Create
+    // one from the IPC params directly; the stream parser will skip
+    // its duplicate creation when it sees the matching waitId.
+    const fresh = buildActionFromIpcRequest(payload);
+    if (fresh) addAction(payload.session_id, fresh);
+  }
+
+  function actionMatchesIpcParams(
+    a: ClaudeAction,
+    kind: ActionRequestPayload['kind'],
+    params: Record<string, unknown>
+  ): boolean {
+    if (a.kind !== kind) return false;
+    if (kind === 'bash')
+      return a.kind === 'bash' && a.command === String(params.command ?? '');
+    if (kind === 'commit')
+      return a.kind === 'commit' && a.message === String(params.message ?? '');
+    if (kind === 'pr')
+      return a.kind === 'pr' && a.title === String(params.title ?? '');
+    if (kind === 'switch_cwd')
+      return a.kind === 'switch_cwd' && a.path === String(params.path ?? '');
+    return false;
+  }
+
+  function buildActionFromIpcRequest(p: ActionRequestPayload): ClaudeAction | null {
+    const id = (typeof crypto !== 'undefined' && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : `act-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const px = p.params;
+    if (p.kind === 'bash') {
+      return {
+        id,
+        kind: 'bash',
+        command: String(px.command ?? ''),
+        reason: typeof px.reason === 'string' ? px.reason : '',
+        status: 'pending',
+        waitId: p.wait_id
+      };
+    }
+    if (p.kind === 'commit') {
+      return {
+        id,
+        kind: 'commit',
+        message: String(px.message ?? ''),
+        body: typeof px.body === 'string' ? px.body : '',
+        push: px.push !== false,
+        note: typeof px.note === 'string' ? px.note : '',
+        status: 'pending',
+        waitId: p.wait_id
+      };
+    }
+    if (p.kind === 'pr') {
+      return {
+        id,
+        kind: 'pr',
+        title: String(px.title ?? ''),
+        body: typeof px.body === 'string' ? px.body : '',
+        base: typeof px.base === 'string' ? px.base : '',
+        draft: px.draft === true,
+        note: typeof px.note === 'string' ? px.note : '',
+        status: 'pending',
+        waitId: p.wait_id
+      };
+    }
+    if (p.kind === 'switch_cwd') {
+      return {
+        id,
+        kind: 'switch_cwd',
+        path: String(px.path ?? ''),
+        reason: typeof px.reason === 'string' ? px.reason : '',
+        status: 'pending',
+        waitId: p.wait_id
+      };
+    }
+    return null;
+  }
 
   // Wire the layout→sessions hook once. Any closed panel instance (via the X
   // button or workbench deletion) orphans its pinned sessions back to the
@@ -576,6 +729,22 @@
        with default `:root` vars, this flips `<html data-theme="…">`
        so the saved palette wins on first paint. */
     initTheme();
+    // Install a window-level dragend/drop listener that clears the
+    // drag payload on any cancel — defense in depth against future
+    // drag sources forgetting their own ondragend wiring.
+    installGlobalDragSafetyNet();
+    // Subscribe to action-IPC requests from MCP sidecars. Each event
+    // fires when forgehold-github's `propose_*` MCP tool wants the
+    // user to approve a card. We attach the IPC `wait_id` to the
+    // matching pending action card (or create one if the stream
+    // parser hasn't yet) so when the card resolves later in
+    // executeAction, we can route the outcome back to the sidecar
+    // via `resolve_action_wait` — and the agent receives it as the
+    // tool_result IN THE SAME TURN (no end-turn / next-turn drain).
+    actionIpcUnlisten = await listen<ActionRequestPayload>(
+      'forgehold:action_request',
+      (event) => handleActionRequest(event.payload)
+    );
     // Plan-usage snapshot for the chip. Fire-and-forget — the chip
     // shows "—" until the first response comes back, after which
     // refreshPlanUsage is debounced to MIN_REFRESH_MS (60s) so any
@@ -629,6 +798,30 @@
       }
     } catch {/* ignore */}
     tickInterval = setInterval(() => (now = Date.now()), 30_000);
+    // Periodic connection health-check. The boot retry only runs once
+    // and gives up after ~22 s + per-attempt invoke timeouts; if the
+    // user's network was down then or a token rotated since, the cards
+    // would stay stuck on the boot result until manual "Test
+    // connection". This heartbeat picks up automatically. We coalesce
+    // with `lastConnectionRefreshAt` so the focus listener below doesn't
+    // double-fire when the user app-switches mid-cadence.
+    connectionRefreshInterval = setInterval(() => {
+      if (appLocked) return;
+      lastConnectionRefreshAt = Date.now();
+      void refreshAllStatus();
+    }, 5 * 60 * 1000);
+    // Refresh on window focus too — the most common reason a user
+    // notices a stale connection is when they come back to the app
+    // after a meeting / sleep-wake. 60 s coalesce window so rapid
+    // app-switching doesn't burn API quota.
+    const focusHandler = () => {
+      if (appLocked) return;
+      if (Date.now() - lastConnectionRefreshAt < 60_000) return;
+      lastConnectionRefreshAt = Date.now();
+      void refreshAllStatus();
+    };
+    window.addEventListener('focus', focusHandler);
+    removeFocusListener = () => window.removeEventListener('focus', focusHandler);
     // Biometric gate runs first — refreshAllStatus + inbox fetches live
     // inside `biometricUnlock` so nothing hits the keychain before the
     // user authenticates.
@@ -672,6 +865,9 @@
     if (jiraPollInterval) clearInterval(jiraPollInterval);
     if (sentryPollInterval) clearInterval(sentryPollInterval);
     if (tickInterval) clearInterval(tickInterval);
+    if (connectionRefreshInterval) clearInterval(connectionRefreshInterval);
+    removeFocusListener?.();
+    actionIpcUnlisten?.();
   });
 
   $effect(() => {
@@ -1183,6 +1379,11 @@
       });
       if (typeof picked === 'string') {
         applySessionCwd(activeSession.id, picked, { breakLink: true });
+        // The cwd swap rotated the CLI session uuid, so any prewarmed
+        // CLI for this session is now stale. The backend would respawn
+        // on signature mismatch anyway, but dropping early avoids
+        // burning a CLI process while the new prewarm fires.
+        void dropPrewarm(activeSession.id);
       }
     } catch (e) {
       notifyError(e, { title: "Couldn't pick folder" });
@@ -1192,6 +1393,26 @@
   function clearCwd() {
     if (!activeSession) return;
     applySessionCwd(activeSession.id, null, { breakLink: true });
+    void dropPrewarm(activeSession.id);
+  }
+
+  /** Wrapper around `deleteClaudeSession` that also drops any
+   *  prewarmed CLI parked for this session — otherwise the
+   *  pre-spawn lingers (holding a `claude` process + MCP sidecars)
+   *  until the TTL sweeper picks it up. Also stops any in-flight
+   *  agent run for this session and clears the auto-continuation
+   *  guard set so a future session id reuse (vanishingly unlikely
+   *  given uuid randomness, but still) wouldn't silently swallow
+   *  the next continuation. */
+  function deleteClaudeSessionWithCleanup(sessionId: string) {
+    void dropPrewarm(sessionId);
+    // If a turn is mid-stream for this session, stop it before we
+    // pull the chat out from under it. Failures here are non-fatal —
+    // the worst case is a CLI process that gets reaped by the TTL
+    // sweeper a few minutes later.
+    void stopAgentRequest(sessionId).catch(() => {});
+    continuationInFlight.delete(sessionId);
+    deleteClaudeSession(sessionId);
   }
 
   /** Bidirectional link. When the AI side initiates and the session already
@@ -1680,6 +1901,22 @@
     return true;
   }
 
+  /** When the CLI orphans the resume target uuid, we mint a new uuid
+   *  and prime the next turn's system prompt with a recap drawn from
+   *  Forgehold's own in-memory transcript — the chat history the CLI
+   *  has just lost. We piggyback on `cwdSwitchRecap` because the
+   *  injection mechanism already exists (the field is read by
+   *  `agentContext.ts` and stamped into `appendSystemPrompt`); the
+   *  one-shot semantics are identical (consumed and cleared after
+   *  next successful turn). The wording is tailored for the orphan
+   *  case so the agent understands why memory feels fresh.
+   *
+   *  Mirrors `buildCwdSwitchRecap`'s "/compact summary + verbatim
+   *  recent" structure: if the user has ever run /compact in this
+   *  chat, fold its summary in as the older-context layer so we
+   *  don't strand pre-compact decisions just because the CLI lost
+   *  its store. */
+
   async function sendClaudeMessage() {
     const s = activeSession;
     if (!s || s.sending) return;
@@ -1766,6 +2003,19 @@
       if (ctx) prompt = `Referenced items:\n\n${ctx}\n\n----\n\nUser message:\n${text}`;
     }
 
+    // Drain any action-card outcomes that landed since the agent's last
+    // turn (commit/PR/bash/cwd-switch results) and prepend them as a
+    // structured block. The CLI's `--resume` history doesn't include
+    // these — they're Forgehold-side annotations — so this is the only
+    // channel the agent has for learning whether its proposed commit
+    // pushed cleanly, what stderr a bash card produced, etc. The drain
+    // also clears the queue so a result is never delivered twice.
+    const pendingForAgent = drainPendingActionResultsForAgent(id);
+    if (pendingForAgent.length > 0) {
+      const block = formatActionResultsForPrompt(pendingForAgent);
+      prompt = `${block}\n\n---\n\n${prompt}`;
+    }
+
     // Priority of working dir:
     //   1. Session has an isolated worktree → use it (SPEC: "every Claude run
     //      in a worktree, never touches main working tree").
@@ -1812,6 +2062,13 @@
       }
     }
 
+    // Outer try/finally ensures `sending: false` lands on every exit
+    // path — exceptions escaping the inner catch, future code changes
+    // forgetting the cleanup, etc. The body below already updates
+    // `sending: false` in the normal cleanup; the finally is a
+    // belt-and-braces no-op when that has already happened, and a
+    // safety net when it hasn't.
+    try {
     try {
       const result = await runAgentRequest({
         sessionId: id,
@@ -1895,6 +2152,42 @@
     } catch (e) {
       const msg = typeof e === 'string' ? e : String(e);
       const cancelled = msg.toLowerCase().includes('cancelled');
+      // Resume-orphan self-heal. The CLI lost the session uuid we tried to
+      // resume against (pruned on disk, CLI reinstalled, etc.). Mint a
+      // fresh uuid, clear the resumable flag, stamp a recap of the in-
+      // memory chat into the next system prompt via cwdSwitchRecap (the
+      // existing one-shot channel), then retry this same prompt once.
+      // The retry never re-enters this branch on its own orphan because
+      // we cleared `resume`.
+      if (isResumeOrphanError(e) && !cancelled) {
+        const detail = msg.slice(RESUME_ORPHAN_PREFIX.length).trim();
+        const sessNow = sessionsState.list.find((x) => x.id === id);
+        if (sessNow) {
+          const recap = buildContinuationRecap(sessNow, 'cli_orphan', { detail });
+          updateSession(id, {
+            claudeUuid: genUuid(),
+            claudeResumable: false,
+            cwdSwitchRecap: recap
+          });
+          notify({
+            kind: 'info',
+            title: `${s.agentKind === 'cursor' ? 'Cursor' : 'Claude'} session refreshed`,
+            body: 'Prior CLI history was unavailable; restarted with the in-app transcript baked into context. Continuing your turn.',
+            ttlMs: 6000
+          });
+          // Re-enter sendClaudeMessage. We pre-stamped the new uuid and
+          // cleared sending below would block, so we have to unmark it
+          // first. The trim+empty-mention guard at the top is fine —
+          // this is a true retry of the same prompt that already had
+          // both. Pop the placeholder assistant bubble so the streaming
+          // restart appends to a fresh one.
+          replaceLastAssistant(id, '');
+          updateSession(id, { sending: false, input: text, mentions: mentionsSnapshotPre });
+          stopThinkingTimer();
+          await sendClaudeMessage();
+          return;
+        }
+      }
       if (cancelled) {
         // Keep the partial content; add a system note.
         appendSessionMessage(id, {
@@ -1923,6 +2216,14 @@
       }
     }
     stopThinkingTimer();
+    // Flush any action-card outcomes that landed mid-turn into the
+    // chat transcript NOW that the assistant message is no longer
+    // streaming. Mid-stream flushing would shift the last-message
+    // position and silently drop further deltas (the bug that cut
+    // off responses mid-sentence). At this point sending is still
+    // true but there's nothing more to stream into — the recv loop
+    // ended, so it's safe to append system messages.
+    flushActionResultsToUI(id);
     const finalSess = sessionsState.list.find((x) => x.id === id);
     const erroredOut = finalSess?.messages.some(
       (m, i) => i === finalSess.messages.length - 1 && m.role === 'assistant' && m.content.startsWith('**Claude failed:')
@@ -1939,6 +2240,18 @@
       });
     }
     void scrollChatBottom();
+    } finally {
+      // Belt-and-braces sending=false. The body above already unsets
+      // it on the normal happy/error paths; this catches exceptions
+      // that escape the inner catch + any future code path that
+      // returns early without cleanup. Idempotent — checked first to
+      // avoid an extra reactive tick when nothing's wrong.
+      const stillSending = sessionsState.list.find((s) => s.id === id)?.sending;
+      if (stillSending) {
+        stopThinkingTimer();
+        updateSession(id, { sending: false });
+      }
+    }
   }
 
   // Streaming-event dispatch lives in `$lib/stream/agentStream.ts`. The
@@ -3228,6 +3541,25 @@
     dispatchAction(sessionId, action, appendAssistantDelta, onActionResolved);
   }
 
+  /** Drop an action card AND tell the sidecar's IPC waiter that the
+   *  user dismissed (so its blocking MCP call returns and the agent
+   *  can react to "user said no" in the same turn instead of hanging
+   *  the CLI on a never-arriving response). Cards without a waitId
+   *  (legacy fire-and-forget path) just get removed locally. */
+  function dismissAction(sessionId: string, actionId: string) {
+    const sess = sessionsState.list.find((s) => s.id === sessionId);
+    const a = sess?.actions.find((x) => x.id === actionId);
+    const waitId = a?.waitId;
+    removeAction(sessionId, actionId);
+    if (waitId) {
+      void invoke('resolve_action_wait', {
+        waitId,
+        ok: false,
+        summary: 'User dismissed the card. The action was not run. Decide whether to propose a different approach or stop and ask the user what they want.'
+      }).catch((e) => console.warn('[action-ipc] dismiss resolve failed', e));
+    }
+  }
+
   /** Per-session re-entry guard. Two cards finishing in the same
    *  microtask both pass the `stillBusy=false` check above (Svelte
    *  state writes aren't synchronous gates) and would each fire
@@ -3237,16 +3569,21 @@
    *  finishes (in finally) so the next user-initiated batch can fire. */
   const continuationInFlight = new Set<string>();
 
-  /** Called by every executeXxx after the action ran. If the session
-   *  was awaiting approval AND no other actions are still pending,
-   *  fire a follow-up agent turn with the result baked in. */
+  /** Called by every executeXxx after the action ran. The executor
+   *  already pushed the outcome onto the pending-action-results
+   *  queue (see `enqueuePendingActionResult`). All this hook does is
+   *  decide whether to AUTO-FIRE the next agent turn so the user
+   *  doesn't have to type "continue" by hand. The continuation
+   *  itself drains the same queue inside `continueAgentTurn`, so
+   *  the recap is built from one source of truth — no risk of the
+   *  manual-send and auto-fire paths reporting different things. */
   function onActionResolved(
     sessionId: string,
     _action: ClaudeAction,
-    result: { ok: boolean; summary: string }
+    _result: { ok: boolean; summary: string }
   ) {
     const sess = sessionsState.list.find((s) => s.id === sessionId);
-    if (!sess || !sess.awaitingApproval) return;
+    if (!sess) return;
     // Wait for ALL pending actions before continuing — agent may have
     // proposed a sequence (commit + PR) that we want to resolve in one
     // batch. `executing` counts as "still in flight".
@@ -3255,36 +3592,41 @@
     );
     if (stillBusy) return;
     if (continuationInFlight.has(sessionId)) return;
+    // BLOCK auto-continue when the previous turn errored. Without this
+    // guard, a CLI-stopped-responding / forced-shutdown cascades into
+    // a second auto-resume that hits the now-locked session-id ("Session
+    // ID … is already in use"), and so on. The user can hit the explicit
+    // "Retry" button on the error chip if they want to try again — that
+    // path goes through the recovery flow that handles uuid rotation.
+    const lastMsg = sess.messages[sess.messages.length - 1];
+    const lastErrored =
+      lastMsg?.role === 'assistant' &&
+      (lastMsg.content.startsWith('**Claude failed:') ||
+        lastMsg.content.startsWith('**Cursor failed:'));
+    if (lastErrored) return;
+    // We DON'T require `sess.awaitingApproval` here. That flag is only
+    // stamped at the END of `sendClaudeMessage`'s finally block, so
+    // when the user approves a card before the flag lands (fast clicks,
+    // streaming still settling) the continuation would silently no-op
+    // and they'd have to type "продолжи" by hand. Downstream guards
+    // (`sending`, drained-queue empty, in-flight Set above) cover the
+    // real concurrency cases.
     continuationInFlight.add(sessionId);
-    updateSession(sessionId, { awaitingApproval: false });
-    // Compose a recap of every action that ran since the last user turn.
-    // For a single action it's just the one summary; for a batch the
-    // agent gets the whole list in order.
-    const recentActionSummaries = sess.actions
-      .filter((a) => a.status === 'done' || a.status === 'error')
-      .map((a) => `- ${a.kind}: ${a.status === 'done' ? '✓' : '✗'} ${actionShortSummary(a)}`)
-      .join('\n');
-    const continuation = recentActionSummaries
-      ? `[Forgehold: action card resolved]\n${recentActionSummaries}\n\nLast result: ${result.ok ? '✓' : '✗'} ${result.summary}\n\nContinue with what you were doing.`
-      : `[Forgehold: action resolved]\n${result.ok ? '✓' : '✗'} ${result.summary}\n\nContinue with what you were doing.`;
-    void continueAgentTurn(sessionId, continuation);
+    if (sess.awaitingApproval) {
+      updateSession(sessionId, { awaitingApproval: false });
+    }
+    void continueAgentTurn(sessionId);
   }
 
-  /** Render an action card down to one line for the auto-continuation
-   *  recap. Conservative — keeps url / hash / first line of cmd. */
-  function actionShortSummary(a: ClaudeAction): string {
-    if (a.kind === 'commit') return `${a.message}${a.result ? ` → ${a.result.split('\n')[0]}` : ''}`;
-    if (a.kind === 'pr') return `${a.title}${a.result?.startsWith('http') ? ` → ${a.result}` : ''}`;
-    if (a.kind === 'bash') return `\`${truncInline(a.command, 120)}\``;
-    if (a.kind === 'switch_cwd') return a.path;
-    return '(unknown)';
-  }
-
-  /** Re-enter `runAgentRequest` with a synthesised follow-up prompt.
-   *  Doesn't append a user message to the chat — the recap from
-   *  `onActionResolved` carries the context, and the Action Card
-   *  results already render visibly in the transcript. */
-  async function continueAgentTurn(sessionId: string, prompt: string) {
+  /** Re-enter `runAgentRequest` for an auto-continuation. The prompt
+   *  is built from the pending-action-results queue, drained inside
+   *  this function — same code path the manual `sendClaudeMessage`
+   *  uses, so the agent sees identical "since-last-turn outcomes"
+   *  formatting whether it picks up automatically or after the user
+   *  types something. No `prompt` arg from the caller because the
+   *  drained queue IS the prompt; an empty drain means the caller
+   *  has nothing meaningful to send. */
+  async function continueAgentTurn(sessionId: string) {
     const sess = sessionsState.list.find((s) => s.id === sessionId);
     if (!sess || sess.sending) {
       // Bail without firing the turn but still release the guard so
@@ -3294,6 +3636,17 @@
       continuationInFlight.delete(sessionId);
       return;
     }
+    // Drain the pending-action-results queue and turn it into the
+    // prompt. If nothing's there (e.g. the user manually triggered
+    // continuation but no actions are awaiting), bail — there's no
+    // meaningful prompt to send and runAgentRequest with empty
+    // content would just confuse the agent.
+    const drained = drainPendingActionResultsForAgent(sessionId);
+    if (drained.length === 0) {
+      continuationInFlight.delete(sessionId);
+      return;
+    }
+    const prompt = formatActionResultsForPrompt(drained);
     updateSession(sessionId, { sending: true });
     appendSessionMessage(sessionId, {
       role: 'assistant',
@@ -3383,9 +3736,22 @@
       }
     }
     stopThinkingTimer();
+    // Same flush hook as sendClaudeMessage's: any action-card outcomes
+    // that landed during this continuation (e.g. the agent proposed a
+    // PR and the user approved before this turn finished) get their
+    // chips appended now, after streaming is done.
+    flushActionResultsToUI(sessionId);
     updateSession(sessionId, { sending: false });
     continuationInFlight.delete(sessionId);
     void scrollChatBottom();
+    // Belt-and-braces: even if an exception escapes the catch above,
+    // make sure sending and the in-flight guard get cleared so a
+    // future approval batch isn't blocked by stuck state. Idempotent.
+    const sessNow = sessionsState.list.find((s) => s.id === sessionId);
+    if (sessNow?.sending) {
+      updateSession(sessionId, { sending: false });
+    }
+    continuationInFlight.delete(sessionId);
   }
 
   // ---- Agent execution ----
@@ -3398,6 +3764,28 @@
     } catch (e) {
       notifyError(e, { title: 'Stop failed' });
     }
+    // After SIGKILL the Claude CLI's session-id store can end up in a
+    // wedged state — `--resume <uuid>` later either returns partial
+    // context, refuses with "session in use", or silently restarts
+    // fresh without telling us. The user-visible symptom is "agent
+    // forgot what I just said". Force a clean restart on the NEXT
+    // turn: rotate uuid, drop resumable, stamp a recap of the current
+    // in-memory transcript so the fresh CLI starts with the full
+    // context (anchored on the very FIRST user message — the original
+    // task brief — plus the recent slice). The unified
+    // `buildContinuationRecap` does this for every context-loss
+    // scenario (Stop / cli_orphan / cwd_switch / app_restart) — same
+    // strong recap shape, no more divergence between sources.
+    const sessNow = sessionsState.list.find((x) => x.id === s.id);
+    if (!sessNow) return;
+    const recap = buildContinuationRecap(sessNow, 'stop', {
+      detail: 'User pressed Stop — restarting CLI session with the in-app transcript baked in to avoid context loss.'
+    });
+    updateSession(s.id, {
+      claudeUuid: genUuid(),
+      claudeResumable: false,
+      cwdSwitchRecap: recap
+    });
   }
 
 
@@ -4559,7 +4947,7 @@
                 onUpdateSessionClaudeToolProfile={(id, profile) => updateSession(id, { claudeToolProfile: profile })}
                 onCompactSession={runCompactSession}
                 onExportSession={exportSession}
-                onDeleteClaudeSession={deleteClaudeSession}
+                onDeleteClaudeSession={deleteClaudeSessionWithCleanup}
                 onNewClaudeSession={newClaudeSession}
                 onStartEditMessage={startEditMessage}
                 onResendMessage={resendMessage}
@@ -4567,7 +4955,7 @@
                 onCommitEditMessage={() => void commitEditMessage()}
                 onSetEditingMsgDraft={setEditingMsgDraft}
                 onUpdateAction={updateAction}
-                onRemoveAction={removeAction}
+                onRemoveAction={dismissAction}
                 onExecuteAction={executeAction}
                 onOpenPrInForgehold={openPrUrlInForgehold}
                 onSetSessionInput={setSessionInput}
@@ -4613,7 +5001,7 @@
                 onUpdateSessionClaudeToolProfile={(id, profile) => updateSession(id, { claudeToolProfile: profile })}
                 onCompactSession={runCompactSession}
                 onExportSession={exportSession}
-                onDeleteClaudeSession={deleteClaudeSession}
+                onDeleteClaudeSession={deleteClaudeSessionWithCleanup}
                 onNewClaudeSession={newClaudeSession}
                 onStartEditMessage={startEditMessage}
                 onResendMessage={resendMessage}
@@ -4621,7 +5009,7 @@
                 onCommitEditMessage={() => void commitEditMessage()}
                 onSetEditingMsgDraft={setEditingMsgDraft}
                 onUpdateAction={updateAction}
-                onRemoveAction={removeAction}
+                onRemoveAction={dismissAction}
                 onExecuteAction={executeAction}
                 onOpenPrInForgehold={openPrUrlInForgehold}
                 onSetSessionInput={setSessionInput}
@@ -5218,20 +5606,17 @@
     overflow-x: auto;
     overflow-y: hidden;
     position: relative;
-    /* Force a persistent, visible horizontal scrollbar — macOS's
-       auto-hiding scrollbars made users think scroll was broken. */
-    scrollbar-color: var(--accent-soft) transparent;
-    scrollbar-gutter: stable;
+    /* Hide the horizontal scrollbar visually but keep content
+       horizontally scrollable (two-finger swipe / shift+wheel still
+       works). The earlier "force-show the bar" approach was meant
+       to hint that scroll was available, but it ended up reading
+       as visual noise across the bottom of the workbench whenever
+       there were enough columns to overflow. macOS auto-hide
+       behavior is enough — when the user swipes, the bar appears
+       briefly. */
+    scrollbar-width: none;
   }
-  .wb-columns::-webkit-scrollbar { height: 10px; }
-  .wb-columns::-webkit-scrollbar-track { background: transparent; }
-  .wb-columns::-webkit-scrollbar-thumb {
-    background: var(--border-hi);
-    border-radius: 5px;
-    border: 2px solid transparent;
-    background-clip: padding-box;
-  }
-  .wb-columns::-webkit-scrollbar-thumb:hover { background: var(--accent); background-clip: padding-box; }
+  .wb-columns::-webkit-scrollbar { height: 0; display: none; }
 
   /* Empty-workbench discoverability nudge. Centered with generous
      padding so it reads as guidance rather than a permanent fixture. */

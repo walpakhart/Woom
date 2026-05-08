@@ -498,12 +498,31 @@
       camX -= dx / camZoom;
       camY -= dy / camZoom;
     };
-    const onUp = (u: PointerEvent) => {
-      surfaceEl!.releasePointerCapture(u.pointerId);
-      surfaceEl!.removeEventListener('pointermove', onMove);
-      surfaceEl!.removeEventListener('pointerup', onUp);
-      surfaceEl!.removeEventListener('pointercancel', onUp);
+    // Pull cleanup into its own scope so it runs on EVERY exit path
+    // — onUp's normal flow OR a thrown releasePointerCapture (e.g.
+    // when the pointer was stolen by a parent and is no longer
+    // captured by surfaceEl). Without this guard a failed release
+    // would skip removeEventListener and the move/up handlers
+    // would dangle past the gesture, accumulating per pan attempt.
+    const cleanup = () => {
+      try {
+        surfaceEl?.removeEventListener('pointermove', onMove);
+        surfaceEl?.removeEventListener('pointerup', onUp);
+        surfaceEl?.removeEventListener('pointercancel', onUp);
+      } catch {
+        // removeEventListener never throws in spec, but be defensive.
+      }
       panActive = false;
+    };
+    const onUp = (u: PointerEvent) => {
+      try {
+        surfaceEl?.releasePointerCapture(u.pointerId);
+      } catch {
+        // releasePointerCapture throws InvalidStateError if the pointer
+        // is no longer captured (e.g. parent stole capture mid-gesture).
+        // Don't let that swallow our cleanup.
+      }
+      cleanup();
       pushViewport();
     };
     surfaceEl.addEventListener('pointermove', onMove);

@@ -164,6 +164,62 @@ struct UpdateIssueParams {
     /// unchanged. Pass `[]` to clear.
     #[serde(default)]
     labels: Option<Vec<String>>,
+    /// Issue priority by name (e.g. "Highest", "High", "Medium", "Low",
+    /// "Lowest"). Project-specific — the names usually match Jira's
+    /// defaults but can be customised. Omit to leave unchanged.
+    #[serde(default)]
+    priority: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct SetPriorityParams {
+    /// Issue key, e.g. "DEVOPS-452".
+    key: String,
+    /// Priority name. Pass an empty string or omit to clear (sets to
+    /// the project default).
+    priority: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct WorklogParams {
+    /// Issue key, e.g. "DEVOPS-452".
+    key: String,
+    /// Time spent in Jira's shorthand: "1h 30m", "45m", "2d 4h". The
+    /// Jira API parses this server-side using the workspace's standard
+    /// hours-per-day setting.
+    time_spent: String,
+    /// Optional comment in markdown — converted to ADF for the worklog.
+    #[serde(default)]
+    comment: Option<String>,
+    /// ISO 8601 start time (e.g. "2026-05-04T10:00:00.000+0300"). Omit
+    /// to use "now" on Jira's side.
+    #[serde(default)]
+    started: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct ListWorklogsParams {
+    key: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct ListBoardsParams {
+    /// Project key to filter by. Omit to list all accessible boards
+    /// (capped at 50 — Agile API page size).
+    #[serde(default)]
+    project_key: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct ListStatusesParams {
+    /// Project key. Statuses are project-scoped — the same workflow
+    /// can have different status sets across projects.
+    project_key: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct ListIssueTypesParams {
+    project_key: String,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -316,7 +372,7 @@ impl Jira {
     }
 
     #[tool(
-        description = "Update an existing Jira issue. Pass `key` plus any subset of: summary, description (Markdown — replaces existing body, full ADF conversion), assignee_account_id (or the literal string \"unassign\" to clear), sprint_id (numeric — moves issue into that sprint), labels (full replace; pass [] to clear). Omitted fields are left unchanged. Use this when the user asks to fix the description, reassign, change a title, or move between sprints."
+        description = "Update an existing Jira issue. Pass `key` plus any subset of: summary, description (Markdown — replaces existing body, full ADF conversion), assignee_account_id (or the literal string \"unassign\" to clear), sprint_id (numeric — moves issue into that sprint), labels (full replace; pass [] to clear), priority (name like \"High\"). Omitted fields are left unchanged. Use this when the user asks to fix the description, reassign, change a title, or move between sprints."
     )]
     async fn update_issue(
         &self,
@@ -327,6 +383,7 @@ impl Jira {
             assignee_account_id,
             sprint_id,
             labels,
+            priority,
         }): Parameters<UpdateIssueParams>,
     ) -> Result<CallToolResult, ErrorData> {
         match self
@@ -337,9 +394,94 @@ impl Jira {
                 assignee_account_id.as_deref(),
                 sprint_id,
                 labels.as_deref(),
+                priority.as_deref(),
             )
             .await
         {
+            Ok(text) => Ok(CallToolResult::success(vec![Content::text(text)])),
+            Err(e) => Err(ErrorData::internal_error(e.to_string(), None)),
+        }
+    }
+
+    #[tool(
+        description = "Set an issue's priority by name (e.g. \"High\", \"Medium\"). Thin wrapper around update_issue's priority field — exists separately because \"set this to high\" is a common one-shot the agent shouldn't need to plumb through update_issue's larger param surface."
+    )]
+    async fn set_priority(
+        &self,
+        Parameters(SetPriorityParams { key, priority }): Parameters<SetPriorityParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        match self
+            .do_update_issue(&key, None, None, None, None, None, Some(&priority))
+            .await
+        {
+            Ok(text) => Ok(CallToolResult::success(vec![Content::text(text)])),
+            Err(e) => Err(ErrorData::internal_error(e.to_string(), None)),
+        }
+    }
+
+    #[tool(
+        description = "Log time on a Jira issue. `time_spent` uses Jira's shorthand (\"1h 30m\", \"45m\", \"2d 4h\"). `comment` is optional markdown — converted to ADF for the worklog. `started` is optional ISO-8601 (defaults to \"now\")."
+    )]
+    async fn add_worklog(
+        &self,
+        Parameters(WorklogParams { key, time_spent, comment, started }): Parameters<WorklogParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        match self
+            .do_add_worklog(&key, &time_spent, comment.as_deref(), started.as_deref())
+            .await
+        {
+            Ok(text) => Ok(CallToolResult::success(vec![Content::text(text)])),
+            Err(e) => Err(ErrorData::internal_error(e.to_string(), None)),
+        }
+    }
+
+    #[tool(
+        description = "List worklogs (time entries) on a Jira issue. Returns each entry's author, time-spent, started timestamp, and comment text."
+    )]
+    async fn list_worklogs(
+        &self,
+        Parameters(ListWorklogsParams { key }): Parameters<ListWorklogsParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        match self.do_list_worklogs(&key).await {
+            Ok(text) => Ok(CallToolResult::success(vec![Content::text(text)])),
+            Err(e) => Err(ErrorData::internal_error(e.to_string(), None)),
+        }
+    }
+
+    #[tool(
+        description = "List Agile boards. Optional `project_key` to filter to one project; omit to get all accessible (Agile API caps at 50). Useful for resolving board ids before driving sprint creation/start/close (Forgehold's UI has these but the MCP tool surface is read-only on boards for now)."
+    )]
+    async fn list_boards(
+        &self,
+        Parameters(ListBoardsParams { project_key }): Parameters<ListBoardsParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        match self.do_list_boards(project_key.as_deref()).await {
+            Ok(text) => Ok(CallToolResult::success(vec![Content::text(text)])),
+            Err(e) => Err(ErrorData::internal_error(e.to_string(), None)),
+        }
+    }
+
+    #[tool(
+        description = "List workflow statuses available on a project. Status sets are project-scoped (the same workflow can have different statuses across projects). Use to discover valid `status` values before issuing transitions or filtering JQL."
+    )]
+    async fn list_statuses(
+        &self,
+        Parameters(ListStatusesParams { project_key }): Parameters<ListStatusesParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        match self.do_list_statuses(&project_key).await {
+            Ok(text) => Ok(CallToolResult::success(vec![Content::text(text)])),
+            Err(e) => Err(ErrorData::internal_error(e.to_string(), None)),
+        }
+    }
+
+    #[tool(
+        description = "List issue types available on a project (Task, Bug, Story, Epic, Sub-task, …). Use to validate `issue_type` before create_issue."
+    )]
+    async fn list_issue_types(
+        &self,
+        Parameters(ListIssueTypesParams { project_key }): Parameters<ListIssueTypesParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        match self.do_list_issue_types(&project_key).await {
             Ok(text) => Ok(CallToolResult::success(vec![Content::text(text)])),
             Err(e) => Err(ErrorData::internal_error(e.to_string(), None)),
         }
@@ -358,13 +500,19 @@ impl ServerHandler for Jira {
              - search(jql) — JQL query for lists. e.g. `assignee = currentUser() AND resolution = Unresolved`.\n\
              - list_projects(query?) — discover project keys when the user mentions a project by partial name.\n\
              - list_assignable_users(project_key, query?) — translate a human name (\"give it to Petya\", \"@Nikolay\") into the accountId that create_issue / set_assignee need. Filter by name/email substring.\n\
-             - list_sprints(project_key, state?) — translate a sprint name (\"Sprint 160\", \"current sprint\") into the numeric id that create_issue's sprint_id parameter accepts. state defaults to active+future; pass `all` if the user references a closed one.\n\n\
+             - list_sprints(project_key, state?) — translate a sprint name (\"Sprint 160\", \"current sprint\") into the numeric id that create_issue's sprint_id parameter accepts. state defaults to active+future; pass `all` if the user references a closed one.\n\
+             - list_boards(project_key?) — Agile board ids; useful for project-scoped sprint operations.\n\
+             - list_statuses(project_key) — workflow status names available on a project; use to validate transitions before calling them.\n\
+             - list_issue_types(project_key) — issue types valid for create_issue on this project (Task / Bug / Story / Epic / sub-types).\n\
+             - list_worklogs(key) — time entries on an issue.\n\n\
              WRITE:\n\
              - add_comment(key, body) — post a comment. Body is Markdown; full ADF conversion (headings, lists, code blocks, links, bold/italic).\n\
              - transition_issue(key, to, comment?) — move workflow state. Pass the human name (e.g. \"In Review\") or transition id.\n\
              - create_issue(project_key, summary, issue_type?, description?, assignee_account_id?, sprint_id?) — file a new ticket. Default issue_type is Task. ALWAYS call list_projects → list_assignable_users + list_sprints up front when the user asks for a ticket with assignee/sprint, so you can pass real ids instead of bouncing back to the user. Returns the new issue key + URL.\n\
-             - update_issue(key, summary?, description?, assignee_account_id?, sprint_id?, labels?) — patch existing ticket fields. Pass only the keys you want to change. assignee_account_id=\"unassign\" clears the assignee. description is Markdown.\n\n\
-             All write payloads accept Markdown for rich-text fields (description, comment body) and translate to ADF: headings, bullet/ordered lists, fenced code blocks, links, bold/italic/strike all preserved.\n\n\
+             - update_issue(key, summary?, description?, assignee_account_id?, sprint_id?, labels?, priority?) — patch existing ticket fields. Pass only the keys you want to change. assignee_account_id=\"unassign\" clears the assignee. description is Markdown.\n\
+             - set_priority(key, priority) — quick wrapper when the user just asks to bump priority (\"set DEVOPS-416 to High\").\n\
+             - add_worklog(key, time_spent, comment?, started?) — log time. time_spent uses Jira shorthand (\"1h 30m\", \"45m\", \"2d\").\n\n\
+             All write payloads accept Markdown for rich-text fields (description, comment body, worklog comment) and translate to ADF: headings, bullet/ordered lists, fenced code blocks, links, bold/italic/strike all preserved.\n\n\
              Match GitHub semantics: read-only ops are auto-approved; mutation ops should be called only when the user explicitly asks for them."
                 .to_string(),
         );
@@ -659,6 +807,7 @@ impl Jira {
         assignee_account_id: Option<&str>,
         sprint_id: Option<u64>,
         labels: Option<&[String]>,
+        priority: Option<&str>,
     ) -> anyhow::Result<String> {
         let key = key.trim();
         if key.is_empty() {
@@ -711,6 +860,19 @@ impl Jira {
                         .collect(),
                 ),
             );
+        }
+        if let Some(p) = priority {
+            let trimmed = p.trim();
+            if trimmed.is_empty() {
+                // Empty string → null clears it (Jira falls back to
+                // project default).
+                fields.insert("priority".into(), serde_json::Value::Null);
+            } else {
+                fields.insert(
+                    "priority".into(),
+                    serde_json::json!({ "name": trimmed }),
+                );
+            }
         }
 
         let mut updated_parts: Vec<&str> = Vec::new();
@@ -994,6 +1156,239 @@ impl Jira {
                 out.push_str(&format!(" · lead={}", lead));
             }
             out.push('\n');
+        }
+        Ok(out)
+    }
+
+    async fn do_add_worklog(
+        &self,
+        key: &str,
+        time_spent: &str,
+        comment: Option<&str>,
+        started: Option<&str>,
+    ) -> anyhow::Result<String> {
+        let key = key.trim();
+        if key.is_empty() {
+            anyhow::bail!("issue key is required");
+        }
+        if time_spent.trim().is_empty() {
+            anyhow::bail!("time_spent is required (e.g. \"1h 30m\")");
+        }
+        let url = format!(
+            "https://{}/rest/api/3/issue/{}/worklog",
+            self.creds.workspace, key
+        );
+        let mut payload = serde_json::Map::new();
+        payload.insert(
+            "timeSpent".into(),
+            serde_json::Value::String(time_spent.trim().to_string()),
+        );
+        if let Some(c) = comment.map(str::trim).filter(|s| !s.is_empty()) {
+            payload.insert("comment".into(), markdown_to_adf(c));
+        }
+        if let Some(s) = started.map(str::trim).filter(|s| !s.is_empty()) {
+            payload.insert("started".into(), serde_json::Value::String(s.to_string()));
+        }
+        let resp = self
+            .http
+            .post(&url)
+            .basic_auth(&self.creds.email, Some(&self.creds.token))
+            .header("Accept", "application/json")
+            .header("Content-Type", "application/json")
+            .json(&serde_json::Value::Object(payload))
+            .send()
+            .await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("Jira {} on worklog/{}: {}", status, key, truncate(&body, 600));
+        }
+        let v: serde_json::Value = resp.json().await?;
+        let id = v.get("id").and_then(|x| x.as_str()).unwrap_or("?");
+        Ok(format!("Worklog #{} added to {} ({}).", id, key, time_spent))
+    }
+
+    async fn do_list_worklogs(&self, key: &str) -> anyhow::Result<String> {
+        let key = key.trim();
+        if key.is_empty() {
+            anyhow::bail!("issue key is required");
+        }
+        let url = format!(
+            "https://{}/rest/api/3/issue/{}/worklog?maxResults=100",
+            self.creds.workspace, key
+        );
+        let resp = self
+            .http
+            .get(&url)
+            .basic_auth(&self.creds.email, Some(&self.creds.token))
+            .header("Accept", "application/json")
+            .send()
+            .await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("Jira {} on worklog/{}: {}", status, key, truncate(&body, 600));
+        }
+        let v: serde_json::Value = resp.json().await?;
+        let logs = v
+            .get("worklogs")
+            .and_then(|x| x.as_array())
+            .cloned()
+            .unwrap_or_default();
+        if logs.is_empty() {
+            return Ok(format!("No worklogs on {}.", key));
+        }
+        let mut out = format!("Worklogs on {} ({} total):\n", key, logs.len());
+        for w in logs.iter().take(50) {
+            let author = w
+                .get("author")
+                .and_then(|a| a.get("displayName"))
+                .and_then(|x| x.as_str())
+                .unwrap_or("?");
+            let time = w.get("timeSpent").and_then(|x| x.as_str()).unwrap_or("?");
+            let started = w.get("started").and_then(|x| x.as_str()).unwrap_or("");
+            out.push_str(&format!("- {} · {} · {}\n", started, author, time));
+        }
+        if logs.len() > 50 {
+            out.push_str(&format!("… and {} more\n", logs.len() - 50));
+        }
+        Ok(out)
+    }
+
+    async fn do_list_boards(&self, project_key: Option<&str>) -> anyhow::Result<String> {
+        let mut url = format!(
+            "https://{}/rest/agile/1.0/board?maxResults=50",
+            self.creds.workspace
+        );
+        if let Some(pk) = project_key.map(str::trim).filter(|s| !s.is_empty()) {
+            use std::fmt::Write as _;
+            let _ = write!(&mut url, "&projectKeyOrId={}", urlencoding::encode(pk));
+        }
+        let resp = self
+            .http
+            .get(&url)
+            .basic_auth(&self.creds.email, Some(&self.creds.token))
+            .header("Accept", "application/json")
+            .send()
+            .await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("Jira {} on /board: {}", status, truncate(&body, 600));
+        }
+        let v: serde_json::Value = resp.json().await?;
+        let boards = v
+            .get("values")
+            .and_then(|x| x.as_array())
+            .cloned()
+            .unwrap_or_default();
+        if boards.is_empty() {
+            return Ok("No boards found.".to_string());
+        }
+        let mut out = format!("Boards ({} total):\n", boards.len());
+        for b in &boards {
+            let id = b.get("id").and_then(|x| x.as_u64()).unwrap_or(0);
+            let name = b.get("name").and_then(|x| x.as_str()).unwrap_or("?");
+            let kind = b.get("type").and_then(|x| x.as_str()).unwrap_or("?");
+            out.push_str(&format!("- id={} · {} ({})\n", id, name, kind));
+        }
+        Ok(out)
+    }
+
+    async fn do_list_statuses(&self, project_key: &str) -> anyhow::Result<String> {
+        let key = project_key.trim();
+        if key.is_empty() {
+            anyhow::bail!("project_key is required");
+        }
+        let url = format!(
+            "https://{}/rest/api/3/project/{}/statuses",
+            self.creds.workspace,
+            urlencoding::encode(key)
+        );
+        let resp = self
+            .http
+            .get(&url)
+            .basic_auth(&self.creds.email, Some(&self.creds.token))
+            .header("Accept", "application/json")
+            .send()
+            .await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("Jira {} on /project/{}/statuses: {}", status, key, truncate(&body, 600));
+        }
+        // Response is `[{name: <issuetype>, statuses: [{ name, ... }]}]`.
+        // Flatten and dedupe by status name so the agent gets a clean
+        // "valid statuses on this project" list.
+        let v: serde_json::Value = resp.json().await?;
+        let arr = v.as_array().cloned().unwrap_or_default();
+        let mut seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for it in &arr {
+            if let Some(ss) = it.get("statuses").and_then(|x| x.as_array()) {
+                for s in ss {
+                    if let Some(n) = s.get("name").and_then(|x| x.as_str()) {
+                        seen.insert(n.to_string());
+                    }
+                }
+            }
+        }
+        if seen.is_empty() {
+            return Ok(format!("No statuses found for project {}.", key));
+        }
+        let mut out = format!("Statuses on {} ({} unique):\n", key, seen.len());
+        for s in &seen {
+            out.push_str(&format!("- {}\n", s));
+        }
+        Ok(out)
+    }
+
+    async fn do_list_issue_types(&self, project_key: &str) -> anyhow::Result<String> {
+        let key = project_key.trim();
+        if key.is_empty() {
+            anyhow::bail!("project_key is required");
+        }
+        // Jira's REST API shape: `/issue/createmeta` with project filter
+        // gives back the valid issue types for that project (project-
+        // scoped because admins can hide types per-project).
+        let url = format!(
+            "https://{}/rest/api/3/issue/createmeta?projectKeys={}",
+            self.creds.workspace,
+            urlencoding::encode(key)
+        );
+        let resp = self
+            .http
+            .get(&url)
+            .basic_auth(&self.creds.email, Some(&self.creds.token))
+            .header("Accept", "application/json")
+            .send()
+            .await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("Jira {} on createmeta: {}", status, truncate(&body, 600));
+        }
+        let v: serde_json::Value = resp.json().await?;
+        let projects = v
+            .get("projects")
+            .and_then(|x| x.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let mut out = format!("Issue types on {}:\n", key);
+        for p in &projects {
+            if let Some(types) = p.get("issuetypes").and_then(|x| x.as_array()) {
+                for t in types {
+                    let name = t.get("name").and_then(|x| x.as_str()).unwrap_or("?");
+                    let subtask = t.get("subtask").and_then(|x| x.as_bool()).unwrap_or(false);
+                    out.push_str(&format!(
+                        "- {}{}\n",
+                        name,
+                        if subtask { " (sub-task)" } else { "" }
+                    ));
+                }
+            }
+        }
+        if out.lines().count() <= 1 {
+            return Ok(format!("No issue types found for project {}.", key));
         }
         Ok(out)
     }

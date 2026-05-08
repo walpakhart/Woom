@@ -7,7 +7,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::claude::{self, Runners};
+use crate::claude::{self, Runners, WarmPool};
 use crate::cursor;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -49,6 +49,23 @@ pub enum AgentError {
     Cursor(#[from] cursor::CursorRunError),
 }
 
+impl AgentError {
+    /// True when the underlying CLI told us the resume target uuid is gone
+    /// from its on-disk store. The frontend uses this to self-heal: rotate
+    /// the session uuid, clear the resumable flag, stamp a recap of the
+    /// in-memory chat history into the next system prompt, and retry once.
+    /// Both adapters surface this through their own error variants — this
+    /// helper unifies the check so the frontend doesn't have to branch on
+    /// agent kind.
+    pub fn is_resume_orphan(&self) -> bool {
+        match self {
+            AgentError::Claude(claude::ClaudeRunError::ResumeOrphan(_)) => true,
+            AgentError::Cursor(cursor::CursorRunError::ResumeOrphan(_)) => true,
+            _ => false,
+        }
+    }
+}
+
 /// Kind-dispatched one-off commit-message generator. Both adapters ship
 /// their own headless path that takes the staged diff and returns a
 /// one-liner — this just picks the right one for the agent the user has
@@ -71,6 +88,7 @@ pub async fn ask(
     kind: AgentKind,
     app: tauri::AppHandle,
     runners: Runners,
+    warm_pool: WarmPool,
     session_id: &str,
     prompt: &str,
     cwd: Option<&Path>,
@@ -81,6 +99,7 @@ pub async fn ask(
     claude_model: Option<&str>,
     claude_tool_profile: Option<&str>,
     app_context: Option<&str>,
+    action_ipc_socket: Option<&Path>,
     image_paths: &[String],
 ) -> Result<AgentAskResult, AgentError> {
     match kind {
@@ -88,6 +107,7 @@ pub async fn ask(
             let reply = claude::ask(
                 app,
                 runners,
+                warm_pool,
                 session_id,
                 prompt,
                 cwd,
@@ -97,6 +117,7 @@ pub async fn ask(
                 claude_model,
                 claude_tool_profile,
                 app_context,
+                action_ipc_socket,
                 image_paths,
             )
             .await?;

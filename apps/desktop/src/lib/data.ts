@@ -261,18 +261,21 @@ export interface SentryEventDetail {
   permalink: string | null;
 }
 
-/** Sentry level → which mini-tag style to use. */
+/** Sentry level → which `tag--*` class to apply. The same class
+ *  drives the inbox-card's left stripe AND the inline state-pill,
+ *  so the severity is reinforced visually in two places. */
 export function sentryLevelClass(level: string): string {
   switch (level) {
     case 'fatal':
+      return 'tag--fatal';
     case 'error':
-      return 'tag--closed';
+      return 'tag--error';
     case 'warning':
-      return 'tag--draft';
+      return 'tag--warning';
     case 'info':
     case 'debug':
     default:
-      return 'tag--open';
+      return 'tag--info';
   }
 }
 

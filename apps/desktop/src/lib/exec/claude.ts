@@ -9,7 +9,7 @@
 
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import { handleStreamEvent } from '$lib/stream/agentStream';
+import { handleStreamEvent, resetTurnDispatcherState } from '$lib/stream/agentStream';
 
 export interface AgentRunRequest {
   sessionId: string;
@@ -79,6 +79,12 @@ export interface AgentRunResult {
  *  dispatches events through `handleStreamEvent`, then awaits the final
  *  reply. The subscription is always cleaned up — even on throw. */
 export async function runAgentRequest(req: AgentRunRequest): Promise<AgentRunResult> {
+  // Wipe any leftover per-turn dispatcher flags before this turn
+  // starts. Normally cleared by the previous turn's `result` event;
+  // turns that errored out without emitting `result` (CLI crash,
+  // forced kill, malformed final line) would otherwise leak their
+  // flags to here and skew this turn's usage stamping.
+  resetTurnDispatcherState(req.sessionId);
   let unlisten: UnlistenFn | null = null;
   try {
     unlisten = await listen<string>(`claude:stream:${req.sessionId}`, (event) => {
@@ -126,4 +132,77 @@ export async function runAgentRequest(req: AgentRunRequest): Promise<AgentRunRes
  *  caller can toast them. */
 export async function stopAgentRequest(sessionId: string): Promise<void> {
   await invoke('claude_stop', { sessionId });
+}
+
+/** Args needed to prewarm a Claude CLI for a session. Same shape as
+ *  the spawn-relevant subset of `AgentRunRequest` — they have to match
+ *  for the backend's pool-match check to find the prewarmed process
+ *  on the next `runAgentRequest`. */
+export interface PrewarmRequest {
+  sessionId: string;
+  cwd: string | null;
+  claudeUuid: string;
+  resume: boolean;
+  rules: string | null;
+  agentKind: 'claude' | 'cursor';
+  claudeModel: string | null;
+  claudeToolProfile:
+    | 'all'
+    | 'coding'
+    | 'github'
+    | 'jira'
+    | 'sentry'
+    | 'triage'
+    | null;
+  appContext: string | null;
+}
+
+/** Pre-spawn a Claude CLI for `sessionId` so the cold-start cost
+ *  (binary load + `--resume` history hydration) overlaps with the
+ *  user typing their prompt. Idempotent for matching args (cheap to
+ *  call on every keystroke / focus event). No-op for cursor sessions —
+ *  cursor-agent takes its prompt as a positional CLI arg, so the
+ *  backend has nothing to spawn until the user hits Send. */
+export async function prewarmAgent(req: PrewarmRequest): Promise<void> {
+  try {
+    await invoke('claude_prewarm', {
+      sessionId: req.sessionId,
+      cwd: req.cwd,
+      claudeUuid: req.claudeUuid,
+      resume: req.resume,
+      rules: req.rules,
+      agentKind: req.agentKind,
+      claudeModel: req.claudeModel,
+      claudeToolProfile: req.claudeToolProfile,
+      appContext: req.appContext
+    });
+  } catch {
+    // Prewarm is purely an optimization — failing to spawn (binary
+    // missing, auth lost) is fine; the actual `runAgentRequest` will
+    // surface the real error to the user.
+  }
+}
+
+/** Drop any prewarmed CLI parked for `sessionId`. Called on tab
+ *  switch / cwd change / chat deletion / blur-after-empty-input —
+ *  anywhere the parked process can no longer match the next ask. */
+export async function dropPrewarm(sessionId: string): Promise<void> {
+  try {
+    await invoke('claude_drop_prewarm', { sessionId });
+  } catch {
+    // Best-effort cleanup; if the call fails, the TTL sweeper will
+    // pick up the abandoned process within ~30s.
+  }
+}
+
+/** Stable wire-format prefix the Rust side stamps on `claude_ask`
+ *  errors when the CLI couldn't find the resume target uuid in its
+ *  on-disk store. Frontend uses this to distinguish "session was
+ *  pruned, recover by minting a new uuid + injecting recap" from
+ *  ordinary CLI failures (auth, network, model error, etc.). */
+export const RESUME_ORPHAN_PREFIX = 'RESUME_ORPHAN: ';
+
+export function isResumeOrphanError(err: unknown): boolean {
+  const msg = typeof err === 'string' ? err : err instanceof Error ? err.message : String(err);
+  return msg.startsWith(RESUME_ORPHAN_PREFIX);
 }

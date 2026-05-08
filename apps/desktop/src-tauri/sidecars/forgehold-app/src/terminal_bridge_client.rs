@@ -46,11 +46,16 @@ pub struct ListResp {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct InstanceLite {
-    pub id: String,
-    /// Workbench column display name (e.g. "Notre-Dame"). Optional —
-    /// older sessions spawned before this field landed have no name.
+    /// Workbench column display name (e.g. "Notre-Dame"). This is
+    /// what should be used to address terminals — first field on
+    /// purpose so the agent picks it as canonical. Optional only
+    /// because legacy sessions predating column-naming have no name.
     #[serde(default)]
     pub name: Option<String>,
+    /// Per-spawn uuid. Useful only for disambiguation when two
+    /// columns share a name (rare). Renamed from `id` so the agent
+    /// doesn't reflexively grab the uuid.
+    pub uuid: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -61,7 +66,15 @@ pub struct WriteReq {
 #[derive(Debug, Serialize)]
 pub struct RunReq {
     pub cmd: String,
+    /// Idle timeout (ms) — bridge resets this on every chunk of
+    /// output. Default 60_000. Long-running commands that stream
+    /// progress don't need a higher value — pass-through 60s is
+    /// fine because output keeps the deadline rolling.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
+    /// Absolute cap (ms). Default 30 minutes server-side.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_timeout_ms: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -69,6 +82,12 @@ pub struct RunResp {
     pub stdout: String,
     pub exit_code: i32,
     pub timed_out: bool,
+    /// When `timed_out: true` and the bridge detected an interactive
+    /// prompt waiting on user input (Y/N, password, "Press Enter",
+    /// etc.), this carries the prompt line so the MCP tool can
+    /// surface it directly to the agent.
+    #[serde(default)]
+    pub interactive_prompt: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]

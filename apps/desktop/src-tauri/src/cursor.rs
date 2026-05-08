@@ -70,10 +70,35 @@ pub enum CursorRunError {
     NotInstalled,
     #[error("cursor-agent is not authenticated — run `cursor-agent login` or set CURSOR_API_KEY")]
     NotAuthed,
+    /// `--resume <chat_id>` referenced a chat the cursor-agent backend no
+    /// longer has. Frontend self-heals by minting a fresh chat (next turn
+    /// drops resume + stamps a recap of in-memory history into the prompt).
+    /// Heuristic detection — Cursor doesn't publish stable error codes, so
+    /// the match is loose and false positives just trigger the same recap-
+    /// based recovery, which is benign.
+    #[error("cursor-agent resume target is gone: {0}")]
+    ResumeOrphan(String),
     #[error("cursor-agent failed: {0}")]
     Failed(String),
     #[error(transparent)]
     Io(#[from] std::io::Error),
+}
+
+/// Heuristic check: did cursor-agent fail because the chat_id we tried
+/// to resume no longer exists? Phrasings observed: "chat not found",
+/// "no chat with id", "unknown chat", "chat ... does not exist".
+/// Loose match by design — see the variant doc above.
+fn looks_like_cursor_resume_orphan(stderr: &str) -> bool {
+    let t = stderr.to_ascii_lowercase();
+    let chat_y = t.contains("chat") || t.contains("conversation") || t.contains("session");
+    let phrasings_y = t.contains("not found")
+        || t.contains("no such")
+        || t.contains("does not exist")
+        || t.contains("doesn't exist")
+        || t.contains("could not find")
+        || t.contains("cannot find")
+        || t.contains("unknown");
+    (chat_y && phrasings_y) || t.contains("no resumable") || t.contains("invalid chat id")
 }
 
 /// Run cursor-agent and stream normalized Claude-style JSON events to the
@@ -257,6 +282,12 @@ pub async fn ask(
     }
     if !out.success() {
         let code = out.code().unwrap_or(-1);
+        // Surface resume-orphan distinctly so the frontend can self-heal.
+        // Only check on a `--resume` attempt — a fresh `create-chat` turn
+        // can't be orphaned (we just minted the id).
+        if resume && looks_like_cursor_resume_orphan(&stderr_text) {
+            return Err(CursorRunError::ResumeOrphan(stderr_text));
+        }
         let msg = if stderr_text.is_empty() {
             format!("cursor-agent exited with status {}", code)
         } else {
@@ -271,6 +302,12 @@ pub async fn ask(
     // the app silently swallowed their turn. Treat empty stdout + non-empty
     // stderr as an error so they at least see what cursor-agent told us.
     if final_text.trim().is_empty() && !stderr_text.is_empty() {
+        // Same orphan check on the exit-0-but-empty path — cursor-agent
+        // sometimes prints "chat not found" to stderr and exits cleanly
+        // when the resume id is unknown.
+        if resume && looks_like_cursor_resume_orphan(&stderr_text) {
+            return Err(CursorRunError::ResumeOrphan(stderr_text));
+        }
         return Err(CursorRunError::Failed(format!(
             "cursor-agent finished with no output. Diagnostic: {}",
             truncate_str(&stderr_text, 600)
@@ -1454,11 +1491,26 @@ fn canonicalize_tool_name(name: &str) -> String {
 }
 
 /// Send SIGTERM to a running cursor-agent spawn for the given Forgehold session.
+/// SIGTERM → wait 2s → SIGKILL fallback. Same rationale as `claude::stop`:
+/// a cursor-agent stuck in a syscall (network, MCP RPC) ignores SIGTERM
+/// and keeps its chat lock; without the kill the next `--resume` fails.
 pub fn stop(runners: &Runners, session_id: &str) -> bool {
     let pid = runners.lock().unwrap().get(session_id).copied();
     match pid {
-        Some(p) => unsafe { libc::kill(p as libc::pid_t, libc::SIGTERM) == 0 },
-        None => false,
+        Some(p) if p > 0 => {
+            let sigterm_ok = unsafe { libc::kill(p as libc::pid_t, libc::SIGTERM) == 0 };
+            // `agent::stop` is invoked from a sync Tauri command, so
+            // `tokio::spawn` panics here. Use Tauri's runtime-agnostic
+            // spawn to dispatch the SIGKILL escalation timer instead.
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
+                if unsafe { libc::kill(p as libc::pid_t, 0) } == 0 {
+                    unsafe { libc::kill(p as libc::pid_t, libc::SIGKILL) };
+                }
+            });
+            sigterm_ok
+        }
+        _ => false,
     }
 }
 

@@ -329,7 +329,7 @@
           {#each items as item (item.id)}
             {@const stag = stateTag(item)}
             <div
-              class="inbox-item"
+              class="inbox-item {stag.className}"
               class:active={item.id === inboxState.focusItem?.id}
               draggable="true"
               role="button"
@@ -340,17 +340,17 @@
               onclick={(e) => { if (isClickNotDrag(e)) onSelectInboxItem(item.id); }}
               onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelectInboxItem(item.id); } }}
             >
-              <div class="inbox-item-top">
-                <span class="source-mark">GH</span>
+              <div class="inbox-item-row1">
+                <span class="state-dot"></span>
                 <span class="inbox-item-id mono">{externalId(item)}</span>
+                <span class="state-pill {stag.className}">{stag.text}</span>
+                <span class="kind-tag">{kindLabel(item)}</span>
                 <span class="inbox-item-time mono">{relativeTime(item.updated_at, now)}</span>
               </div>
               <div class="inbox-item-title">{item.title}</div>
-              <div class="inbox-item-meta">
-                <span class="mini-tag {stag.className}">{stag.text}</span>
-                <span class="mini-kind">{kindLabel(item)}</span>
-                {#if item.repo}<span class="mini-repo mono">· {repoLabel(item)}</span>{/if}
-              </div>
+              {#if item.repo}
+                <div class="inbox-item-row3 mono">{repoLabel(item)}</div>
+              {/if}
             </div>
           {/each}
         {/if}
@@ -424,40 +424,7 @@
   }
   .inbox-group-label::after { content: ''; flex: 1; height: 1px; background: var(--border-neutral); }
 
-  .inbox-item {
-    padding: 10px 12px;
-    border-radius: 8px;
-    background: var(--bg-1); border: 1px solid var(--border-neutral);
-    cursor: pointer;
-    transition: all 120ms;
-    display: flex; flex-direction: column; gap: 5px;
-  }
-  .inbox-item:hover { background: var(--bg-2); border-color: var(--border-neutral-hi); }
-  .inbox-item.active { background: var(--bg-2); border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent-soft); }
-  .inbox-item:active { cursor: grabbing; transform: scale(0.99); }
-  .inbox-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-  .inbox-item-top { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
-
-  .source-mark {
-    width: 22px; height: 22px; border-radius: 5px;
-    display: inline-flex; align-items: center; justify-content: center;
-    font-size: 10.5px; font-weight: 700; letter-spacing: -0.02em;
-    background: var(--bg-2); color: var(--text-1);
-    border: 1px solid var(--border-neutral-hi);
-  }
-  .inbox-item-id { font-size: 11px; color: var(--text-2); font-weight: 500; }
-  .inbox-item-time { margin-left: auto; font-size: 10.5px; color: var(--text-mute); font-variant-numeric: tabular-nums; }
-  .inbox-item-title {
-    font-size: 13px; color: var(--text-0); font-weight: 500;
-    line-height: 1.4; margin-bottom: 6px; word-break: break-word;
-  }
-  .inbox-item-meta { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-2); flex-wrap: wrap; }
-
-  .mini-tag { padding: 1px 6px; border-radius: 4px; font-size: 10px; font-weight: 600; text-transform: lowercase; }
-  .mini-kind { color: var(--text-2); text-transform: lowercase; }
-  .mini-repo { color: var(--text-mute); font-size: 10.5px; }
-  :global(.tag--open)   { color: var(--accent-bright); background: var(--accent-soft); border: 1px solid rgba(16, 185, 129, 0.22); }
-  :global(.tag--closed) { color: #8b96ab; background: rgba(139, 150, 171, 0.08); border: 1px solid rgba(139, 150, 171, 0.2); }
-  :global(.tag--merged) { color: #b199f6; background: rgba(139, 92, 246, 0.08); border: 1px solid rgba(139, 92, 246, 0.24); }
-  :global(.tag--draft)  { color: #fcd34d; background: rgba(245, 158, 11, 0.06); border: 1px solid rgba(245, 158, 11, 0.2); }
+  /* `.inbox-item` base layout + `.tag--*` state colors live in
+     `app.css` (shared across GitHub/Jira/Sentry columns). This
+     component only adds GitHub-specific tweaks. */
 </style>

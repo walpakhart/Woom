@@ -136,21 +136,19 @@
   onMount(() => {
     if (!host) return;
 
-    /* Pull text + accent from the live theme so a Light-mode terminal
-     * has dark text and an Iconic-mode one has cream — but use a
-     * dedicated NEUTRAL DARK for the terminal background regardless
-     * of theme. Iconic's `--bg-0: #0C1117` has a deliberate blue
-     * undertone (cold-steel brand) which reads "tinted" in a terminal
-     * column; macOS Terminal.app sets a precedent that the shell
-     * surface is pure grey-black. Picking one neutral for every
-     * theme keeps the column anchored visually instead of drifting
-     * with the rest of the chrome. */
+    /* Pull surface + text + accent from the live theme so the column
+     * matches the inbox/canvas columns visually — Github/Jira sit on
+     * `.wb-column.inbox` (= --bg-1) and Canvas's head + surface are
+     * also --bg-1, so that's the "default chrome" of the workbench.
+     * Header, host padding, and the xterm canvas all settle on
+     * `--bg-1` so the terminal reads as part of that family instead
+     * of the deeper `--bg-0` used by Editor/Agent/Sentry. */
     const css = getComputedStyle(document.documentElement);
     const v = (name: string, fallback: string) =>
       (css.getPropertyValue(name) || fallback).trim() || fallback;
     const text0 = v('--text-0', '#EDE5D1');
     const accentBright = v('--accent-bright', '#E8A33A');
-    const TERM_BG = '#15151A';
+    const bg1 = v('--bg-1', '#131A23');
 
     term = new Terminal({
       fontFamily: '"JetBrains Mono", "SF Mono", ui-monospace, monospace',
@@ -166,10 +164,10 @@
       // on every theme — those are content colours from `ls`,
       // `git status`, etc., not chrome.
       theme: {
-        background: TERM_BG,
+        background: bg1,
         foreground: text0,
         cursor: accentBright,
-        cursorAccent: TERM_BG,
+        cursorAccent: bg1,
         selectionBackground: 'rgba(232, 163, 58, 0.32)',
         black: '#1A1410',
         red: '#D4664A',
@@ -347,7 +345,11 @@
 
 <style>
   .terminal-col {
-    background: var(--bg-0);
+    /* Match inbox/canvas chrome (`--bg-1`) — see comment by `bg1`
+       in the TS section. Overrides the `.wb-column` default of
+       `--bg-0` (which Editor/Agent/Sentry use) so terminal blends
+       with its visible neighbours instead of going darker. */
+    background: var(--bg-1);
     display: flex; flex-direction: column;
     min-height: 0;
     position: relative;
@@ -435,10 +437,8 @@
     flex: 1;
     min-height: 0;
     padding: 8px 4px 4px 8px;
-    /* Neutral dark grey, theme-independent — see comment in the
-       TS section. Avoids Iconic's blue undertone reading as a
-       tinted terminal. */
-    background: #15151A;
+    /* Inherit `--bg-0` from `.terminal-col` so header + body share
+       the same surface as every other column kind in the workbench. */
     overflow: hidden;
   }
   /* xterm.js draws into a sized child div — make it fill the host. */

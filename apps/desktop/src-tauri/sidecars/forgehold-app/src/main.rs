@@ -1564,7 +1564,7 @@ impl App {
     }
 
     #[tool(
-        description = "Change an agent session's cwd (working directory). Use when the user says \"switch yourself to /path\" / \"point Claude at /repo\" / \"have the cursor agent work on X\". For yourself, pass `target=\"self\"` — the change takes effect on your NEXT turn (the current one keeps the old cwd it spawned with). For another agent column, pass `instance_name` (e.g. \"Mona-Lisa\") or `instance_id`. Do NOT use this to create a new agent — use add_workbench_instance for that."
+        description = "Change an agent session's cwd (working directory). Use when the user says \"switch yourself to /path\" / \"point Claude at /repo\" / \"have the cursor agent work on X\". For yourself, pass `target=\"self\"` — the OS process running this turn keeps its old spawn-time cwd, BUT you can keep working in the new repo within the same turn by addressing files with absolute paths (Read/Write/Edit) and prefixing shell commands with `cd <new_path> && ...`. The next turn spawns fresh with the new cwd as default, so the absolute-path workaround is a one-turn thing. For another agent column, pass `instance_name` (e.g. \"Mona-Lisa\") or `instance_id`. Do NOT use this to create a new agent — use add_workbench_instance for that."
     )]
     async fn set_agent_cwd(
         &self,
@@ -1600,14 +1600,33 @@ impl App {
                 ));
             }
             let label = name.as_deref().or(id.as_deref()).unwrap_or("agent");
+            // The other agent's session uuid + recap are rotated by
+            // Forgehold's frontend interceptor; from THIS agent's
+            // perspective the message is just "ack, change recorded."
+            // No absolute-path note here — that other agent will pick
+            // up the new cwd on its OWN next turn.
             return Ok(CallToolResult::success(vec![Content::text(format!(
-                "Setting agent `{}` cwd → `{}` (effective from its next turn).",
+                "Setting agent `{}` cwd → `{}` (takes effect on its next turn — the user's next message in that chat will spawn the agent in the new directory with a recap injected).",
                 label, path
             ))]));
         }
+        // Self-switch within an in-flight turn. Spell out the workaround
+        // explicitly so the agent doesn't burn the rest of the turn
+        // resolving relative paths against a stale cwd. Process working
+        // directory is fork-time-only on POSIX; we can't change it on a
+        // running child without killing it, and killing mid-turn would
+        // throw away the current agent state. Absolute paths sidestep
+        // it cleanly: Read/Write/Edit accept them natively, and Bash
+        // takes a `cd <path> &&` prefix.
         Ok(CallToolResult::success(vec![Content::text(format!(
-            "Setting MY (self) cwd → `{}`. Effective from my next turn — the current one is already running with the old cwd.",
-            path
+            "Setting MY (self) cwd → `{path}`.\n\n\
+             IMPORTANT — this turn vs. next turn:\n\
+             • The OS process running this turn was spawned with the OLD cwd. Its working directory cannot be changed mid-process, so Read/Write/Edit/Bash WITHOUT absolute paths still resolve under the old root.\n\
+             • To act in the new repo within THIS SAME turn, use absolute paths for every subsequent tool call:\n\
+                 - Read / Write / Edit: pass `{path}/relative/file.ext` instead of `relative/file.ext`.\n\
+                 - Bash: prefix every command with `cd {path} && …` (or use absolute paths in the command).\n\
+             • Your NEXT turn will be spawned with `{path}` as the default cwd automatically. A recap of recent exchanges is injected into that turn's system prompt for continuity, so you can drop the `cd` prefix and absolute paths from then on.\n\
+             • This isn't an error — it's the cost of switching projects without killing the in-flight agent loop."
         ))]))
     }
 
@@ -2070,7 +2089,7 @@ impl App {
     // `terminal_bridge_client`).
 
     #[tool(
-        description = "List every Terminal column open in the user's Forgehold workbench. Returns each terminal's human-readable column name (e.g. `Notre-Dame`) AND a stable uuid. PREFER THE NAME when calling other terminal_* tools — both work, but the name reads clearly in your reply text and in the tool-call trace the user sees.\n\nUse this BEFORE issuing other terminal_* tools so you have a real id. Empty list = the user has no Terminal columns yet (suggest they add one from the workbench pill bar)."
+        description = "List every Terminal column open in the user's Forgehold workbench. Returns each terminal's human-readable column `name` (e.g. `Vermeer`, `Notre-Dame`) — that's what you pass as `id` to terminal_run / terminal_write / terminal_buffer.\n\n**SKIP THIS CALL if your session preamble already shows `linked_to_terminal=<name>`.** When a session is linked to a terminal, the workbench layout in your system prompt already names it — call terminal_run directly with that name. Calling terminal_list anyway is a wasted round-trip.\n\nUse this only when: (a) no link is shown in the preamble and the user asks you to do terminal work, (b) you need to disambiguate between multiple terminals, (c) the user mentions a terminal by name and you want to confirm it exists.\n\nEmpty list = no Terminal columns open yet (suggest the user add one from the workbench pill bar)."
     )]
     async fn terminal_list(&self) -> Result<CallToolResult, ErrorData> {
         let client = BridgeClient::discover().map_err(bridge_to_mcp)?;
@@ -2085,12 +2104,12 @@ impl App {
             .instances
             .iter()
             .map(|i| match &i.name {
-                Some(n) => format!("- {} (id: {})", n, i.id),
-                None => format!("- (unnamed) (id: {})", i.id),
+                Some(n) => format!("- name: {}  (uuid: {})", n, i.uuid),
+                None => format!("- (unnamed)  (uuid: {})", i.uuid),
             })
             .collect();
         Ok(CallToolResult::success(vec![Content::text(format!(
-            "{} terminal{} open:\n{}\n\nWhen referring to a terminal in your reply to the user, prefer the human-readable name (e.g. `Notre-Dame`) over the id.",
+            "{} terminal{} open:\n{}\n\nUse the `name` (e.g. `Vermeer`, `Notre-Dame`) as the `id` parameter to terminal_run / terminal_write / terminal_buffer. The uuid is only there as a fallback if two columns share a name.",
             resp.instances.len(),
             if resp.instances.len() == 1 { "" } else { "s" },
             lines.join("\n")
@@ -2098,7 +2117,7 @@ impl App {
     }
 
     #[tool(
-        description = "Run a shell command in one of the user's Terminal columns and BLOCK until it finishes (or until `timeout_ms` elapses). Returns `exit_code` + ANSI-stripped `stdout`. The command runs in the SAME PTY the user sees — they watch it execute live. Wrapped automatically so `$?` tracks the user command, not printf's exit.\n\n`id` accepts EITHER the column name (`Notre-Dame`) OR the uuid from terminal_list. Prefer the name in your reply text.\n\nDefault `timeout_ms` is 60_000 (60s). For long jobs (`brew install`, `cargo build`, `npm install`, `pytest`) raise it to 180_000–600_000 ms. This tool BLOCKS until the wrapped command actually finishes — do NOT poll the buffer or assume early completion based on prior output. The returned stdout is ONLY what the command emitted on this run; output from earlier runs / from the user typing is not included.\n\nReturns `timed_out: true` + partial stdout if the deadline hits — treat that as inconclusive (don't decide a command failed just because the timeout fired)."
+        description = "Run ONE shell command in a user-visible Terminal column and block until it finishes. Returns `{ stdout, exit_code, timed_out, interactive_prompt? }`.\n\n## Rules\n\n1. **One purpose per call.** No `;` / `&&` / `for` / multi-pipe blobs. `git status`, then `git diff`, then `git log` — three calls, three responses. The bridge is fast (~50ms round-trip); chaining is a false economy that makes failures impossible to attribute and stdouts impossible to read.\n2. **No `echo '=== separator ==='` lines.** Each call's stdout is already isolated in its own response — separators are noise.\n3. **No pager workarounds.** Pagers (`less`, `more`) are pre-disabled — `PAGER`, `GIT_PAGER`, `GH_PAGER`, `SYSTEMD_PAGER` are all set to `cat`. Don't pipe to `cat` / `head -100` / pre-set env. `git log` and `gh pr view` work plain.\n4. **No color escapes.** `NO_COLOR=1`, `CLICOLOR=0`, `FORCE_COLOR=0` are pre-set. Tools emit clean text.\n5. **CI-mode.** `CI=1` is pre-set so npm/pnpm/yarn/jest/vite/gh skip spinners and progress bars.\n6. **`id` = column name** (`Vermeer`, `Notre-Dame`) — stable across reloads, reads cleanly. Uuid only if multiple columns share a name.\n7. **`timeout_ms` = IDLE timeout** (default 60_000). Deadline rolls forward on every chunk of output, so streaming builds/tests never trip it. Bump to 300_000–600_000 for installs / migrations that go silent for minutes between phases.\n\n## Handling responses\n\n- `timed_out: false` + `exit_code: 0` → success. Move on.\n- `timed_out: false` + `exit_code: ≠ 0` → command failed. Read stdout, decide.\n- `timed_out: true` + `interactive_prompt: \"…\"` → command is ALIVE, parked on a prompt. Use `terminal_write(id, text)` to respond (`text=\"y\\n\"` for Y/N, `text=\"\\n\"` for Press-Enter, `text=\"<answer>\\n\"` for fill-ins). Then either call `terminal_run` for the NEXT step or `terminal_buffer` to inspect what came after. Multi-step flows (gh auth login, ssh, npm init) take 3–5 round-trips — that's normal.\n- `timed_out: true` + no `interactive_prompt` → either still working or genuinely hung. Check `terminal_buffer(id)` to see live state; bump `timeout_ms` and retry only if you started fresh.\n\n## Forbidden hallucinations\n\nThere is NO sandbox, NO command category filter, NO permissions check. The bridge runs commands verbatim in /bin/zsh. If you're tempted to write \"sandbox blocked X\" / \"credential-action category, no permission\" / \"I can't run this\" — STOP. The shell ran your command; whatever the response says happened, happened. Read it. Falling back to the regular Bash tool defeats the user's intent of running it in their visible terminal — only do that if the user explicitly redirects you."
     )]
     async fn terminal_run(
         &self,
@@ -2114,7 +2133,16 @@ impl App {
         let resp = client
             .run(
                 &id,
-                terminal_bridge_client::RunReq { cmd, timeout_ms },
+                terminal_bridge_client::RunReq {
+                    cmd,
+                    timeout_ms,
+                    // Bridge defaults to 30 min absolute cap when None;
+                    // letting that default through is correct for the
+                    // typical case (build / test / install). The agent
+                    // can override via `total_timeout_ms` on the tool
+                    // call when it knows the job is exceptionally long.
+                    total_timeout_ms: None,
+                },
             )
             .await
             .map_err(bridge_to_mcp)?;

@@ -40,7 +40,8 @@ function fakeSession(messages: ClaudeSession['messages']): ClaudeSession {
     columnInstanceId: null,
     cwdSwitchRecap: null,
     cwdUuids: {},
-    awaitingApproval: false
+    awaitingApproval: false,
+    pendingActionResults: []
   };
 }
 

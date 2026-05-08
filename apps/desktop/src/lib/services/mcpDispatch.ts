@@ -75,6 +75,25 @@ import {
   scrollKindIntoView,
   setActiveWorkbench
 } from '$lib/state/layout.svelte';
+import { notify } from '$lib/state/toaster.svelte';
+
+/** Surface a "the agent tried to do X but Y was wrong" warning when
+ *  an MCP tool call lands in a silent-no-op branch. Without a toast,
+ *  the user has no idea the agent's tool call failed — the only
+ *  signal in the chat is the bare `> *Tool* …` hint, which doesn't
+ *  carry "and it didn't work" semantics. The agent's NEXT turn also
+ *  doesn't see it (these tool dispatches don't go through the chat
+ *  message pipeline), so the agent often charges ahead assuming the
+ *  switch / focus / open succeeded. Toasting at least lets the user
+ *  notice and correct the agent on the next prompt. */
+function warnAgentToolMissed(tool: string, reason: string) {
+  notify({
+    kind: 'info',
+    title: `Agent tool "${tool}" was a no-op`,
+    body: reason,
+    ttlMs: 5000
+  });
+}
 import { sessionsState } from '$lib/state/sessions.svelte';
 import type { PanelInstance, PanelKind } from '$lib/types';
 import type { AgentInternalView } from './mcpAlias';
@@ -366,7 +385,13 @@ export function createMcpDispatcher(ctx: McpDispatchContext) {
       // ──────────────────────────────────────────────────────────
       case 'mcp__app__set_github_column': {
         const inst = ctx.findInstanceByNameOrId('github', str('instance_name'), str('instance_id'));
-        if (!inst) return;
+        if (!inst) {
+          warnAgentToolMissed(
+            'set_github_column',
+            `No GitHub column matched "${str('instance_name') || str('instance_id') || '(unspecified)'}". Add the column first or pass a valid name/id.`
+          );
+          return;
+        }
         const patch: Partial<GithubFilters> = {};
         if ('repo' in input) {
           // Empty string = "clear filter" (= all repos).
@@ -386,7 +411,13 @@ export function createMcpDispatcher(ctx: McpDispatchContext) {
       }
       case 'mcp__app__set_jira_column': {
         const inst = ctx.findInstanceByNameOrId('jira', str('instance_name'), str('instance_id'));
-        if (!inst) return;
+        if (!inst) {
+          warnAgentToolMissed(
+            'set_jira_column',
+            `No Jira column matched "${str('instance_name') || str('instance_id') || '(unspecified)'}". Add the column first or pass a valid name/id.`
+          );
+          return;
+        }
         const patch: Partial<JiraFilters> = {};
         if ('project_key' in input) {
           const p = str('project_key');
@@ -412,7 +443,13 @@ export function createMcpDispatcher(ctx: McpDispatchContext) {
       }
       case 'mcp__app__set_sentry_column': {
         const inst = ctx.findInstanceByNameOrId('sentry', str('instance_name'), str('instance_id'));
-        if (!inst) return;
+        if (!inst) {
+          warnAgentToolMissed(
+            'set_sentry_column',
+            `No Sentry column matched "${str('instance_name') || str('instance_id') || '(unspecified)'}". Add the column first or pass a valid name/id.`
+          );
+          return;
+        }
         const patch: SentryFilterPatch = {};
         if (Array.isArray(input.projects)) {
           patch.projects = input.projects
@@ -450,9 +487,21 @@ export function createMcpDispatcher(ctx: McpDispatchContext) {
         const repoPath = pickDeep(input, REPO_PATH_KEYS);
         const instName = pickDeep(input, INSTANCE_NAME_KEYS);
         const instId = pickDeep(input, INSTANCE_ID_KEYS);
-        if (!repoPath) return;
+        if (!repoPath) {
+          warnAgentToolMissed(
+            'set_editor_repo_path',
+            'Agent did not provide a `repo_path`. Editor was not switched.'
+          );
+          return;
+        }
         const editor = ctx.findInstanceByNameOrId('editor', instName, instId);
-        if (!editor) return;
+        if (!editor) {
+          warnAgentToolMissed(
+            'set_editor_repo_path',
+            `No Editor column matched "${instName || instId || '(unspecified)'}". Repo not switched.`
+          );
+          return;
+        }
         ctx.setView('workbench');
         ctx.setEditorRepoPath(repoPath, editor.id);
         // Linked agents follow. `applySessionCwd` rotates the agent's
@@ -472,14 +521,22 @@ export function createMcpDispatcher(ctx: McpDispatchContext) {
         // Same pickDeep contract as set_editor_repo_path — keep the
         // two in sync so the LLM doesn't need a different schema.
         const repoPath = pickDeep(input, REPO_PATH_KEYS);
-        if (!repoPath) return;
+        if (!repoPath) {
+          warnAgentToolMissed(
+            'set_agent_cwd',
+            'Agent did not provide a `repo_path`. Agent cwd not switched.'
+          );
+          return;
+        }
         const target = str('target').toLowerCase();
         let sessId: string | null = null;
+        let targetLabel = '(self)';
         if (target === 'self') {
           sessId = sessionId;
         } else {
           const instName = pickDeep(input, INSTANCE_NAME_KEYS);
           const instId = pickDeep(input, INSTANCE_ID_KEYS);
+          targetLabel = instName || instId || '(unspecified)';
           // Try claude first, then cursor — same pool from the
           // user's POV.
           const inst = ctx.findInstanceByNameOrId('claude', instName, instId)
@@ -490,7 +547,13 @@ export function createMcpDispatcher(ctx: McpDispatchContext) {
             sessId = sessionsState.activeByInstance[inst.id] ?? null;
           }
         }
-        if (!sessId) return;
+        if (!sessId) {
+          warnAgentToolMissed(
+            'set_agent_cwd',
+            `No agent column matched "${targetLabel}", or it has no active session. Cwd not switched.`
+          );
+          return;
+        }
         applySessionCwd(sessId, repoPath, { breakLink: false });
         return;
       }

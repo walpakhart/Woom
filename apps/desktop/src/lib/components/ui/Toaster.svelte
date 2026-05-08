@@ -12,8 +12,14 @@
     const tick = (now: number) => {
       const dt = now - last;
       last = now;
-      for (const t of toasterState.items) {
-        if (t.ttl === null) continue;
+      // Iterate in REVERSE so `dismissToast` splicing the array
+      // mid-loop doesn't make a forward iterator skip the toast that
+      // shifted into the just-removed slot. With forward iteration
+      // and N expired toasts in one frame, every other one would
+      // survive an extra frame.
+      for (let i = toasterState.items.length - 1; i >= 0; i--) {
+        const t = toasterState.items[i];
+        if (!t || t.ttl === null) continue;
         t.ttl -= dt;
         if (t.ttl <= 0) dismissToast(t.id);
       }

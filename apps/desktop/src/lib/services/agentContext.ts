@@ -167,6 +167,18 @@ export function buildAgentAppContext(callingSessionId: string): string {
             const link = wb.instances.find((i) => i.id === sess.linkedToEditorInstanceId);
             if (link) meta.push(`linked_to_editor=${link.name}`);
           }
+          // Surface the linked terminal so the agent knows which
+          // column to address with terminal_run / terminal_write
+          // WITHOUT calling terminal_list first. The previous
+          // behavior — agent calls terminal_list every turn even
+          // when a link exists — was wasted round-trips.
+          if (sess.linkedTerminalInstanceId) {
+            const term = wb.instances.find((i) => i.id === sess.linkedTerminalInstanceId)
+              ?? layoutState.workbenches
+                .flatMap((w) => w.instances)
+                .find((i) => i.id === sess.linkedTerminalInstanceId);
+            if (term) meta.push(`linked_to_terminal=${term.name}`);
+          }
         }
       }
       const isYou = inst.id === callingInstanceId;

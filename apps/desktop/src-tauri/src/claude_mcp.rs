@@ -12,7 +12,7 @@
 //! path + allowed-tool list. Kept `pub(crate)` (not `pub`) so the
 //! surface stays internal to the desktop binary.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::claude;
 use crate::jira::{JiraCredentials, normalize_workspace};
@@ -188,9 +188,13 @@ impl ToolProfile {
 pub(crate) fn build_mcp_config(
     session_id: &str,
     profile: ToolProfile,
+    ipc_socket: Option<&Path>,
 ) -> Option<(PathBuf, Vec<String>)> {
     let mut servers = serde_json::Map::new();
     let mut allowed: Vec<String> = Vec::new();
+    let ipc_str = ipc_socket
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default();
 
     if let Some(jira) = build_jira_server() {
         servers.insert("jira".into(), jira);
@@ -205,7 +209,7 @@ pub(crate) fn build_mcp_config(
         allowed.push("mcp__jira__list_sprints".into());
     }
 
-    if let Some(gh) = build_github_server() {
+    if let Some(gh) = build_github_server(session_id, &ipc_str) {
         servers.insert("github".into(), gh);
         allowed.push("mcp__github__get_pr".into());
         allowed.push("mcp__github__get_pr_diff".into());
@@ -343,16 +347,23 @@ fn build_jira_server() -> Option<serde_json::Value> {
     }))
 }
 
-fn build_github_server() -> Option<serde_json::Value> {
+fn build_github_server(session_id: &str, ipc_socket: &str) -> Option<serde_json::Value> {
     let token = keychain::get(GITHUB_KEYCHAIN_KEY).ok().flatten()?;
     if token.trim().is_empty() {
         return None;
     }
     let sidecar = find_sidecar("forgehold-github")?;
+    // Plumb the action-IPC socket path + session id so the sidecar's
+    // `propose_*` tools can reach the Tauri shell to BLOCK on user
+    // approval — without these, propose_bash et al. fall back to the
+    // legacy "card created, end turn" stub. Empty socket string is
+    // a sentinel meaning "IPC unavailable" and triggers that fallback.
     Some(serde_json::json!({
         "command": sidecar.to_string_lossy(),
         "env": {
             "GITHUB_TOKEN": token,
+            "FORGEHOLD_IPC_SOCKET": ipc_socket,
+            "FORGEHOLD_SESSION_ID": session_id,
         }
     }))
 }

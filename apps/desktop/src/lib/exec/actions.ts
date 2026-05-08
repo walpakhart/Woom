@@ -13,11 +13,49 @@ import {
   sessionsState,
   updateSession,
   updateAction,
-  removeAction
+  removeAction,
+  enqueuePendingActionResult
 } from '$lib/state/sessions.svelte';
 import { activeInstances } from '$lib/state/layout.svelte';
 import { truncInline } from '$lib/format';
 import type { ClaudeAction, ClaudeSession } from '$lib/types';
+
+/** Deliver an action outcome to its destination.
+ *
+ *  Two paths, picked by whether the card has a `waitId`:
+ *
+ *  1. **Synchronous (waitId set)** — the action card was created in
+ *     response to a sidecar IPC request that's still BLOCKING in the
+ *     sidecar's `propose_*` MCP tool. We invoke `resolve_action_wait`
+ *     so Tauri shoots the resolution back over the Unix socket, the
+ *     sidecar's MCP call returns the summary as the tool result, and
+ *     the agent reacts to it IN THE SAME TURN. No queue, no
+ *     next-turn drain — the agent is still mid-think.
+ *
+ *  2. **Legacy (no waitId)** — fallback for sessions where IPC
+ *     wasn't available (older forge build, socket binding failed,
+ *     etc.). Push to `pendingActionResults`; consumers (UI flush +
+ *     agent drain) deliver on next quiescent point. This is the old
+ *     pre-refactor flow, kept for graceful degradation.
+ *
+ *  Older versions also called `appendSessionMessage` directly here
+ *  which broke mid-stream — see git history. The queue pattern
+ *  fixed that; the IPC path supersedes it for the common case. */
+function recordActionOutcome(
+  sessionId: string,
+  kind: 'commit' | 'pr' | 'bash' | 'switch_cwd',
+  ok: boolean,
+  summary: string,
+  waitId?: string
+) {
+  if (waitId) {
+    void invoke('resolve_action_wait', { waitId, ok, summary }).catch((e) => {
+      console.warn('[action-ipc] resolve failed for', waitId, e);
+    });
+    return;
+  }
+  enqueuePendingActionResult(sessionId, { ok, kind, summary });
+}
 
 /** Fired after an action card runs (success or failure). The caller in
  *  +page.svelte uses this to auto-continue the agent's turn — when an
@@ -62,6 +100,7 @@ export async function executeCommit(
   if (!cwd) {
     const msg = 'No working directory — pick a folder or enable worktree first.';
     updateAction(sessionId, actionId, { status: 'error', result: msg });
+    recordActionOutcome(sessionId, 'commit', false, `commit (${truncInline(action.message, 80)}) skipped: ${msg}`, action.waitId);
     onResolved?.(sessionId, action, { ok: false, summary: msg });
     return;
   }
@@ -76,15 +115,16 @@ export async function executeCommit(
     const cmd = action.push ? 'git_commit_and_push' : 'git_commit';
     const res = await invoke<string>(cmd, { repo: cwd, message: fullMsg });
     updateAction(sessionId, actionId, { status: 'done', result: res });
-    onResolved?.(sessionId, action, {
-      ok: true,
-      summary: `Commit landed (${action.push ? 'pushed' : 'local'}): ${action.message}\n${res}`
-    });
+    const okSummary = `Commit landed (${action.push ? 'pushed' : 'local'}): ${action.message}\n${res}`;
+    recordActionOutcome(sessionId, 'commit', true, okSummary, action.waitId);
+    onResolved?.(sessionId, action, { ok: true, summary: okSummary });
     setTimeout(() => removeAction(sessionId, actionId), 4000);
   } catch (e) {
     const msg = asMessage(e);
     updateAction(sessionId, actionId, { status: 'error', result: msg });
-    onResolved?.(sessionId, action, { ok: false, summary: `Commit failed: ${msg}` });
+    const failSummary = `Commit failed (${truncInline(action.message, 80)}): ${msg}`;
+    recordActionOutcome(sessionId, 'commit', false, failSummary, action.waitId);
+    onResolved?.(sessionId, action, { ok: false, summary: failSummary });
   }
 }
 
@@ -101,6 +141,7 @@ export async function executeBash(
   if (!cwd) {
     const msg = 'No working directory — pick a folder first.';
     updateAction(sessionId, actionId, { status: 'error', result: msg });
+    recordActionOutcome(sessionId, 'bash', false, `bash skipped: ${msg}`, action.waitId);
     onResolved?.(sessionId, action, { ok: false, summary: msg });
     return;
   }
@@ -122,17 +163,24 @@ export async function executeBash(
       sessionId,
       `\n\n\`$ ${truncInline(action.command, 400)}\`${exitNote}\n\n\`\`\`\n${truncInline(output, 4000)}\n\`\`\`\n\n`
     );
-    onResolved?.(sessionId, action, {
-      ok: res.ok,
-      summary: `bash \`${truncInline(action.command, 200)}\` exited ${res.code}.\nOutput:\n${truncInline(output, 2000)}`
-    });
+    const summary = `bash \`${truncInline(action.command, 200)}\` exited ${res.code}.\nOutput:\n${truncInline(output, 2000)}`;
+    // The bash output already streams into the assistant transcript
+    // above (`appendToTranscript`), so the agent sees it on its own
+    // turn-end. We still emit a system-message marker so the agent
+    // can spot the exit code when scanning the transcript on later
+    // turns — without it the inline output is just text and the
+    // agent has to infer success from the absence of "exited 1".
+    recordActionOutcome(sessionId, 'bash', res.ok, summary, action.waitId);
+    onResolved?.(sessionId, action, { ok: res.ok, summary });
     if (res.ok) {
       setTimeout(() => removeAction(sessionId, actionId), 4000);
     }
   } catch (e) {
     const msg = asMessage(e);
     updateAction(sessionId, actionId, { status: 'error', result: msg });
-    onResolved?.(sessionId, action, { ok: false, summary: `bash failed to start: ${msg}` });
+    const failSummary = `bash failed to start (\`${truncInline(action.command, 80)}\`): ${msg}`;
+    recordActionOutcome(sessionId, 'bash', false, failSummary, action.waitId);
+    onResolved?.(sessionId, action, { ok: false, summary: failSummary });
   }
 }
 
@@ -150,6 +198,7 @@ export async function executeSwitchCwd(
     if (!exists) {
       const msg = `Path does not exist: ${action.path}`;
       updateAction(sessionId, actionId, { status: 'error', result: msg });
+      recordActionOutcome(sessionId, 'switch_cwd', false, `cwd switch failed: ${msg}`, action.waitId);
       onResolved?.(sessionId, action, { ok: false, summary: msg });
       return;
     }
@@ -160,15 +209,16 @@ export async function executeSwitchCwd(
       worktreeRepo: null
     });
     updateAction(sessionId, actionId, { status: 'done', result: `Switched to ${action.path}` });
-    onResolved?.(sessionId, action, {
-      ok: true,
-      summary: `cwd switched to ${action.path}.`
-    });
+    const okSummary = `cwd switched to ${action.path}.`;
+    recordActionOutcome(sessionId, 'switch_cwd', true, okSummary, action.waitId);
+    onResolved?.(sessionId, action, { ok: true, summary: okSummary });
     setTimeout(() => removeAction(sessionId, actionId), 3000);
   } catch (e) {
     const msg = asMessage(e);
     updateAction(sessionId, actionId, { status: 'error', result: msg });
-    onResolved?.(sessionId, action, { ok: false, summary: `cwd switch failed: ${msg}` });
+    const failSummary = `cwd switch failed (${action.path}): ${msg}`;
+    recordActionOutcome(sessionId, 'switch_cwd', false, failSummary, action.waitId);
+    onResolved?.(sessionId, action, { ok: false, summary: failSummary });
   }
 }
 
@@ -184,6 +234,7 @@ export async function executePr(
   if (!cwd) {
     const msg = 'No working directory — pick a folder first.';
     updateAction(sessionId, actionId, { status: 'error', result: msg });
+    recordActionOutcome(sessionId, 'pr', false, `PR creation skipped: ${msg}`, action.waitId);
     onResolved?.(sessionId, action, { ok: false, summary: msg });
     return;
   }
@@ -197,10 +248,9 @@ export async function executePr(
       base: action.base.trim() || null
     });
     updateAction(sessionId, actionId, { status: 'done', result: url });
-    onResolved?.(sessionId, action, {
-      ok: true,
-      summary: `PR opened: ${action.title}\n${url}`
-    });
+    const okSummary = `PR opened: ${action.title}\n${url}`;
+    recordActionOutcome(sessionId, 'pr', true, okSummary, action.waitId);
+    onResolved?.(sessionId, action, { ok: true, summary: okSummary });
     // Auto-dismiss successful PR cards too — without this, a chained
     // commit→PR continuation would re-include the done PR card in
     // every subsequent recap (recentActionSummaries filters by status,
@@ -211,7 +261,9 @@ export async function executePr(
   } catch (e) {
     const msg = asMessage(e);
     updateAction(sessionId, actionId, { status: 'error', result: msg });
-    onResolved?.(sessionId, action, { ok: false, summary: `PR creation failed: ${msg}` });
+    const failSummary = `PR creation failed (${truncInline(action.title, 80)}): ${msg}`;
+    recordActionOutcome(sessionId, 'pr', false, failSummary, action.waitId);
+    onResolved?.(sessionId, action, { ok: false, summary: failSummary });
   }
 }
 

@@ -213,6 +213,91 @@ struct ProposePrParams {
     note: Option<String>,
 }
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct EditPrParams {
+    owner: String,
+    repo: String,
+    number: u64,
+    /// New title. Omit to leave unchanged.
+    #[serde(default)]
+    title: Option<String>,
+    /// New body (markdown). Omit to leave unchanged. Pass an empty
+    /// string to clear the body.
+    #[serde(default)]
+    body: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct ReviewersParams {
+    owner: String,
+    repo: String,
+    number: u64,
+    /// User logins to add or remove (without leading @).
+    #[serde(default)]
+    user_logins: Option<Vec<String>>,
+    /// Team slugs (without org prefix). Common case is empty.
+    #[serde(default)]
+    team_slugs: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct LabelsParams {
+    owner: String,
+    repo: String,
+    /// Issue OR PR number (GitHub treats them the same on labels).
+    number: u64,
+    /// Label names. For add: case-sensitive, exact match required;
+    /// non-existent labels are auto-created on add. For remove:
+    /// missing labels are silently skipped.
+    labels: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct AssigneesParams {
+    owner: String,
+    repo: String,
+    number: u64,
+    /// User logins (no leading @). Both PRs and issues accepted.
+    logins: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct SetPrDraftParams {
+    owner: String,
+    repo: String,
+    number: u64,
+    /// `true` → convert to draft. `false` → mark ready for review.
+    draft: bool,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct SetPrStateParams {
+    owner: String,
+    repo: String,
+    number: u64,
+    /// `open` to reopen a closed PR/issue, `closed` to close.
+    state: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct ListCheckRunsParams {
+    owner: String,
+    repo: String,
+    /// Branch name, tag, or commit SHA. For PR checks pass the PR's
+    /// head SHA (visible on `get_pr` as `head_sha`).
+    #[serde(rename = "ref", alias = "ref_name", alias = "sha")]
+    ref_name: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct WorkflowRunParams {
+    owner: String,
+    repo: String,
+    /// The workflow run id (NOT the workflow id itself). Visible on
+    /// `list_workflow_runs` results.
+    run_id: u64,
+}
+
 #[tool_router]
 impl Gh {
     fn new(creds: GhCreds) -> anyhow::Result<Self> {
@@ -400,67 +485,65 @@ impl Gh {
     }
 
     #[tool(
-        description = "Propose a commit for the user to review. Use this after you've finished making code changes and want to suggest a commit. Does NOT perform the commit — it surfaces an editable commit card in the Forgehold UI so the user can review, tweak the message, and approve with one click. Only call this when the user asked you to commit."
+        description = "Propose a commit. Surfaces an editable approval card in Forgehold and BLOCKS until the user approves (commit + push runs) or dismisses. The tool's response is the actual outcome (commit hash, push status, or error) — react to it directly in this same turn."
     )]
     async fn propose_commit(
         &self,
         Parameters(ProposeCommitParams { message, body, push, note }): Parameters<ProposeCommitParams>,
     ) -> Result<CallToolResult, ErrorData> {
         let push_s = push.unwrap_or(true);
-        let summary = format!(
-            "Commit proposal queued for user approval.\n\n\
-             subject: {}\n\
-             push:    {}\n\
-             body:    {}\n\
-             note:    {}\n\n\
-             The user will see an editable card with [Commit & Push] / [Dismiss] in the Forgehold chat. \
-             Do not call git-write tools yourself — wait for the user.",
+        let params = serde_json::json!({
+            "message": message,
+            "body": body,
+            "push": push_s,
+            "note": note,
+        });
+        let fallback = format!(
+            "Commit proposal queued.\nsubject: {}\npush: {}\nbody: {}\nnote: {}",
             message,
             push_s,
             body.as_deref().unwrap_or("(none)"),
             note.as_deref().unwrap_or("(none)"),
         );
-        Ok(CallToolResult::success(vec![Content::text(summary)]))
+        run_or_fallback("commit", params, fallback).await
     }
 
     #[tool(
-        description = "Propose a shell command for the user to approve. Use this for ANY command that changes state: `git checkout/switch/merge/push/pull/reset/rebase`, `rm`, `mv`, `cp`, `npm install`, `yarn`, database migrations, deployment scripts, etc. Does NOT run the command — the user sees an approval card with [Run] / [Dismiss] buttons and can edit the command first. Read-only commands like `git status`, `ls`, `cat`, `grep` should use the regular Bash tool; this one is only for mutations."
+        description = "Propose a state-changing shell command (`git switch/merge/push/pull/reset/rebase`, `rm`, `mv`, `npm install`, migrations, deploys, etc.). Surfaces an editable approval card in Forgehold and BLOCKS until the user approves (command runs) or dismisses. The tool's response is the actual stdout/stderr + exit code — read it and continue this same turn. Read-only commands (git status, ls, cat, grep) use the regular Bash tool, not this one."
     )]
     async fn propose_bash(
         &self,
         Parameters(ProposeBashParams { command, reason }): Parameters<ProposeBashParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        let summary = format!(
-            "Bash command queued for user approval.\n\n\
-             command: {}\n\
-             reason:  {}\n\n\
-             The user will see an editable [Run] / [Dismiss] card in the Forgehold chat. \
-             When the user approves and the command finishes, they'll paste the output \
-             back to you so you can continue. Do not call other state-changing tools \
-             until they respond.",
+        let params = serde_json::json!({
+            "command": command,
+            "reason": reason,
+        });
+        let fallback = format!(
+            "Bash command queued.\ncommand: {}\nreason: {}",
             command,
             reason.as_deref().unwrap_or("(none)"),
         );
-        Ok(CallToolResult::success(vec![Content::text(summary)]))
+        run_or_fallback("bash", params, fallback).await
     }
 
     #[tool(
-        description = "Propose switching the current Claude session's working directory to a different local path. Use when the user asks you to work on a different repo or folder. Does NOT switch — the user sees an approval card. Only call when the user asked you to switch."
+        description = "Propose switching the current session's working directory. Surfaces an approval card in Forgehold and BLOCKS until the user approves (cwd switches) or dismisses. The tool's response is the actual outcome — react and continue in this same turn."
     )]
     async fn propose_switch_cwd(
         &self,
         Parameters(ProposeSwitchCwdParams { path, reason }): Parameters<ProposeSwitchCwdParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        let summary = format!(
-            "Working-directory switch proposed for user approval.\n\n\
-             path:   {}\n\
-             reason: {}\n\n\
-             The user will see an approval card in the Forgehold chat. Do not call \
-             other tools until they accept or dismiss.",
+        let params = serde_json::json!({
+            "path": path,
+            "reason": reason,
+        });
+        let fallback = format!(
+            "cwd switch proposal queued.\npath: {}\nreason: {}",
             path,
             reason.as_deref().unwrap_or("(none)"),
         );
-        Ok(CallToolResult::success(vec![Content::text(summary)]))
+        run_or_fallback("switch_cwd", params, fallback).await
     }
 
     #[tool(
@@ -515,22 +598,229 @@ impl Gh {
         &self,
         Parameters(ProposePrParams { title, body, base, draft, note }): Parameters<ProposePrParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        let summary = format!(
-            "PR proposal queued for user approval.\n\n\
-             title: {}\n\
-             base:  {}\n\
-             draft: {}\n\
-             body:  {}\n\
-             note:  {}\n\n\
-             The user will see an editable card with [Create PR] / [Dismiss] in the Forgehold chat. \
-             Wait for the user before doing anything else.",
+        let params = serde_json::json!({
+            "title": title,
+            "body": body,
+            "base": base,
+            "draft": draft.unwrap_or(false),
+            "note": note,
+        });
+        let fallback = format!(
+            "PR proposal queued.\ntitle: {}\nbase: {}\ndraft: {}",
             title,
             base.as_deref().unwrap_or("(repo default)"),
             draft.unwrap_or(false),
-            body.as_deref().unwrap_or("(none)"),
-            note.as_deref().unwrap_or("(none)"),
         );
-        Ok(CallToolResult::success(vec![Content::text(summary)]))
+        run_or_fallback("pr", params, fallback).await
+    }
+
+    #[tool(
+        description = "Edit an existing PR's title and/or body in place. Either field can be omitted to leave it unchanged. Use when the user asks to rename a PR or rewrite its description (e.g. \"update PR #1234 to say Part 1 + Part 2\"). For closing/reopening, use set_pr_state instead. For draft toggling, use set_pr_draft."
+    )]
+    async fn edit_pr(
+        &self,
+        Parameters(EditPrParams { owner, repo, number, title, body }): Parameters<EditPrParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        if title.is_none() && body.is_none() {
+            return Err(ErrorData::invalid_params(
+                "edit_pr: at least one of `title` or `body` must be provided".to_string(),
+                None,
+            ));
+        }
+        match self.do_edit_pr(&owner, &repo, number, title.as_deref(), body.as_deref()).await {
+            Ok(t) => Ok(CallToolResult::success(vec![Content::text(t)])),
+            Err(e) => Err(ErrorData::internal_error(e.to_string(), None)),
+        }
+    }
+
+    #[tool(
+        description = "Add reviewers to a PR. Pass `user_logins` (array of GitHub usernames, no leading @) and/or `team_slugs` (array of team slugs without the org prefix). Additive — existing reviewers stay. GitHub silently de-dupes already-requested reviewers."
+    )]
+    async fn request_reviewers(
+        &self,
+        Parameters(ReviewersParams { owner, repo, number, user_logins, team_slugs }): Parameters<ReviewersParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let users = user_logins.unwrap_or_default();
+        let teams = team_slugs.unwrap_or_default();
+        if users.is_empty() && teams.is_empty() {
+            return Err(ErrorData::invalid_params(
+                "request_reviewers: provide at least one of `user_logins` or `team_slugs`".to_string(),
+                None,
+            ));
+        }
+        match self.do_request_reviewers(&owner, &repo, number, &users, &teams).await {
+            Ok(t) => Ok(CallToolResult::success(vec![Content::text(t)])),
+            Err(e) => Err(ErrorData::internal_error(e.to_string(), None)),
+        }
+    }
+
+    #[tool(
+        description = "Remove reviewers from a PR. Mirror of request_reviewers — same `user_logins` / `team_slugs` shape."
+    )]
+    async fn remove_reviewers(
+        &self,
+        Parameters(ReviewersParams { owner, repo, number, user_logins, team_slugs }): Parameters<ReviewersParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let users = user_logins.unwrap_or_default();
+        let teams = team_slugs.unwrap_or_default();
+        if users.is_empty() && teams.is_empty() {
+            return Err(ErrorData::invalid_params(
+                "remove_reviewers: provide at least one of `user_logins` or `team_slugs`".to_string(),
+                None,
+            ));
+        }
+        match self.do_remove_reviewers(&owner, &repo, number, &users, &teams).await {
+            Ok(t) => Ok(CallToolResult::success(vec![Content::text(t)])),
+            Err(e) => Err(ErrorData::internal_error(e.to_string(), None)),
+        }
+    }
+
+    #[tool(
+        description = "Add labels to an issue or PR. Labels are auto-created if they don't exist (GitHub's default). Additive — existing labels stay. Pass `labels: [\"bug\", \"high-priority\"]`. PRs and issues use the same numbering for labels."
+    )]
+    async fn add_labels(
+        &self,
+        Parameters(LabelsParams { owner, repo, number, labels }): Parameters<LabelsParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        if labels.is_empty() {
+            return Err(ErrorData::invalid_params(
+                "add_labels: `labels` must be a non-empty array".to_string(),
+                None,
+            ));
+        }
+        match self.do_add_labels(&owner, &repo, number, &labels).await {
+            Ok(t) => Ok(CallToolResult::success(vec![Content::text(t)])),
+            Err(e) => Err(ErrorData::internal_error(e.to_string(), None)),
+        }
+    }
+
+    #[tool(
+        description = "Remove labels from an issue or PR. Per-label loop — labels not present on the issue are silently skipped (no error). Returns the labels that were actually removed."
+    )]
+    async fn remove_labels(
+        &self,
+        Parameters(LabelsParams { owner, repo, number, labels }): Parameters<LabelsParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        if labels.is_empty() {
+            return Err(ErrorData::invalid_params(
+                "remove_labels: `labels` must be a non-empty array".to_string(),
+                None,
+            ));
+        }
+        match self.do_remove_labels(&owner, &repo, number, &labels).await {
+            Ok(t) => Ok(CallToolResult::success(vec![Content::text(t)])),
+            Err(e) => Err(ErrorData::internal_error(e.to_string(), None)),
+        }
+    }
+
+    #[tool(
+        description = "Add assignees (users responsible for the issue/PR) by login. Same numbering applies to PRs. Additive — existing assignees stay. GitHub silently ignores users that already are assignees."
+    )]
+    async fn add_assignees(
+        &self,
+        Parameters(AssigneesParams { owner, repo, number, logins }): Parameters<AssigneesParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        if logins.is_empty() {
+            return Err(ErrorData::invalid_params(
+                "add_assignees: `logins` must be a non-empty array".to_string(),
+                None,
+            ));
+        }
+        match self.do_add_assignees(&owner, &repo, number, &logins).await {
+            Ok(t) => Ok(CallToolResult::success(vec![Content::text(t)])),
+            Err(e) => Err(ErrorData::internal_error(e.to_string(), None)),
+        }
+    }
+
+    #[tool(
+        description = "Remove assignees from an issue/PR. Mirror of add_assignees."
+    )]
+    async fn remove_assignees(
+        &self,
+        Parameters(AssigneesParams { owner, repo, number, logins }): Parameters<AssigneesParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        if logins.is_empty() {
+            return Err(ErrorData::invalid_params(
+                "remove_assignees: `logins` must be a non-empty array".to_string(),
+                None,
+            ));
+        }
+        match self.do_remove_assignees(&owner, &repo, number, &logins).await {
+            Ok(t) => Ok(CallToolResult::success(vec![Content::text(t)])),
+            Err(e) => Err(ErrorData::internal_error(e.to_string(), None)),
+        }
+    }
+
+    #[tool(
+        description = "Convert a PR to draft (`draft: true`) or mark it ready for review (`draft: false`). Implemented via GitHub's GraphQL mutation since REST doesn't expose draft toggling."
+    )]
+    async fn set_pr_draft(
+        &self,
+        Parameters(SetPrDraftParams { owner, repo, number, draft }): Parameters<SetPrDraftParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        match self.do_set_pr_draft(&owner, &repo, number, draft).await {
+            Ok(t) => Ok(CallToolResult::success(vec![Content::text(t)])),
+            Err(e) => Err(ErrorData::internal_error(e.to_string(), None)),
+        }
+    }
+
+    #[tool(
+        description = "Open or close a PR/issue. `state: \"open\"` reopens, `state: \"closed\"` closes. For PRs, closing without merging discards them; use merge_pr if the intent is to merge."
+    )]
+    async fn set_pr_state(
+        &self,
+        Parameters(SetPrStateParams { owner, repo, number, state }): Parameters<SetPrStateParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let s = state.trim().to_ascii_lowercase();
+        if s != "open" && s != "closed" {
+            return Err(ErrorData::invalid_params(
+                format!("set_pr_state: `state` must be \"open\" or \"closed\", got \"{state}\""),
+                None,
+            ));
+        }
+        match self.do_set_pr_state(&owner, &repo, number, &s).await {
+            Ok(t) => Ok(CallToolResult::success(vec![Content::text(t)])),
+            Err(e) => Err(ErrorData::internal_error(e.to_string(), None)),
+        }
+    }
+
+    #[tool(
+        description = "List CI/check runs for a commit ref (typically a PR's head SHA from get_pr). Returns each check's name, status (queued/in_progress/completed), conclusion (success/failure/etc), and details URL. Use to answer \"is the PR green?\" without paging through GitHub's UI."
+    )]
+    async fn list_check_runs(
+        &self,
+        Parameters(ListCheckRunsParams { owner, repo, ref_name }): Parameters<ListCheckRunsParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        match self.do_list_check_runs(&owner, &repo, &ref_name).await {
+            Ok(t) => Ok(CallToolResult::success(vec![Content::text(t)])),
+            Err(e) => Err(ErrorData::internal_error(e.to_string(), None)),
+        }
+    }
+
+    #[tool(
+        description = "Re-run a GitHub Actions workflow run by id. Triggers a fresh run with the same inputs; doesn't cancel the old one. Useful for flaky CI."
+    )]
+    async fn rerun_workflow(
+        &self,
+        Parameters(WorkflowRunParams { owner, repo, run_id }): Parameters<WorkflowRunParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        match self.do_rerun_workflow(&owner, &repo, run_id).await {
+            Ok(t) => Ok(CallToolResult::success(vec![Content::text(t)])),
+            Err(e) => Err(ErrorData::internal_error(e.to_string(), None)),
+        }
+    }
+
+    #[tool(
+        description = "Cancel an in-progress GitHub Actions workflow run by id. No-op if the run already finished."
+    )]
+    async fn cancel_workflow(
+        &self,
+        Parameters(WorkflowRunParams { owner, repo, run_id }): Parameters<WorkflowRunParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        match self.do_cancel_workflow(&owner, &repo, run_id).await {
+            Ok(t) => Ok(CallToolResult::success(vec![Content::text(t)])),
+            Err(e) => Err(ErrorData::internal_error(e.to_string(), None)),
+        }
     }
 }
 
@@ -541,10 +831,11 @@ impl ServerHandler for Gh {
         info.capabilities = ServerCapabilities::builder().enable_tools().build();
         info.instructions = Some(
             "Access GitHub and propose local actions on behalf of the user.\n\n\
-             READ: get_pr, get_pr_diff, get_pr_files, get_pr_comments, list_tree, get_file, list_commits, list_releases, list_workflow_runs, get_readme.\n\n\
-             WRITE (needs user confirmation in their chat client): add_comment, submit_review, merge_pr.\n\n\
+             READ: get_pr, get_pr_diff, get_pr_files, get_pr_comments, list_tree, get_file, list_commits, list_releases, list_workflow_runs, get_readme, list_check_runs.\n\n\
+             WRITE (executes immediately — user has already given consent by asking): add_comment, submit_review, merge_pr, edit_pr (title/body), request_reviewers, remove_reviewers, add_labels, remove_labels, add_assignees, remove_assignees, set_pr_draft, set_pr_state (open/closed), rerun_workflow, cancel_workflow.\n\n\
              PROPOSE (queues an approval card in Forgehold UI, does nothing itself — use when the user asked you to commit/open-pr/switch-repo/run-a-command): propose_commit, propose_pr, propose_switch_cwd, propose_bash.\n\n\
-             RULE: for any command that modifies state (git checkout/switch/merge/push/pull/reset/rebase, rm, mv, npm install, migrations, deploys, etc.) call propose_bash instead of the regular Bash tool. Read-only commands (git status, ls, cat, grep, find, rg) can use Bash directly. After proposing, STOP and wait for the user's approval before doing anything else."
+             PR-EDIT GUIDE: rename PR → edit_pr; rewrite description → edit_pr; close/reopen → set_pr_state; convert to draft / mark ready → set_pr_draft; add CODEOWNERS / specific reviewers → request_reviewers. The agent should NOT push the user back to the GitHub UI for these — they're all wired here.\n\n\
+             RULE: for any LOCAL command that modifies state (git switch/merge/push/pull/reset/rebase, rm, mv, npm install, migrations, deploys, etc.) call propose_bash instead of the regular Bash tool. Read-only commands (git status, ls, cat, grep, find, rg) can use Bash directly. propose_* calls are SYNCHRONOUS — they BLOCK until the user resolves the card and the action runs. The tool's response IS the actual outcome (commit hash, bash output, PR url, error stderr). React to the response in the SAME TURN — chain follow-up propose_* calls or finish, the agent's turn is fully under your control."
                 .to_string(),
         );
         info
@@ -1114,6 +1405,414 @@ impl Gh {
         Ok(format!("PR #{} merged={} (sha: {})", number, merged, sha))
     }
 
+    async fn do_edit_pr(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+        title: Option<&str>,
+        body: Option<&str>,
+    ) -> anyhow::Result<String> {
+        let url = format!("{API_BASE}/repos/{owner}/{repo}/pulls/{number}");
+        let mut payload = serde_json::Map::new();
+        if let Some(t) = title {
+            payload.insert("title".into(), serde_json::Value::String(t.to_string()));
+        }
+        if let Some(b) = body {
+            payload.insert("body".into(), serde_json::Value::String(b.to_string()));
+        }
+        let resp = self
+            .http
+            .patch(&url)
+            .bearer_auth(&self.creds.token)
+            .header("Accept", "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .json(&serde_json::Value::Object(payload))
+            .send()
+            .await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body_text = resp.text().await.unwrap_or_default();
+            anyhow::bail!("GitHub {} on {}: {}", status, url, truncate(&body_text, 500));
+        }
+        let v: serde_json::Value = resp.json().await?;
+        let html_url = v.get("html_url").and_then(|x| x.as_str()).unwrap_or("");
+        let mut changed = Vec::new();
+        if title.is_some() { changed.push("title"); }
+        if body.is_some() { changed.push("body"); }
+        Ok(format!("PR #{} updated ({}): {}", number, changed.join(" + "), html_url))
+    }
+
+    async fn do_request_reviewers(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+        users: &[String],
+        teams: &[String],
+    ) -> anyhow::Result<String> {
+        let url = format!(
+            "{API_BASE}/repos/{owner}/{repo}/pulls/{number}/requested_reviewers"
+        );
+        let resp = self
+            .http
+            .post(&url)
+            .bearer_auth(&self.creds.token)
+            .header("Accept", "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .json(&serde_json::json!({
+                "reviewers": users,
+                "team_reviewers": teams,
+            }))
+            .send()
+            .await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body_text = resp.text().await.unwrap_or_default();
+            anyhow::bail!("GitHub {} on {}: {}", status, url, truncate(&body_text, 500));
+        }
+        Ok(format!(
+            "Requested reviewers on PR #{}: users={:?}, teams={:?}",
+            number, users, teams
+        ))
+    }
+
+    async fn do_remove_reviewers(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+        users: &[String],
+        teams: &[String],
+    ) -> anyhow::Result<String> {
+        let url = format!(
+            "{API_BASE}/repos/{owner}/{repo}/pulls/{number}/requested_reviewers"
+        );
+        let resp = self
+            .http
+            .delete(&url)
+            .bearer_auth(&self.creds.token)
+            .header("Accept", "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .json(&serde_json::json!({
+                "reviewers": users,
+                "team_reviewers": teams,
+            }))
+            .send()
+            .await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body_text = resp.text().await.unwrap_or_default();
+            anyhow::bail!("GitHub {} on {}: {}", status, url, truncate(&body_text, 500));
+        }
+        Ok(format!(
+            "Removed reviewers from PR #{}: users={:?}, teams={:?}",
+            number, users, teams
+        ))
+    }
+
+    async fn do_add_labels(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+        labels: &[String],
+    ) -> anyhow::Result<String> {
+        let url = format!("{API_BASE}/repos/{owner}/{repo}/issues/{number}/labels");
+        let resp = self
+            .http
+            .post(&url)
+            .bearer_auth(&self.creds.token)
+            .header("Accept", "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .json(&serde_json::json!({ "labels": labels }))
+            .send()
+            .await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body_text = resp.text().await.unwrap_or_default();
+            anyhow::bail!("GitHub {} on {}: {}", status, url, truncate(&body_text, 500));
+        }
+        Ok(format!("Added labels to #{}: {:?}", number, labels))
+    }
+
+    async fn do_remove_labels(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+        labels: &[String],
+    ) -> anyhow::Result<String> {
+        let mut removed = Vec::new();
+        let mut skipped = Vec::new();
+        for label in labels {
+            let enc = urlencoding::encode(label);
+            let url = format!(
+                "{API_BASE}/repos/{owner}/{repo}/issues/{number}/labels/{enc}"
+            );
+            let resp = self
+                .http
+                .delete(&url)
+                .bearer_auth(&self.creds.token)
+                .header("Accept", "application/vnd.github+json")
+                .header("X-GitHub-Api-Version", "2022-11-28")
+                .send()
+                .await?;
+            let status = resp.status();
+            if status == reqwest::StatusCode::NOT_FOUND {
+                // Label not present on this issue — fine, just skip.
+                skipped.push(label.clone());
+                continue;
+            }
+            if !status.is_success() {
+                let body_text = resp.text().await.unwrap_or_default();
+                anyhow::bail!("GitHub {} on {}: {}", status, url, truncate(&body_text, 500));
+            }
+            removed.push(label.clone());
+        }
+        Ok(format!(
+            "Removed labels from #{}: {:?}{}",
+            number,
+            removed,
+            if skipped.is_empty() {
+                String::new()
+            } else {
+                format!(" (already absent: {:?})", skipped)
+            }
+        ))
+    }
+
+    async fn do_add_assignees(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+        logins: &[String],
+    ) -> anyhow::Result<String> {
+        let url = format!("{API_BASE}/repos/{owner}/{repo}/issues/{number}/assignees");
+        let resp = self
+            .http
+            .post(&url)
+            .bearer_auth(&self.creds.token)
+            .header("Accept", "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .json(&serde_json::json!({ "assignees": logins }))
+            .send()
+            .await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body_text = resp.text().await.unwrap_or_default();
+            anyhow::bail!("GitHub {} on {}: {}", status, url, truncate(&body_text, 500));
+        }
+        Ok(format!("Added assignees on #{}: {:?}", number, logins))
+    }
+
+    async fn do_remove_assignees(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+        logins: &[String],
+    ) -> anyhow::Result<String> {
+        let url = format!("{API_BASE}/repos/{owner}/{repo}/issues/{number}/assignees");
+        let resp = self
+            .http
+            .delete(&url)
+            .bearer_auth(&self.creds.token)
+            .header("Accept", "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .json(&serde_json::json!({ "assignees": logins }))
+            .send()
+            .await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body_text = resp.text().await.unwrap_or_default();
+            anyhow::bail!("GitHub {} on {}: {}", status, url, truncate(&body_text, 500));
+        }
+        Ok(format!("Removed assignees from #{}: {:?}", number, logins))
+    }
+
+    async fn do_set_pr_draft(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+        draft: bool,
+    ) -> anyhow::Result<String> {
+        // Step 1: REST → fetch PR's `node_id` (GraphQL global id).
+        let pr_url = format!("{API_BASE}/repos/{owner}/{repo}/pulls/{number}");
+        let pr_resp = self.req(&pr_url).send().await?;
+        let pr_status = pr_resp.status();
+        if !pr_status.is_success() {
+            let body = pr_resp.text().await.unwrap_or_default();
+            anyhow::bail!("GitHub {} on {}: {}", pr_status, pr_url, truncate(&body, 500));
+        }
+        let pr_v: serde_json::Value = pr_resp.json().await?;
+        let node_id = pr_v
+            .get("node_id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("missing node_id on PR fetch"))?;
+
+        // Step 2: GraphQL mutation, picked by toggle direction.
+        let mutation = if draft {
+            "mutation($id:ID!) { convertPullRequestToDraft(input:{pullRequestId:$id}) { pullRequest { id isDraft } } }"
+        } else {
+            "mutation($id:ID!) { markPullRequestReadyForReview(input:{pullRequestId:$id}) { pullRequest { id isDraft } } }"
+        };
+        let gql_url = format!("{API_BASE}/graphql");
+        let resp = self
+            .http
+            .post(&gql_url)
+            .bearer_auth(&self.creds.token)
+            .header("Accept", "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .json(&serde_json::json!({
+                "query": mutation,
+                "variables": { "id": node_id },
+            }))
+            .send()
+            .await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body_text = resp.text().await.unwrap_or_default();
+            anyhow::bail!("GitHub {} on {}: {}", status, gql_url, truncate(&body_text, 500));
+        }
+        let v: serde_json::Value = resp.json().await?;
+        if let Some(errors) = v.get("errors").and_then(|e| e.as_array()) {
+            if !errors.is_empty() {
+                let msg = errors
+                    .iter()
+                    .filter_map(|e| e.get("message").and_then(|m| m.as_str()))
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                anyhow::bail!("GraphQL mutation failed: {msg}");
+            }
+        }
+        Ok(format!(
+            "PR #{} set to {}",
+            number,
+            if draft { "draft" } else { "ready for review" }
+        ))
+    }
+
+    async fn do_set_pr_state(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+        state: &str,
+    ) -> anyhow::Result<String> {
+        // PRs and issues share the /issues endpoint for state changes.
+        let url = format!("{API_BASE}/repos/{owner}/{repo}/issues/{number}");
+        let resp = self
+            .http
+            .patch(&url)
+            .bearer_auth(&self.creds.token)
+            .header("Accept", "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .json(&serde_json::json!({ "state": state }))
+            .send()
+            .await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body_text = resp.text().await.unwrap_or_default();
+            anyhow::bail!("GitHub {} on {}: {}", status, url, truncate(&body_text, 500));
+        }
+        Ok(format!("#{} state set to {}", number, state))
+    }
+
+    async fn do_list_check_runs(
+        &self,
+        owner: &str,
+        repo: &str,
+        ref_name: &str,
+    ) -> anyhow::Result<String> {
+        let enc = urlencoding::encode(ref_name);
+        let url = format!(
+            "{API_BASE}/repos/{owner}/{repo}/commits/{enc}/check-runs?per_page=100"
+        );
+        let resp = self.req(&url).send().await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body_text = resp.text().await.unwrap_or_default();
+            anyhow::bail!("GitHub {} on {}: {}", status, url, truncate(&body_text, 500));
+        }
+        let v: serde_json::Value = resp.json().await?;
+        let runs = v
+            .get("check_runs")
+            .and_then(|x| x.as_array())
+            .cloned()
+            .unwrap_or_default();
+        if runs.is_empty() {
+            return Ok(format!("No check runs found for {}/{}@{}.", owner, repo, ref_name));
+        }
+        let mut lines = Vec::with_capacity(runs.len() + 1);
+        lines.push(format!("Check runs for {}/{}@{} ({} total):", owner, repo, ref_name, runs.len()));
+        for r in runs.iter().take(50) {
+            let name = r.get("name").and_then(|x| x.as_str()).unwrap_or("?");
+            let st = r.get("status").and_then(|x| x.as_str()).unwrap_or("?");
+            let conc = r.get("conclusion").and_then(|x| x.as_str()).unwrap_or("");
+            let url = r.get("details_url").and_then(|x| x.as_str()).unwrap_or("");
+            lines.push(format!(
+                "- [{}{}] {} — {}",
+                st,
+                if conc.is_empty() { String::new() } else { format!("/{}", conc) },
+                name,
+                url
+            ));
+        }
+        if runs.len() > 50 {
+            lines.push(format!("… and {} more (truncated)", runs.len() - 50));
+        }
+        Ok(lines.join("\n"))
+    }
+
+    async fn do_rerun_workflow(
+        &self,
+        owner: &str,
+        repo: &str,
+        run_id: u64,
+    ) -> anyhow::Result<String> {
+        let url = format!("{API_BASE}/repos/{owner}/{repo}/actions/runs/{run_id}/rerun");
+        let resp = self
+            .http
+            .post(&url)
+            .bearer_auth(&self.creds.token)
+            .header("Accept", "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .send()
+            .await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body_text = resp.text().await.unwrap_or_default();
+            anyhow::bail!("GitHub {} on {}: {}", status, url, truncate(&body_text, 500));
+        }
+        Ok(format!("Workflow run {} re-queued.", run_id))
+    }
+
+    async fn do_cancel_workflow(
+        &self,
+        owner: &str,
+        repo: &str,
+        run_id: u64,
+    ) -> anyhow::Result<String> {
+        let url = format!("{API_BASE}/repos/{owner}/{repo}/actions/runs/{run_id}/cancel");
+        let resp = self
+            .http
+            .post(&url)
+            .bearer_auth(&self.creds.token)
+            .header("Accept", "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .send()
+            .await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body_text = resp.text().await.unwrap_or_default();
+            anyhow::bail!("GitHub {} on {}: {}", status, url, truncate(&body_text, 500));
+        }
+        Ok(format!("Workflow run {} cancellation requested.", run_id))
+    }
+
     async fn fetch_readme(&self, owner: &str, repo: &str) -> anyhow::Result<String> {
         let url = format!("{API_BASE}/repos/{owner}/{repo}/readme");
         let resp = self.req(&url).send().await?;
@@ -1279,6 +1978,102 @@ fn truncate(s: &str, max: usize) -> String {
         s.to_string()
     } else {
         format!("{}…", &s[..max])
+    }
+}
+
+/// Send a CardRequest to the Tauri shell over the action-IPC Unix
+/// socket and BLOCK until the user resolves the card. The MCP tool
+/// caller (propose_bash et al.) holds its response open during this
+/// await — that's exactly how the agent's CLI ends up waiting for
+/// the card outcome IN THE SAME TURN.
+///
+/// Error path: if FORGEHOLD_IPC_SOCKET / FORGEHOLD_SESSION_ID env
+/// vars are missing or the socket is unreachable, returns Err and
+/// the caller falls back to the legacy "card created, end the turn"
+/// stub (handing the agent a generic message). That keeps things
+/// degrading gracefully if Tauri side isn't yet IPC-aware.
+async fn ipc_request_card(
+    kind: &str,
+    params: serde_json::Value,
+) -> anyhow::Result<(bool, String)> {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use tokio::net::UnixStream;
+
+    let socket = std::env::var("FORGEHOLD_IPC_SOCKET")
+        .context("FORGEHOLD_IPC_SOCKET not set")?;
+    if socket.trim().is_empty() {
+        anyhow::bail!("FORGEHOLD_IPC_SOCKET is empty");
+    }
+    let session_id = std::env::var("FORGEHOLD_SESSION_ID")
+        .context("FORGEHOLD_SESSION_ID not set")?;
+    let wait_id = uuid::Uuid::new_v4().to_string();
+
+    let req = serde_json::json!({
+        "session_id": session_id,
+        "wait_id": wait_id,
+        "kind": kind,
+        "params": params,
+    });
+    let mut body = serde_json::to_string(&req)?;
+    body.push('\n');
+
+    let stream = UnixStream::connect(&socket)
+        .await
+        .with_context(|| format!("connect to action-IPC socket at {}", socket))?;
+    let (read_half, mut write_half) = stream.into_split();
+    write_half.write_all(body.as_bytes()).await?;
+    write_half.flush().await?;
+    // Don't close write half — keep it open, the Tauri side reads
+    // a single line and then the connection stays open until it
+    // writes the response. (Closing write half would let the OS
+    // half-close the connection, which is fine, but explicit shutdown
+    // would also send EOF that the read side treats as connection
+    // gone; safer to just leave it.)
+    let mut reader = BufReader::new(read_half);
+    let mut response_line = String::new();
+    // No timeout on this read — the agent is meant to wait
+    // indefinitely on user approval, mirroring claude-code's bash
+    // permission prompt UX. The user's CLI session itself can be
+    // cancelled (kill -TERM); that propagates through the parent
+    // claude process to us via stdio close.
+    let _ = reader.read_line(&mut response_line).await?;
+    let resp: serde_json::Value = serde_json::from_str(response_line.trim())
+        .with_context(|| format!("parse IPC response: {:?}", response_line))?;
+    let ok = resp.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
+    let summary = resp
+        .get("summary")
+        .and_then(|v| v.as_str())
+        .unwrap_or("(no summary returned)")
+        .to_string();
+    Ok((ok, summary))
+}
+
+/// Convenience wrapper: turn the IPC outcome (or fallback) into the
+/// MCP tool's CallToolResult. We always return success at the MCP
+/// level (the agent gets the `summary` text either way) — failures
+/// of the underlying action are conveyed via the summary's content,
+/// not via MCP error frames, because Anthropic's CLI surfaces MCP
+/// errors as opaque "tool failed" red text instead of feeding the
+/// detail back to the model. Keeping it in the success-text means
+/// the agent sees and reasons about every outcome.
+async fn run_or_fallback(
+    kind: &str,
+    params: serde_json::Value,
+    fallback_summary: String,
+) -> Result<CallToolResult, ErrorData> {
+    match ipc_request_card(kind, params).await {
+        Ok((_ok, summary)) => Ok(CallToolResult::success(vec![Content::text(summary)])),
+        Err(e) => {
+            // Surface the IPC failure to the agent as part of the
+            // text so it can decide what to do (usually: tell the
+            // user the propose flow degraded, fall back to a normal
+            // Bash tool call, etc).
+            let msg = format!(
+                "{}\n\n(Action IPC unavailable: {}. The card was not registered with Forgehold's UI.)",
+                fallback_summary, e
+            );
+            Ok(CallToolResult::success(vec![Content::text(msg)]))
+        }
     }
 }
 

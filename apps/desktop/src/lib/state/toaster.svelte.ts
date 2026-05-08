@@ -44,6 +44,29 @@ export function notify(opts: {
   actions?: ToastAction[];
 }): string {
   const kind = opts.kind ?? 'info';
+  // Dedupe: if we already have a toast with the same kind+title+body
+  // showing, refresh its TTL and bump it to the top instead of
+  // stacking a duplicate. The "send 5 messages and they all fail"
+  // pattern would otherwise spawn 5 identical sticky errors that the
+  // user has to dismiss one-by-one. Actions are intentionally
+  // excluded from the equality check — a retry button is keyed off
+  // the latest invocation's closure, so we let the new toast keep
+  // its own actions if provided. Sticky toasts (`ttl === null`) get
+  // refreshed too: same-text repeated errors stay sticky but we
+  // don't accumulate visual noise.
+  const existing = toasterState.items.find(
+    (t) =>
+      t.kind === kind &&
+      t.title === opts.title &&
+      (t.body ?? '') === (opts.body ?? '')
+  );
+  if (existing) {
+    existing.ttl =
+      opts.ttlMs === undefined ? DEFAULT_TTL_MS[kind] : opts.ttlMs;
+    existing.createdAt = Date.now();
+    if (opts.actions) existing.actions = opts.actions;
+    return existing.id;
+  }
   const t: Toast = {
     id: genId(),
     kind,

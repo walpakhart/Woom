@@ -1,3 +1,4 @@
+mod action_ipc;
 mod agent;
 mod biometry;
 mod claude;
@@ -19,7 +20,7 @@ mod watch;
 mod worktree;
 
 use agent::{AgentAskResult, AgentKind, AgentStatus};
-use claude::{ClaudeStatus, Runners};
+use claude::{ClaudeStatus, Runners, WarmPool};
 use fs::{BashResult, DirEntry};
 use git::{Branch, CommitEntry as GitCommitEntry, GitStatus, RepoInfo};
 use tauri::State;
@@ -265,8 +266,10 @@ pub fn run() {
         // is unreachable.
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(claude::new_runners())
+        .manage(claude::new_warm_pool())
         .manage(watch::new_state())
         .manage(terminal::TerminalRegistry::default())
+        .manage(action_ipc_state())
         .invoke_handler(tauri::generate_handler![
             github_connect_pat,
             github_status,
@@ -297,6 +300,14 @@ pub fn run() {
             github_submit_review,
             github_set_state,
             github_merge_pr,
+            github_edit_pr,
+            github_request_reviewers,
+            github_remove_reviewers,
+            github_add_labels,
+            github_remove_labels,
+            github_add_assignees,
+            github_remove_assignees,
+            github_set_pr_draft,
             github_compare,
             github_create_pr,
             jira_connect,
@@ -336,6 +347,8 @@ pub fn run() {
             jira_delete_worklog,
             claude_status,
             claude_ask,
+            claude_prewarm,
+            claude_drop_prewarm,
             agent_compact_session,
             claude_plan_usage,
             claude_stop,
@@ -404,8 +417,31 @@ pub fn run() {
             terminal::terminal_write,
             terminal::terminal_resize,
             terminal::terminal_kill,
+            resolve_action_wait,
         ])
         .setup(|app| {
+            // Bring up the action-IPC Unix socket — sidecars use it
+            // to make `propose_*` MCP tools BLOCKING (they hold the
+            // MCP response open until the user resolves the card).
+            // Failure is non-fatal: the propose_* tools degrade to
+            // returning an error string, the agent surfaces it, and
+            // the user can still send manual messages.
+            //
+            // CRITICAL: must run inside an async-runtime task, NOT
+            // synchronously in setup. `UnixListener::bind` and
+            // `tokio::spawn` both require a Tokio runtime context;
+            // calling them from setup-fn directly panics with "no
+            // reactor running" → SIGABRT during
+            // NSApplicationDidFinishLaunching → app crash on launch.
+            use tauri::Manager;
+            let ipc: tauri::State<'_, std::sync::Arc<action_ipc::ActionIpc>> = app.state();
+            let ipc_handle = ipc.inner().clone();
+            let ipc_app = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = action_ipc::start_ipc_server(ipc_handle, ipc_app) {
+                    eprintln!("[forgehold] action IPC server failed to start: {e}");
+                }
+            });
             // Spawn the localhost terminal-MCP bridge. Failure is
             // non-fatal — desktop still works, agents just lose
             // `terminal.run_command` etc. Port goes to
@@ -421,6 +457,25 @@ pub fn run() {
                     Err(e) => {
                         eprintln!("[forgehold] terminal bridge failed to start: {e}");
                     }
+                }
+            });
+            // Background sweeper for the Claude warm pool — kills any
+            // prewarmed CLI that's been parked longer than its TTL
+            // (~150s). Without this, abandoned prewarms (user typed in
+            // a chat then closed the tab without sending) would
+            // accumulate over the app's lifetime, each holding open a
+            // claude process + MCP sidecars.
+            let warm_pool: tauri::State<'_, claude::WarmPool> = app.state();
+            let warm_pool_handle = warm_pool.inner().clone();
+            tauri::async_runtime::spawn(async move {
+                // Tick every 30s — fine-grained enough that newly-stale
+                // entries don't sit much past their TTL, infrequent
+                // enough that the lock contention cost is negligible.
+                let mut ticker = tokio::time::interval(std::time::Duration::from_secs(30));
+                ticker.tick().await; // skip the immediate first tick
+                loop {
+                    ticker.tick().await;
+                    claude::evict_stale_warm(warm_pool_handle.clone()).await;
                 }
             });
             Ok(())
@@ -445,6 +500,14 @@ pub fn run() {
             // MCP) gets a clean slate.
             if let tauri::RunEvent::Exit = event {
                 terminal_bridge::clear_port_file(app);
+                // Best-effort cleanup of the action-IPC socket so the
+                // next launch doesn't see a stale-looking inode. The
+                // server itself also unlinks on bind, so this is just
+                // tidiness — not a correctness requirement.
+                use tauri::Manager;
+                if let Some(ipc) = app.try_state::<std::sync::Arc<action_ipc::ActionIpc>>() {
+                    let _ = std::fs::remove_file(ipc.inner().socket_path());
+                }
                 kill_stale_sidecars();
             }
         });
@@ -454,6 +517,39 @@ async fn token() -> Result<String, String> {
     keychain::get(GITHUB_KEY)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "GitHub is not connected".to_string())
+}
+
+/// Build the IPC server state with a per-process socket path. We use
+/// `/tmp/forgehold-ipc-<pid>.sock` so multiple Forgehold instances on
+/// the same machine don't collide and a stale socket from a crashed
+/// previous run doesn't block startup (the server cleans it up on
+/// bind anyway, but per-pid isolation is cheap insurance).
+fn action_ipc_state() -> std::sync::Arc<action_ipc::ActionIpc> {
+    let pid = std::process::id();
+    let path = std::env::temp_dir().join(format!("forgehold-ipc-{}.sock", pid));
+    std::sync::Arc::new(action_ipc::ActionIpc::new(path))
+}
+
+/// Resolve a pending approval-card wait. The frontend calls this
+/// after running an action card to completion (success or failure).
+/// `summary` is what the agent sees as the MCP tool result text, so
+/// it should be terse but informative — exit codes, commit hashes,
+/// PR urls, error stderr tails. The sidecar's `propose_*` MCP call
+/// returns this verbatim and the agent's tool_result lands with it
+/// IN THE SAME TURN.
+#[tauri::command]
+async fn resolve_action_wait(
+    state: State<'_, std::sync::Arc<action_ipc::ActionIpc>>,
+    wait_id: String,
+    ok: bool,
+    summary: String,
+) -> Result<bool, String> {
+    let waits = state.waits();
+    Ok(action_ipc::resolve_wait(
+        &waits,
+        action_ipc::CardResolution { wait_id, ok, summary },
+    )
+    .await)
 }
 
 #[tauri::command]
@@ -749,6 +845,144 @@ async fn github_merge_pr(
 ) -> Result<(), String> {
     let t = token().await?;
     github::merge_pr(&t, &owner, &repo, number, &method).await.map_err(|e| e.to_string())
+}
+
+/// PATCH a PR's title and/or body. Either or both can be provided;
+/// missing keys leave the corresponding field unchanged on GitHub.
+/// Empty strings DO clear the body — pass `null`/None to skip
+/// updating that field instead.
+#[tauri::command]
+async fn github_edit_pr(
+    owner: String,
+    repo: String,
+    number: u64,
+    title: Option<String>,
+    body: Option<String>,
+) -> Result<(), String> {
+    let t = token().await?;
+    github::edit_pr(&t, &owner, &repo, number, title.as_deref(), body.as_deref())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn github_request_reviewers(
+    owner: String,
+    repo: String,
+    number: u64,
+    #[allow(non_snake_case)] userLogins: Option<Vec<String>>,
+    #[allow(non_snake_case)] teamSlugs: Option<Vec<String>>,
+) -> Result<(), String> {
+    let t = token().await?;
+    github::request_pr_reviewers(
+        &t,
+        &owner,
+        &repo,
+        number,
+        &userLogins.unwrap_or_default(),
+        &teamSlugs.unwrap_or_default(),
+    )
+    .await
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn github_remove_reviewers(
+    owner: String,
+    repo: String,
+    number: u64,
+    #[allow(non_snake_case)] userLogins: Option<Vec<String>>,
+    #[allow(non_snake_case)] teamSlugs: Option<Vec<String>>,
+) -> Result<(), String> {
+    let t = token().await?;
+    github::remove_pr_reviewers(
+        &t,
+        &owner,
+        &repo,
+        number,
+        &userLogins.unwrap_or_default(),
+        &teamSlugs.unwrap_or_default(),
+    )
+    .await
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn github_add_labels(
+    owner: String,
+    repo: String,
+    number: u64,
+    labels: Vec<String>,
+) -> Result<(), String> {
+    let t = token().await?;
+    github::add_issue_labels(&t, &owner, &repo, number, &labels)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Remove labels from an issue/PR. Loops over the slice to call
+/// `remove_issue_label` once per label so a missing-label 404 on one
+/// doesn't abort the rest. Returns the labels that successfully
+/// removed (caller can diff against the requested set to learn which
+/// were already absent).
+#[tauri::command]
+async fn github_remove_labels(
+    owner: String,
+    repo: String,
+    number: u64,
+    labels: Vec<String>,
+) -> Result<Vec<String>, String> {
+    let t = token().await?;
+    let mut removed = Vec::with_capacity(labels.len());
+    for l in &labels {
+        match github::remove_issue_label(&t, &owner, &repo, number, l).await {
+            Ok(()) => removed.push(l.clone()),
+            // Surface 404 / not-found as "absent, that's fine"; other
+            // errors abort with diagnostic so the caller can act.
+            Err(github::GithubError::Api { status: 404, .. }) => {}
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+    Ok(removed)
+}
+
+#[tauri::command]
+async fn github_add_assignees(
+    owner: String,
+    repo: String,
+    number: u64,
+    logins: Vec<String>,
+) -> Result<(), String> {
+    let t = token().await?;
+    github::add_issue_assignees(&t, &owner, &repo, number, &logins)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn github_remove_assignees(
+    owner: String,
+    repo: String,
+    number: u64,
+    logins: Vec<String>,
+) -> Result<(), String> {
+    let t = token().await?;
+    github::remove_issue_assignees(&t, &owner, &repo, number, &logins)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn github_set_pr_draft(
+    owner: String,
+    repo: String,
+    number: u64,
+    draft: bool,
+) -> Result<(), String> {
+    let t = token().await?;
+    github::set_pr_draft(&t, &owner, &repo, number, draft)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1156,6 +1390,8 @@ fn claude_status() -> ClaudeStatus {
 async fn claude_ask(
     app: tauri::AppHandle,
     runners: State<'_, Runners>,
+    warm_pool: State<'_, WarmPool>,
+    ipc: State<'_, std::sync::Arc<action_ipc::ActionIpc>>,
     session_id: String,
     prompt: String,
     cwd: Option<String>,
@@ -1193,10 +1429,12 @@ async fn claude_ask(
     let cwd_path = cwd.as_deref().map(std::path::Path::new);
     let kind = agentKind.unwrap_or_default();
     let images = imagePaths.unwrap_or_default();
-    agent::ask(
+    let ipc_socket = ipc.inner().socket_path().to_path_buf();
+    let result = agent::ask(
         kind,
         app,
         runners.inner().clone(),
+        warm_pool.inner().clone(),
         &session_id,
         &prompt,
         cwd_path,
@@ -1207,10 +1445,76 @@ async fn claude_ask(
         claudeModel.as_deref(),
         claudeToolProfile.as_deref(),
         appContext.as_deref(),
+        Some(ipc_socket.as_path()),
         &images,
+    )
+    .await;
+    // Tag resume-orphan with a stable prefix on the wire so the frontend
+    // can recognise it without parsing free-form CLI stderr. Anything
+    // else passes through as-is (the frontend already has decent error
+    // toasts for the common cases).
+    match result {
+        Ok(r) => Ok(r),
+        Err(e) if e.is_resume_orphan() => Err(format!("RESUME_ORPHAN: {}", e)),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// Pre-spawn a `claude` CLI for `session_id` so the cold-start cost
+/// (binary load + `--resume` history hydration) overlaps with the user
+/// typing. Idempotent for matching args. Cheap to call frequently —
+/// the implementation no-ops when the existing warm entry is still
+/// good. Frontend triggers this on textarea focus / first keystroke.
+#[tauri::command]
+async fn claude_prewarm(
+    warm_pool: State<'_, WarmPool>,
+    ipc: State<'_, std::sync::Arc<action_ipc::ActionIpc>>,
+    session_id: String,
+    cwd: Option<String>,
+    claude_uuid: String,
+    resume: bool,
+    rules: Option<String>,
+    #[allow(non_snake_case)] agentKind: Option<AgentKind>,
+    #[allow(non_snake_case)] claudeModel: Option<String>,
+    #[allow(non_snake_case)] claudeToolProfile: Option<String>,
+    #[allow(non_snake_case)] appContext: Option<String>,
+) -> Result<(), String> {
+    // Cursor CLI takes its prompt as a positional arg, so we have to
+    // know the prompt at spawn time — pre-warming cursor-agent would
+    // mean spawning with a placeholder prompt the user never sent.
+    // Skip the call for cursor sessions; cold-path `ask` still works.
+    if agentKind.unwrap_or_default() == AgentKind::Cursor {
+        return Ok(());
+    }
+    let cwd_path = cwd.as_deref().map(std::path::Path::new);
+    let ipc_socket = ipc.inner().socket_path().to_path_buf();
+    claude::prewarm(
+        warm_pool.inner().clone(),
+        &session_id,
+        cwd_path,
+        &claude_uuid,
+        resume,
+        rules.as_deref(),
+        claudeModel.as_deref(),
+        claudeToolProfile.as_deref(),
+        appContext.as_deref(),
+        Some(ipc_socket.as_path()),
     )
     .await
     .map_err(|e| e.to_string())
+}
+
+/// Drop any warm CLI parked for `session_id`. Frontend calls this on
+/// session/tab switch, cwd change, blur-after-empty-input, and chat
+/// deletion — anywhere the parked CLI is no longer the right fit for
+/// what the user might do next. Safe to call when no entry exists.
+#[tauri::command]
+async fn claude_drop_prewarm(
+    warm_pool: State<'_, WarmPool>,
+    session_id: String,
+) -> Result<(), String> {
+    claude::drop_prewarm(warm_pool.inner().clone(), &session_id).await;
+    Ok(())
 }
 
 #[tauri::command]

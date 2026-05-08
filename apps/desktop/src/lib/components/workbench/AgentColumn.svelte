@@ -3,6 +3,7 @@
   import { slide } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
   import Markdown from '$lib/components/ui/Markdown.svelte';
+  import AssistantContent from '$lib/components/workbench/AssistantContent.svelte';
   import ClaudeActionCard from '$lib/components/workbench/ClaudeActionCard.svelte';
   import EditDiffCard from '$lib/components/workbench/EditDiffCard.svelte';
   import Dropdown, { type DropdownOption } from '$lib/components/ui/Dropdown.svelte';
@@ -46,12 +47,15 @@
     revertAllPendingEdits,
     keepAllPendingEdits
   } from '$lib/services/diffActions';
+  import { buildAgentAppContext } from '$lib/services/agentContext';
+  import { prewarmAgent, dropPrewarm } from '$lib/exec/claude';
   import { notify, notifyError } from '$lib/state/toaster.svelte';
   import {
     layoutState,
     startResizeById,
     activeInstances,
-    findInstanceAnywhere
+    findInstanceAnywhere,
+    addPanelInstance
   } from '$lib/state/layout.svelte';
   import ColumnControls from '$lib/components/workbench/ColumnControls.svelte';
   import type { ClaudeAction, RepoInfo } from '$lib/types';
@@ -202,6 +206,43 @@
   // is enough; persisting across reloads or scoping to the global
   // session store would only complicate the cancel/abort story.
   let compactingId: string | null = $state(null);
+
+  // Debounced prewarm: when the user is interacting with the composer
+  // (focus / typing) for a Claude session, kick off a backend prewarm
+  // so the CLI cold-start cost overlaps with their typing. Backend
+  // call is idempotent for matching args, so the only cost of firing
+  // it more than necessary is one extra IPC roundtrip per debounce
+  // window — harmless. We skip cursor sessions (positional prompt
+  // means the backend can't do anything until Send) and skip sessions
+  // that are already mid-turn (a CLI is already running for them).
+  let prewarmTimer: ReturnType<typeof setTimeout> | null = null;
+  function schedulePrewarm() {
+    if (kind !== 'claude') return;
+    const sess = activeSess;
+    if (!sess || sess.sending) return;
+    if (prewarmTimer) clearTimeout(prewarmTimer);
+    prewarmTimer = setTimeout(() => {
+      prewarmTimer = null;
+      const sNow = activeSess;
+      if (!sNow || sNow.sending) return;
+      // Resolve cwd the same way `sendClaudeMessage` does — we want
+      // the prewarm signature to match what the eventual ask sends,
+      // otherwise the backend kills the warm CLI and respawns,
+      // wasting the spawn we just paid for.
+      const cwd = sNow.worktreePath || sNow.cwd || editorRepoPath || null;
+      void prewarmAgent({
+        sessionId: sNow.id,
+        cwd,
+        claudeUuid: sNow.claudeUuid,
+        resume: Boolean(sNow.claudeResumable),
+        rules: sessionsState.userRules.trim() || null,
+        agentKind: sNow.agentKind,
+        claudeModel: sNow.claudeModel ?? null,
+        claudeToolProfile: sNow.claudeToolProfile ?? null,
+        appContext: buildAgentAppContext(sNow.id) || null
+      });
+    }, 250);
+  }
 
   async function runCompact() {
     const s = activeSess;
@@ -395,6 +436,55 @@
     else next.add(key);
     expandedThinking = next;
   }
+  // Action-result system messages render collapsed by default — user
+  // clicks to see the full output (commit body, push diagnostics,
+  // bash stderr, etc.). The content stored on the message stays
+  // verbatim; this is rendering-only.
+  let expandedActionResult = $state(new Set<string>());
+  function toggleActionResult(key: string) {
+    const next = new Set(expandedActionResult);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    expandedActionResult = next;
+  }
+
+  /** Parse the system-message format that `recordActionOutcomeInChat`
+   *  emits (`[Forgehold action result] ✓/✗ <headline>\n\n<detail>`)
+   *  into a structured shape for the chip renderer. Falls back to
+   *  null when the message doesn't match the action-result format —
+   *  caller falls through to the plain-system render path. Headline
+   *  is the first line of the summary; detail is everything after,
+   *  preserved verbatim so the user can read CLI stderr / commit
+   *  bodies in full when expanded. */
+  function parseActionResult(
+    content: string
+  ): { ok: boolean; headline: string; detail: string } | null {
+    const marker = '[Forgehold action result]';
+    if (!content.startsWith(marker)) return null;
+    const rest = content.slice(marker.length).trimStart();
+    let ok: boolean;
+    let body: string;
+    if (rest.startsWith('✓ ')) {
+      ok = true;
+      body = rest.slice(2);
+    } else if (rest.startsWith('✗ ')) {
+      ok = false;
+      body = rest.slice(2);
+    } else {
+      // Marker present but unexpected status glyph — treat as
+      // free-form, fall back to plain render.
+      return null;
+    }
+    const nlIdx = body.indexOf('\n');
+    if (nlIdx === -1) {
+      return { ok, headline: body.trim(), detail: '' };
+    }
+    return {
+      ok,
+      headline: body.slice(0, nlIdx).trim(),
+      detail: body.slice(nlIdx + 1).trim()
+    };
+  }
   // Same shape, separate Set for the "✓ N steps" trace pill (tool-use
   // hints). Independent so a user can expand thinking without auto-
   // expanding trace and vice versa.
@@ -497,6 +587,18 @@
     const sess = sessionsState.list.find((s) => s.id === sessionsState.activeByInstance[instanceId]);
     if (!sess) return;
     updateSession(sess.id, { linkedTerminalInstanceId: termId || null });
+  }
+  /** Spawn a fresh terminal column AND link this session to it.
+   *  Used by the "Link terminal…" picker's "+ New terminal" option
+   *  so the chip is always actionable, even when no terminals are
+   *  currently open (which is the default state for users who
+   *  haven't added a Terminal column yet — link-canvas already
+   *  works this way because canvases persist in the library). */
+  function createAndLinkTerminal() {
+    const sess = sessionsState.list.find((s) => s.id === sessionsState.activeByInstance[instanceId]);
+    if (!sess) return;
+    const newId = addPanelInstance('terminal');
+    updateSession(sess.id, { linkedTerminalInstanceId: newId });
   }
   function unlinkSessionFromTerminal() {
     const sess = sessionsState.list.find((s) => s.id === sessionsState.activeByInstance[instanceId]);
@@ -809,6 +911,37 @@
     mentionQuery = null;
     mentionSelectedIdx = 0;
   }
+
+  /** Blur-delay tracker. The textarea's onblur fires a 120 ms
+   *  setTimeout that closes the popover so a click on a popover
+   *  item still registers (the click happens after blur but before
+   *  the close). Without tracking the timer:
+   *    1. If the user re-focuses or starts typing within the 120 ms
+   *       window, the timer still fires and the popover snaps shut
+   *       under their hands.
+   *    2. If the column unmounts mid-window, the timer fires on
+   *       freed state.
+   *  Storing the handle lets focus / input handlers cancel it, and
+   *  the component-cleanup `$effect` returns it on destroy. */
+  let mentionBlurTimer: ReturnType<typeof setTimeout> | null = null;
+  function scheduleMentionBlurClose() {
+    if (mentionBlurTimer) clearTimeout(mentionBlurTimer);
+    mentionBlurTimer = setTimeout(() => {
+      mentionBlurTimer = null;
+      closeMentionPopover();
+    }, 120);
+  }
+  function cancelMentionBlurClose() {
+    if (mentionBlurTimer) {
+      clearTimeout(mentionBlurTimer);
+      mentionBlurTimer = null;
+    }
+  }
+  $effect(() => {
+    // Cleanup on component teardown — fires on destroy AND on every
+    // re-run of this effect (which is fine since it has no deps).
+    return () => cancelMentionBlurClose();
+  });
 
   /** Rank-one fuzzy score — case-insensitive substring match, with a
       big bonus for prefix and a small bonus for contiguous matches near
@@ -1141,8 +1274,12 @@
 
       <!-- Terminal link control. Same Dropdown UX as canvas-link.
            When set, the agent's MCP `terminal_run` defaults to this
-           id without an explicit pick. Hidden when no Terminal
-           columns are open AND no link exists. -->
+           id without an explicit pick. ALWAYS shown when not linked —
+           the dropdown lists open terminals plus a "+ New terminal"
+           option that spawns a fresh column and links in one click,
+           so the chip is actionable even when no terminals exist
+           (mirrors canvas-link, which also stays visible because
+           canvases persist in the library independently of columns). -->
       {#if linkedTerminalEntry}
         <button
           class="canvas-link-chip"
@@ -1153,12 +1290,19 @@
           <span class="canvas-link-name">{linkedTerminalEntry.name}</span>
           <svg class="i i-sm canvas-link-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>
         </button>
-      {:else if linkableTerminals.length > 0}
+      {:else}
         <div class="link-canvas-picker">
           <Dropdown
             value=""
-            options={linkableTerminals.map((t) => ({ value: t.id, label: `Link to ${t.name}` }))}
-            onChange={(id) => { focusLocalSession(activeSess.id); linkSessionToTerminal(id); }}
+            options={[
+              ...linkableTerminals.map((t) => ({ value: t.id, label: `Link to ${t.name}` })),
+              { value: '__new__', label: '+ New terminal' }
+            ]}
+            onChange={(id) => {
+              focusLocalSession(activeSess.id);
+              if (id === '__new__') createAndLinkTerminal();
+              else linkSessionToTerminal(id);
+            }}
             placeholder="Link terminal…"
             ariaLabel="Link to terminal"
           />
@@ -1181,29 +1325,40 @@
         </div>
       {/if}
       {#if activeSess.agentKind === 'claude'}
-        <div class="model-chip" title="Claude model — forwarded as `claude --model`. Default Sonnet 4.6 (~5x cheaper output than Opus on Max plans).">
+        <div class="model-chip" title="Claude model — forwarded as `claude --model`. Default Sonnet 4.6 (~5x cheaper output than Opus on Max plans). Switching repools the warm CLI with the new model so the next send picks it up cold-start-free.">
           <svg class="i i-sm" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1"/></svg>
           {#key activeSess.id}
             <Dropdown
               value={activeSess.claudeModel ?? ''}
               options={claudeModelOptions}
-              onChange={(v) => onUpdateSessionClaudeModel(activeSess.id, v || null)}
+              onChange={(v) => {
+                onUpdateSessionClaudeModel(activeSess.id, v || null);
+                // Re-prewarm with the new model so the next send doesn't
+                // pay a cold-start. Backend's signature check would
+                // respawn anyway on send, but kicking it off here means
+                // the new CLI is ready by the time the user types and
+                // hits Send instead of overlapping with their typing.
+                schedulePrewarm();
+              }}
               ariaLabel="Claude model"
               variant="ghost"
               compact
             />
           {/key}
         </div>
-        <div class="model-chip" title="Tool profile — selects which MCP tool group is wired. Coding (default) skips GitHub/Jira/Sentry to save ~10-15k tokens of MCP schemas per turn.">
+        <div class="model-chip" title="Tool profile — selects which MCP tool group is wired. Coding (default) skips GitHub/Jira/Sentry to save ~10-15k tokens of MCP schemas per turn. Switching repools the warm CLI so the next send loads the chosen tools.">
           <svg class="i i-sm" viewBox="0 0 24 24" aria-hidden="true"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4l-6.6 6.6a1 1 0 0 0 1.4 1.4l6.6-6.6a4 4 0 0 0 5.4-5.4l-2.7 2.7-2-2 2.7-2.7z"/></svg>
           {#key activeSess.id}
             <Dropdown
               value={activeSess.claudeToolProfile ?? 'all'}
               options={claudeToolProfileOptions}
-              onChange={(v) => onUpdateSessionClaudeToolProfile(
-                activeSess.id,
-                v as 'all' | 'coding' | 'github' | 'jira' | 'sentry' | 'triage'
-              )}
+              onChange={(v) => {
+                onUpdateSessionClaudeToolProfile(
+                  activeSess.id,
+                  v as 'all' | 'coding' | 'github' | 'jira' | 'sentry' | 'triage'
+                );
+                schedulePrewarm();
+              }}
               ariaLabel="Claude tool profile"
               variant="ghost"
               compact
@@ -1623,7 +1778,32 @@
                     <button class="btn-tiny btn-tiny--primary" onclick={onCommitEditMessage} disabled={!editingMsg.draft.trim()}>Send ⌘↵</button>
                   </div>
                 {:else if msg.role === 'system'}
-                  <div class="chat-plain">{msg.content}</div>
+                  {@const actionResult = parseActionResult(msg.content)}
+                  {#if actionResult}
+                    {@const arKey = `${sess.id}:ar:${idx}`}
+                    {@const arOpen = expandedActionResult.has(arKey)}
+                    <button
+                      class="action-result-chip"
+                      class:action-result-chip--ok={actionResult.ok}
+                      class:action-result-chip--fail={!actionResult.ok}
+                      aria-expanded={arOpen}
+                      onclick={() => toggleActionResult(arKey)}
+                      title={arOpen ? 'Collapse details' : 'Expand details'}
+                    >
+                      <svg class="i i-sm action-result-chev" class:action-result-chev--open={arOpen} viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg>
+                      {#if actionResult.ok}
+                        <svg class="i i-sm action-result-icon" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>
+                      {:else}
+                        <svg class="i i-sm action-result-icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+                      {/if}
+                      <span class="action-result-headline">{actionResult.headline}</span>
+                    </button>
+                    {#if arOpen && actionResult.detail}
+                      <pre class="action-result-detail mono">{actionResult.detail}</pre>
+                    {/if}
+                  {:else}
+                    <div class="chat-plain">{msg.content}</div>
+                  {/if}
                 {:else}
                   {#if msg.role === 'assistant' && msg.thinking && msg.thinking.trim()}
                     {@const tkey = `${sess.id}:${idx}`}
@@ -1650,7 +1830,7 @@
                          straight into Markdown. -->
                     {#each msg.events as ev, evIdx (evIdx)}
                       {#if ev.kind === 'text'}
-                        <Markdown source={ev.body} onOpenFile={onOpenMentionPath} />
+                        <AssistantContent source={ev.body} onOpenFile={onOpenMentionPath} />
                       {:else if ev.kind === 'edit'}
                         <!-- Inline diff card for an Edit / MultiEdit chunk.
                              Cursor-style "expand → red/green → Revert"
@@ -1683,7 +1863,7 @@
                         </button>
                         {#if cOpen}
                           <div class="trace-body">
-                            <Markdown source={ev.segments.join('\n\n')} onOpenFile={onOpenMentionPath} />
+                            <AssistantContent source={ev.segments.join('\n\n')} onOpenFile={onOpenMentionPath} />
                           </div>
                         {/if}
                       {/if}
@@ -1708,11 +1888,15 @@
                       </button>
                       {#if cOpen}
                         <div class="trace-body">
-                          <Markdown source={msg.trace} onOpenFile={onOpenMentionPath} />
+                          <AssistantContent source={msg.trace} onOpenFile={onOpenMentionPath} />
                         </div>
                       {/if}
                     {/if}
-                    <Markdown source={msg.content} onOpenFile={onOpenMentionPath} />
+                    {#if msg.role === 'assistant'}
+                      <AssistantContent source={msg.content} onOpenFile={onOpenMentionPath} />
+                    {:else}
+                      <Markdown source={msg.content} onOpenFile={onOpenMentionPath} />
+                    {/if}
                   {/if}
                 {/if}
                 {#if msg.role === 'assistant' && msg.usage}
@@ -1899,14 +2083,18 @@
               pruneMentionsByInput(sess.id, el.value);
               syncMentionFromTextarea(el);
               syncBackdropScroll();
+              // Prewarm a Claude CLI for this session (debounced
+              // 250ms, no-op for cursor) so its cold-start cost
+              // overlaps with the rest of the user's typing.
+              schedulePrewarm();
             }}
             onscroll={syncBackdropScroll}
-            onkeyup={(e) => syncMentionFromTextarea(e.currentTarget as HTMLTextAreaElement)}
-            onclick={(e) => syncMentionFromTextarea(e.currentTarget as HTMLTextAreaElement)}
-            onblur={() => setTimeout(closeMentionPopover, 120)}
+            onkeyup={(e) => { cancelMentionBlurClose(); syncMentionFromTextarea(e.currentTarget as HTMLTextAreaElement); }}
+            onclick={(e) => { cancelMentionBlurClose(); syncMentionFromTextarea(e.currentTarget as HTMLTextAreaElement); }}
+            onblur={scheduleMentionBlurClose}
             placeholder={sess.mentions.length ? 'Ask about the attached items (use @IDs in your text)…' : `Ask ${brandLabel} anything…`}
             disabled={sess.sending}
-            onfocus={() => focusLocalSession(sess.id)}
+            onfocus={() => { cancelMentionBlurClose(); focusLocalSession(sess.id); schedulePrewarm(); }}
             onkeydown={(e) => onTextareaKeydown(e, sess)}
             onpaste={(e) => {
               // Pull image blobs out of the clipboard. If any landed,
@@ -2247,6 +2435,96 @@
     line-height: 1.55;
     max-height: 320px;
     overflow-y: auto;
+  }
+  /* Action-result chip — rendered for system messages whose content
+     starts with `[Forgehold action result]`. Replaces the verbose
+     italic block with a compact pill (success: accent border / check
+     icon; failure: error border / warning icon). Click to expand
+     full output (commit body, push diagnostics, bash stderr). The
+     stored message content stays full-text — this is rendering only,
+     so the agent on `--resume` still sees everything. */
+  .action-result-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    margin: 0 0 4px;
+    padding: 4px 10px 4px 6px;
+    background: var(--bg-1);
+    border: 1px solid var(--border-neutral);
+    border-radius: 999px;
+    color: var(--text-1);
+    font-size: 11.5px;
+    font-weight: 500;
+    text-align: left;
+    max-width: 100%;
+    cursor: pointer;
+    transition: all 120ms;
+  }
+  .action-result-chip:hover {
+    background: var(--bg-2);
+    color: var(--text-0);
+    border-color: var(--border-neutral-hi);
+  }
+  .action-result-chip--ok {
+    border-color: rgba(101, 211, 150, 0.32);
+    background: rgba(101, 211, 150, 0.06);
+  }
+  .action-result-chip--ok:hover {
+    background: rgba(101, 211, 150, 0.10);
+    border-color: rgba(101, 211, 150, 0.5);
+  }
+  .action-result-chip--ok .action-result-icon {
+    color: var(--success);
+  }
+  .action-result-chip--fail {
+    border-color: rgba(229, 113, 92, 0.34);
+    background: rgba(229, 113, 92, 0.06);
+  }
+  .action-result-chip--fail:hover {
+    background: rgba(229, 113, 92, 0.10);
+    border-color: rgba(229, 113, 92, 0.55);
+  }
+  .action-result-chip--fail .action-result-icon {
+    color: var(--error);
+  }
+  .action-result-chev {
+    width: 12px; height: 12px;
+    transition: transform 140ms ease;
+    color: var(--text-mute);
+    flex-shrink: 0;
+  }
+  .action-result-chev--open { transform: rotate(90deg); }
+  .action-result-icon {
+    width: 13px; height: 13px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    flex-shrink: 0;
+  }
+  .action-result-headline {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    /* The chip lives inside the chat-msg-body which already constrains
+       width. The headline truncates with ellipsis if it's longer than
+       what the chip can hold; the user expands to see the full headline
+       in the detail pane. */
+    min-width: 0;
+  }
+  .action-result-detail {
+    margin: 4px 0 8px;
+    padding: 10px 12px;
+    background: var(--bg-1);
+    border: 1px solid var(--border-neutral);
+    border-left: 3px solid var(--border-neutral-hi);
+    border-radius: 6px;
+    font-size: 11.5px;
+    color: var(--text-2);
+    white-space: pre-wrap;
+    line-height: 1.5;
+    max-height: 320px;
+    overflow: auto;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
   }
   /* Trace body uses Markdown rendering (inherits .prose styles), so no
      pre-wrap. Same chrome as thinking-body otherwise — muted, scrollable,

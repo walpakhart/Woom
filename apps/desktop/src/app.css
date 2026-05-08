@@ -436,19 +436,48 @@ kbd {
 }
 .inbox-group-label::after { content: ''; flex: 1; height: 1px; background: var(--border-neutral); }
 
+/* ---- Inbox-item redesign ----
+   Three-column inboxes (GitHub PRs, Jira tickets, Sentry issues) all
+   share this card. Goal: scannable at a glance — a 3px left stripe
+   colored by state lets peripheral vision tell open-vs-stale, and
+   each card packs into ~3 short rows so 8-12 fit on a typical
+   1080-tall column.
+     row1: state-dot + id + state-pill + kind/type + (spacer) + time
+     row2: title (clamped to 2 lines, ellipsis)
+     row3: optional muted secondary line — repo path / project key /
+           events count, etc. Per-column choice. */
 .inbox-item {
-  display: block; padding: 11px 12px; border-radius: 9px;
-  cursor: grab; transition: all 120ms;
-  width: 100%; text-align: left; border: 1px solid transparent;
+  display: flex; flex-direction: column; gap: 3px;
+  padding: 8px 10px 8px 12px;
+  border-radius: 7px;
+  background: var(--bg-1);
+  border: 1px solid var(--border-neutral);
+  border-left-width: 3px;
+  border-left-color: var(--border-neutral-hi);
+  cursor: pointer;
+  transition: background 120ms, border-color 120ms, transform 120ms;
+  width: 100%; text-align: left;
   user-select: none;
 }
-.inbox-item:hover { background: var(--bg-1); }
-.inbox-item.active { background: var(--bg-2); border-color: var(--border-hi); }
+.inbox-item:hover { background: var(--bg-2); border-color: var(--border-neutral-hi); }
+.inbox-item.active { background: var(--bg-2); border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent-soft); }
 .inbox-item:active { cursor: grabbing; transform: scale(0.99); }
 .inbox-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/* Row 1 — id + state pill + meta. Top of every card. */
+.inbox-item-row1 { display: flex; align-items: center; gap: 8px; font-size: 11px; }
+/* Legacy alias — older templates use .inbox-item-top. */
 .inbox-item-top { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
 
-.inbox-item-id { font-size: 11px; color: var(--text-2); font-weight: 500; }
+/* Tiny round dot at the very start of row 1 — colored by state.
+   Doubles up the state signal so the eye sees it both on the left
+   edge stripe and inline at the start of the id column. */
+.state-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--text-mute);
+}
+.inbox-item-id { color: var(--text-1); font-weight: 600; font-size: 11px; }
 .inbox-item-ext {
   display: inline-flex; align-items: center; justify-content: center;
   width: 18px; height: 18px; border-radius: 3px;
@@ -458,10 +487,22 @@ kbd {
 .inbox-item-ext svg { width: 10px; height: 10px; }
 .inbox-item:hover .inbox-item-ext { opacity: 1; }
 .inbox-item-ext:hover { color: var(--accent-bright); background: var(--bg-2); }
-.inbox-item-time { margin-left: auto; font-size: 10.5px; color: var(--text-mute); font-variant-numeric: tabular-nums; }
+.inbox-item-time {
+  margin-left: auto;
+  font-size: 10.5px; color: var(--text-mute);
+  font-variant-numeric: tabular-nums;
+}
 .inbox-item-title {
-  font-size: 13.5px; color: var(--text-0); margin-bottom: 5px; line-height: 1.35;
-  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; line-clamp: 2;
+  font-size: 13px; color: var(--text-0); font-weight: 500;
+  line-height: 1.4; word-break: break-word;
+  /* Cap at 2 lines + ellipsis. Long titles otherwise expanded cards
+     to 4-5 lines and broke scannability. */
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden; line-clamp: 2;
+}
+.inbox-item-row3 {
+  color: var(--text-mute); font-size: 10.5px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .inbox-item-meta { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-2); flex-wrap: wrap; }
 
@@ -472,13 +513,84 @@ kbd {
   font-size: 8.5px; font-weight: 700; letter-spacing: -0.02em; flex-shrink: 0;
   color: var(--text-1); background: var(--bg-3); border: 1px solid var(--border-neutral-hi);
 }
+/* Bigger, bolder state pill replacing the older `mini-tag`. The
+   uppercase + tabular weight makes it readable at 10px without
+   needing to enlarge the row. */
+.state-pill {
+  padding: 1px 7px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+.kind-tag {
+  color: var(--text-mute);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+/* Legacy aliases kept for any callsites that haven't migrated to the
+   row1/row2/row3 + state-pill structure yet. */
 .mini-tag { padding: 1px 6px; border-radius: 4px; font-size: 10px; font-weight: 600; text-transform: lowercase; }
 .mini-kind { color: var(--text-2); text-transform: lowercase; }
 .mini-repo { color: var(--text-mute); font-size: 10.5px; }
-.tag--open   { color: var(--accent-bright); background: var(--accent-soft); border: 1px solid rgba(16, 185, 129, 0.22); }
-.tag--closed { color: #8b96ab; background: rgba(139, 150, 171, 0.08); border: 1px solid rgba(139, 150, 171, 0.2); }
-.tag--merged { color: #b199f6; background: rgba(139, 92, 246, 0.08); border: 1px solid rgba(139, 92, 246, 0.24); }
-.tag--draft  { color: #fcd34d; background: rgba(245, 158, 11, 0.06); border: 1px solid rgba(245, 158, 11, 0.2); }
+
+/* Card-level state colors — drives the left-stripe AND the dot.
+   Each `.tag--*` class is applied to the `.inbox-item` itself; the
+   matching `.state-pill.tag--*` rule below colors the inline pill. */
+.inbox-item.tag--open   { border-left-color: var(--success); }
+.inbox-item.tag--draft  { border-left-color: #fcd34d; }
+.inbox-item.tag--merged { border-left-color: #b199f6; }
+.inbox-item.tag--closed { border-left-color: var(--border-neutral-hi); }
+.inbox-item.tag--inprogress { border-left-color: #f59e0b; }
+.inbox-item.tag--inreview   { border-left-color: #60a5fa; }
+.inbox-item.tag--done       { border-left-color: var(--success); }
+.inbox-item.tag--todo       { border-left-color: var(--text-mute); }
+.inbox-item.tag--error   { border-left-color: var(--error); }
+.inbox-item.tag--warning { border-left-color: #f59e0b; }
+.inbox-item.tag--info    { border-left-color: #60a5fa; }
+.inbox-item.tag--fatal   { border-left-color: #f87171; }
+
+.inbox-item.tag--open    .state-dot { background: var(--success); }
+.inbox-item.tag--draft   .state-dot { background: #fcd34d; }
+.inbox-item.tag--merged  .state-dot { background: #b199f6; }
+.inbox-item.tag--closed  .state-dot { background: var(--border-neutral-hi); }
+.inbox-item.tag--inprogress .state-dot { background: #f59e0b; }
+.inbox-item.tag--inreview   .state-dot { background: #60a5fa; }
+.inbox-item.tag--done       .state-dot { background: var(--success); }
+.inbox-item.tag--todo       .state-dot { background: var(--text-mute); }
+.inbox-item.tag--error   .state-dot { background: var(--error); }
+.inbox-item.tag--warning .state-dot { background: #f59e0b; }
+.inbox-item.tag--info    .state-dot { background: #60a5fa; }
+.inbox-item.tag--fatal   .state-dot { background: #f87171; }
+
+/* State-pill colors — same hue as the stripe, soft background so
+   the row stays readable. */
+.state-pill.tag--open   { color: var(--success);          background: rgba(101, 211, 150, 0.14); }
+.state-pill.tag--draft  { color: #fcd34d;                 background: rgba(245, 158, 11, 0.14); }
+.state-pill.tag--merged { color: #b199f6;                 background: rgba(139, 92, 246, 0.14); }
+.state-pill.tag--closed { color: var(--text-mute);        background: rgba(139, 150, 171, 0.10); }
+.state-pill.tag--inprogress { color: #f59e0b;             background: rgba(245, 158, 11, 0.14); }
+.state-pill.tag--inreview   { color: #60a5fa;             background: rgba(96, 165, 250, 0.14); }
+.state-pill.tag--done       { color: var(--success);      background: rgba(101, 211, 150, 0.14); }
+.state-pill.tag--todo       { color: var(--text-mute);    background: rgba(139, 150, 171, 0.10); }
+.state-pill.tag--error   { color: var(--error);           background: rgba(229, 113, 92, 0.14); }
+.state-pill.tag--warning { color: #f59e0b;                background: rgba(245, 158, 11, 0.14); }
+.state-pill.tag--info    { color: #60a5fa;                background: rgba(96, 165, 250, 0.14); }
+.state-pill.tag--fatal   { color: #f87171;                background: rgba(248, 113, 113, 0.18); }
+
+/* Legacy `.tag--*` rules for the old `.mini-tag` callsites that
+   haven't migrated yet. Kept intentionally distinct from state-pill
+   so the new pill style doesn't accidentally override the legacy
+   look on a pre-migration card mid-rollout. */
+.mini-tag.tag--open   { color: var(--accent-bright); background: var(--accent-soft); border: 1px solid rgba(16, 185, 129, 0.22); }
+.mini-tag.tag--closed { color: #8b96ab; background: rgba(139, 150, 171, 0.08); border: 1px solid rgba(139, 150, 171, 0.2); }
+.mini-tag.tag--merged { color: #b199f6; background: rgba(139, 92, 246, 0.08); border: 1px solid rgba(139, 92, 246, 0.24); }
+.mini-tag.tag--draft  { color: #fcd34d; background: rgba(245, 158, 11, 0.06); border: 1px solid rgba(245, 158, 11, 0.2); }
 
 /* Focus pane */
 .focus { display: flex; flex-direction: column; overflow: hidden; min-height: 0; }

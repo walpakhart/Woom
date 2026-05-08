@@ -24,6 +24,7 @@ import {
   sessionsState,
   updateSession
 } from '$lib/state/sessions.svelte';
+import { COMPACT_SUMMARY_MARKER } from '$lib/services/sessionCwd';
 
 export interface RunCompactOpts {
   /** Fallback cwd when the session has no worktree / no explicit cwd
@@ -73,9 +74,14 @@ export async function runCompactSession(
     claudeResumable: true,
     lastContextSize: 0
   });
+  // Marker prefix is shared with `extractCompactSummary` in sessionCwd
+  // — keeping them on a single constant lets cwd-switch recap and
+  // orphan-recovery recap pick up this summary as the older-history
+  // layer when the user later switches projects or the CLI loses its
+  // store. Cheap insurance against the two strings drifting apart.
   appendSessionMessage(sessionId, {
     role: 'system',
-    content: `Compacted earlier conversation. New session seeded with this summary:\n\n${result.summary}`,
+    content: `${COMPACT_SUMMARY_MARKER}\n\n${result.summary}`,
     at: new Date().toISOString()
   });
   void opts.scrollChatBottom();

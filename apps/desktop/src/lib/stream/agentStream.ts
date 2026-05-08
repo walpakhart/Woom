@@ -25,6 +25,7 @@ import {
   appendToLastAssistant,
   appendToLastThinking,
   appendToLastTrace,
+  attachOutputToLastTrace,
   appendEditEvent,
   updateEditEvent,
   addAction,
@@ -32,7 +33,7 @@ import {
   genId
 } from '$lib/state/sessions.svelte';
 import { formatToolUse } from '$lib/format';
-import type { ClaudeUsage } from '$lib/types';
+import type { ClaudeAction, ClaudeUsage } from '$lib/types';
 
 export interface AgentStreamHandlers {
   /** Called with raw text deltas for the assistant turn. Implementations
@@ -69,6 +70,29 @@ export interface AgentStreamHandlers {
    *  full prior conversation, which is the cheapest informative
    *  single-number summary for the per-message badge. Optional. */
   onUsage?: (sessionId: string, usage: ClaudeUsage) => void;
+}
+
+/** Per-session "step usage seen this turn" flag. Set when an
+ *  `assistant` event with a usage block arrives; read on the
+ *  terminating `result` event to decide whether the result's usage
+ *  is a redundant cumulative artifact (skip) or the only signal
+ *  (use). Cleared on the result event so the next turn starts
+ *  fresh. Module-scoped Map because the dispatcher is otherwise
+ *  stateless per-line, and tracking this on the session model
+ *  itself would balloon the persisted shape for ephemeral state.
+ *  Untracked sessions (no entry) are treated as not-yet-seen. */
+const perTurnStepUsageSeen = new Map<string, boolean>();
+
+/** Reset the per-turn dispatcher flags for a session. Call at the
+ *  start of every new agent turn (manual send / auto-continuation /
+ *  orphan retry) so a previous turn's lingering state can't poison
+ *  the new one. The result-event handler also clears these on a
+ *  clean turn-end, but turns that error out without emitting a
+ *  result event (CLI crash, JSON parse failure on the result line,
+ *  forced kill mid-stream) leave flags set — calling this at turn
+ *  start guarantees every turn starts from a known-clean baseline. */
+export function resetTurnDispatcherState(sessionId: string): void {
+  perTurnStepUsageSeen.delete(sessionId);
 }
 
 /** Default handler: write to the sessions store. UIs that want to also
@@ -135,6 +159,18 @@ export function handleStreamEvent(
   // sometimes emits an empty `result.usage` envelope before the
   // real one and we don't want that wiping a real usage already
   // stamped from the assistant event right before. */
+  if (msg.type === 'result') {
+    // Clear the per-turn step-usage flag UNCONDITIONALLY on any
+    // result event, before doing anything else. If we waited until
+    // after the usage-extraction block, an empty/zero usage envelope
+    // (which the CLI sometimes emits as a placeholder) would leave
+    // the flag set and poison the NEXT turn's usage update — the
+    // result event from turn N+1 would see `stepSeen=true` from
+    // turn N and skip its own usage stamp. Clearing at the top of
+    // every result handler tracks "turn ended" cleanly regardless
+    // of whether the usage envelope was meaningful.
+    perTurnStepUsageSeen.delete(sessionId);
+  }
   if (msg.type === 'result' && msg.usage && typeof msg.usage === 'object') {
     const u = msg.usage as Record<string, unknown>;
     const inp = numField(u, 'inputTokens') || numField(u, 'input_tokens');
@@ -144,24 +180,73 @@ export function handleStreamEvent(
       numField(u, 'cacheWriteTokens') || numField(u, 'cache_creation_input_tokens');
     const out = numField(u, 'outputTokens') || numField(u, 'output_tokens');
     if (inp + out + cacheRead + cacheWrite > 0) {
-      merged.onUsage?.(sessionId, {
-        inputTokens: inp,
-        cacheCreationTokens: cacheWrite,
-        cacheReadTokens: cacheRead,
-        outputTokens: out,
-        contextSize: inp + cacheWrite + cacheRead,
-        // Cursor doesn't surface a stable model id on the result
-        // event; Claude's `result` may carry one but we already pull
-        // the model from the in-stream assistant events above so
-        // either way leaving null is safe — the per-message badge
-        // falls back gracefully and the context-ring chip uses the
-        // session's `cursorModel` / `claudeModel` field.
-        model: null
-      });
+      // Cumulative-usage guard. Claude CLI's `result.usage` sums input
+      // tokens across every internal tool-call sub-step in a turn,
+      // not just the final step's snapshot. For a turn with N tool
+      // calls, that's N× inflation: we've seen 946k reported as the
+      // "context size" for a chat whose actual conversation length
+      // was ~150k. The earlier per-step `assistant` events already
+      // carry the correct final-step usage; if we've seen any of
+      // those for this session, prefer them and ignore the result
+      // event's number entirely. Falls back to using `result.usage`
+      // when no per-step usage was seen (cursor flow + edge cases).
+      const stepSeen = perTurnStepUsageSeen.get(sessionId) === true;
+      if (!stepSeen) {
+        merged.onUsage?.(sessionId, {
+          inputTokens: inp,
+          cacheCreationTokens: cacheWrite,
+          cacheReadTokens: cacheRead,
+          outputTokens: out,
+          contextSize: inp + cacheWrite + cacheRead,
+          // Cursor doesn't surface a stable model id on the result
+          // event; Claude's `result` may carry one but we already
+          // pull the model from the in-stream assistant events above
+          // so either way leaving null is safe — the per-message
+          // badge falls back gracefully and the context-ring chip
+          // uses the session's `cursorModel` / `claudeModel` field.
+          model: null
+        });
+      }
+      // Turn ended — clear the flag for the next turn so we can pick
+      // up `result.usage` again if it's the only source available.
+      perTurnStepUsageSeen.delete(sessionId);
     }
     return;
   }
 
+  // User-role events with `tool_result` content blocks. Claude CLI
+  // emits these AFTER each tool_use — they carry the tool's output
+  // back to the model for its next reasoning step. Pre-fix the
+  // stream parser bailed on every non-assistant event, so tool
+  // results never landed in `sess.messages`. Result: when CLI's
+  // session uuid rotated (user pressed Stop, orphan recovery),
+  // the recap built from sess.messages had only agent-side text —
+  // no `supabase projects list` output, no `gh api` JSON, no
+  // `git log` lines. Agent then re-asked the user for facts it
+  // had already discovered, on the same chat. Persisting tool
+  // results inline at the end of the corresponding assistant
+  // message (the one that emitted the tool_use) means:
+  //   1. recap (from sess.messages) carries the data forward
+  //   2. user sees what the agent saw, scrolling chat history
+  //   3. on --resume the duplication is harmless (CLI's own
+  //      session JSONL has the canonical copy; ours is mirror).
+  if (msg.type === 'user') {
+    const inner = msg.message as { content?: Array<Record<string, unknown>> } | undefined;
+    if (Array.isArray(inner?.content)) {
+      for (const block of inner.content) {
+        if (block.type !== 'tool_result') continue;
+        const raw = extractToolResultText(block);
+        if (!raw) continue;
+        // Attach to the last trace event's last segment — visually
+        // pairs the command with its output inside the same "✓ N
+        // steps" pill (so expanding the pill shows: command →
+        // output card). The capping + ‹output› wrapping happens
+        // inside attachOutputToLastTrace.
+        attachOutputToLastTrace(sessionId, raw);
+      }
+    }
+    return;
+  }
   if (msg.type !== 'assistant') return;
   const inner = msg.message as {
     content?: Array<Record<string, unknown>>;
@@ -184,6 +269,10 @@ export function handleStreamEvent(
     const cacheRead = numField(u, 'cache_read_input_tokens');
     const out = numField(u, 'output_tokens');
     if (inp + out + cacheCreate + cacheRead > 0) {
+      // Mark this turn as having received per-step usage. The result
+      // event handler reads this to decide whether to fall back on
+      // its own (cumulative-prone) usage block or skip it.
+      perTurnStepUsageSeen.set(sessionId, true);
       merged.onUsage?.(sessionId, {
         inputTokens: inp,
         cacheCreationTokens: cacheCreate,
@@ -229,23 +318,46 @@ export function handleStreamEvent(
     // Intercept propose_* tools: they surface action cards in the chat
     // so the user can approve them before anything runs. Suppress the
     // generic tool-use line — the card carries the message.
+    //
+    // Race with action-IPC: the sidecar's MCP tool also emits a
+    // `forgehold:action_request` event when it makes its blocking IPC
+    // call to Tauri. Whichever path arrives first creates the card;
+    // the other should NOT duplicate. The IPC path fingerprints the
+    // card with a `waitId`, so this stream parser checks for an
+    // existing pending card matching the same params and skips
+    // creation when one's already there.
+    const sess = sessionsState.list.find((s) => s.id === sessionId);
+    const hasMatchingPending = (
+      kind: 'bash' | 'commit' | 'pr' | 'switch_cwd',
+      probe: (a: ClaudeAction) => boolean
+    ) =>
+      sess?.actions.some((a) => a.status === 'pending' && a.kind === kind && probe(a)) ?? false;
     switch (name) {
-      case 'mcp__github__propose_commit':
+      case 'mcp__github__propose_commit': {
+        const message = String(input.message ?? '');
+        if (hasMatchingPending('commit', (a) => a.kind === 'commit' && a.message === message)) {
+          continue;
+        }
         addAction(sessionId, {
           id,
           kind: 'commit',
-          message: String(input.message ?? ''),
+          message,
           body: typeof input.body === 'string' ? input.body : '',
           push: input.push !== false,
           note: typeof input.note === 'string' ? input.note : '',
           status: 'pending'
         });
         continue;
-      case 'mcp__github__propose_pr':
+      }
+      case 'mcp__github__propose_pr': {
+        const title = String(input.title ?? '');
+        if (hasMatchingPending('pr', (a) => a.kind === 'pr' && a.title === title)) {
+          continue;
+        }
         addAction(sessionId, {
           id,
           kind: 'pr',
-          title: String(input.title ?? ''),
+          title,
           body: typeof input.body === 'string' ? input.body : '',
           base: typeof input.base === 'string' ? input.base : '',
           draft: input.draft === true,
@@ -253,24 +365,35 @@ export function handleStreamEvent(
           status: 'pending'
         });
         continue;
-      case 'mcp__github__propose_switch_cwd':
+      }
+      case 'mcp__github__propose_switch_cwd': {
+        const path = String(input.path ?? '');
+        if (hasMatchingPending('switch_cwd', (a) => a.kind === 'switch_cwd' && a.path === path)) {
+          continue;
+        }
         addAction(sessionId, {
           id,
           kind: 'switch_cwd',
-          path: String(input.path ?? ''),
+          path,
           reason: typeof input.reason === 'string' ? input.reason : '',
           status: 'pending'
         });
         continue;
-      case 'mcp__github__propose_bash':
+      }
+      case 'mcp__github__propose_bash': {
+        const command = String(input.command ?? '');
+        if (hasMatchingPending('bash', (a) => a.kind === 'bash' && a.command === command)) {
+          continue;
+        }
         addAction(sessionId, {
           id,
           kind: 'bash',
-          command: String(input.command ?? ''),
+          command,
           reason: typeof input.reason === 'string' ? input.reason : '',
           status: 'pending'
         });
         continue;
+      }
       default: {
         // forgehold-app navigation tools — drive the UI directly. We
         // also surface a one-line "navigated to X" hint into the chat
@@ -512,6 +635,31 @@ export function handleStreamEvent(
 function numField(obj: Record<string, unknown>, key: string): number {
   const v = obj[key];
   return typeof v === 'number' && Number.isFinite(v) ? v : 0;
+}
+
+/** Pull plain text out of a `tool_result` content block. Claude API
+ *  shape allows the result's `content` field to be EITHER a string
+ *  (the simple case) OR an array of content blocks (so a tool can
+ *  return text + image + text etc). We flatten both into a single
+ *  string for persistence; image blocks become a placeholder note. */
+function extractToolResultText(block: Record<string, unknown>): string {
+  const content = block.content;
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    const parts: string[] = [];
+    for (const c of content) {
+      if (c && typeof c === 'object') {
+        const item = c as Record<string, unknown>;
+        if (item.type === 'text' && typeof item.text === 'string') {
+          parts.push(item.text);
+        } else if (item.type === 'image') {
+          parts.push('[image]');
+        }
+      }
+    }
+    return parts.join('\n').trim();
+  }
+  return '';
 }
 
 /** Resolve the pre-agent contents of a file the agent just `Write`'d, by
