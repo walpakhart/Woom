@@ -71,6 +71,7 @@ export {
   resetJiraInbox,
   selectAnyAssignee,
   selectAssignee,
+  persistJiraUiFilters,
   updateJiraFilters,
   updateJiraTabFilters
 } from './inbox-jira';

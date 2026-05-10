@@ -168,6 +168,17 @@ export async function refreshAllJiraInboxes(opts: { silent?: boolean } = {}) {
 
 const jiraFilterDebounces: Map<string, ReturnType<typeof setTimeout>> = new Map();
 
+/** Persist UI-only filter state (query, role, status, project, assignee)
+ *  without triggering a server-side refresh — these fields are not in
+ *  the JQL and should not cause a round-trip on every keystroke. */
+export function persistJiraUiFilters(instanceId: string, patch: Partial<JiraFilters>) {
+  inboxState.jiraFiltersByInstance[instanceId] = {
+    ...jiraFiltersFor(instanceId),
+    ...patch
+  };
+  persistJiraFilters();
+}
+
 /** Patch one column's Jira filter state, persist all instances, and
  *  re-run that column's search (debounced 300 ms). */
 export function updateJiraFilters(instanceId: string, patch: Partial<JiraFilters>) {

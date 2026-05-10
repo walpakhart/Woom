@@ -10,13 +10,13 @@
     jiraItemsLoadingFor,
     jiraItemsErrorFor,
     updateJiraFilters,
+    persistJiraUiFilters,
     jiraFiltersFor,
     loadJiraSprints,
     loadJiraBoards
   } from '$lib/state/inbox.svelte';
   import { relativeTime, jiraStatusClass, type JiraItem, type JiraStatus } from '$lib/data';
   import Dropdown from '$lib/components/ui/Dropdown.svelte';
-  import { onMount } from 'svelte';
 
   interface Props {
     instanceId: string;
@@ -50,18 +50,23 @@
   const loading = $derived(jiraItemsLoadingFor(p.instanceId));
   const error = $derived(jiraItemsErrorFor(p.instanceId));
 
-  /** Search + filter state. In-memory; resets on refresh. Each chip
-   *  is a toggle (click again to deselect → "all"); dropdowns use a
-   *  `__all__` sentinel for "any". */
-  let query = $state('');
-  let roleFilter = $state<'mine' | 'reporter' | null>(null);
-  let statusFilter = $state<'open' | 'inprogress' | 'done' | null>(null);
-  let projectFilter = $state<string | null>(null);
-  let assigneeFilter = $state<string | null>(null);
+  const currentFilters = $derived(jiraFiltersFor(p.instanceId));
+
+  // Read persisted UI state once at init — call the function directly
+  // so Svelte doesn't warn about referencing a derived in $state init.
+  // instanceId is stable for the lifetime of this component instance.
+  const { instanceId: _instanceId } = p;
+  const _init = jiraFiltersFor(_instanceId);
+
+  /** Search + filter state — initialised from persisted filters so the
+   *  view survives unmount/remount. Changes are synced back via $effect. */
+  let query = $state(_init.uiQuery ?? '');
+  let roleFilter = $state<'mine' | 'reporter' | null>(_init.uiRoleFilter ?? null);
+  let statusFilter = $state<'open' | 'inprogress' | 'done' | null>(_init.uiStatusFilter ?? null);
+  let projectFilter = $state<string | null>(_init.uiProjectFilter ?? null);
+  let assigneeFilter = $state<string | null>(_init.uiAssigneeFilter ?? null);
 
   const me = $derived(p.jiraStatus.kind === 'connected' ? p.jiraStatus.user.account_id : null);
-
-  const currentFilters = $derived(jiraFiltersFor(p.instanceId));
   const selectedSprintId = $derived(
     currentFilters?.sprintIds?.length ? String(currentFilters.sprintIds[0]) : '__all__'
   );
@@ -86,12 +91,25 @@
     }
   }
 
-  onMount(async () => {
+  // Persist UI filter state so it survives remounts — no server refresh needed
+  $effect(() => {
+    persistJiraUiFilters(p.instanceId, {
+      uiQuery: query,
+      uiRoleFilter: roleFilter,
+      uiStatusFilter: statusFilter,
+      uiProjectFilter: projectFilter,
+      uiAssigneeFilter: assigneeFilter
+    });
+  });
+
+  // Reload boards+sprints whenever the project filter changes
+  $effect(() => {
     if (p.jiraStatus.kind !== 'connected') return;
-    const projectKey = currentFilters?.projectKey ?? null;
-    await loadJiraBoards(projectKey).catch(() => {});
-    const board = inboxState.jiraBoardOptions?.[0];
-    if (board) await loadJiraSprints(board.id).catch(() => {});
+    const key = projectFilter ?? currentFilters.projectKey ?? null;
+    loadJiraBoards(key).then(() => {
+      const board = inboxState.jiraBoardOptions?.[0];
+      if (board) loadJiraSprints(board.id);
+    }).catch(() => {});
   });
 
   const JIRA_KEY_RE = /^[A-Z][A-Z0-9]+-\d+$/;
@@ -104,6 +122,17 @@
       query = '';
       e.preventDefault();
     }
+  }
+
+  const hotOpenKey = $derived.by(() => {
+    const q = query.trim().toUpperCase();
+    return JIRA_KEY_RE.test(q) ? q : null;
+  });
+
+  function doHotOpen() {
+    if (!hotOpenKey) return;
+    inboxState.jiraFocusKey = hotOpenKey;
+    query = '';
   }
 
   /** Unique projects (key prefix before the dash) seen in the items. */
@@ -259,6 +288,12 @@
         </button>
       {/if}
     </label>
+    {#if hotOpenKey}
+      <button class="jl-hot-hint" onclick={doHotOpen} title="Open {hotOpenKey} (Enter)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+        Open {hotOpenKey}
+      </button>
+    {/if}
     <div class="jl-chips">
       <button class="jl-toggle" class:active={roleFilter === 'mine'} disabled={!me} onclick={() => toggleRole('mine')} title="Assigned to me">
         <span class="jl-toggle-dot"></span>
@@ -502,6 +537,24 @@
   }
   .jl-search-clear:hover { color: var(--text-0); background: var(--bg-3); }
   .jl-search-clear svg { width: 10px; height: 10px; }
+
+  .jl-hot-hint {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 3px 10px;
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--accent) 10%, var(--bg-2));
+    border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+    color: var(--accent-bright);
+    font-size: 11.5px; font-weight: 500;
+    cursor: pointer;
+    transition: background 120ms, border-color 120ms;
+    width: max-content;
+  }
+  .jl-hot-hint:hover {
+    background: color-mix(in srgb, var(--accent) 18%, var(--bg-2));
+    border-color: color-mix(in srgb, var(--accent) 50%, transparent);
+  }
+  .jl-hot-hint svg { width: 11px; height: 11px; flex-shrink: 0; }
 
   .jl-chips { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
   .jl-divider {

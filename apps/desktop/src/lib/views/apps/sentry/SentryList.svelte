@@ -128,17 +128,30 @@
 
   const SENTRY_ID_RE = /^[A-Z][A-Z0-9]+-\d+$/i;
 
+  const hotOpenIssue = $derived.by(() => {
+    const q = query.trim();
+    if (!SENTRY_ID_RE.test(q)) return null;
+    return items.find((it) => it.short_id.toLowerCase() === q.toLowerCase()) ?? null;
+  });
+
+  const hotOpenShortId = $derived.by(() => {
+    const q = query.trim();
+    return SENTRY_ID_RE.test(q) ? q.toUpperCase() : null;
+  });
+
   function handleSearchKeydown(e: KeyboardEvent) {
     if (e.key !== 'Enter') return;
-    const q = query.trim();
-    if (SENTRY_ID_RE.test(q)) {
-      const found = items.find((it) => it.short_id.toLowerCase() === q.toLowerCase());
-      if (found) {
-        openSentryFocus(found.id);
-        query = '';
-        e.preventDefault();
-      }
+    if (hotOpenIssue) {
+      openSentryFocus(hotOpenIssue.id);
+      query = '';
+      e.preventDefault();
     }
+  }
+
+  function doHotOpen() {
+    if (!hotOpenIssue) return;
+    openSentryFocus(hotOpenIssue.id);
+    query = '';
   }
 </script>
 
@@ -164,6 +177,16 @@
         </button>
       {/if}
     </label>
+    {#if hotOpenShortId}
+      <button class="sl-hot-hint" onclick={doHotOpen} title="Open {hotOpenShortId} (Enter)" disabled={!hotOpenIssue}>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+        {#if hotOpenIssue}
+          {hotOpenIssue.short_id} · {hotOpenIssue.title}
+        {:else}
+          {hotOpenShortId} — not in inbox
+        {/if}
+      </button>
+    {/if}
     <div class="sl-chips">
       <button class="sl-toggle" class:active={levelFilter === 'fatal'} onclick={() => toggleLevel('fatal')}>
         <span class="sl-toggle-dot"></span>
@@ -367,6 +390,26 @@
   }
   .sl-search-clear:hover { color: var(--text-0); background: var(--bg-3); }
   .sl-search-clear svg { width: 10px; height: 10px; }
+
+  .sl-hot-hint {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 3px 10px;
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--accent) 10%, var(--bg-2));
+    border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+    color: var(--accent-bright);
+    font-size: 11.5px; font-weight: 500;
+    cursor: pointer;
+    max-width: 100%;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    transition: background 120ms, border-color 120ms;
+  }
+  .sl-hot-hint:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--accent) 18%, var(--bg-2));
+    border-color: color-mix(in srgb, var(--accent) 50%, transparent);
+  }
+  .sl-hot-hint:disabled { opacity: 0.5; cursor: default; }
+  .sl-hot-hint svg { width: 11px; height: 11px; flex-shrink: 0; }
 
   .sl-chips { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
   .sl-divider {

@@ -378,17 +378,29 @@
     if (e.key !== 'Enter') return;
     const q = query.trim();
     if (/^#?\d+$/.test(q)) {
-      const num = parseInt(q.replace('#', ''));
-      const found = items.find((it) => it.number === num);
-      if (found) {
-        p.onSelect(found.id);
-      } else {
-        // not in inbox — open GitHub search in browser
-        p.onOpenBrowser(`https://github.com/pulls?q=${encodeURIComponent(q)}`);
-      }
-      query = '';
+      doHotOpen();
       e.preventDefault();
     }
+  }
+
+  const hotOpenNum = $derived.by(() => {
+    const q = query.trim();
+    if (!/^#?\d+$/.test(q)) return null;
+    return parseInt(q.replace('#', ''));
+  });
+
+  const hotOpenItem = $derived(
+    hotOpenNum !== null ? (items.find((it) => it.number === hotOpenNum) ?? null) : null
+  );
+
+  function doHotOpen() {
+    if (hotOpenNum === null) return;
+    if (hotOpenItem) {
+      p.onSelect(hotOpenItem.id);
+    } else {
+      p.onOpenBrowser(`https://github.com/pulls?q=%23${hotOpenNum}`);
+    }
+    query = '';
   }
 
   function stateLabel(it: InboxItem): string {
@@ -447,6 +459,16 @@
         </button>
       {/if}
     </label>
+    {#if hotOpenNum !== null}
+      <button class="gl-hot-hint" onclick={doHotOpen} title="Open #{hotOpenNum} (Enter)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+        {#if hotOpenItem}
+          #{hotOpenItem.number} · {hotOpenItem.title}
+        {:else}
+          Open #{hotOpenNum} on GitHub
+        {/if}
+      </button>
+    {/if}
 
     <div class="gl-chips">
       <button
@@ -751,6 +773,25 @@
   }
   .gl-search-clear:hover { color: var(--text-0); background: var(--bg-3); }
   .gl-search-clear svg { width: 10px; height: 10px; }
+
+  .gl-hot-hint {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 3px 10px;
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--accent) 10%, var(--bg-2));
+    border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+    color: var(--accent-bright);
+    font-size: 11.5px; font-weight: 500;
+    cursor: pointer;
+    max-width: 100%;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    transition: background 120ms, border-color 120ms;
+  }
+  .gl-hot-hint:hover {
+    background: color-mix(in srgb, var(--accent) 18%, var(--bg-2));
+    border-color: color-mix(in srgb, var(--accent) 50%, transparent);
+  }
+  .gl-hot-hint svg { width: 11px; height: 11px; flex-shrink: 0; }
 
   .gl-chips {
     display: flex; gap: 6px; flex-wrap: wrap; align-items: center;

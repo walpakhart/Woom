@@ -86,6 +86,14 @@ export interface JiraFilters {
    *  really show every ticket assigned to the user. */
   statusName: string | null;
   search: string;
+  /** Client-side UI filter state persisted so the list view survives
+   *  unmount/remount. These fields are NOT used in JQL — they filter
+   *  the already-loaded items in JiraList. */
+  uiQuery: string;
+  uiRoleFilter: 'mine' | 'reporter' | null;
+  uiStatusFilter: 'open' | 'inprogress' | 'done' | null;
+  uiProjectFilter: string | null;
+  uiAssigneeFilter: string | null;
 }
 
 export interface SentryFiltersPersisted {
@@ -126,7 +134,12 @@ export const DEFAULT_JIRA_FILTERS: JiraFilters = {
   boardIds: [],
   sprintIds: [],
   statusName: null,
-  search: ''
+  search: '',
+  uiQuery: '',
+  uiRoleFilter: null,
+  uiStatusFilter: null,
+  uiProjectFilter: null,
+  uiAssigneeFilter: null
 };
 
 export const DEFAULT_SENTRY_FILTERS: SentryFiltersPersisted = {
@@ -179,12 +192,23 @@ function normalizeJiraFilters(raw: unknown): JiraFilters {
   } else if (typeof parsed.boardId === 'number') {
     boardIds = [parsed.boardId];
   }
+  const uiRoleRaw = parsed.uiRoleFilter;
+  const uiStatusRaw = parsed.uiStatusFilter;
   return {
     projectKey: typeof parsed.projectKey === 'string' ? parsed.projectKey : null,
     boardIds,
     sprintIds,
     statusName,
-    search: typeof parsed.search === 'string' ? parsed.search : ''
+    search: typeof parsed.search === 'string' ? parsed.search : '',
+    uiQuery: typeof parsed.uiQuery === 'string' ? parsed.uiQuery : '',
+    uiRoleFilter:
+      uiRoleRaw === 'mine' || uiRoleRaw === 'reporter' ? uiRoleRaw : null,
+    uiStatusFilter:
+      uiStatusRaw === 'open' || uiStatusRaw === 'inprogress' || uiStatusRaw === 'done'
+        ? uiStatusRaw
+        : null,
+    uiProjectFilter: typeof parsed.uiProjectFilter === 'string' ? parsed.uiProjectFilter : null,
+    uiAssigneeFilter: typeof parsed.uiAssigneeFilter === 'string' ? parsed.uiAssigneeFilter : null
   };
 }
 
@@ -329,7 +353,12 @@ function readJiraTabFilters(): JiraFilters {
         typeof parsed.statusName === 'string' && parsed.statusName.trim()
           ? parsed.statusName
           : null,
-      search: typeof parsed.search === 'string' ? parsed.search : ''
+      search: typeof parsed.search === 'string' ? parsed.search : '',
+      uiQuery: '',
+      uiRoleFilter: null,
+      uiStatusFilter: null,
+      uiProjectFilter: null,
+      uiAssigneeFilter: null
     };
   } catch {
     return { ...DEFAULT_JIRA_FILTERS };
