@@ -1,26 +1,23 @@
 <script lang="ts">
-  /* CanvasApp — full-screen workspace для холста.
-     Layout: [CanvasSurface (flex)] [props side (280, optional)]
-
-     Right side panel — info: shape count + drop hint. Полные
-     properties / minimap — следующий milestone. */
-
   import CanvasSurface from './canvas/CanvasSurface.svelte';
+  import InlineClaude from './editor/InlineClaude.svelte';
   import Splitter from '$lib/components/ui/Splitter.svelte';
   import { canvasState } from '$lib/state/canvas.svelte';
-  import { layoutState } from '$lib/state/layout.svelte';
-  import { sessionsState } from '$lib/state/sessions.svelte';
+  import { layoutState, APP_INSTANCE_IDS } from '$lib/state/layout.svelte';
+  import { sessionsState, updateSession } from '$lib/state/sessions.svelte';
   import type { Shape } from '$lib/state/canvas.svelte';
 
   interface Props {
     instanceId: string;
     onCardOpen?: (shape: Shape) => void;
+    onOpenClaude?: () => void;
+    onQuickSend?: (sessionId: string, text: string) => void;
+    onOpenSession?: (sessionId: string, agentInstanceId: string) => void;
   }
   let p: Props = $props();
 
   let sideOpen = $state(true);
 
-  /** Live shape/edge counts из активного канваса. */
   const stats = $derived.by(() => {
     const inst = canvasState.byInstance[p.instanceId];
     const canvasId = inst?.activeId;
@@ -32,22 +29,25 @@
     };
   });
 
-  /** Curated mark for the open canvas instance — shown as the side
-   *  pane's editorial title so users always see which Rothko /
-   *  Hokusai canvas they're inside. */
   const instanceLabel = $derived(
     layoutState.instances.canvas.find((i) => i.id === p.instanceId)?.name ?? 'Canvas'
   );
 
   const activeCanvasId = $derived(canvasState.byInstance[p.instanceId]?.activeId ?? null);
 
-  /** Agent sessions linked to the current canvas document. */
-  const linkedSessions = $derived.by(() => {
-    if (!activeCanvasId) return [];
-    return sessionsState.list
-      .filter((s) => s.linkedCanvasId === activeCanvasId)
-      .map((s) => ({ id: s.id, title: s.title || 'Untitled chat', kind: s.agentKind }));
-  });
+  function handleLinkSession(sessionId: string) {
+    if (!activeCanvasId) return;
+    const sess = sessionsState.list.find((s) => s.id === sessionId);
+    if (!sess) return;
+    const patch: Partial<typeof sess> = { linkedCanvasId: activeCanvasId };
+    if (!sess.agentInstanceId && (sess.agentKind === 'claude' || sess.agentKind === 'cursor'))
+      patch.agentInstanceId = APP_INSTANCE_IDS[sess.agentKind];
+    updateSession(sessionId, patch);
+  }
+
+  function handleUnlinkSession(sessionId: string) {
+    updateSession(sessionId, { linkedCanvasId: null });
+  }
 </script>
 
 <section
@@ -77,38 +77,29 @@
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M18 6 6 18M6 6l12 12"/></svg>
             </button>
           </header>
-          <div class="sc-side-body">
-        <div class="sc-stat-row">
-          <div class="sc-stat">
-            <div class="sc-stat-num mono">{stats.shapes}</div>
-            <div class="sc-stat-lbl mono">shapes</div>
-          </div>
-          <div class="sc-stat">
-            <div class="sc-stat-num mono">{stats.edges}</div>
-            <div class="sc-stat-lbl mono">edges</div>
-          </div>
-        </div>
-
-        <div class="sc-section">
-          <div class="sc-group-label mono">Linked agents</div>
-          {#if linkedSessions.length === 0}
-            <p class="sc-empty-p">
-              No agents linked. Link a session from the agent's cwd bar to drive
-              this canvas with <span class="mono">canvas_*</span> MCP tools.
-            </p>
-          {:else}
-            <div class="sc-linked-list">
-              {#each linkedSessions as ls (ls.id)}
-                <div class="sc-linked-item">
-                  <span class="sc-linked-dot" class:sc-linked-dot--cursor={ls.kind === 'cursor'}></span>
-                  <span class="sc-linked-name">{ls.title}</span>
-                  <span class="sc-linked-kind mono">{ls.kind}</span>
-                </div>
-              {/each}
+          <div class="sc-stats">
+            <div class="sc-stat-row">
+              <div class="sc-stat">
+                <div class="sc-stat-num mono">{stats.shapes}</div>
+                <div class="sc-stat-lbl mono">shapes</div>
+              </div>
+              <div class="sc-stat">
+                <div class="sc-stat-num mono">{stats.edges}</div>
+                <div class="sc-stat-lbl mono">edges</div>
+              </div>
             </div>
-          {/if}
-        </div>
           </div>
+          <InlineClaude
+            instanceId={p.instanceId}
+            linkKind="canvas"
+            activeCanvasId={activeCanvasId}
+            onClose={() => (sideOpen = false)}
+            onOpenClaude={p.onOpenClaude ?? (() => {})}
+            onQuickSend={p.onQuickSend ?? (() => {})}
+            onOpenSession={p.onOpenSession ?? (() => {})}
+            onLinkSession={handleLinkSession}
+            onUnlinkSession={handleUnlinkSession}
+          />
         </aside>
       {/snippet}
     </Splitter>
@@ -136,6 +127,9 @@
     width: 100%;
     min-width: 0;
   }
+  /* InlineClaude fills the remaining side-panel height, overriding its
+     own fixed 280px width so the splitter controls the column width. */
+  .sc-shell :global(.ic) { width: 100%; flex: 1; border-left: none; min-height: 0; }
 
   .sc-canvas {
     display: flex;
@@ -163,9 +157,12 @@
   .sc-show-side:hover { color: var(--text-0); border-color: var(--border-hi); }
   .sc-show-side svg { width: 13px; height: 13px; }
 
-  /* Small mono tag next to the editorial instance name so users still
-     see "Canvas" as a kind label even when the head shows a curated
-     mark like "Rothko" or "Hokusai". */
+  .sc-side {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
   .sc-kind-tag {
     font-size: 9.5px; font-weight: 700;
     letter-spacing: 0.10em;
@@ -177,10 +174,10 @@
     border: 1px solid color-mix(in srgb, var(--src-canvas) 22%, transparent);
   }
 
-  .sc-side-body {
-    overflow-y: auto;
+  .sc-stats {
     padding: 14px;
-    display: flex; flex-direction: column; gap: 14px;
+    flex-shrink: 0;
+    border-bottom: 1px solid var(--border);
   }
 
   .sc-stat-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
@@ -200,44 +197,5 @@
   .sc-stat-lbl {
     font-size: 9.5px; color: var(--text-mute);
     margin-top: 4px; text-transform: uppercase; letter-spacing: 0.08em;
-  }
-
-  .sc-section { display: flex; flex-direction: column; gap: 6px; }
-  .sc-group-label {
-    font-size: 9.5px; font-weight: 700;
-    letter-spacing: 0.10em;
-    text-transform: uppercase;
-    color: var(--text-mute);
-  }
-  .sc-empty-p {
-    font-size: 12px; color: var(--text-2);
-    line-height: 1.55; margin: 0;
-  }
-  .sc-empty-p .mono {
-    font-family: 'JetBrains Mono', monospace; font-size: 11px;
-    padding: 1px 5px; background: var(--bg-2); border: 1px solid var(--border);
-    border-radius: 4px; color: var(--src-canvas);
-  }
-
-  .sc-linked-list { display: flex; flex-direction: column; gap: 6px; }
-  .sc-linked-item {
-    display: flex; align-items: center; gap: 8px;
-    padding: 6px 10px;
-    border-radius: 8px;
-    background: color-mix(in srgb, var(--src-canvas) 6%, transparent);
-    border: 1px solid color-mix(in srgb, var(--src-canvas) 16%, transparent);
-  }
-  .sc-linked-dot {
-    width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
-    background: var(--src-claude);
-  }
-  .sc-linked-dot--cursor { background: var(--src-cursor); }
-  .sc-linked-name {
-    flex: 1; font-size: 12px; color: var(--text-0);
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  }
-  .sc-linked-kind {
-    font-size: 9.5px; font-weight: 700; text-transform: uppercase;
-    letter-spacing: 0.08em; color: var(--text-mute);
   }
 </style>

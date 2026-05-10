@@ -27,7 +27,10 @@
     instanceId: string;
     /** Which kind of host app is showing the pane. Switches the filter
      *  field, the sub-label copy, and the empty-state hint. */
-    linkKind?: 'editor' | 'terminal';
+    linkKind?: 'editor' | 'terminal' | 'canvas';
+    /** Required when `linkKind === 'canvas'`. The canvas DOCUMENT id
+     *  (not the canvas instance id) to filter linked sessions by. */
+    activeCanvasId?: string | null;
     onClose: () => void;
     /** "Maximise" affordance — opens the agent's full app. Kept generic
      *  in copy ("Open agent app") so it makes sense in both editor and
@@ -51,8 +54,12 @@
   }
   let p: Props = $props();
   const linkKind = $derived(p.linkKind ?? 'editor');
-  const hostLabel = $derived(linkKind === 'terminal' ? 'this terminal' : 'this editor');
-  const linkVerb = $derived(linkKind === 'terminal' ? 'Link to Terminal' : 'Link to Editor');
+  const hostLabel = $derived(
+    linkKind === 'terminal' ? 'this terminal' : linkKind === 'canvas' ? 'this canvas' : 'this editor'
+  );
+  const linkVerb = $derived(
+    linkKind === 'terminal' ? 'Link to Terminal' : linkKind === 'canvas' ? 'Link to Canvas' : 'Link to Editor'
+  );
 
   const linkedAgents = $derived.by(() => {
     const out: { sessionId: string; agentInstanceId: string; kind: 'claude' | 'cursor'; title: string; sending: boolean; queueLen: number }[] = [];
@@ -60,8 +67,11 @@
       if (linkKind === 'editor') {
         if (!s.linkedToEditor) continue;
         if (s.linkedToEditorInstanceId !== p.instanceId) continue;
-      } else {
+      } else if (linkKind === 'terminal') {
         if (s.linkedTerminalInstanceId !== p.instanceId) continue;
+      } else {
+        if (!p.activeCanvasId) continue;
+        if (s.linkedCanvasId !== p.activeCanvasId) continue;
       }
       /* Floating sessions (no agentInstanceId yet) fall back to the
          singleton app id for their kind so the row can still render
@@ -106,7 +116,9 @@
       const linkedHere =
         linkKind === 'editor'
           ? s.linkedToEditor && s.linkedToEditorInstanceId === p.instanceId
-          : s.linkedTerminalInstanceId === p.instanceId;
+          : linkKind === 'terminal'
+          ? s.linkedTerminalInstanceId === p.instanceId
+          : !!p.activeCanvasId && s.linkedCanvasId === p.activeCanvasId;
       if (linkedHere) continue;
       out.push({ sessionId: s.id, kind: s.agentKind, title: s.title || 'Untitled chat' });
     }

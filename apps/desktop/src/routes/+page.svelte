@@ -4753,7 +4753,18 @@
 
     {:else if view === 'canvasApp'}
       {#key layoutState.activeInstance.canvas}
-        <CanvasApp instanceId={layoutState.activeInstance.canvas} onCardOpen={openCanvasCardSource} />
+        <CanvasApp
+          instanceId={layoutState.activeInstance.canvas}
+          onCardOpen={openCanvasCardSource}
+          onOpenClaude={() => (view = 'claudeApp')}
+          onQuickSend={quickSendToSession}
+          onOpenSession={(sessionId, agentInstanceId) => {
+            const sess = sessionsState.list.find((x) => x.id === sessionId);
+            if (!sess) return;
+            setActiveSessionInInstance(agentInstanceId, sessionId);
+            view = sess.agentKind === 'cursor' ? 'cursorApp' : 'claudeApp';
+          }}
+        />
       {/key}
 
     {:else if view === 'terminalApp'}
