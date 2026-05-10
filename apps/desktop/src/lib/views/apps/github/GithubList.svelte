@@ -389,8 +389,13 @@
     return parseInt(q.replace('#', ''));
   });
 
+  // Check both local inbox items and remote search results
   const hotOpenItem = $derived(
-    hotOpenNum !== null ? (items.find((it) => it.number === hotOpenNum) ?? null) : null
+    hotOpenNum !== null
+      ? (items.find((it) => it.number === hotOpenNum) ??
+         searchResults?.find((it) => it.number === hotOpenNum) ??
+         null)
+      : null
   );
 
   function doHotOpen() {
@@ -398,7 +403,17 @@
     if (hotOpenItem) {
       p.onSelect(hotOpenItem.id);
     } else {
-      p.onOpenBrowser(`https://github.com/pulls?q=%23${hotOpenNum}`);
+      // Build a scoped URL limited to repos in the dropdown list
+      const knownRepos = availableRepos.length > 0
+        ? availableRepos.map((r) => `${r.owner}/${r.name}`)
+        : [...new Map(
+            items.filter((it) => it.repo).map((it) => [`${it.repo!.owner}/${it.repo!.name}`, `${it.repo!.owner}/${it.repo!.name}`])
+          ).values()];
+      const repoScope = knownRepos.slice(0, 12).map((r) => `repo:${r}`).join(' ');
+      const q = repoScope
+        ? `is:pr is:open #${hotOpenNum} ${repoScope}`
+        : `is:pr is:open #${hotOpenNum} involves:@me`;
+      p.onOpenBrowser(`https://github.com/search?q=${encodeURIComponent(q)}&type=pullrequests`);
     }
     query = '';
   }
