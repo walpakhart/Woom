@@ -183,25 +183,39 @@
 
     const isAllOpen = repoFilter === '__all_open__';
     const isSpecificRepo = repoFilter !== null && repoFilter !== '__all_open__';
-    const hasNarrower =
-      isAllOpen ||
-      isSpecificRepo ||
-      (authorFilter !== null && authorFilter !== me) ||
-      roleFilter === 'reviewer';
-    if (!hasNarrower) parts.push('involves:@me');
+
+    if (isSpecificRepo) {
+      /* Scoped to a single repo — no involvement filter needed. */
+      parts.push(`repo:${repoFilter}`);
+    } else if (text || isAllOpen) {
+      /* Searching or "All open PRs": scope to repos the user has access
+         to via user: qualifiers (one per unique org/owner in the list).
+         Falls back to involves:@me if repos haven't loaded yet so the
+         first keystroke still works before loadAvailableRepos finishes. */
+      const owners = [...new Set(availableRepos.map((r) => r.owner))];
+      if (owners.length > 0) {
+        owners.forEach((o) => parts.push(`user:${o}`));
+      } else {
+        parts.push('involves:@me');
+      }
+    } else {
+      /* Pure inbox (no query, no special scope): involves:@me so the
+         default view shows only PRs/issues that need the user's attention,
+         not the full commit history of every repo. */
+      const hasNarrower =
+        (authorFilter !== null && authorFilter !== me) || roleFilter === 'reviewer';
+      if (!hasNarrower) parts.push('involves:@me');
+    }
 
     if (roleFilter === 'mine' && me) parts.push(`author:${me}`);
     if (roleFilter === 'reviewer' && me) parts.push('review-requested:@me');
 
-    /* Open/Draft state — open is default, draft refines further. */
     if (stateFilter === 'open') parts.push('is:open', 'draft:false');
     else if (stateFilter === 'draft') parts.push('is:open', 'draft:true');
     else parts.push('is:open');
 
-    /* "All open PRs" scope: pin to PRs only (issues are excluded so
-       the user gets a homogeneous list in PR-mode). */
-    if (isAllOpen) parts.push('is:pr');
-    if (isSpecificRepo) parts.push(`repo:${repoFilter}`);
+    /* Always pin to PRs when searching so issues don't pollute results. */
+    if (text || isAllOpen) parts.push('is:pr');
     if (authorFilter) parts.push(`author:${authorFilter}`);
 
     parts.push('sort:updated-desc');
