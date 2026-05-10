@@ -26,7 +26,7 @@ release pipeline, first-run wizard, polish.
 - **SQLite-backed object cache, event log, repository table, rule_set
   table, workspace/member tables** — none are needed for v0.1. State
   lives in localStorage on the frontend; the only persistent backend
-  store is the `forgehold-memory` MCP sidecar's note DB. Re-add when
+  store is the `woom-memory` MCP sidecar's note DB. Re-add when
   the team layer arrives in v0.3.
 - **Per-scope `.forge/rules.md` parser** — replaced with a single
   global ruleset injected via `--append-system-prompt`. Per-folder /
@@ -94,15 +94,15 @@ Built as Rust sidecars in `apps/desktop/src-tauri/sidecars/`. Wired into
 Claude via `--mcp-config` (see `apps/desktop/src-tauri/src/claude.rs`
 `build_mcp_config`).
 
-**forgehold-jira** — read-only context for Claude runs:
+**woom-jira** — read-only context for Claude runs:
 - `mcp__jira__get_issue`, `mcp__jira__search`
 
-**forgehold-github** — read-only context:
+**woom-github** — read-only context:
 - `mcp__github__get_pr`, `mcp__github__get_pr_diff`, `mcp__github__get_pr_files`,
   `mcp__github__get_pr_comments`, `mcp__github__list_tree`, `mcp__github__get_file`,
   `mcp__github__list_commits`
 
-**forgehold-memory** — long-term scratch memory (SQLite + FTS5):
+**woom-memory** — long-term scratch memory (SQLite + FTS5):
 - `mcp__memory__save`, `mcp__memory__search`, `mcp__memory__list`, `mcp__memory__delete`
 
 **~~forge-slack~~** — Cut to post-v1.
@@ -126,7 +126,7 @@ GitHub Desktop-style local repo management. Details in [REPOS.md](REPOS.md).
 
 - [x] ~~`repository` table~~ — Cut, replaced with localStorage.
 - [x] Git ops (shell-out via `git`): clone, fetch, pull, status, branches, log, diff, stage, commit, push, checkout, create-branch.
-- [x] Worktrees (`worktree create/remove/list/diff/apply`) under `~/Library/Application Support/Forgehold/worktrees/<session>`.
+- [x] Worktrees (`worktree create/remove/list/diff/apply`) under `~/Library/Application Support/Woom/worktrees/<session>`.
 - [x] Repositories view (`RepositoriesView`) — card list, repo detail, branches, releases, files.
 - [ ] Clone-from-GitHub-picker dialog (manual clone is wired; picker UI is pending).
 - [ ] "Open in Zed/VS Code" spawn action (open-in-Editor works; external IDE handoff pending).
@@ -148,7 +148,7 @@ GitHub Desktop-style local repo management. Details in [REPOS.md](REPOS.md).
 - [x] Cross-workbench routing (drag onto a header pill → menu shows every instance across all workbenches).
 - [x] Claude bridge: `claude -p` headless + `--mcp-config` pointing to bundled sidecars + `--allowedTools` allow-list. Streaming via `stream-json`. Session resume by uuid.
 - [x] Cursor bridge: `cursor-agent -p` with chat-id management + model picker.
-- [x] Worktree-isolated runs (per-session branch `forgehold/<sessionId>`); main tree never touched.
+- [x] Worktree-isolated runs (per-session branch `woom/<sessionId>`); main tree never touched.
 - [x] Apply / discard worktree actions exposed in the column header.
 - [x] Action cards inline in chat for proposed commits / PRs / bash / cwd switches; user approves before they run.
 - [ ] ~~Output → Artifact (diff + summary as a draggable artifact)~~ — Cut to post-v1; the diff modal covers the inspect path.
@@ -183,7 +183,7 @@ Remaining:
 - [ ] Custom `.dmg` background + Applications symlink.
 - [ ] GitHub Actions release workflow: tag → build → notarize → publish.
 
-**Deliverable:** a signed, notarized `Forgehold.dmg` (Universal) that
+**Deliverable:** a signed, notarized `Woom.dmg` (Universal) that
 opens on macOS 13+ without Gatekeeper warnings. v0.1 ships when this
 checklist is closed.
 

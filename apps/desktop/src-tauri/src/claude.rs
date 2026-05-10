@@ -1,6 +1,6 @@
 //! Claude Code CLI detection.
 //!
-//! Forgehold does NOT own Claude Code authentication — the `claude` CLI manages
+//! Woom does NOT own Claude Code authentication — the `claude` CLI manages
 //! its own auth (subscription via `claude login`, or API key via
 //! `ANTHROPIC_API_KEY`). We just detect whether the CLI is installed and
 //! whether it appears to be configured.
@@ -396,7 +396,7 @@ async fn spawn_claude_armed(args: &AskArgs<'_>) -> Result<ArmedCli, ClaudeRunErr
         .unwrap_or(false);
     if memory_available {
         system_parts.push(
-            "Forgehold memory (persistent across sessions, ESSENTIAL — \
+            "Woom memory (persistent across sessions, ESSENTIAL — \
              the CLI session itself is ephemeral and may be wiped \
              between app restarts; this DB survives). Tools: \
              `mcp__memory__memory_search`, `memory_save`, `memory_list`, \
@@ -458,7 +458,7 @@ async fn spawn_claude_armed(args: &AskArgs<'_>) -> Result<ArmedCli, ClaudeRunErr
          after a Stop / restart."
             .to_string(),
     );
-    // Action-chaining contract. Forgehold auto-resumes the agent's
+    // Action-chaining contract. Woom auto-resumes the agent's
     // turn after every approval card resolves (commit / PR / bash /
     // switch_cwd) — the result is fed back as a synthesised user
     // message and you immediately get a fresh turn to react. So the
@@ -471,7 +471,7 @@ async fn spawn_claude_armed(args: &AskArgs<'_>) -> Result<ArmedCli, ClaudeRunErr
     system_parts.push(
         "Action cards (`mcp__github__propose_commit` / `propose_pr` / \
          `propose_bash` / `propose_switch_cwd`): once you call one, \
-         end the turn — Forgehold runs the card and AUTO-RESUMES you \
+         end the turn — Woom runs the card and AUTO-RESUMES you \
          with the outcome as the next turn (success or failure recap). \
          You do NOT need the user to type \"continue\" or \"go ahead\" \
          between cards. Don't write \"waiting for X\" / \"ждy коммит\" \
@@ -614,7 +614,7 @@ fn arm_streams(armed: ArmedCli) -> StreamHandles {
 /// history hydration). Otherwise we spawn fresh.
 ///
 /// `claude_uuid` is the Claude CLI session UUID (independent of
-/// Forgehold's own `session_id`). `resume=true` → `--resume <uuid>`,
+/// Woom's own `session_id`). `resume=true` → `--resume <uuid>`,
 /// `resume=false` → `--session-id <uuid>` (creates a fresh persisted
 /// session). On `ResumeOrphan` the frontend self-heals with a new
 /// uuid + recap injection.
@@ -764,7 +764,7 @@ async fn consume_handles(
     //     a cleanup expedient — not an error condition. Was 30s,
     //     which made the UI animate the thinking dots for 15-20s
     //     after every turn while the CLI tore down its 5 MCP
-    //     sidecars; users read that as "Forgehold is hung". 2s
+    //     sidecars; users read that as "Woom is hung". 2s
     //     covers the common trailing-events window without making
     //     the CLI's MCP-shutdown latency user-visible.
     //   - With no `result` yet, 15 minutes idle is the hard ceiling — long

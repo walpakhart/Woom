@@ -39,7 +39,7 @@
   let { shapes, viewport, onTeleport, onClose }: Props = $props();
 
   /* Map dimensions in CSS px — picked so the map is informative but
-     compact. Aspect ratio 5:3 fits most workbench layouts. */
+     compact. Aspect ratio 5:3 fits most solo layouts. */
   const MAP_W = 200;
   const MAP_H = 120;
 
@@ -140,8 +140,8 @@
       case 'mermaid':
       case 'dot':                 return '#0ea5e9';
       case 'code':                return '#a855f7';
-      case 'image':               return '#22c55e';
-      case 'sticky':              return 'rgba(238, 107, 31, 0.85)';
+      case 'image':               return '#A8D9B8';
+      case 'sticky':              return 'rgba(232, 130, 100, 0.85)';
       case 'frame':
       case 'group':               return 'rgba(255, 255, 255, 0.18)';
       default:                    return 'rgba(255, 255, 255, 0.45)';
@@ -212,7 +212,7 @@
         y={vpRect.y.toFixed(2)}
         width={vpRect.w.toFixed(2)}
         height={vpRect.h.toFixed(2)}
-        fill="rgba(238, 107, 31, 0.10)"
+        fill="rgba(232, 130, 100, 0.10)"
         stroke="var(--accent)"
         stroke-width="1.2"
         rx="2"

@@ -1,12 +1,12 @@
-//! Local writer for the `forgehold-memory` SQLite store.
+//! Local writer for the `woom-memory` SQLite store.
 //!
-//! Lets the Forgehold UI persist a chat message to long-term memory
+//! Lets the Woom UI persist a chat message to long-term memory
 //! without going through an MCP round-trip on the agent side. Used
 //! by the "Save as note" right-click action on chat bubbles
 //! (`docs/ROADMAP_1.0.md §2.2.11`).
 //!
 //! The schema is assumed to already exist — created by the
-//! `forgehold-memory` sidecar on first launch. We only INSERT here;
+//! `woom-memory` sidecar on first launch. We only INSERT here;
 //! never CREATE / ALTER. If the file is missing we let the error
 //! propagate so the toast surfaces it (the user can launch any
 //! memory-aware agent column to bootstrap the DB).
@@ -20,7 +20,7 @@ fn db_path() -> Result<PathBuf, String> {
     Ok(PathBuf::from(home)
         .join("Library")
         .join("Application Support")
-        .join("Forgehold")
+        .join("Woom")
         .join("memory.db"))
 }
 

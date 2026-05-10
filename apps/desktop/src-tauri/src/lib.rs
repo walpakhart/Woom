@@ -73,7 +73,7 @@ pub enum SentryConnectionStatus {
     Connected { user: SentryUser },
 }
 
-/// When Forgehold is launched from Finder/Dock (not a terminal) the process
+/// When Woom is launched from Finder/Dock (not a terminal) the process
 /// inherits macOS's minimal PATH (`/usr/bin:/bin:/usr/sbin:/sbin`) — the
 /// user's `~/.zshrc`/`.bash_profile` never runs. Tools like `claude`,
 /// `cursor-agent`, and anything installed via Homebrew/nvm/bun/volta live
@@ -193,7 +193,7 @@ fn bundled_docs_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String
     Err("docs directory not found (build with bundle resources or run from repo)".into())
 }
 
-/// Kill any Forgehold sidecar processes left running from a previous
+/// Kill any Woom sidecar processes left running from a previous
 /// session. See `run()` for why this matters — Cursor's MCP client
 /// keeps sidecars alive across restarts and serves their (old) tool
 /// schema until the process dies.
@@ -205,12 +205,12 @@ fn bundled_docs_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String
 /// processes.
 fn kill_stale_sidecars() {
     /* `pkill -f` matches against the full command line, so paths like
-       /Applications/Forgehold.app/Contents/MacOS/forgehold-app match
+       /Applications/Woom.app/Contents/MacOS/woom-app match
        cleanly. We pkill each sidecar binary by exact suffix name —
        avoids any regex-alternation portability questions and keeps
        the match deliberately scoped to our bundled binaries (never
-       touches forgehold-desktop, which is the main process). */
-    for name in ["forgehold-app", "forgehold-github", "forgehold-jira", "forgehold-sentry", "forgehold-memory"] {
+       touches woom-desktop, which is the main process). */
+    for name in ["woom-app", "woom-github", "woom-jira", "woom-sentry", "woom-memory"] {
         let _ = std::process::Command::new("pkill")
             .arg("-f")
             .arg(name)
@@ -229,26 +229,26 @@ pub fn run() {
      * for the moment a Sentry DSN ships with the build. See
      * `crash_reporting::init_if_enabled` for the wiring. */
     crash_reporting::init_if_enabled();
-    // Kill any stale Forgehold sidecars left behind by Cursor / Claude
-    // from a previous Forgehold version. Cursor's MCP client spawns
+    // Kill any stale Woom sidecars left behind by Cursor / Claude
+    // from a previous Woom version. Cursor's MCP client spawns
     // sidecars on first handshake and keeps them alive across Cursor
-    // restarts and Forgehold restarts — `ps aux | grep forgehold-app`
+    // restarts and Woom restarts — `ps aux | grep woom-app`
     // shows the original PID days later. After a DMG update, those
     // long-lived sidecars run the OLD binary's tool schema; the new
     // tools / aliases / batch endpoints simply aren't there for the
     // agent to call. Killing them here forces Cursor (and any
     // already-running Claude session) to spawn fresh ones from the
     // bundle we're about to register, which solves the "I just
-    // updated Forgehold but Cursor still says missing field
+    // updated Woom but Cursor still says missing field
     // from_shape_id" class of bugs.
     //
     // Single-user macOS app, so there's never a "kill the other
-    // user's Forgehold sidecars" risk to worry about.
+    // user's Woom sidecars" risk to worry about.
     kill_stale_sidecars();
-    // Push the current set of Forgehold-owned MCP entries (jira / github /
+    // Push the current set of Woom-owned MCP entries (jira / github /
     // sentry / memory / app) into `~/.cursor/mcp.json` once at startup.
     // Without this, an existing user wouldn't pick up new sidecars (most
-    // notably `forgehold-app` for UI-navigation tools) until they touched
+    // notably `woom-app` for UI-navigation tools) until they touched
     // a connect/disconnect toggle. Best-effort — a failure here just leaves
     // the cursor mcp config a turn behind; no UX impact otherwise.
     let _ = cursor_mcp::sync();
@@ -364,6 +364,7 @@ pub fn run() {
             app_data_dir,
             set_window_zoom,
             fs_list_dir,
+            fs_walk_files,
             fs_path_exists,
             fs_bash_run,
             git_status,
@@ -439,7 +440,7 @@ pub fn run() {
             let ipc_app = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 if let Err(e) = action_ipc::start_ipc_server(ipc_handle, ipc_app) {
-                    eprintln!("[forgehold] action IPC server failed to start: {e}");
+                    eprintln!("[woom] action IPC server failed to start: {e}");
                 }
             });
             // Spawn the localhost terminal-MCP bridge. Failure is
@@ -451,11 +452,11 @@ pub fn run() {
                 match terminal_bridge::start(handle.clone()).await {
                     Ok(port) => {
                         eprintln!(
-                            "[forgehold] terminal MCP bridge listening on 127.0.0.1:{port}"
+                            "[woom] terminal MCP bridge listening on 127.0.0.1:{port}"
                         );
                     }
                     Err(e) => {
-                        eprintln!("[forgehold] terminal bridge failed to start: {e}");
+                        eprintln!("[woom] terminal bridge failed to start: {e}");
                     }
                 }
             });
@@ -483,12 +484,12 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| {
-            // Kill our sidecars when Forgehold quits. Tauri owns the
-            // main `forgehold-desktop` process, but the `forgehold-app
+            // Kill our sidecars when Woom quits. Tauri owns the
+            // main `woom-desktop` process, but the `woom-app
             // / -github / -jira / -sentry / -memory` MCP sidecars are
             // spawned by Cursor (and Claude Code) on their first
             // handshake, NOT by us — they become Cursor's children, so
-            // a normal cmd-Q on Forgehold leaves them happily running
+            // a normal cmd-Q on Woom leaves them happily running
             // for hours / days / until reboot, serving the OLD tool
             // schema to whatever agent connects to them next.
             //
@@ -496,7 +497,7 @@ pub fn run() {
             // we're about to leave the event loop — best moment to
             // sweep them. We use the same `pkill -f` matching the
             // startup `kill_stale_sidecars` does, so the next launch
-            // of Forgehold (or Cursor immediately reconnecting via
+            // of Woom (or Cursor immediately reconnecting via
             // MCP) gets a clean slate.
             if let tauri::RunEvent::Exit = event {
                 terminal_bridge::clear_port_file(app);
@@ -520,13 +521,13 @@ async fn token() -> Result<String, String> {
 }
 
 /// Build the IPC server state with a per-process socket path. We use
-/// `/tmp/forgehold-ipc-<pid>.sock` so multiple Forgehold instances on
+/// `/tmp/woom-ipc-<pid>.sock` so multiple Woom instances on
 /// the same machine don't collide and a stale socket from a crashed
 /// previous run doesn't block startup (the server cleans it up on
 /// bind anyway, but per-pid isolation is cheap insurance).
 fn action_ipc_state() -> std::sync::Arc<action_ipc::ActionIpc> {
     let pid = std::process::id();
-    let path = std::env::temp_dir().join(format!("forgehold-ipc-{}.sock", pid));
+    let path = std::env::temp_dir().join(format!("woom-ipc-{}.sock", pid));
     std::sync::Arc::new(action_ipc::ActionIpc::new(path))
 }
 
@@ -1642,7 +1643,7 @@ pub struct SidecarHealth {
     pub pid_count: usize,
 }
 
-/// Snapshot of which Forgehold MCP sidecars are alive. Sidecars are
+/// Snapshot of which Woom MCP sidecars are alive. Sidecars are
 /// spawned by Claude / Cursor on first MCP handshake (not by us),
 /// so a `running: false` row means no agent has yet asked that
 /// sidecar to start in this session — not that it crashed. Drives
@@ -1650,11 +1651,11 @@ pub struct SidecarHealth {
 #[tauri::command]
 fn mcp_sidecar_health() -> Vec<SidecarHealth> {
     let names = [
-        "forgehold-app",
-        "forgehold-github",
-        "forgehold-jira",
-        "forgehold-sentry",
-        "forgehold-memory",
+        "woom-app",
+        "woom-github",
+        "woom-jira",
+        "woom-sentry",
+        "woom-memory",
     ];
     names
         .iter()
@@ -1936,6 +1937,23 @@ fn set_window_zoom(window: tauri::WebviewWindow, factor: f64) -> Result<(), Stri
 #[tauri::command]
 fn fs_list_dir(path: String) -> Result<Vec<DirEntry>, String> {
     fs::list_dir(&path)
+}
+
+/// Bounded recursive file search — used by the composer's @-mention
+/// picker. `query` is a case-insensitive substring on the leaf
+/// filename; pass `None` to list everything up to `max_files`.
+/// Skips `.git`, `node_modules`, build outputs, and the usual VCS
+/// noise so a 5,000-file monorepo stays sub-50ms.
+#[tauri::command]
+fn fs_walk_files(
+    root: String,
+    query: Option<String>,
+    max_files: Option<u32>,
+    max_depth: Option<u32>,
+) -> Result<Vec<DirEntry>, String> {
+    let mf = max_files.map(|x| x as usize).unwrap_or(2000).clamp(1, 10_000);
+    let md = max_depth.map(|x| x as usize).unwrap_or(8).clamp(1, 16);
+    fs::walk_files(&root, query.as_deref(), mf, md)
 }
 
 #[tauri::command]
@@ -2222,6 +2240,6 @@ fn worktree_cleanup_orphans(
 
 #[tauri::command]
 async fn biometric_unlock(reason: Option<String>) -> Result<(), String> {
-    let reason = reason.unwrap_or_else(|| "Unlock Forgehold".to_string());
+    let reason = reason.unwrap_or_else(|| "Unlock Woom".to_string());
     biometry::authenticate(&reason).await
 }

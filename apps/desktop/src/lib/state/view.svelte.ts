@@ -1,16 +1,26 @@
-// Top-level view router. Replaces a `let view = $state(...)` in
-// `+page.svelte` so any component can switch the view without prop
-// drilling (e.g. an empty-state CTA in JiraTab jumping to Connections).
+// Top-level view router. Mirrors the local `View` union in `+page.svelte`
+// so any component can switch the view without prop drilling.
 //
-// Tab is the inspector tab inside the GitHub focus pane. Both pieces are
-// independent but live together because every consumer that flips one
-// usually wants to read the other.
+// `tab` is the inspector tab inside the GitHub focus pane. Both pieces
+// are independent but live together because every consumer that flips
+// one usually wants to read the other.
 
-export type View = 'workbench' | 'githubTab' | 'jiraTab' | 'sentryTab' | 'rules' | 'connections' | 'settings';
+export type View =
+  | 'jiraApp'
+  | 'githubApp'
+  | 'sentryApp'
+  | 'claudeApp'
+  | 'cursorApp'
+  | 'editorApp'
+  | 'canvasApp'
+  | 'terminalApp'
+  | 'rules'
+  | 'connections'
+  | 'settings';
 export type DetailTab = 'conversation' | 'commits' | 'files' | 'reviews' | 'checks';
 
 export const viewState = $state<{ view: View; tab: DetailTab }>({
-  view: 'workbench',
+  view: 'claudeApp',
   tab: 'conversation'
 });
 

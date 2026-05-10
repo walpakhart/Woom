@@ -137,7 +137,7 @@
               <svg class="i" viewBox="0 0 24 24" style="width: 22px; height: 22px;" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
               <div>
                 <div class="detect-title">Ready to run agents.</div>
-                <div class="detect-sub">Forgehold will use this CLI for Cursor runs. Re-check any time.</div>
+                <div class="detect-sub">Woom will use this CLI for Cursor runs. Re-check any time.</div>
               </div>
             </div>
           {/if}

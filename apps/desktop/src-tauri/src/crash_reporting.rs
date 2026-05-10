@@ -5,14 +5,14 @@
 //! provides everything that doesn't depend on a live Sentry DSN:
 //!
 //! - File-backed opt-out flag at
-//!   `~/Library/Application Support/Forgehold/telemetry-opt-out.flag`.
+//!   `~/Library/Application Support/Woom/telemetry-opt-out.flag`.
 //!   Plain "presence == opted out" semantics — no JSON to corrupt,
 //!   readable by every other tool.
 //! - Tauri commands `get_telemetry_opt_out` / `set_telemetry_opt_out`
 //!   that the Settings view binds to its toggle.
 //! - `init_if_enabled()` hook fired from `lib::run()` before the
 //!   event loop. Currently a no-op; once the deployment carries a
-//!   real DSN (env var `FORGEHOLD_SENTRY_DSN`), uncomment the
+//!   real DSN (env var `WOOM_SENTRY_DSN`), uncomment the
 //!   marked block to wire `sentry::init()` (the SDK can be added
 //!   to `Cargo.toml` then — see the comment below).
 //!
@@ -29,16 +29,16 @@ use std::path::PathBuf;
 
 const OPT_OUT_FLAG: &str = "telemetry-opt-out.flag";
 
-/// Resolve the per-user Forgehold app-support directory. Mirrors the
+/// Resolve the per-user Woom app-support directory. Mirrors the
 /// path used by `worktree::storage_dir()` and `claude::sessions_dir()`
-/// so all Forgehold state ends up under one root the user can poke at
+/// so all Woom state ends up under one root the user can poke at
 /// via Finder.
 fn app_support_dir() -> Option<PathBuf> {
     let home = std::env::var("HOME").ok()?;
     let path = PathBuf::from(home)
         .join("Library")
         .join("Application Support")
-        .join("Forgehold");
+        .join("Woom");
     std::fs::create_dir_all(&path).ok()?;
     Some(path)
 }
@@ -87,7 +87,7 @@ pub fn init_if_enabled() {
     if is_opted_out() {
         return;
     }
-    let dsn = match std::env::var("FORGEHOLD_SENTRY_DSN") {
+    let dsn = match std::env::var("WOOM_SENTRY_DSN") {
         Ok(v) if !v.is_empty() => v,
         _ => return, /* no DSN → nothing to wire up */
     };

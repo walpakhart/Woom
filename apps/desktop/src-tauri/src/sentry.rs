@@ -130,7 +130,7 @@ pub struct SentryEventDetail {
     pub permalink: Option<String>,
 }
 
-const USER_AGENT: &str = concat!("forgehold-desktop/", env!("CARGO_PKG_VERSION"));
+const USER_AGENT: &str = concat!("woom-desktop/", env!("CARGO_PKG_VERSION"));
 
 /// Strip protocol-trailing-slash slop from whatever the user pasted into
 /// the host field. Returns `https://sentry.io` for empty input.

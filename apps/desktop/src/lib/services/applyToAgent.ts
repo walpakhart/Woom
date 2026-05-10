@@ -9,8 +9,8 @@
  *       referring to).
  *    2. Make that session the active tab in its column (otherwise
  *       the mention lands on a session the user can't currently see
- *       in the workbench).
- *    3. Scroll the agent column into view in the workbench so the
+ *       in the solo).
+ *    3. Scroll the agent column into view in the solo so the
  *       composer is visible after the click — the editor and the
  *       chat are usually side-by-side, but the user might have a
  *       multi-column setup where the target column is offscreen.
@@ -23,9 +23,9 @@
 
 import {
   attachLineRangeMention,
-  setActiveSessionInColumn
+  setActiveSessionInColumn,
+  sessionsState
 } from '$lib/state/sessions.svelte';
-import { scrollInstanceIntoView } from '$lib/state/layout.svelte';
 
 export interface ApplyRangeArgs {
   sessionId: string;
@@ -55,6 +55,13 @@ export function applyRangeToAgent(args: ApplyRangeArgs): ApplyRangeResult {
   );
   if (!token) return { ok: false, token: null };
   setActiveSessionInColumn(args.agentInstanceId, args.sessionId);
-  void scrollInstanceIntoView(args.agentInstanceId);
+  /* Tell the InlineClaude pane to auto-expand the row for this
+     session. Both composers (the agent app's main one and the inline
+     mini one) read from the same `sess.input`, so the freshly-pinned
+     `@path:line-range` mention shows up everywhere automatically;
+     the expand signal just makes the inline row visible-by-default
+     so the user doesn't have to click to find it. Consumed (cleared
+     back to null) by InlineClaude's effect. */
+  sessionsState.requestInlineExpandFor = args.sessionId;
   return { ok: true, token };
 }

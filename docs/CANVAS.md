@@ -1,4 +1,4 @@
-# Forgehold — Canvas (Whiteboard) Specification
+# Woom — Canvas (Whiteboard) Specification
 
 **Version:** 0.1 (draft)
 **Last updated:** 2026-04-28
@@ -185,7 +185,7 @@ column instance. The user starts with zero canvases; clicking the
 + inlined screenshots). We persist to disk:
 
 ```
-~/Library/Application Support/Forgehold/
+~/Library/Application Support/Woom/
   canvases/
     <canvas-id>.json          # full Canvas record
     <canvas-id>.thumb.png     # 256×160 thumbnail
@@ -209,7 +209,7 @@ type CanvasIndexEntry = {
 type CanvasIndex = { entries: CanvasIndexEntry[] };
 ```
 
-Persisted under `forgehold:canvas:index:v1`. On startup we read this
+Persisted under `woom:canvas:index:v1`. On startup we read this
 index and lazy-load full JSON only when a canvas is opened in a column.
 
 ### 3.2 Canvas column header
@@ -751,9 +751,9 @@ screenshot is rendered through the same renderer as the live canvas
 ### 10.4 Writing — the MCP tool catalog
 
 All tools live under the `canvas.*` namespace and are served by a new
-sidecar **`forgehold-canvas`** following the existing MCP pattern (see
+sidecar **`woom-canvas`** following the existing MCP pattern (see
 sidecars list under [src-tauri/sidecars/](../apps/desktop/src-tauri/sidecars/)).
-The sidecar is a thin Rust shim that proxies to the running Forgehold
+The sidecar is a thin Rust shim that proxies to the running Woom
 app via Tauri IPC — the canvas state is in the SvelteKit process, the
 MCP server speaks JSON-RPC over stdio.
 
@@ -1091,10 +1091,10 @@ piece at ~90 KB; everything else is small). Within budget.
 
 ### 15.3 Sidecar
 
-`forgehold-canvas` — a Rust binary (same shape as `forgehold-app`) that
+`woom-canvas` — a Rust binary (same shape as `woom-app`) that
 exposes the §10.4 tool catalog over MCP stdio. The sidecar is a thin
 proxy: every tool is forwarded as a JSON-RPC call to the running
-Forgehold app via a localhost-loopback socket bound to a random port
+Woom app via a localhost-loopback socket bound to a random port
 written to a file in the app data dir on startup, with a token. The
 app process owns the canvas state — the sidecar is stateless.
 
@@ -1146,9 +1146,9 @@ Suggested milestones, sized for one engineer.
   re-render on inbox state change.
 - Drag-from-inbox-onto-canvas drop handling.
 
-### M-canvas-7 — `forgehold-canvas` sidecar + MCP tools (1 week)
+### M-canvas-7 — `woom-canvas` sidecar + MCP tools (1 week)
 
-- Rust sidecar skeleton (mirror `forgehold-app` shape).
+- Rust sidecar skeleton (mirror `woom-app` shape).
 - Tool catalog from §10.4, with the IPC bridge.
 - Per-session linking UI.
 - Canvas summary in the system prompt for linked sessions.

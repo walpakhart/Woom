@@ -10,7 +10,7 @@
  *   - Last N entries from `connectionEventsState` — the closest thing
  *     we have to "last 200 log lines" without wiring a live log
  *     stream.
- *   - Layout snapshot: active workbench, column kinds + counts.
+ *   - Layout snapshot: active solo, column kinds + counts.
  *   - User description (markdown-escaped).
  *
  * Out of scope (deferred to 1.x): live terminal output bundling, full
@@ -28,7 +28,7 @@ export interface BugReportInput {
   /** Caller-supplied app version string. Frontend doesn't have a
    *  reliable way to read `tauri.conf.json > version` at runtime
    *  without an extra IPC, so we accept it from the caller (which
-   *  already shows it as `Forgehold 1.0.0` in Settings). */
+   *  already shows it as `Woom 1.0.0` in Settings). */
   appVersion: string;
 }
 
@@ -62,7 +62,7 @@ export function buildBugReport(input: BugReportInput): string {
  *  copy-to-clipboard. */
 export function bugReportMailto(report: string, to: string | null): string | null {
   if (!to) return null;
-  const subject = encodeURIComponent('Forgehold bug report');
+  const subject = encodeURIComponent('Woom bug report');
   const body = encodeURIComponent(report);
   return `mailto:${to}?subject=${subject}&body=${body}`;
 }
@@ -115,19 +115,23 @@ function pad(s: string, width: number): string {
 }
 
 function formatLayout(): string {
-  const wbs = layoutState.workbenches ?? [];
-  if (wbs.length === 0) return '_(no workbenches)_';
   const lines: string[] = [];
-  for (const wb of wbs) {
-    const insts = wb.instances ?? [];
-    const byKind: Record<string, number> = {};
-    for (const inst of insts) {
-      byKind[inst.kind] = (byKind[inst.kind] ?? 0) + 1;
-    }
-    const kindSummary = Object.entries(byKind)
-      .map(([k, n]) => `${k}×${n}`)
-      .join(' ');
-    lines.push(`- **${wb.name}** — ${insts.length} column${insts.length === 1 ? '' : 's'} (${kindSummary || 'empty'})`);
+  if (layoutState.active.editor.repoPath) {
+    lines.push(`- editor.repo_path = \`${layoutState.active.editor.repoPath}\``);
   }
-  return lines.join('\n');
+  if (layoutState.active.canvas.canvasId) {
+    lines.push(`- canvas.active = \`${layoutState.active.canvas.canvasId}\``);
+  }
+  if (layoutState.active.terminal.cwd) {
+    lines.push(`- terminal.cwd = \`${layoutState.active.terminal.cwd}\``);
+  }
+  const linkSummary: string[] = [];
+  for (const [repo, sessions] of Object.entries(layoutState.links.editorToAgent)) {
+    if (sessions.length) linkSummary.push(`editor(${repo})↔${sessions.length} agent(s)`);
+  }
+  for (const [canvasId, sessions] of Object.entries(layoutState.links.canvasToAgent)) {
+    if (sessions.length) linkSummary.push(`canvas(${canvasId.slice(0, 6)})↔${sessions.length} agent(s)`);
+  }
+  if (linkSummary.length) lines.push(`- links: ${linkSummary.join(', ')}`);
+  return lines.length === 0 ? '_(no active solo state)_' : lines.join('\n');
 }

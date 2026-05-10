@@ -16,7 +16,7 @@ import {
   removeAction,
   enqueuePendingActionResult
 } from '$lib/state/sessions.svelte';
-import { activeInstances } from '$lib/state/layout.svelte';
+import { APP_INSTANCE_IDS } from '$lib/state/layout.svelte';
 import { truncInline } from '$lib/format';
 import type { ClaudeAction, ClaudeSession } from '$lib/types';
 
@@ -71,12 +71,11 @@ export type ActionResolvedCallback = (
 ) => void;
 
 /** Resolve the working directory the action should run in. Order:
- *  worktree → explicit cwd → first editor's open repo → null. */
+ *  worktree → explicit cwd → editor solo's open repo → null. */
 export function effectiveCwd(s: ClaudeSession): string | null {
   if (s.worktreePath) return s.worktreePath;
   if (s.cwd) return s.cwd;
-  const first = activeInstances().find((i) => i.kind === 'editor');
-  const editor = first ? sessionsState.editorInstanceState[first.id]?.repoPath : null;
+  const editor = sessionsState.editorInstanceState[APP_INSTANCE_IDS.editor]?.repoPath ?? null;
   return editor && editor.length > 0 ? editor : null;
 }
 

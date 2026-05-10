@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build a distributable .dmg for Forgehold (macOS only).
+# Build a distributable .dmg for Woom (macOS only).
 #
 # Steps:
 #   1. Compile every sidecar from the Cargo workspace in release mode.
@@ -50,7 +50,7 @@ fi
 
 echo "→ target triple: $TARGET"
 
-SIDECARS=(forgehold-github forgehold-jira forgehold-memory forgehold-sentry forgehold-app)
+SIDECARS=(woom-github woom-jira woom-memory woom-sentry woom-app)
 
 mkdir -p "$BINARIES_DIR"
 

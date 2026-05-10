@@ -1,33 +1,12 @@
-// Shared types used by workbench column components that live outside of
+// Shared types used by solo-mode app components that live outside of
 // `+page.svelte`. Kept here (not in `$lib/data.ts`) because these describe
 // UI/runtime state — not the GitHub/Jira payload shapes that `data.ts`
-// models. Re-exporting these from the columns (plus +page.svelte) keeps
-// the import graph flat.
+// models.
 
+/** One of the solo-mode kinds. There is exactly one app of each kind in
+ *  the running shell; per-kind state slots are keyed by the matching
+ *  `APP_INSTANCE_IDS[kind]` from `$lib/state/layout.svelte`. */
 export type PanelKind = 'github' | 'jira' | 'sentry' | 'claude' | 'cursor' | 'editor' | 'canvas' | 'terminal';
-
-/** One live instance of a column in a workbench. Every kind supports multiple
- *  side-by-side instances — two GitHub columns can browse different repos,
- *  two Jira columns different boards, etc. (see `addPanelInstance` in
- *  layout.svelte.ts for how new instances are created).
- *
- *  `name` is a human-readable handle drawn from a pool of art / artist /
- *  monument names (Mona-Lisa, Da-Vinci, Parthenon, …). Shown in the column
- *  header and used when picking a target for linking ("Link to Claude
- *  (Mona-Lisa)"). Auto-generated on creation, unique within a workbench. */
-export type PanelInstance = {
-  id: string;
-  kind: PanelKind;
-  width: number;
-  name: string;
-};
-
-/** Named preset of a column layout. The user can switch between many. */
-export type Workbench = {
-  id: string;
-  name: string;
-  instances: PanelInstance[];
-};
 
 /** Ordered chunk that makes up an assistant message's body. The stream
     parser appends events as they arrive, merging consecutive same-kind
@@ -163,11 +142,21 @@ export type ClaudeMessage = {
 };
 
 export type Mention = {
-  source: 'github' | 'jira' | 'sentry' | 'file';
+  /** Where the mention was sourced from. `chat` is added in v8 for
+   *  "@-mention another chat session" — used by the inline mention
+   *  picker so users can hand a session's context to another agent. */
+  source: 'github' | 'jira' | 'sentry' | 'file' | 'chat';
   externalId: string;
   title: string;
   body: string | null;
   isDir?: boolean;
+  /** True when this mention represents a file/image dragged or pasted
+   *  from OUTSIDE the app (Finder drop, Cmd+V image, screenshot). The
+   *  composer surfaces these as removable chips in a dedicated strip.
+   *  Mentions added via the @-picker or in-app editor-tree drag stay
+   *  unflagged — those live as inline `@token` references in the
+   *  prompt text and don't need a chip. */
+  attached?: boolean;
 };
 
 /** `waitId` is set on cards created via the synchronous IPC path
@@ -230,6 +219,12 @@ export type ClaudeSession = {
   messages: ClaudeMessage[];
   input: string;
   sending: boolean;
+  /** Messages typed while a turn was in flight. Each item is a fully-
+   *  composed user prompt — `Send` while `sending=true` pushes the
+   *  current input here, clears the visible composer, and the queue
+   *  drains FIFO when the turn finishes. Optional / undefined =
+   *  empty queue. */
+  pendingQueue?: string[];
   cwd: string | null;
   worktreePath: string | null;
   worktreeBranch: string | null;
@@ -271,7 +266,7 @@ export type ClaudeSession = {
       Drives the context-window % indicator chip. 0 = no turn yet. */
   lastContextSize: number;
   /** When set, the session is bound to a Canvas in the workspace
-      library. The `forgehold-app` sidecar's `mcp__app__canvas_*` tools
+      library. The `woom-app` sidecar's `mcp__app__canvas_*` tools
       target this canvas; a brief canvas summary is injected into the
       system prompt at every turn so the agent knows what's there. Null
       = no canvas link (default). The id is the **library** canvas id,
@@ -285,7 +280,7 @@ export type ClaudeSession = {
   linkedToEditor: boolean;
   /** Which Editor instance this session is linked to. When null and
       `linkedToEditor` is true, falls back to the first editor in the
-      active workbench. Explicit id lets the user keep a stable target even
+      active solo. Explicit id lets the user keep a stable target even
       when multiple Editor columns are open. */
   linkedToEditorInstanceId: string | null;
   /** Which Terminal instance this session is bound to. When set, the
@@ -332,7 +327,7 @@ export type ClaudeSession = {
         2. Agent: drained on the NEXT runAgentRequest call (manual or
            auto-fired) and prepended to the prompt as a "since-last-
            turn outcomes" block. The CLI's `--resume` history doesn't
-           include these (Forgehold-side annotations), so this is the
+           include these (Woom-side annotations), so this is the
            only channel the agent has for learning whether its commit
            push succeeded, what stderr a bash card returned, etc.
       Persisted across app restarts so a result that arrived right

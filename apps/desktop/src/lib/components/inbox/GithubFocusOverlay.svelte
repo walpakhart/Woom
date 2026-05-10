@@ -34,6 +34,17 @@
     onOpenBrowser: (url: string) => void;
     onOpenCheckDetails: (url: string) => void;
     mergeDisabled: () => boolean;
+    /** Hand the focused PR off to a Claude / Cursor session. Optional
+     *  so older call sites that haven't wired them up yet still
+     *  compile; the overlay hides each button when undefined. */
+    onSendToClaude?: () => void;
+    onSendToCursor?: () => void;
+    /** When true, render as a static block that fills its parent
+     *  (used by GithubApp's right pane) instead of as a fixed-position
+     *  modal slide-over. The component's chrome — backdrop, slide
+     *  animation, border-left, drop shadow — is conditionally swapped
+     *  out so the same code path serves both layouts cleanly. */
+    inline?: boolean;
   }
 
   let {
@@ -52,7 +63,10 @@
     onReopen,
     onOpenBrowser,
     onOpenCheckDetails,
-    mergeDisabled
+    mergeDisabled,
+    onSendToClaude,
+    onSendToCursor,
+    inline = false
   }: Props = $props();
 
   /** Roll a check run's combined {status, conclusion} down to a single key
@@ -133,8 +147,16 @@
 {#if inboxState.focusItem}
   {@const item = inboxState.focusItem}
   {@const stag = stateTag(item)}
-  <div class="slide-over" onclick={(e) => { if (e.target === e.currentTarget) onCloseFocus(); }} onkeydown={(e) => { if (e.key === 'Escape') onCloseFocus(); }} role="dialog" aria-modal="true" tabindex="-1">
-    <div class="slide-panel">
+  <div
+    class={inline ? 'gfo-inline' : 'slide-over'}
+    onclick={inline ? undefined : (e) => { if (e.target === e.currentTarget) onCloseFocus(); }}
+    onkeydown={(e) => { if (e.key === 'Escape') onCloseFocus(); }}
+    role={inline ? 'region' : 'dialog'}
+    aria-modal={inline ? undefined : 'true'}
+    aria-label={inline ? 'Pull request detail' : undefined}
+    tabindex="-1"
+  >
+    <div class={inline ? 'gfo-inline-panel' : 'slide-panel'}>
       <!-- Unified header bar: close-left, metadata center, "Open on
            GitHub" right. Mirrors `.jdp-head` (Jira) and `.sdp-head`
            (Sentry) so all three detail panes share the same skeleton. -->
@@ -166,6 +188,18 @@
             <polyline points="3 21 3 15 9 15"/>
           </svg>
         </button>
+        {#if onSendToClaude}
+          <button class="gfo-btn gfo-btn--claude" onclick={onSendToClaude} title="Send this PR to a Claude session">
+            <svg class="i i-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="m22 2-7 20-4-9-9-4 20-7z"/></svg>
+            Send to Claude
+          </button>
+        {/if}
+        {#if onSendToCursor}
+          <button class="gfo-btn gfo-btn--cursor" onclick={onSendToCursor} title="Send this PR to a Cursor session">
+            <svg class="i i-sm" viewBox="0 0 24 24" fill="currentColor"><path d="M3 3l8 18 2-8 8-2z"/></svg>
+            Send to Cursor
+          </button>
+        {/if}
         <button class="gfo-btn" onclick={() => onOpenBrowser(item.url)} title="Open on GitHub">
           <svg class="i i-sm" viewBox="0 0 24 24"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><path d="M15 3h6v6M10 14 21 3"/></svg>
           Open on GitHub
@@ -566,9 +600,9 @@
 {/if}
 
 <style>
-  /* Focus-pane styles that intentionally override or extend the base rules
-     defined globally in app.css. Kept scoped so the Workbench GitHub column
-     and the GitHub tab render identically. */
+  /* Focus-pane styles that override or extend the base rules defined
+     globally in app.css. Kept scoped so the inline (GithubApp) and
+     overlay (other solos) renderings stay identical. */
 
   /* Unified header bar — close on the left, metadata in the middle,
      "Open on GitHub" on the right. Same shape as `.jdp-head` (Jira) and
@@ -600,6 +634,30 @@
   .gfo-btn:disabled { opacity: 0.45; cursor: not-allowed; }
   .gfo-btn--icon { padding: 6px; }
   .gfo-btn--icon .i-sm { width: 14px; height: 14px; }
+  /* Send-to-Claude — brand-tinted ghost so the handoff stands apart
+     from the GitHub-native actions. Mirrors `.jdp-btn--claude` /
+     `.sdp-btn--claude` so all three detail panes ship the same chip
+     in the same header position. */
+  .gfo-btn--claude {
+    color: var(--src-claude);
+    background: color-mix(in srgb, var(--src-claude) 8%, transparent);
+    border-color: color-mix(in srgb, var(--src-claude) 30%, transparent);
+  }
+  .gfo-btn--claude:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--src-claude) 18%, transparent);
+    color: var(--accent-bright);
+    border-color: color-mix(in srgb, var(--src-claude) 50%, transparent);
+  }
+  .gfo-btn--cursor {
+    color: var(--src-cursor, var(--text-1));
+    background: color-mix(in srgb, var(--src-cursor, var(--text-1)) 10%, transparent);
+    border-color: color-mix(in srgb, var(--src-cursor, var(--text-1)) 32%, transparent);
+  }
+  .gfo-btn--cursor:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--src-cursor, var(--text-1)) 22%, transparent);
+    color: var(--text-0);
+    border-color: color-mix(in srgb, var(--src-cursor, var(--text-1)) 50%, transparent);
+  }
   .gfo-spin { animation: gfo-spin 0.8s linear infinite; }
   @keyframes gfo-spin { to { transform: rotate(360deg); } }
 
@@ -608,7 +666,16 @@
 
   .chip-state { padding: 2px 9px; border-radius: 5px; font-size: 10.5px; font-weight: 500; }
 
-  .focus-title { font-size: 26px; line-height: 1.2; letter-spacing: -0.02em; font-weight: 600; margin-bottom: 16px; max-width: 720px; color: var(--text-0); }
+  .focus-title {
+    font-family: 'Instrument Serif', 'New York', Georgia, serif;
+    font-size: 30px;
+    line-height: 1.18;
+    letter-spacing: -0.02em;
+    font-weight: 400;
+    margin-bottom: 16px;
+    max-width: 720px;
+    color: var(--text-0);
+  }
   .focus-labels { display: flex; gap: 6px; margin-bottom: 16px; flex-wrap: wrap; }
   :global(.label-chip) {
     padding: 2px 8px; border-radius: 999px;
@@ -627,16 +694,29 @@
   .focus-meta-item { display: inline-flex; align-items: center; gap: 6px; }
   .meta-avatar { width: 18px; height: 18px; border-radius: 50%; }
   .chg-add { color: var(--accent-bright); }
-  .chg-del { color: #fca5a5; }
+  .chg-del { color: #F0A38A; }
 
-  .detail-tabs { display: flex; gap: 2px; margin-bottom: 20px; border-bottom: 1px solid var(--border-neutral); }
+  .detail-tabs {
+    display: flex; gap: 2px;
+    margin-bottom: 20px;
+    border-bottom: 1px solid var(--border);
+  }
   .detail-tab {
-    padding: 10px 14px; font-size: 12.5px; color: var(--text-2);
-    border-bottom: 2px solid transparent; margin-bottom: -1px;
+    padding: 10px 14px;
+    font-size: 12.5px; font-weight: 500;
+    color: var(--text-2);
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
     transition: all 120ms;
+    background: transparent;
+    border-left: 0; border-right: 0; border-top: 0;
+    cursor: pointer;
   }
   .detail-tab:hover { color: var(--text-0); }
-  .detail-tab.active { color: var(--accent-bright); border-bottom-color: var(--accent); }
+  .detail-tab.active {
+    color: var(--accent-bright);
+    border-bottom-color: var(--accent);
+  }
   .tab-count {
     padding: 0 6px; min-width: 16px; height: 16px;
     border-radius: 8px; background: var(--bg-3);
@@ -645,9 +725,9 @@
     color: var(--text-1); margin-left: 6px;
   }
   .detail-tab.active .tab-count { background: var(--accent-soft); color: var(--accent-bright); }
-  .tab-count--ok { background: rgba(16, 185, 129, 0.18); color: #34d399; }
-  .tab-count--err { background: rgba(239, 68, 68, 0.18); color: #fca5a5; }
-  .tab-count--pending { background: rgba(234, 179, 8, 0.16); color: #fcd34d; }
+  .tab-count--ok { background: rgba(168, 217, 184, 0.18); color: #A8D9B8; }
+  .tab-count--err { background: rgba(232, 130, 100, 0.18); color: #F0A38A; }
+  .tab-count--pending { background: rgba(217, 184, 110, 0.16); color: #E4C885; }
 
   .checks-summary { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
   .check-pill {
@@ -656,9 +736,9 @@
     background: var(--bg-2); color: var(--text-1);
   }
   .check-pill--total { background: var(--bg-2); color: var(--text-1); }
-  .check-pill--ok { background: rgba(16, 185, 129, 0.12); color: #34d399; border-color: rgba(16, 185, 129, 0.3); }
-  .check-pill--err { background: rgba(239, 68, 68, 0.12); color: #fca5a5; border-color: rgba(239, 68, 68, 0.3); }
-  .check-pill--pending { background: rgba(234, 179, 8, 0.12); color: #fcd34d; border-color: rgba(234, 179, 8, 0.3); }
+  .check-pill--ok { background: rgba(168, 217, 184, 0.12); color: #A8D9B8; border-color: rgba(168, 217, 184, 0.3); }
+  .check-pill--err { background: rgba(232, 130, 100, 0.12); color: #F0A38A; border-color: rgba(232, 130, 100, 0.3); }
+  .check-pill--pending { background: rgba(217, 184, 110, 0.12); color: #E4C885; border-color: rgba(217, 184, 110, 0.3); }
   .check-pill--skip { background: var(--bg-2); color: var(--text-mute); }
 
   .check-list {
@@ -677,9 +757,9 @@
     font-size: 12px; font-weight: 700;
     flex-shrink: 0;
   }
-  .check-icon--success { background: rgba(16, 185, 129, 0.15); color: #34d399; }
-  .check-icon--failure { background: rgba(239, 68, 68, 0.15); color: #fca5a5; }
-  .check-icon--pending { background: rgba(234, 179, 8, 0.15); color: #fcd34d; animation: check-spin 1.6s linear infinite; }
+  .check-icon--success { background: rgba(168, 217, 184, 0.15); color: #A8D9B8; }
+  .check-icon--failure { background: rgba(232, 130, 100, 0.15); color: #F0A38A; }
+  .check-icon--pending { background: rgba(217, 184, 110, 0.15); color: #E4C885; animation: check-spin 1.6s linear infinite; }
   .check-icon--skipped,
   .check-icon--cancelled,
   .check-icon--neutral { background: var(--bg-2); color: var(--text-mute); }
@@ -697,14 +777,14 @@
   .tab-pane { min-height: 100px; }
   .tab-state { padding: 40px; text-align: center; color: var(--text-2); font-size: 13px; }
   .tab-error {
-    padding: 12px 14px; font-size: 12.5px; color: #fca5a5;
-    background: rgba(239, 68, 68, 0.06); border: 1px solid rgba(239, 68, 68, 0.22);
+    padding: 12px 14px; font-size: 12.5px; color: #F0A38A;
+    background: rgba(232, 130, 100, 0.06); border: 1px solid rgba(232, 130, 100, 0.22);
     border-radius: 8px; margin-bottom: 16px;
   }
 
   .body-card {
-    background: var(--bg-1); border: 1px solid var(--border-neutral);
-    border-radius: 10px; padding: 16px 18px; margin-bottom: 16px;
+    background: var(--bg-2); border: 1px solid var(--border);
+    border-radius: 11px; padding: 16px 18px; margin-bottom: 16px;
   }
   .body-head {
     display: flex; align-items: center; gap: 8px;
@@ -718,8 +798,8 @@
     color: var(--text-mute); font-style: italic; font-size: 12.5px; margin-bottom: 16px;
   }
   .timeline-item {
-    background: var(--bg-1); border: 1px solid var(--border-neutral);
-    border-radius: 10px; padding: 14px 16px; margin-bottom: 10px;
+    background: var(--bg-2); border: 1px solid var(--border);
+    border-radius: 11px; padding: 14px 16px; margin-bottom: 10px;
   }
   /* Slim, sparse commit row in the conversation — visually softer than the
      review/comment cards (no background, no border) so the surface still
@@ -777,11 +857,11 @@
   }
   .meta-time { margin-left: auto; color: var(--text-mute); font-size: 11px; }
 
-  .review-item.rev--approved .review-state { color: var(--accent-bright); background: var(--accent-soft); border-color: rgba(16, 185, 129, 0.3); }
-  .review-item.rev--changes .review-state { color: #fca5a5; background: rgba(239, 68, 68, 0.08); border-color: rgba(239, 68, 68, 0.28); }
-  .review-item.rev--commented .review-state { color: var(--blue-bright); background: rgba(59, 130, 246, 0.08); border-color: rgba(59, 130, 246, 0.24); }
+  .review-item.rev--approved .review-state { color: var(--accent-bright); background: var(--accent-soft); border-color: rgba(168, 217, 184, 0.3); }
+  .review-item.rev--changes .review-state { color: #F0A38A; background: rgba(232, 130, 100, 0.08); border-color: rgba(232, 130, 100, 0.28); }
+  .review-item.rev--commented .review-state { color: var(--blue-bright); background: rgba(79, 142, 255, 0.08); border-color: rgba(79, 142, 255, 0.24); }
   .review-item.rev--approved { border-left: 3px solid var(--accent); }
-  .review-item.rev--changes { border-left: 3px solid #fca5a5; }
+  .review-item.rev--changes { border-left: 3px solid #F0A38A; }
 
   .review-empty {
     font-size: 12.5px; color: var(--text-mute);
@@ -791,8 +871,8 @@
     margin-top: 10px;
     display: inline-flex; align-items: center; gap: 6px;
     padding: 6px 10px;
-    background: rgba(59, 130, 246, 0.08);
-    border: 1px solid rgba(59, 130, 246, 0.22);
+    background: rgba(79, 142, 255, 0.08);
+    border: 1px solid rgba(79, 142, 255, 0.22);
     border-radius: 7px;
     color: var(--blue-bright);
     font-size: 12px; font-weight: 500;
@@ -800,8 +880,8 @@
     cursor: pointer;
   }
   .review-inline-link:hover {
-    background: rgba(59, 130, 246, 0.14);
-    border-color: rgba(59, 130, 246, 0.35);
+    background: rgba(79, 142, 255, 0.14);
+    border-color: rgba(79, 142, 255, 0.35);
     transform: translateY(-1px);
   }
   .review-inline-link--secondary {
@@ -879,10 +959,10 @@
     font-size: 10px; font-weight: 700; text-transform: uppercase;
     letter-spacing: 0.06em; padding: 2px 7px; border-radius: 4px;
   }
-  .file-status--added    { color: var(--accent-bright); background: var(--accent-soft); border: 1px solid rgba(16, 185, 129, 0.24); }
-  .file-status--modified { color: var(--blue-bright); background: rgba(59, 130, 246, 0.08); border: 1px solid rgba(59, 130, 246, 0.22); }
-  .file-status--removed  { color: #fca5a5; background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.22); }
-  .file-status--renamed  { color: #fcd34d; background: rgba(245, 158, 11, 0.06); border: 1px solid rgba(245, 158, 11, 0.22); }
+  .file-status--added    { color: var(--accent-bright); background: var(--accent-soft); border: 1px solid rgba(168, 217, 184, 0.24); }
+  .file-status--modified { color: var(--blue-bright); background: rgba(79, 142, 255, 0.08); border: 1px solid rgba(79, 142, 255, 0.22); }
+  .file-status--removed  { color: #F0A38A; background: rgba(232, 130, 100, 0.08); border: 1px solid rgba(232, 130, 100, 0.22); }
+  .file-status--renamed  { color: #E4C885; background: rgba(217, 184, 110, 0.06); border: 1px solid rgba(217, 184, 110, 0.22); }
   .file-name { flex: 1; font-size: 12.5px; color: var(--text-0); overflow-wrap: anywhere; }
   .file-changes { display: inline-flex; gap: 8px; font-size: 11px; }
   .file-comments-badge {
@@ -890,7 +970,7 @@
     padding: 1px 7px;
     border-radius: 999px;
     background: var(--blue-deep); color: var(--blue-bright);
-    border: 1px solid rgba(59, 130, 246, 0.3);
+    border: 1px solid rgba(79, 142, 255, 0.3);
   }
 
   /* Diff */
@@ -924,10 +1004,10 @@
     position: sticky; left: 0;
   }
   .diff-line-content { padding: 0 14px; white-space: pre; color: var(--text-1); }
-  .diff-line.add .diff-line-content { background: rgba(16, 185, 129, 0.08); color: #6ee7b7; }
-  .diff-line.add .diff-line-num { background: rgba(16, 185, 129, 0.12); color: #6ee7b7; }
-  .diff-line.del .diff-line-content { background: rgba(239, 68, 68, 0.07); color: #fca5a5; }
-  .diff-line.del .diff-line-num { background: rgba(239, 68, 68, 0.1); color: #fca5a5; }
+  .diff-line.add .diff-line-content { background: rgba(168, 217, 184, 0.08); color: #A8DEC8; }
+  .diff-line.add .diff-line-num { background: rgba(168, 217, 184, 0.12); color: #A8DEC8; }
+  .diff-line.del .diff-line-content { background: rgba(232, 130, 100, 0.07); color: #F0A38A; }
+  .diff-line.del .diff-line-num { background: rgba(232, 130, 100, 0.1); color: #F0A38A; }
 
   /* Inline comments on files */
   .inline-comments {
@@ -963,7 +1043,8 @@
     backdrop-filter: blur(12px);
   }
 
-  /* Slide-over */
+  /* Slide-over (modal mode — used when GithubFocusOverlay is rendered
+     at the page root from a non-GitHub view). */
   .slide-over {
     position: fixed; inset: 0;
     background: var(--backdrop);
@@ -981,6 +1062,24 @@
     display: flex; flex-direction: column;
     overflow: hidden;
     animation: slideInRight 240ms cubic-bezier(0.34, 1.56, 0.64, 1);
+    position: relative;
+  }
+
+  /* Inline mode — used by GithubApp's right pane. No backdrop, no
+     fixed positioning, no slide animation. The host fills its grid
+     track and the panel fills the host. Picks up the surrounding
+     `.app-pane` chrome from the parent's layout. */
+  .gfo-inline {
+    flex: 1; min-height: 0;
+    display: flex;
+    width: 100%; height: 100%;
+    background: transparent;
+  }
+  .gfo-inline-panel {
+    flex: 1; min-width: 0; min-height: 0;
+    display: flex; flex-direction: column;
+    background: var(--bg-0);
+    overflow: hidden;
     position: relative;
   }
   @keyframes slideInRight {

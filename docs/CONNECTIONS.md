@@ -1,20 +1,20 @@
-# Forgehold — Connections & Settings Specification
+# Woom — Connections & Settings Specification
 
 **Version:** 0.1
 **Last updated:** 2026-04-29
 **Status:** describes shipping behaviour. Connections cover the
-external services Forgehold can pull from (GitHub, Jira, Sentry) and
+external services Woom can pull from (GitHub, Jira, Sentry) and
 the local agent CLIs it can drive (Claude, Cursor). Slack, Linear,
 Notion, GitLab, Teams, Asana, Codex, Aider, Copilot are catalogued in
 the Connect view as "coming soon" placeholders only.
 
-> Forgehold's connection model is deliberately small. Tokens go in the
+> Woom's connection model is deliberately small. Tokens go in the
 > macOS Keychain. Status is a Tauri `invoke` per source — connected /
 > disconnected / connecting. There is no central OAuth roundtrip
 > infrastructure, and there never will be (`docs/ROADMAP_1.0.md §6`):
 > GitHub uses a PAT, Jira uses email + API token, Sentry uses an
 > internal-integration token. PAT-only is the permanent shape of
-> Forgehold auth; we invest in token UX (rotation reminders, multi-
+> Woom auth; we invest in token UX (rotation reminders, multi-
 > account, diagnostics) rather than OAuth bureaucracy. Agents
 > (Claude / Cursor) aren't tokens at all — they're shelled subprocesses;
 > we just check the binary is on PATH and authenticated to its own
@@ -26,7 +26,7 @@ the Connect view as "coming soon" placeholders only.
 
 ### 1.1 Vision
 
-A user should be able to wire up Forgehold to their entire toolchain
+A user should be able to wire up Woom to their entire toolchain
 in five minutes, all from one screen. The Connect view shows every
 known integration with a uniform status pill, a single CTA, and a
 revocation path. No magic; no surprise re-auth roundtrips at runtime.
@@ -51,13 +51,13 @@ revocation path. No magic; no surprise re-auth roundtrips at runtime.
   paste (`docs/ROADMAP_1.0.md §6`). Token UX investment instead:
   scope guidance, rotation reminders, multi-account, diagnostics.
 - **Multiple accounts of the same source.** One GitHub, one Jira, one
-  Sentry per Forgehold instance (multi-account is a 1.0 backlog
+  Sentry per Woom instance (multi-account is a 1.0 backlog
   item, see ROADMAP §2.7.1).
 - **Slack / Linear / Notion / GitLab / Teams / Asana / Codex / Aider /
   Copilot.** Roadmap chips only.
 - **Per-workspace credentials.** Tokens are user-global.
-- **Login with Atlassian / Google / GitHub SSO** for Forgehold itself.
-  Forgehold has no account model.
+- **Login with Atlassian / Google / GitHub SSO** for Woom itself.
+  Woom has no account model.
 
 ---
 
@@ -99,7 +99,7 @@ pub fn delete(account: &str) -> Result<()>;
 ```
 
 Backed by macOS `security` framework via the `keyring` crate. The
-keychain item shows up as `Service: Forgehold, Account: <key>`.
+keychain item shows up as `Service: Woom, Account: <key>`.
 
 | Key (`account`) | Source                  |
 |-----------------|-------------------------|
@@ -107,7 +107,7 @@ keychain item shows up as `Service: Forgehold, Account: <key>`.
 | `"jira"`        | JSON `{ workspace, email, token }` |
 | `"sentry"`      | JSON `{ host, organization_slug, token }` |
 
-Claude and Cursor have no Forgehold-managed token; they auth to their
+Claude and Cursor have no Woom-managed token; they auth to their
 own services.
 
 ### 3.2 Connect roundtrip
@@ -191,7 +191,7 @@ scopes (see `docs/GITHUB.md §11`).
 
 ### 4.1 MCP triggering
 
-The `mcp__app__open_connect_modal` tool (sidecar `forgehold-app`)
+The `mcp__app__open_connect_modal` tool (sidecar `woom-app`)
 takes `{ source: 'github' | 'jira' | ... }` and calls
 `openConnectModal(connectionsMeta.find(c => c.id === source))`. Useful
 for "Claude, hook me up to Slack" — the agent looks for `slack` in the
@@ -279,7 +279,7 @@ modal.
 Sections (in display order):
 
 1. **Theme** — light / dark switch (writes to `themeState.name`,
-   persisted under `forgehold:theme:v1`).
+   persisted under `woom:theme:v1`).
 2. **Font scale** — % multiplier, applied via CSS `font-size` on
    `:root`.
 3. **localStorage stats** — total bytes used, per-key breakdown.
@@ -289,30 +289,30 @@ Sections (in display order):
 5. **Cleanup** — buttons to:
    - clear archived workbench instances older than N days,
    - hard-delete a single session (confirms first),
-   - reset Forgehold (clears localStorage; keychain stays).
+   - reset Woom (clears localStorage; keychain stays).
 6. **Storage keys** — read-only list of every `localStorage` key
-   Forgehold uses, mainly for support diagnostics.
+   Woom uses, mainly for support diagnostics.
 
 Persistence keys touched:
 
 ```text
-forgehold:theme:v1
-forgehold:claude-sessions:v1   (-> docs/AGENTS.md §13)
-forgehold:claude-rules:v1
-forgehold:editor-state:v1      (-> docs/EDITOR.md §13)
-forgehold:editor:root          (-> docs/EDITOR.md §13)
-forgehold:editor:tabs
-forgehold:editor:sidebar-tab
-forgehold:editor-main          (Splitter)
-forgehold:workbenches:v1       (-> docs/WORKBENCH.md §15)
-forgehold:github-col-filters-by-instance:v1
-forgehold:jira-col-filters-by-instance:v1
-forgehold:sentry-col-filters-by-instance:v1
-forgehold:canvas:index:v1      (-> docs/CANVAS.md §3.1)
-forgehold:canvas:viewport:v1
+woom:theme:v1
+woom:claude-sessions:v1   (-> docs/AGENTS.md §13)
+woom:claude-rules:v1
+woom:editor-state:v1      (-> docs/EDITOR.md §13)
+woom:editor:root          (-> docs/EDITOR.md §13)
+woom:editor:tabs
+woom:editor:sidebar-tab
+woom:editor-main          (Splitter)
+woom:workbenches:v1       (-> docs/WORKBENCH.md §15)
+woom:github-col-filters-by-instance:v1
+woom:jira-col-filters-by-instance:v1
+woom:sentry-col-filters-by-instance:v1
+woom:canvas:index:v1      (-> docs/CANVAS.md §3.1)
+woom:canvas:viewport:v1
 ```
 
-Worktree dirs are on-disk under `~/Library/Application Support/Forgehold/worktrees/`.
+Worktree dirs are on-disk under `~/Library/Application Support/Woom/worktrees/`.
 
 ---
 
@@ -320,7 +320,7 @@ Worktree dirs are on-disk under `~/Library/Application Support/Forgehold/worktre
 
 A first-launch biometric prompt (`security` `kSecAccessControl`) is
 configured for the keychain item — successful unlock keeps the items
-accessible for the session. Failed unlock keeps Forgehold open but
+accessible for the session. Failed unlock keeps Woom open but
 every `*_status()` returns disconnected. Reconnecting stores under a
 fresh access-control object.
 
@@ -335,8 +335,8 @@ without trying tools blind:
 ```text
 sources:
   github: connected as @nikolay
-  jira: connected (forgehold.atlassian.net, nikolay@…)
-  sentry: connected (sentry.io, forgehold)
+  jira: connected (woom.atlassian.net, nikolay@…)
+  sentry: connected (sentry.io, woom)
   claude: connected (3.x)
 agents:
   claude (you): linked editor=Sagrada-Familia
@@ -370,9 +370,9 @@ since `implemented: false`).
 
 ## 12. Glossary
 
-- **Source** — a service Forgehold reads / writes data from (GitHub,
+- **Source** — a service Woom reads / writes data from (GitHub,
   Jira, Sentry, Slack-future).
-- **Agent** — a CLI Forgehold drives as a subprocess (Claude, Cursor).
+- **Agent** — a CLI Woom drives as a subprocess (Claude, Cursor).
 - **`connectionsMeta`** — static catalogue of all known sources +
   agents and whether they're implemented yet.
 - **`connectionsState`** — runtime status per source.

@@ -1,7 +1,7 @@
 //! Per-session git worktrees for Claude runs.
 //!
 //! Each Claude session can optionally run in its own isolated git worktree,
-//! which lives under `~/Library/Application Support/Forgehold/worktrees/<session>/`.
+//! which lives under `~/Library/Application Support/Woom/worktrees/<session>/`.
 //! This lets multiple agents work in parallel on the same repo without
 //! trampling each other's in-progress changes, and keeps the user's main
 //! working tree untouched — exactly what SPEC §worktrees mandates.
@@ -11,7 +11,7 @@ use std::process::Command;
 
 use serde::Serialize;
 
-/// Storage root for all Forgehold-managed worktrees. We use macOS's Application
+/// Storage root for all Woom-managed worktrees. We use macOS's Application
 /// Support dir so the data is treated as app state (backed up, excluded from
 /// Spotlight by default, stable across app updates).
 pub fn storage_root() -> Option<PathBuf> {
@@ -19,7 +19,7 @@ pub fn storage_root() -> Option<PathBuf> {
     let root = Path::new(&home)
         .join("Library")
         .join("Application Support")
-        .join("Forgehold")
+        .join("Woom")
         .join("worktrees");
     let _ = std::fs::create_dir_all(&root);
     Some(root)
@@ -35,9 +35,9 @@ pub struct Worktree {
     pub head: Option<String>,
     /// True if this is the repo's main working tree (not a secondary worktree).
     pub is_main: bool,
-    /// If this worktree was created by Forgehold, the session id we attached to
-    /// its branch name (`forgehold/<session>`). None for user-created worktrees.
-    pub forgehold_session: Option<String>,
+    /// If this worktree was created by Woom, the session id we attached to
+    /// its branch name (`woom/<session>`). None for user-created worktrees.
+    pub woom_session: Option<String>,
 }
 
 fn git(cwd: &str) -> Command {
@@ -62,7 +62,7 @@ fn run(mut cmd: Command) -> Result<String, String> {
 
 /// Create a new worktree for a Claude session. The worktree branches off
 /// `base_ref` (defaults to HEAD of the repo) and checks out a new branch
-/// called `forgehold/<session_id>` inside a fresh directory under `storage_root`.
+/// called `woom/<session_id>` inside a fresh directory under `storage_root`.
 ///
 /// Idempotent: if a worktree for this session already exists, returns its
 /// path without re-creating.
@@ -73,7 +73,7 @@ pub fn create(
 ) -> Result<Worktree, String> {
     let root = storage_root().ok_or_else(|| "could not resolve $HOME".to_string())?;
     let path = root.join(session_id);
-    let branch = forgehold_branch(session_id);
+    let branch = woom_branch(session_id);
 
     // Already exists? Treat as success.
     if path.exists() {
@@ -100,7 +100,7 @@ pub fn create(
 pub fn remove(repo_path: &str, session_id: &str) -> Result<(), String> {
     let root = storage_root().ok_or_else(|| "could not resolve $HOME".to_string())?;
     let path = root.join(session_id);
-    let branch = forgehold_branch(session_id);
+    let branch = woom_branch(session_id);
 
     if path.exists() {
         let mut cmd = git(repo_path);
@@ -126,7 +126,7 @@ pub fn remove(repo_path: &str, session_id: &str) -> Result<(), String> {
 }
 
 /// List every worktree git knows about for a repo, annotated with our
-/// `forgehold_session` tag if the branch name matches `forgehold/<session>`.
+/// `woom_session` tag if the branch name matches `woom/<session>`.
 pub fn list(repo_path: &str) -> Result<Vec<Worktree>, String> {
     let mut cmd = git(repo_path);
     cmd.args(["worktree", "list", "--porcelain"]);
@@ -146,7 +146,7 @@ pub fn list(repo_path: &str) -> Result<Vec<Worktree>, String> {
                     branch: branch.take(),
                     head: head.take(),
                     is_main: std::mem::replace(&mut is_main, false),
-                    forgehold_session: None,
+                    woom_session: None,
                 });
             }
             continue;
@@ -174,15 +174,15 @@ pub fn list(repo_path: &str) -> Result<Vec<Worktree>, String> {
             branch: branch.take(),
             head: head.take(),
             is_main,
-            forgehold_session: None,
+            woom_session: None,
         });
     }
 
-    // Annotate forgehold_session from branch names.
+    // Annotate woom_session from branch names.
     for w in out.iter_mut() {
         if let Some(b) = &w.branch {
-            if let Some(session) = b.strip_prefix("forgehold/") {
-                w.forgehold_session = Some(session.to_string());
+            if let Some(session) = b.strip_prefix("woom/") {
+                w.woom_session = Some(session.to_string());
             }
         }
     }
@@ -200,16 +200,16 @@ fn inspect(path: &Path) -> Option<Worktree> {
     branch_cmd.args(["branch", "--show-current"]);
     let branch = run(branch_cmd).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
 
-    let forgehold_session = branch
+    let woom_session = branch
         .as_ref()
-        .and_then(|b| b.strip_prefix("forgehold/").map(|s| s.to_string()));
+        .and_then(|b| b.strip_prefix("woom/").map(|s| s.to_string()));
 
     Some(Worktree {
         path: path.to_string_lossy().to_string(),
         branch,
         head,
         is_main: false,
-        forgehold_session,
+        woom_session,
     })
 }
 
@@ -232,7 +232,7 @@ pub fn diff(
     session_id: &str,
     base_ref: Option<&str>,
 ) -> Result<(Vec<WorktreeChangedFile>, String), String> {
-    let branch = forgehold_branch(session_id);
+    let branch = woom_branch(session_id);
     let base = base_ref.unwrap_or("HEAD").to_string();
     let spec = format!("{}...{}", base, branch);
 
@@ -281,7 +281,7 @@ pub fn diff(
 /// returns an error without removing — the user can fix the conflicts by
 /// hand in the main repo or via the editor.
 pub fn apply(repo: &str, session_id: &str) -> Result<String, String> {
-    let branch = forgehold_branch(session_id);
+    let branch = woom_branch(session_id);
     // Refuse to merge into the same branch the worktree owns (no-op / would
     // corrupt the worktree's HEAD).
     let mut cur_cmd = git(repo);
@@ -294,7 +294,7 @@ pub fn apply(repo: &str, session_id: &str) -> Result<String, String> {
         ));
     }
 
-    let msg = format!("Merge {}\n\nForgehold session {}", branch, session_id);
+    let msg = format!("Merge {}\n\nWoom session {}", branch, session_id);
     let mut merge_cmd = git(repo);
     merge_cmd.args(["merge", "--no-ff", "-m", &msg, &branch]);
     let merge_out = run(merge_cmd)?;
@@ -408,7 +408,7 @@ fn walk_size(p: &Path) -> u64 {
     total
 }
 
-fn forgehold_branch(session_id: &str) -> String {
+fn woom_branch(session_id: &str) -> String {
     // Sanitize to a valid git ref. Git refs can't contain spaces, `..`, `~`,
     // `^`, `:`, `?`, `*`, `[`, `\`, or control chars.
     let safe: String = session_id
@@ -418,5 +418,5 @@ fn forgehold_branch(session_id: &str) -> String {
             _ => '-',
         })
         .collect();
-    format!("forgehold/{}", safe)
+    format!("woom/{}", safe)
 }

@@ -176,7 +176,7 @@
     color: var(--text-0);
   }
   .cv-tool-btn.active {
-    background: var(--accent-soft, rgba(238, 107, 31, 0.18));
+    background: var(--accent-soft, rgba(232, 130, 100, 0.18));
     color: var(--accent-bright, var(--accent));
     border-color: var(--accent);
   }

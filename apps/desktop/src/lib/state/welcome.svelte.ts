@@ -5,7 +5,7 @@
  * expose a "Show welcome again" affordance without poking
  * localStorage directly. */
 
-const STORAGE_KEY = 'forgehold:welcome-completed:v1';
+const STORAGE_KEY = 'woom:welcome-completed:v1';
 
 export const welcomeState = $state<{ completed: boolean }>({
   completed: loadCompleted()

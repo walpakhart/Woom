@@ -1,6 +1,6 @@
 // Shared drag-and-drop state. Single source of truth for "is something
 // being dragged right now, and what is it" — read by drop targets to decide
-// whether to accept the drop, by the workbench-bar pills to auto-open their
+// whether to accept the drop, by the solo-bar pills to auto-open their
 // hover menus mid-drag, and by drop handlers to recover the payload when
 // WKWebView hides custom-mime data on `dataTransfer.types` during dragover.
 //

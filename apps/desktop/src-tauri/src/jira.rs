@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
-const USER_AGENT: &str = concat!("Forgehold-Desktop/", env!("CARGO_PKG_VERSION"));
+const USER_AGENT: &str = concat!("Woom-Desktop/", env!("CARGO_PKG_VERSION"));
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct JiraCredentials {

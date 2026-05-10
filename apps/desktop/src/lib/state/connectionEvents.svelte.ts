@@ -9,14 +9,14 @@
  *  - Connection diagnostics card in `SettingsView` — full chronological
  *    log, useful for "why did my Jira go dark at 3 AM" debugging.
  *
- * Stored in localStorage under `forgehold:connection-events:v1` capped
+ * Stored in localStorage under `woom:connection-events:v1` capped
  * at 200 events; oldest are dropped on overflow. Persistence failures
  * are swallowed (privacy-mode tabs still get the in-session log).
  */
 
 import { loadVersioned, saveVersioned } from './persist';
 
-const STORAGE_KEY = 'forgehold:connection-events:v1';
+const STORAGE_KEY = 'woom:connection-events:v1';
 const STORAGE_VERSION = 1;
 const MAX_EVENTS = 200;
 

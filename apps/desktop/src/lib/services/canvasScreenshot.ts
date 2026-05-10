@@ -95,16 +95,16 @@ function tintFor(kind: string): { fill: string; stroke: string } {
   switch (kind) {
     case 'rect':                return { fill: 'rgba(255,255,255,0.04)', stroke: '#9094a0' };
     case 'ellipse':             return { fill: 'rgba(255,255,255,0.04)', stroke: '#9094a0' };
-    case 'sticky':              return { fill: 'rgba(238, 107, 31, 0.18)', stroke: 'rgba(238, 107, 31, 0.55)' };
+    case 'sticky':              return { fill: 'rgba(232, 130, 100, 0.18)', stroke: 'rgba(232, 130, 100, 0.55)' };
     case 'mermaid':
     case 'dot':                 return { fill: 'rgba(14, 165, 233, 0.08)', stroke: 'rgba(14, 165, 233, 0.55)' };
     case 'code':                return { fill: 'rgba(168, 85, 247, 0.08)', stroke: 'rgba(168, 85, 247, 0.55)' };
-    case 'image':               return { fill: 'rgba(34, 197, 94, 0.08)', stroke: 'rgba(34, 197, 94, 0.55)' };
+    case 'image':               return { fill: 'rgba(168, 217, 184, 0.08)', stroke: 'rgba(168, 217, 184, 0.55)' };
     case 'jira-card':           return { fill: 'rgba(38, 132, 255, 0.10)', stroke: '#2684FF' };
     case 'github-pr-card':
-    case 'github-issue-card':   return { fill: 'rgba(139, 92, 246, 0.10)', stroke: '#8B5CF6' };
-    case 'sentry-event-card':   return { fill: 'rgba(248, 143, 116, 0.10)', stroke: '#F88F74' };
-    case 'file-card':           return { fill: 'rgba(232, 163, 58, 0.10)', stroke: '#E8A33A' };
+    case 'github-issue-card':   return { fill: 'rgba(181, 132, 255, 0.10)', stroke: '#8B5CF6' };
+    case 'sentry-event-card':   return { fill: 'rgba(232, 130, 100, 0.10)', stroke: '#F88F74' };
+    case 'file-card':           return { fill: 'rgba(204, 120, 92, 0.10)', stroke: '#E8A33A' };
     case 'chat-message-card':   return { fill: 'rgba(217, 119, 87, 0.10)', stroke: '#D97757' };
     case 'frame':               return { fill: 'transparent', stroke: 'rgba(255,255,255,0.18)' };
     case 'group':               return { fill: 'transparent', stroke: 'rgba(255,255,255,0.06)' };

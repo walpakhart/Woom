@@ -2,16 +2,12 @@
   /* Spotlight-style universal navigator. Single search box, results
      grouped by section. Filters across every entity the user might
      want to jump to:
-       Views — Workbench / Repositories / Tasks / Issues / Rules /
-                Connections / Settings (top-level routes)
-       Workbenches — switch the active workbench tab
-       Editors — editor instances with their cwd + linked-session
-                  description (the user explicitly asked for this)
-       Columns — non-editor instances (github/jira/sentry/claude/cursor)
+       Views — top-level solo views + Rules / Connections / Settings
+       Editor — current cwd + linked-session description
        Repos / Boards / Projects — pre-loaded option lists
        Items — currently-loaded GitHub PRs / Jira issues / Sentry errors
-     A picked row dispatches the right action (setView, goToInstance,
-     updateXFilters, openFocus…) and closes the palette. */
+     A picked row dispatches the right action (setView, openFocus,
+     updateXFilters, …) and closes the palette. */
 
   import { externalId, type InboxItem, type JiraItem, type SentryIssue } from '$lib/data';
   import {
@@ -21,11 +17,7 @@
     openSentryFocus,
     scheduleSentryTabFilterRefresh
   } from '$lib/state/inbox.svelte';
-  import {
-    layoutState,
-    setActiveWorkbench,
-    goToInstance
-  } from '$lib/state/layout.svelte';
+  import { kindForInstanceId } from '$lib/state/layout.svelte';
   import { sessionsState } from '$lib/state/sessions.svelte';
   import { fuzzyScoreAny } from '$lib/services/fuzzyMatch';
   import { mruRank, recordPalettePick } from '$lib/state/paletteMru.svelte';
@@ -57,8 +49,8 @@
      *  flip it directly via setView() from view.svelte.ts (that store
      *  is unused there). Parent passes a callback. */
     setView: (v: View) => void;
-    /** Top-level "Actions" rows (connect / disconnect / new workbench /
-     *  show cheatsheet / report bug …). Built by the parent. */
+    /** Top-level "Actions" rows (connect / disconnect / show cheatsheet
+     *  / report bug …). Built by the parent. */
     actions?: PaletteAction[];
   }
 
@@ -70,7 +62,7 @@
   type Result = {
     key: string;
     badge: string;
-    badgeKind: 'view' | 'workbench' | 'editor' | 'canvas' | 'github' | 'jira' | 'sentry' | 'claude' | 'cursor' | 'action';
+    badgeKind: 'view' | 'editor' | 'canvas' | 'github' | 'jira' | 'sentry' | 'claude' | 'cursor' | 'action';
     title: string;
     subtitle?: string;
     section: string;
@@ -117,28 +109,19 @@
   });
 
   const VIEWS: { key: View; title: string; sub: string }[] = [
-    { key: 'workbench', title: 'Workbench', sub: 'Active columns' },
-    { key: 'githubTab', title: 'GitHub', sub: 'Repos / PRs / issues / actions' },
-    { key: 'jiraTab', title: 'Jira', sub: 'Tickets / boards / sprints' },
-    { key: 'sentryTab', title: 'Sentry', sub: 'Errors / events' },
+    { key: 'claudeApp', title: 'Claude', sub: 'Agent · sessions · worktrees' },
+    { key: 'cursorApp', title: 'Cursor', sub: 'Agent · sessions · worktrees' },
+    { key: 'githubApp', title: 'GitHub', sub: 'Repos / PRs / issues / actions' },
+    { key: 'jiraApp', title: 'Jira', sub: 'Tickets / boards / sprints' },
+    { key: 'sentryApp', title: 'Sentry', sub: 'Errors / events' },
+    { key: 'editorApp', title: 'Editor', sub: 'Code · files · diff' },
+    { key: 'canvasApp', title: 'Canvas', sub: 'Whiteboard · agent tools' },
+    { key: 'terminalApp', title: 'Terminal', sub: 'Shell · quick commands' },
     { key: 'rules', title: 'Rules', sub: 'Claude system prompts' },
     { key: 'connections', title: 'Connections', sub: 'GitHub / Jira / Sentry / etc.' },
     { key: 'settings', title: 'Settings', sub: '' }
   ];
 
-  const KIND_BADGE: Record<string, string> = {
-    github: 'GH',
-    jira: 'J',
-    sentry: 'St',
-    claude: 'C',
-    cursor: 'Cr',
-    editor: 'Ed',
-    canvas: 'Cv'
-  };
-
-  function capitalize(s: string) {
-    return s ? s[0].toUpperCase() + s.slice(1) : s;
-  }
 
   function shortFolder(p: string): string {
     const parts = p.split('/').filter(Boolean);
@@ -147,7 +130,7 @@
 
   /* Build results derived from query + state. Each section caps at
      LIMIT_PER_SECTION rows so a workspace with hundreds of issues
-     doesn't drown the workbench / editors / repos that are usually
+     doesn't drown the solo / editors / repos that are usually
      what the user actually wants to reach via Cmd+K. Inside a
      section rows are sorted by descending fuzzy score so the most
      relevant match floats to the top. */
@@ -215,89 +198,36 @@
       })
     );
 
-    // 2. Workbenches
-    push(
-      layoutState.workbenches.flatMap((wb) => {
-        const s = scoreFor(`wb:${wb.id}`, wb.name);
-        if (s === null) return [];
-        return [{
-          key: `wb:${wb.id}`,
-          badge: 'WB',
-          badgeKind: 'workbench' as const,
-          title: wb.name,
-          subtitle: `${wb.instances.length} column${wb.instances.length === 1 ? '' : 's'}`,
-          section: 'Workbenches',
-          score: s,
-          pick: () => {
-            recordPalettePick(`wb:${wb.id}`);
-            setActiveWorkbench(wb.id);
-            setView('workbench');
-            close();
-          }
-        }];
-      })
-    );
-
-    // 3. Editor instances — special: show folder + link status
-    const editorRows: Result[] = [];
-    for (const wb of layoutState.workbenches) {
-      for (const inst of wb.instances) {
-        if (inst.kind !== 'editor') continue;
-        const ed = sessionsState.editorInstanceState[inst.id];
-        const cwd = ed?.repoPath ?? '';
-        const folder = cwd ? shortFolder(cwd) : '(empty)';
-        const linkedSession = sessionsState.list.find(
-          (s) => s.linkedToEditorInstanceId === inst.id
-        );
-        const linkSub = linkedSession
-          ? `linked → ${linkedSession.title || linkedSession.id.slice(0, 6)}`
-          : 'unlinked';
-        const score = scoreFor(`inst:${inst.id}`, inst.name, cwd, folder, linkSub, wb.name);
-        if (score === null) continue;
-        editorRows.push({
-          key: `inst:${inst.id}`,
+    // 2. Editor — show folder + link status (singleton)
+    {
+      const editorId = 'editor-solo';
+      const ed = sessionsState.editorInstanceState[editorId];
+      const cwd = ed?.repoPath ?? '';
+      const folder = cwd ? shortFolder(cwd) : '(empty)';
+      const linkedSession = sessionsState.list.find(
+        (s) => s.linkedToEditorInstanceId === editorId
+      );
+      const linkSub = linkedSession
+        ? `linked → ${linkedSession.title || linkedSession.id.slice(0, 6)}`
+        : 'unlinked';
+      const score = scoreFor('view:editor', 'editor', cwd, folder, linkSub);
+      if (score !== null) {
+        push([{
+          key: 'view:editor',
           badge: 'Ed',
           badgeKind: 'editor',
-          title: `Editor · ${inst.name}`,
-          subtitle: `${folder} · ${linkSub} · ${wb.name}`,
-          section: 'Editors',
+          title: 'Editor',
+          subtitle: `${folder} · ${linkSub}`,
+          section: 'Apps',
           score,
           pick: () => {
-            recordPalettePick(`inst:${inst.id}`);
-            void goToInstance(inst.id, wb.id);
-            setView('workbench');
+            recordPalettePick('view:editor');
+            setView('editorApp');
             close();
           }
-        });
+        }]);
       }
     }
-    push(editorRows);
-
-    // 4. Other panel instances (github/jira/sentry/claude/cursor columns)
-    const colRows: Result[] = [];
-    for (const wb of layoutState.workbenches) {
-      for (const inst of wb.instances) {
-        if (inst.kind === 'editor') continue;
-        const score = scoreFor(`inst:${inst.id}`, inst.name, inst.kind, wb.name);
-        if (score === null) continue;
-        colRows.push({
-          key: `inst:${inst.id}`,
-          badge: KIND_BADGE[inst.kind] ?? '?',
-          badgeKind: inst.kind as Result['badgeKind'],
-          title: `${capitalize(inst.kind)} · ${inst.name}`,
-          subtitle: wb.name,
-          section: 'Columns',
-          score,
-          pick: () => {
-            recordPalettePick(`inst:${inst.id}`);
-            void goToInstance(inst.id, wb.id);
-            setView('workbench');
-            close();
-          }
-        });
-      }
-    }
-    push(colRows);
 
     // 5. GitHub repos
     push(
@@ -319,7 +249,7 @@
               repo: repo.name,
               section: 'pulls'
             };
-            setView('githubTab');
+            setView('githubApp');
             close();
           }
         }];
@@ -345,7 +275,7 @@
                Jira tab, so we update the tab's filter slice (not the
                column's — those are independent now). */
             updateJiraTabFilters({ boardIds: [b.id] });
-            setView('jiraTab');
+            setView('jiraApp');
             close();
           }
         }];
@@ -368,7 +298,7 @@
           pick: () => {
             recordPalettePick(`jproj:${p.key}`);
             updateJiraTabFilters({ projectKey: p.key });
-            setView('jiraTab');
+            setView('jiraApp');
             close();
           }
         }];
@@ -392,7 +322,7 @@
             recordPalettePick(`sproj:${p.slug}`);
             inboxState.sentryTabProjects = [p.slug];
             scheduleSentryTabFilterRefresh();
-            setView('sentryTab');
+            setView('sentryApp');
             close();
           }
         }];
@@ -426,7 +356,7 @@
             pick: () => {
               recordPalettePick(`gh:${item.id}`);
               selectInboxItem(item.id);
-              setView('workbench');
+              setView('githubApp');
               close();
             }
           }];
@@ -466,7 +396,7 @@
             pick: () => {
               recordPalettePick(`j:${item.id}`);
               inboxState.jiraFocusKey = item.key;
-              setView('workbench');
+              setView('jiraApp');
               close();
             }
           }];
@@ -506,7 +436,7 @@
             pick: () => {
               recordPalettePick(`s:${item.id}`);
               openSentryFocus(item.id);
-              setView('workbench');
+              setView('sentryApp');
               close();
             }
           }];
@@ -576,12 +506,13 @@
       <input
         class="palette-input"
         bind:value={query}
-        placeholder="Search anywhere — workbenches, columns, repos, boards, issues…"
+        placeholder="Search anywhere — solos, repos, boards, issues…"
         autofocus
       />
       {#if results.length === 0}
         <div class="palette-empty">No matches.</div>
-      {:else}
+      {/if}
+      {#if results.length > 0}
         <div class="palette-scroll">
           {#each grouped as [section, items] (section)}
             <div class="palette-section">
@@ -618,15 +549,38 @@
           {/each}
         </div>
       {/if}
+
+      <div class="palette-foot">
+        <span class="grp">
+          <span class="kbd">↑</span><span class="kbd">↓</span>
+          <span>navigate</span>
+        </span>
+        <span class="grp">
+          <span class="kbd">⏎</span>
+          <span>open</span>
+        </span>
+        <span class="grp">
+          <span class="kbd">⌘</span><span class="kbd">D</span>
+          <span>pin</span>
+        </span>
+        <span class="grp" style="margin-left: auto;">
+          <span class="kbd">esc</span>
+          <span>close</span>
+        </span>
+      </div>
     </div>
   </div>
 {/if}
 
 <style>
+  /* v6 command palette — Spotlight-class. Warm-noir surface, blurred
+     backdrop, soft entrance, brand-coded source badges. Highlight
+     row gets a clay accent stripe + brand soft halo. */
   .palette-backdrop {
     position: fixed; inset: 0;
     background: var(--backdrop);
-    backdrop-filter: blur(20px);
+    backdrop-filter: blur(22px) saturate(1.1);
+    -webkit-backdrop-filter: blur(22px) saturate(1.1);
     display: flex; align-items: flex-start; justify-content: center;
     padding-top: 12vh; z-index: 200;
     animation: fadeIn 180ms ease-out;
@@ -635,84 +589,130 @@
     width: 720px; max-width: 92vw;
     max-height: 70vh;
     display: flex; flex-direction: column;
-    background: var(--bg-1);
-    backdrop-filter: blur(24px);
-    border: 1px solid var(--border-hi2); border-radius: 14px;
+    background: linear-gradient(180deg, var(--bg-2), var(--bg-1));
+    border: 1px solid var(--border-hi);
+    border-radius: var(--r-modal, 16px);
     overflow: hidden;
-    box-shadow: var(--shadow-3), inset 0 1px 0 rgba(255, 255, 255, 0.04);
-    animation: slideDown 220ms cubic-bezier(0.34, 1.56, 0.64, 1);
+    box-shadow:
+      var(--shadow-3),
+      0 0 0 1px var(--border-accent-2),
+      inset 0 1px 0 rgba(255, 240, 220, 0.04);
+    animation: slideDown 220ms cubic-bezier(0.2, 0.9, 0.3, 1.2);
   }
   .palette-input {
     width: 100%; padding: 18px 22px;
     font-size: 15px; color: var(--text-0);
-    border-bottom: 1px solid var(--border-neutral);
+    border-bottom: 1px solid var(--border);
     background: transparent; border-left: none; border-right: none; border-top: none;
     flex-shrink: 0;
+    letter-spacing: -0.005em;
   }
   .palette-input:focus { outline: none; }
-  .palette-input::placeholder { color: var(--text-2); }
-  .palette-scroll { overflow-y: auto; flex: 1; padding: 4px 0 8px; }
+  .palette-input::placeholder { color: var(--text-mute); }
+  .palette-scroll { overflow-y: auto; flex: 1; padding: 4px 0 10px; }
   .palette-section { padding: 4px 10px; }
   .palette-section-title {
-    padding: 8px 12px 4px; font-size: 10.5px; font-weight: 600;
-    color: var(--text-mute); text-transform: uppercase; letter-spacing: 0.08em;
+    padding: 12px 14px 6px;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 10px; font-weight: 600;
+    color: var(--text-mute); text-transform: uppercase; letter-spacing: 0.10em;
   }
-  .palette-empty { padding: 24px 22px; font-size: 13px; color: var(--text-2); text-align: center; }
+  .palette-empty { padding: 28px 22px; font-size: 13px; color: var(--text-2); text-align: center; }
+
   .palette-item {
+    position: relative;
     display: flex; align-items: stretch;
-    border-radius: 7px;
+    border-radius: 8px;
     width: 100%;
     background: none;
     transition: background 100ms ease;
   }
-  .palette-item:hover, .palette-item.highlight { background: var(--bg-2); }
-  .palette-item.highlight { box-shadow: inset 0 0 0 1px var(--border-hi); }
+  .palette-item:hover { background: var(--bg-2); }
+  .palette-item.highlight {
+    background: linear-gradient(90deg,
+      color-mix(in srgb, var(--accent) 10%, transparent),
+      color-mix(in srgb, var(--accent) 2%, transparent) 60%);
+    box-shadow: inset 0 0 0 1px var(--border-accent-2);
+  }
+  .palette-item.highlight::before {
+    content: '';
+    position: absolute; left: 0; top: 6px; bottom: 6px;
+    width: 2.5px; border-radius: 2px;
+    background: var(--accent);
+    box-shadow: 0 0 10px var(--accent-glow);
+  }
   .palette-item-main {
     flex: 1; min-width: 0;
-    display: flex; align-items: center; gap: 10px;
-    padding: 8px 12px;
+    display: flex; align-items: center; gap: 12px;
+    padding: 9px 14px;
     text-align: left;
     font-size: 13px; color: var(--text-1); cursor: pointer;
     background: none; border: none;
-    border-radius: 7px 0 0 7px;
+    border-radius: 8px 0 0 8px;
   }
   .palette-item:hover .palette-item-main, .palette-item.highlight .palette-item-main { color: var(--text-0); }
   .palette-pin {
     width: 32px; flex-shrink: 0;
     background: none; border: none; cursor: pointer;
     color: var(--text-mute); font-size: 14px;
-    border-radius: 0 7px 7px 0;
-    opacity: 0.35; transition: opacity 120ms;
+    border-radius: 0 8px 8px 0;
+    opacity: 0; transition: opacity 120ms, color 120ms;
   }
   .palette-item:hover .palette-pin { opacity: 0.7; }
   .palette-pin:hover { opacity: 1; color: var(--accent-bright); }
   .palette-pin.pinned { opacity: 1; color: var(--accent); }
   .row-id {
-    color: var(--text-2); font-size: 11.5px; min-width: 48px; flex-shrink: 0;
+    font-family: 'JetBrains Mono', monospace; font-feature-settings: 'tnum';
+    color: var(--text-mute); font-size: 11px; min-width: 48px; flex-shrink: 0;
   }
   .row-title {
     flex: 1; min-width: 0;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    color: var(--text-0);
   }
 
-  /* Source-themed badges. Each kind gets its own tinted pill so the
-     user can scan the result list visually without reading every word. */
+  /* Source-themed badges — share the rest of the palette's --src-*
+     family so the palette and column stripes feel like the same
+     design system. */
   .badge {
     display: inline-flex; align-items: center; justify-content: center;
-    min-width: 26px; height: 20px; padding: 0 5px;
+    min-width: 26px; height: 20px; padding: 0 6px;
     border-radius: 5px; font-weight: 700; font-size: 10px;
     letter-spacing: -0.02em; flex-shrink: 0;
     border: 1px solid transparent;
+    font-family: 'JetBrains Mono', monospace;
   }
-  .badge--view     { background: rgba(160, 160, 180, 0.10); color: #c8d0e2; border-color: rgba(160, 160, 180, 0.18); }
-  .badge--workbench{ background: rgba(232, 163, 58, 0.10); color: #f3c068; border-color: rgba(232, 163, 58, 0.22); }
-  .badge--editor   { background: rgba(255, 255, 255, 0.05); color: #e5ebf4; border-color: rgba(255, 255, 255, 0.1); }
-  .badge--github   { background: rgba(139, 92, 246, 0.1);  color: #b199f6; border-color: rgba(139, 92, 246, 0.22); }
-  .badge--jira     { background: rgba(59, 130, 246, 0.12); color: #60a5fa; border-color: rgba(59, 130, 246, 0.24); }
-  .badge--sentry   { background: rgba(248, 143, 116, 0.08); color: #f8a994; border-color: rgba(248, 143, 116, 0.2); }
-  .badge--claude   { background: rgba(16, 185, 129, 0.12); color: #34d399; border-color: rgba(16, 185, 129, 0.24); }
-  .badge--cursor   { background: rgba(255, 255, 255, 0.05); color: #e5ebf4; border-color: rgba(255, 255, 255, 0.1); }
-  .badge--action   { background: rgba(232, 163, 58, 0.15); color: #f3c068; border-color: rgba(232, 163, 58, 0.32); }
+  .badge--view     { background: var(--bg-3); color: var(--text-1); border-color: var(--border); }
+  .badge--editor   { background: var(--accent-soft); color: var(--src-editor); border-color: var(--border-accent-2); }
+  .badge--github   { background: rgba(181, 132, 255, 0.10); color: var(--src-github);  border-color: rgba(181, 132, 255, 0.26); }
+  .badge--jira     { background: rgba(79, 142, 255, 0.10);  color: var(--src-jira);    border-color: rgba(79, 142, 255, 0.26); }
+  .badge--sentry   { background: rgba(232, 130, 100, 0.10); color: var(--src-sentry);  border-color: rgba(232, 130, 100, 0.26); }
+  .badge--claude   { background: rgba(232, 155, 125, 0.10); color: var(--src-claude);  border-color: rgba(232, 155, 125, 0.26); }
+  .badge--cursor   { background: var(--bg-3); color: var(--src-cursor); border-color: var(--border-hi); }
+  .badge--action   { background: var(--accent-soft); color: var(--accent-bright); border-color: var(--border-accent); }
+
+  /* v7 — footer kbd hints. */
+  .palette-foot {
+    padding: 10px 18px;
+    border-top: 1px solid var(--border);
+    display: flex; align-items: center; gap: 14px;
+    font-size: 11px;
+    color: var(--text-mute);
+    background: var(--bg-2);
+    flex-shrink: 0;
+  }
+  .palette-foot .grp { display: flex; align-items: center; gap: 5px; }
+  .palette-foot .kbd {
+    display: inline-grid; place-items: center;
+    height: 16px; min-width: 16px;
+    padding: 0 4px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9.5px;
+    background: var(--bg-3);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text-1);
+  }
 
   @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
   @keyframes slideDown {

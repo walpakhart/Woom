@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  macOS hardened-runtime entitlements for the Forgehold .app.
+  macOS hardened-runtime entitlements for the Woom .app.
   Used by `scripts/build-dmg.sh` ONLY when `APPLE_SIGNING_IDENTITY` is
   set — the local ad-hoc path skips entitlements entirely (the
   hardened runtime is opt-in and must be paired with notarization to

@@ -4,10 +4,10 @@
 // callers keep working without a churn.
 //
 // Persistence: per-canvas JSON files at
-// `~/Library/Application Support/Forgehold/canvases/<id>.json` plus a
+// `~/Library/Application Support/Woom/canvases/<id>.json` plus a
 // thin `index.json`. localStorage stays as fallback when disk init
 // fails (e.g. SSR build, sandboxing weirdness). Migration from the
-// legacy `forgehold:canvas:v1:*` localStorage layout happens once on
+// legacy `woom:canvas:v1:*` localStorage layout happens once on
 // first disk init (`initCanvasFromDisk`); the legacy keys are then
 // cleared to free the ~5 MB browser quota that big canvases would
 // otherwise blow.
@@ -51,9 +51,9 @@ const HISTORY_CAP = 50;
 
 // ---- Storage keys --------------------------------------------------------
 
-const STORAGE_INDEX = 'forgehold:canvas:index:v1';
-const STORAGE_CANVAS_PREFIX = 'forgehold:canvas:v1:';
-const STORAGE_INSTANCE_STATE = 'forgehold:canvas:instances:v1';
+const STORAGE_INDEX = 'woom:canvas:index:v1';
+const STORAGE_CANVAS_PREFIX = 'woom:canvas:v1:';
+const STORAGE_INSTANCE_STATE = 'woom:canvas:instances:v1';
 
 // ---- Disk persistence (M1 §1.1) -----------------------------------------
 // `_diskDir` is the resolved canvas folder once `initCanvasFromDisk` runs.
@@ -125,7 +125,7 @@ export const canvasState = $state<{
   open: Record<string, Canvas>;
   /** Per-column-instance active canvas + tab strip. Keyed on column
    *  instance id so a Canvas column's tab state survives moving the
-   *  column to another workbench (mirrors how `editorInstanceState`
+   *  column to another solo (mirrors how `editorInstanceState`
    *  works for editor columns). */
   byInstance: Record<string, CanvasInstanceState>;
   /** Per-canvas ephemeral state (selection + undo stack). Created on
@@ -247,11 +247,11 @@ async function readCanvasFromDisk(id: string): Promise<Canvas | null> {
 }
 
 /** Initialize disk persistence. Called from +page.svelte onMount with
- *  the resolved app-data dir (`~/Library/Application Support/Forgehold`
+ *  the resolved app-data dir (`~/Library/Application Support/Woom`
  *  on macOS).
  *
  *  - First launch with no `index.json` on disk: migrate every
- *    `forgehold:canvas:v1:*` localStorage entry to disk, write
+ *    `woom:canvas:v1:*` localStorage entry to disk, write
  *    `index.json`, then clear those localStorage keys to free quota.
  *  - Subsequent launches: read `index.json` (lightweight — just the
  *    library entries) and let `loadCanvas` lazy-fetch the per-canvas

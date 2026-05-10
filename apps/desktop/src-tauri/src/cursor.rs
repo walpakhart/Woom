@@ -1,6 +1,6 @@
 //! Cursor Agent CLI adapter — parallel to `claude.rs`.
 //!
-//! Forgehold spawns `cursor-agent -p <prompt> --output-format stream-json
+//! Woom spawns `cursor-agent -p <prompt> --output-format stream-json
 //! --resume <chat_id>` and normalizes Cursor's native event stream into the
 //! same Claude-style shape the frontend already parses (`type: "assistant"`
 //! with a `content[]` array of `{type: "text"|"tool_use", …}` blocks). That
@@ -14,7 +14,7 @@
 //!   - No `--append-system-prompt` — user-authored Rules are prepended to
 //!     the prompt text as a fenced preamble.
 //!   - No `--mcp-config` — Cursor reads `~/.cursor/mcp.json` and
-//!     `<workspace>/.cursor/mcp.json`. Forgehold's sidecars aren't wired in by
+//!     `<workspace>/.cursor/mcp.json`. Woom's sidecars aren't wired in by
 //!     default in v1; users can add them manually via `cursor-agent mcp
 //!     enable` or a project-local mcp.json.
 
@@ -179,7 +179,7 @@ pub async fn ask(
         .arg("--output-format")
         .arg("stream-json")
         // Without this, cursor-agent buffers the entire model response and
-        // emits one big `assistant` event at the end. The Forgehold spinner
+        // emits one big `assistant` event at the end. The Woom spinner
         // would just tick for 30-90s with no UI feedback. Turn it on so
         // text deltas stream as the model writes them.
         .arg("--stream-partial-output")
@@ -207,7 +207,7 @@ pub async fn ask(
     for (k, v) in extended_env() {
         cmd.env(k, v);
     }
-    // macOS quirk: when Forgehold.app is unsigned (ad-hoc) and spawns
+    // macOS quirk: when Woom.app is unsigned (ad-hoc) and spawns
     // cursor-agent as a child, the child's Keychain Services calls via
     // node-keytar get silently denied — cursor-agent then reports
     // "Authentication required". Work around by reading the token ourselves
@@ -936,7 +936,7 @@ fn collapse_doubled(text: &str) -> String {
 /// Cursor's `tool_call` event carries a discriminated-union payload; pick out
 /// the readable tool name + args and re-emit as a Claude-style `tool_use`
 /// content block. We only handle the `started` subtype (tool *invocation*) —
-/// `completed` carries the tool *result*, which Forgehold already surfaces via
+/// `completed` carries the tool *result*, which Woom already surfaces via
 /// action cards or inline bash output, so rendering it again would duplicate.
 ///
 /// Two-pass extraction. cursor-agent has shipped at least three layouts for
@@ -1014,16 +1014,16 @@ fn normalize_tool_call(v: &serde_json::Value) -> Option<serde_json::Value> {
 /// Append the raw event JSON to a per-machine log so the user can paste
 /// it back when reporting "blank trace pill". Best-effort — failures
 /// to write are silent (don't want diagnostics to break the agent).
-/// The path is `~/Library/Logs/Forgehold/cursor-unknown-tool-calls.log`
-/// on macOS, falling back to `$HOME/.forgehold-cursor-unknown.log`.
+/// The path is `~/Library/Logs/Woom/cursor-unknown-tool-calls.log`
+/// on macOS, falling back to `$HOME/.woom-cursor-unknown.log`.
 fn log_unknown_tool_call(v: &serde_json::Value) {
     let Ok(home) = std::env::var("HOME") else {
         return;
     };
     let dir = if cfg!(target_os = "macos") {
-        PathBuf::from(&home).join("Library/Logs/Forgehold")
+        PathBuf::from(&home).join("Library/Logs/Woom")
     } else {
-        PathBuf::from(&home).join(".forgehold")
+        PathBuf::from(&home).join(".woom")
     };
     let _ = std::fs::create_dir_all(&dir);
     let file = dir.join("cursor-unknown-tool-calls.log");
@@ -1045,8 +1045,8 @@ fn log_unknown_tool_call(v: &serde_json::Value) {
     }
 }
 
-/// Strip the `forgehold-` prefix from MCP tool names so cursor-agent's
-/// `mcp__forgehold-app__open_github_pr` lines up with the
+/// Strip the `woom-` prefix from MCP tool names so cursor-agent's
+/// `mcp__woom-app__open_github_pr` lines up with the
 /// `mcp__app__open_github_pr` shape the frontend's `handleStreamEvent` +
 /// `handleAppNavigation` dispatcher matches on. Same fix for the other
 /// sidecars (jira / github / sentry / memory).
@@ -1054,7 +1054,7 @@ fn log_unknown_tool_call(v: &serde_json::Value) {
 /// Why the names diverge: Claude is invoked with `--mcp-config` listing
 /// servers under bare keys (`app`, `jira`, …) so its tool names land at
 /// `mcp__app__…`. Cursor reads `~/.cursor/mcp.json`, which uses the
-/// public `forgehold-app` / `forgehold-jira` namespace (it's the
+/// public `woom-app` / `woom-jira` namespace (it's the
 /// global MCP namespace shared with anything else the user wires in
 /// via `cursor-agent mcp add`, so we don't squat on `app`). Without
 /// this normalization the frontend silently drops every navigation
@@ -1062,7 +1062,7 @@ fn log_unknown_tool_call(v: &serde_json::Value) {
 /// answers OK), but no UI mutation runs. That's the "Cursor says it
 /// opened the PR but nothing happened" bug.
 fn normalize_mcp_tool_name(name: &str) -> String {
-    if let Some(rest) = name.strip_prefix("mcp__forgehold-") {
+    if let Some(rest) = name.strip_prefix("mcp__woom-") {
         // `rest` is now e.g. `app__open_github_pr`. Re-prefix to land at
         // the Claude-shaped `mcp__app__open_github_pr`.
         return format!("mcp__{}", rest);
@@ -1072,14 +1072,14 @@ fn normalize_mcp_tool_name(name: &str) -> String {
 
 /// Reach into cursor's discriminated tool_call union (readToolCall /
 /// writeToolCall / function / mcp / …) and return a `(tool_name,
-/// input_object)` pair. Best-effort — Forgehold's `formatToolUse`
+/// input_object)` pair. Best-effort — Woom's `formatToolUse`
 /// gracefully falls back to a compact generic render for unknown
 /// names/shapes.
 ///
 /// We probe in three layers, most-specific → most-general, so a cleaner
 /// shape always wins over a fallback. cursor-agent has shipped four
 /// distinct envelopes for tool_calls across versions; this used to only
-/// handle two, which is why MCP calls (e.g. `mcp__forgehold-app__open_github_pr`)
+/// handle two, which is why MCP calls (e.g. `mcp__woom-app__open_github_pr`)
 /// were collapsing to `("tool", {})` — the agent reports "1 step" but
 /// the trace says "_using tool…_" and the frontend dispatcher never
 /// fires because `name` is empty. See the bug repro: "Открыл PR в
@@ -1117,7 +1117,7 @@ fn extract_tool_shape(tc: &serde_json::Value) -> (String, serde_json::Value) {
     // builds split the namespace and the tool name into two fields
     // instead of pre-joining as `mcp__<server>__<tool>`. Re-stitch so
     // downstream `normalize_mcp_tool_name` + the frontend dispatcher
-    // see the same `mcp__forgehold-app__open_github_pr` shape Claude
+    // see the same `mcp__woom-app__open_github_pr` shape Claude
     // produces directly.
     let mcp_obj = obj.get("mcp").and_then(|m| m.as_object()).unwrap_or(obj);
     if let (Some(server), Some(tool)) = (
@@ -1139,8 +1139,8 @@ fn extract_tool_shape(tc: &serde_json::Value) -> (String, serde_json::Value) {
     //     mcpToolCall: {
     //       args: {
     //         args: { …actual tool params… },
-    //         name: "forgehold-app-open_github_pr",
-    //         providerIdentifier: "forgehold-app",
+    //         name: "woom-app-open_github_pr",
+    //         providerIdentifier: "woom-app",
     //         toolCallId: "toolu_…",
     //         toolName: "open_github_pr"
     //       }
@@ -1151,7 +1151,7 @@ fn extract_tool_shape(tc: &serde_json::Value) -> (String, serde_json::Value) {
     // dash, which DOESN'T match the `mcp__<server>__<tool>` convention
     // the rest of the codebase (frontend dispatcher, formatToolUse,
     // claude.rs) expects. So we re-stitch from `providerIdentifier` +
-    // `toolName` instead, stripping the `forgehold-` prefix to match
+    // `toolName` instead, stripping the `woom-` prefix to match
     // Claude's namespace (where servers live as bare keys `app`,
     // `jira`, …). For 3rd-party MCP servers the user wires in via
     // `cursor-agent mcp add`, the prefix won't be present, so the full
@@ -1168,7 +1168,7 @@ fn extract_tool_shape(tc: &serde_json::Value) -> (String, serde_json::Value) {
             let tool_name = outer.get("toolName").and_then(|s| s.as_str()).unwrap_or("");
             let inner_args = outer.get("args").cloned().unwrap_or_else(|| json!({}));
             if !tool_name.is_empty() && !provider.is_empty() {
-                let namespace = provider.strip_prefix("forgehold-").unwrap_or(provider);
+                let namespace = provider.strip_prefix("woom-").unwrap_or(provider);
                 return (format!("mcp__{}__{}", namespace, tool_name), inner_args);
             }
         }
@@ -1490,7 +1490,7 @@ fn canonicalize_tool_name(name: &str) -> String {
     }
 }
 
-/// Send SIGTERM to a running cursor-agent spawn for the given Forgehold session.
+/// Send SIGTERM to a running cursor-agent spawn for the given Woom session.
 /// SIGTERM → wait 2s → SIGKILL fallback. Same rationale as `claude::stop`:
 /// a cursor-agent stuck in a syscall (network, MCP RPC) ignores SIGTERM
 /// and keeps its chat lock; without the kill the next `--resume` fails.

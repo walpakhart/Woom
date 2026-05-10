@@ -2,7 +2,7 @@
  *
  * We can't read upstream expiry — most PATs let the user pick how long
  * the token lives, and even when the provider hard-caps it the field
- * isn't surfaced through their `who am I` endpoint. Forgehold's
+ * isn't surfaced through their `who am I` endpoint. Woom's
  * approximation: stamp the moment the token first hit our keychain
  * (see `markTokenInstalled` callers in `+page.svelte`) and nag on age.
  *
@@ -13,17 +13,17 @@
  *           keep using it — most providers don't auto-expire to the
  *           day, and we'd rather annoy than lock anyone out).
  *
- * Stored in localStorage under `forgehold:token-installed-at:v1`. Lives
+ * Stored in localStorage under `woom:token-installed-at:v1`. Lives
  * in localStorage rather than the keychain because it's metadata, not
  * a secret, and we want it readable on boot before biometric unlock.
  *
- * We only track sources Forgehold owns the credential for — github,
+ * We only track sources Woom owns the credential for — github,
  * jira, sentry. Agents (claude, cursor) auth to their own services so
  * the rotation conversation belongs to them, not us. */
 
 import { loadVersioned, saveVersioned } from './persist';
 
-const STORAGE_KEY = 'forgehold:token-installed-at:v1';
+const STORAGE_KEY = 'woom:token-installed-at:v1';
 const STORAGE_VERSION = 1;
 
 export type TokenSource = 'github' | 'jira' | 'sentry';

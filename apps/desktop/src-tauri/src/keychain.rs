@@ -1,6 +1,6 @@
 //! macOS Keychain storage for source credentials.
 //!
-//! Items are stored under the `com.forgehold.desktop` service with
+//! Items are stored under the `com.woom.desktop` service with
 //! `kSecAttrAccessibleWhenUnlockedThisDeviceOnly` — the keychain is only
 //! readable while the user is logged in, items are bound to this Mac (no
 //! iCloud Keychain sync), and they don't survive a wipe. The app-level
@@ -45,7 +45,7 @@ extern "C" {
     static kSecAttrAccessibleWhenUnlockedThisDeviceOnly: CFStringRef;
 }
 
-const SERVICE: &str = "com.forgehold.desktop";
+const SERVICE: &str = "com.woom.desktop";
 
 #[derive(Debug, thiserror::Error)]
 pub enum KeychainError {

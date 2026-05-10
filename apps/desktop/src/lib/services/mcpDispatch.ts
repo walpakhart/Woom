@@ -1,8 +1,8 @@
-/* MCP-tool dispatch for the `forgehold-app` sidecar.
+/* MCP-tool dispatch for the `woom-app` sidecar.
  *
  * The agent calls `mcp__app__open_jira_issue` / `switch_view` /
  * `canvas_add_shape` / etc. — the stream parser sees the
- * `tool_use` event, and we drive Forgehold's reactive state directly
+ * `tool_use` event, and we drive Woom's reactive state directly
  * here. Same outcome as if the user had clicked through the UI.
  *
  * No approval card: these are read-only navigations / state writes
@@ -19,7 +19,7 @@
  * function. Module-level state (inboxState, canvasState, layout
  * helpers, the canvas op aliases) is imported directly here.
  *
- * Keep this file in lock-step with `forgehold-app/src/main.rs` —
+ * Keep this file in lock-step with `woom-app/src/main.rs` —
  * each `case` here mirrors a `#[tool]` on the sidecar. */
 
 import type { ConnectionMeta } from '$lib/data';
@@ -68,12 +68,9 @@ import {
   type JiraFilters
 } from '$lib/state/inbox.svelte';
 import {
-  addPanelInstance,
-  addWorkbench,
   layoutState,
-  scrollInstanceIntoView,
-  scrollKindIntoView,
-  setActiveWorkbench
+  APP_INSTANCE_IDS,
+  kindForInstanceId
 } from '$lib/state/layout.svelte';
 import { notify } from '$lib/state/toaster.svelte';
 
@@ -95,7 +92,8 @@ function warnAgentToolMissed(tool: string, reason: string) {
   });
 }
 import { sessionsState } from '$lib/state/sessions.svelte';
-import type { PanelInstance, PanelKind } from '$lib/types';
+import type { PanelKind } from '$lib/types';
+type PanelInstance = { id: string; kind: PanelKind; name: string; width: number };
 import type { AgentInternalView } from './mcpAlias';
 import type { DetailTab } from '$lib/state/view.svelte';
 import {
@@ -126,8 +124,10 @@ export interface McpDispatchContext {
   /** Resolve the canvas id a session is linked to (or null if no
    *  link / canvas missing). */
   linkedCanvasIdFor: (sessionId: string) => string | null;
-  /** Look up a workbench instance by art-name or id within a given
-   *  panel kind, across every workbench. */
+  /** Resolve the singleton record for a kind. App mode keeps this
+   *  shape (instead of a literal `APP_INSTANCE_IDS[kind]` lookup) so
+   *  `findInstanceByNameOrId` callers don't need to know the concrete
+   *  id format. */
   findInstanceByNameOrId: (
     kind: PanelKind,
     name: string,
@@ -239,21 +239,17 @@ export function createMcpDispatcher(ctx: McpDispatchContext) {
       // View / layout
       // ──────────────────────────────────────────────────────────
       case 'mcp__app__switch_view': {
-        // The MCP tool exposes platform-named views (`github` /
-        // `jira` / `sentry`) so a future GitLab tab can claim its
-        // own slot without colliding. Internal `View` keys still
-        // carry the `Tab` suffix to disambiguate from workbench
-        // column kinds — `mapAgentViewToInternal` handles the
-        // translation.
+        // The MCP tool exposes platform-named views (`github` / `jira`
+        // / `sentry` / etc.); `mapAgentViewToInternal` translates them
+        // to the matching `…App` internal view name.
         const mapped = mapAgentViewToInternal(str('view'));
         if (mapped) ctx.setView(mapped);
         return;
       }
-      case 'mcp__app__add_editor_instance': {
+      case 'mcp__app__open_repo': {
         const repoPath = str('repo_path');
-        ctx.setView('workbench');
-        const newId = addPanelInstance('editor');
-        if (repoPath && newId) ctx.setEditorRepoPath(repoPath, newId);
+        ctx.setView('editorApp');
+        if (repoPath) ctx.setEditorRepoPath(repoPath, APP_INSTANCE_IDS.editor);
         return;
       }
       case 'mcp__app__open_connect_modal': {
@@ -262,51 +258,25 @@ export function createMcpDispatcher(ctx: McpDispatchContext) {
         if (conn) ctx.openConnectModal(conn);
         return;
       }
-      case 'mcp__app__add_workbench_instance': {
+      case 'mcp__app__focus_solo': {
+        // App singletons always exist — this is just `setView` for the
+        // kind's solo view.
         const kind = str('kind');
-        if (!VALID_PANEL_KINDS.includes(kind as PanelKind)) return;
-        ctx.setView('workbench');
-        const newId = addPanelInstance(kind as PanelKind);
-        if (kind === 'editor') {
-          const repoPath = str('repo_path');
-          if (repoPath && newId) ctx.setEditorRepoPath(repoPath, newId);
-        }
-        // Scroll the new column into view so the user actually sees
-        // the change — addPanelInstance can drop a column off-screen
-        // on a wide layout.
-        if (newId) void scrollInstanceIntoView(newId);
-        return;
-      }
-      case 'mcp__app__new_workbench': {
-        const wbName = str('name') || 'Workbench';
-        const activate = input.activate !== false; // default true
-        const newId = addWorkbench(wbName);
-        if (activate && newId) setActiveWorkbench(newId);
-        ctx.setView('workbench');
-        return;
-      }
-      case 'mcp__app__switch_workbench': {
-        const targetName = str('name');
-        const indexRaw = input.index;
-        ctx.setView('workbench');
-        if (targetName) {
-          const target = layoutState.workbenches.find(
-            (w) => w.name.toLowerCase() === targetName.toLowerCase()
-          );
-          if (target) setActiveWorkbench(target.id);
+        if (!VALID_PANEL_KINDS.includes(kind as PanelKind)) {
+          warnAgentToolMissed('focus_solo', `kind=${kind} is not a known panel kind`);
           return;
         }
-        if (typeof indexRaw === 'number' && Number.isInteger(indexRaw)) {
-          const target = layoutState.workbenches[indexRaw];
-          if (target) setActiveWorkbench(target.id);
-        }
-        return;
-      }
-      case 'mcp__app__focus_workbench_instance': {
-        const kind = str('kind');
-        if (!VALID_PANEL_KINDS.includes(kind as PanelKind)) return;
-        ctx.setView('workbench');
-        void scrollKindIntoView(kind as PanelKind);
+        const map: Record<PanelKind, AgentInternalView> = {
+          github: 'githubApp',
+          jira: 'jiraApp',
+          sentry: 'sentryApp',
+          claude: 'claudeApp',
+          cursor: 'cursorApp',
+          editor: 'editorApp',
+          canvas: 'canvasApp',
+          terminal: 'terminalApp'
+        };
+        ctx.setView(map[kind as PanelKind]);
         return;
       }
 
@@ -319,7 +289,7 @@ export function createMcpDispatcher(ctx: McpDispatchContext) {
         const section = str('section') || 'pulls';
         const path = str('path');
         if (!owner || !repo) return;
-        ctx.setView('githubTab');
+        ctx.setView('githubApp');
         // GithubTab watches this slot and clears it after opening.
         // `path` only honoured for section=code (server validates too).
         inboxState.pendingRepoNav = {
@@ -348,7 +318,7 @@ export function createMcpDispatcher(ctx: McpDispatchContext) {
         if (Array.isArray(input.sprint_ids)) {
           patch.sprintIds = parseSprintScopes(input.sprint_ids);
         }
-        ctx.setView('jiraTab');
+        ctx.setView('jiraApp');
         updateJiraTabFilters(patch);
         return;
       }
@@ -357,7 +327,7 @@ export function createMcpDispatcher(ctx: McpDispatchContext) {
         // filter object), so we can't reuse a setSentryFilters-style
         // patch. Mutate field-by-field — the schedule call below
         // persists and re-runs the query.
-        ctx.setView('sentryTab');
+        ctx.setView('sentryApp');
         if (Array.isArray(input.projects)) {
           inboxState.sentryTabProjects = input.projects
             .map((x) => String(x))
@@ -388,7 +358,7 @@ export function createMcpDispatcher(ctx: McpDispatchContext) {
         if (!inst) {
           warnAgentToolMissed(
             'set_github_column',
-            `No GitHub column matched "${str('instance_name') || str('instance_id') || '(unspecified)'}". Add the column first or pass a valid name/id.`
+            `No inbox matched "${str('instance_name') || str('instance_id') || '(unspecified)'}". Add the column first or pass a valid name/id.`
           );
           return;
         }
@@ -404,9 +374,8 @@ export function createMcpDispatcher(ctx: McpDispatchContext) {
         }
         if ('search' in input) patch.search = str('search');
         if ('custom_user' in input) patch.customUser = str('custom_user');
-        ctx.setView('workbench');
+        ctx.setView('githubApp');
         updateGithubFilters(inst.id, patch);
-        void scrollInstanceIntoView(inst.id);
         return;
       }
       case 'mcp__app__set_jira_column': {
@@ -436,9 +405,8 @@ export function createMcpDispatcher(ctx: McpDispatchContext) {
         if (Array.isArray(input.sprint_ids)) {
           patch.sprintIds = parseSprintScopes(input.sprint_ids);
         }
-        ctx.setView('workbench');
+        ctx.setView('jiraApp');
         updateJiraFilters(inst.id, patch);
-        void scrollInstanceIntoView(inst.id);
         return;
       }
       case 'mcp__app__set_sentry_column': {
@@ -469,9 +437,8 @@ export function createMcpDispatcher(ctx: McpDispatchContext) {
           const e = str('environment');
           patch.environment = e ? e : null;
         }
-        ctx.setView('workbench');
+        ctx.setView('sentryApp');
         setSentryFilters(inst.id, patch);
-        void scrollInstanceIntoView(inst.id);
         return;
       }
 
@@ -502,7 +469,7 @@ export function createMcpDispatcher(ctx: McpDispatchContext) {
           );
           return;
         }
-        ctx.setView('workbench');
+        ctx.setView('editorApp');
         ctx.setEditorRepoPath(repoPath, editor.id);
         // Linked agents follow. `applySessionCwd` rotates the agent's
         // claudeUuid + resets `claudeResumable` when the new cwd
@@ -514,7 +481,6 @@ export function createMcpDispatcher(ctx: McpDispatchContext) {
             applySessionCwd(s.id, repoPath, { breakLink: false });
           }
         }
-        void scrollInstanceIntoView(editor.id);
         return;
       }
       case 'mcp__app__set_agent_cwd': {
@@ -542,8 +508,7 @@ export function createMcpDispatcher(ctx: McpDispatchContext) {
           const inst = ctx.findInstanceByNameOrId('claude', instName, instId)
             ?? ctx.findInstanceByNameOrId('cursor', instName, instId);
           if (inst) {
-            ctx.setView('workbench');
-            void scrollInstanceIntoView(inst.id);
+            ctx.setView(inst.kind === 'cursor' ? 'cursorApp' : 'claudeApp');
             sessId = sessionsState.activeByInstance[inst.id] ?? null;
           }
         }

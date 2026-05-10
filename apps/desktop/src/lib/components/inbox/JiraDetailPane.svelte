@@ -10,8 +10,13 @@
     now: number;
     onClose: () => void;
     onStatusChange?: () => void;
+    /** Hand the focused ticket off to Claude / Cursor. Optional so
+     *  any existing call site that doesn't wire them up still
+     *  compiles — each header button is hidden when undefined. */
+    onSendToClaude?: () => void;
+    onSendToCursor?: () => void;
   }
-  let { issueKey, now, onClose, onStatusChange }: Props = $props();
+  let { issueKey, now, onClose, onStatusChange, onSendToClaude, onSendToCursor }: Props = $props();
 
   let detail = $state<JiraDetail | null>(null);
   let loading = $state(false);
@@ -317,6 +322,18 @@
         <polyline points="3 21 3 15 9 15"/>
       </svg>
     </button>
+    {#if onSendToClaude}
+      <button class="jdp-btn jdp-btn--claude" onclick={onSendToClaude} disabled={!detail} title="Send this ticket to Claude">
+        <svg class="i i-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="m22 2-7 20-4-9-9-4 20-7z"/></svg>
+        Send to Claude
+      </button>
+    {/if}
+    {#if onSendToCursor}
+      <button class="jdp-btn jdp-btn--cursor" onclick={onSendToCursor} disabled={!detail} title="Send this ticket to Cursor">
+        <svg class="i i-sm" viewBox="0 0 24 24" fill="currentColor"><path d="M3 3l8 18 2-8 8-2z"/></svg>
+        Send to Cursor
+      </button>
+    {/if}
     <button class="jdp-btn" onclick={() => detail && openUrl(detail.url)} disabled={!detail} title="Open on Jira">
       <svg class="i i-sm" viewBox="0 0 24 24"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /><path d="M15 3h6v6M10 14 21 3" /></svg>
       Open on Jira
@@ -672,6 +689,28 @@
     border-color: transparent; font-weight: 600;
   }
   .jdp-btn--primary:hover:not(:disabled) { background: var(--accent-bright); color: var(--accent-fg); }
+  /* Send-to-Claude — brand-tinted ghost so the handoff stands apart
+     from the Jira-native actions (Refresh / Open on Jira). */
+  .jdp-btn--claude {
+    color: var(--src-claude);
+    background: color-mix(in srgb, var(--src-claude) 8%, transparent);
+    border-color: color-mix(in srgb, var(--src-claude) 30%, transparent);
+  }
+  .jdp-btn--claude:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--src-claude) 18%, transparent);
+    color: var(--accent-bright);
+    border-color: color-mix(in srgb, var(--src-claude) 50%, transparent);
+  }
+  .jdp-btn--cursor {
+    color: var(--src-cursor, var(--text-1));
+    background: color-mix(in srgb, var(--src-cursor, var(--text-1)) 10%, transparent);
+    border-color: color-mix(in srgb, var(--src-cursor, var(--text-1)) 32%, transparent);
+  }
+  .jdp-btn--cursor:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--src-cursor, var(--text-1)) 22%, transparent);
+    color: var(--text-0);
+    border-color: color-mix(in srgb, var(--src-cursor, var(--text-1)) 50%, transparent);
+  }
 
   .jdp-state { padding: 40px; text-align: center; color: var(--text-2); }
   .jdp-err { color: var(--error); }
@@ -690,8 +729,10 @@
   }
   .jdp-summary:hover { background: var(--bg-1); }
   .jdp-summary-text {
-    font-size: 22px; font-weight: 600; color: var(--text-0);
-    line-height: 1.35; margin: 0;
+    font-family: 'Instrument Serif', 'New York', Georgia, serif;
+    font-size: 30px; font-weight: 400; color: var(--text-0);
+    letter-spacing: -0.02em;
+    line-height: 1.18; margin: 0;
   }
   .jdp-edit-icon { opacity: 0; color: var(--text-2); margin-top: 6px; flex-shrink: 0; transition: opacity 120ms; }
   .jdp-summary:hover .jdp-edit-icon { opacity: 0.8; }
@@ -707,15 +748,19 @@
 
   .jdp-meta-grid {
     display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 12px 24px;
-    padding: 12px 0;
-    border-top: 1px solid var(--border-neutral);
-    border-bottom: 1px solid var(--border-neutral);
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 14px 24px;
+    padding: 16px 0 18px;
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
   }
   .jdp-meta { display: flex; flex-direction: column; gap: 4px; }
   .jdp-meta--full { grid-column: 1 / -1; }
-  .jdp-meta-label { font-size: 10.5px; color: var(--text-2); text-transform: uppercase; letter-spacing: 0.06em; }
+  .jdp-meta-label {
+    font-size: 9.5px; font-weight: 700;
+    color: var(--text-mute);
+    text-transform: uppercase; letter-spacing: 0.10em;
+  }
   .jdp-meta-val { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-0); }
   .jdp-avatar { width: 20px; height: 20px; border-radius: 50%; }
   .jdp-none { color: var(--text-mute); font-style: italic; font-size: 12.5px; }
@@ -821,10 +866,18 @@
 
   .jdp-comments { display: flex; flex-direction: column; gap: 14px; margin-bottom: 20px; }
   .jdp-comment {
-    background: var(--bg-1);
-    border: 1px solid var(--border-neutral);
-    border-radius: 8px;
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: 11px;
     padding: 12px 14px;
+  }
+  .jdp-comment-head .jdp-avatar {
+    width: 22px; height: 22px;
+    border-radius: 50%;
+    background: var(--bg-3);
+    display: grid; place-items: center;
+    font-size: 10.5px; font-weight: 600;
+    color: var(--text-1);
   }
   .jdp-comment-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
   .jdp-comment-author { font-size: 12.5px; color: var(--text-0); font-weight: 500; }
@@ -849,7 +902,7 @@
     padding: 2px 7px; border-radius: 4px;
     color: var(--accent-bright);
     background: var(--accent-soft);
-    border: 1px solid rgba(232, 163, 58, 0.22);
+    border: 1px solid rgba(204, 120, 92, 0.22);
   }
   .jdp-worklog-time { margin-left: auto; font-size: 11px; color: var(--text-mute); }
   .jdp-worklog-del {

@@ -3,7 +3,7 @@
  *
  * Re-opening a tab should land on the same line + column + scroll
  * the user left, with any active selection restored. Stored in
- * localStorage under `forgehold:editor:cursors:v1` keyed by the
+ * localStorage under `woom:editor:cursors:v1` keyed by the
  * absolute file path; capped at the most-recent N files so a long
  * day of file hopping doesn't pad the origin quota.
  *
@@ -15,7 +15,7 @@
  * error when a file shrank between sessions.
  */
 
-const STORAGE_KEY = 'forgehold:editor:cursors:v1';
+const STORAGE_KEY = 'woom:editor:cursors:v1';
 const MAX_ENTRIES = 200;
 
 export interface EditorCursorRecord {

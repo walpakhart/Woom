@@ -110,7 +110,7 @@ export function appendUsageBreakdown(session: ClaudeSession): void {
  *  Pure UX — no agent call. */
 export function appendSlashHelp(session: ClaudeSession): void {
   const lines = [
-    '**Slash commands** (Forgehold-side; not sent to the agent):',
+    '**Slash commands** (Woom-side; not sent to the agent):',
     '',
     '- `/compact` — drop history, keep a summary in the next turn',
     '- `/clear` — wipe this session\'s messages and start fresh',

@@ -28,7 +28,7 @@
   >
     <div class="modal">
       <header class="modal-head">
-        <svg class="i" viewBox="0 0 24 24" style="color: {m.danger ? '#fca5a5' : 'var(--accent-bright)'}">
+        <svg class="i" viewBox="0 0 24 24" style="color: {m.danger ? '#F0A38A' : 'var(--accent-bright)'}">
           {#if m.danger}
             <circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" />
           {:else}

@@ -30,7 +30,7 @@ const RATE_TABLE: Record<
  *      the standard subscription. Cursor's "Max mode" toggle is about
  *      tool/think budget, NOT context size — observed live as
  *      "70.4% · 140.9K / 200K context used" with Max enabled, so the
- *      Forgehold ring was over-reporting "23%" when the user was
+ *      Woom ring was over-reporting "23%" when the user was
  *      actually past 70% headed into auto-summary territory.
  *
  *  Defaults `agentKind = 'claude'` so existing call sites without the

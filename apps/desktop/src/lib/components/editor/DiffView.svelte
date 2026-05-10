@@ -168,10 +168,10 @@
   .dv-body :global(.cm-editor.cm-focused) { outline: none; }
   .dv-body :global(.cm-scroller) { overflow: auto; }
 
-  /* Recolor CodeMirror merge diff backgrounds to our forgehold palette. */
-  .dv-body :global(.cm-changedLine) { background: rgba(232, 163, 58, 0.10); }
+  /* Recolor CodeMirror merge diff backgrounds to our Woom palette. */
+  .dv-body :global(.cm-changedLine) { background: rgba(204, 120, 92, 0.10); }
   .dv-body :global(.cm-deletedChunk) { background: rgba(212, 102, 74, 0.14); }
-  .dv-body :global(.cm-changedText) { background: rgba(232, 163, 58, 0.28); }
+  .dv-body :global(.cm-changedText) { background: rgba(204, 120, 92, 0.28); }
   .dv-body :global(.cm-deletedText) { background: rgba(212, 102, 74, 0.38); text-decoration: none; }
   .dv-body :global(.cm-insertedLine) { background: rgba(111, 174, 136, 0.16); }
   .dv-body :global(.cm-collapsedLines) {

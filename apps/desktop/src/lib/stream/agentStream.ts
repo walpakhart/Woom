@@ -53,7 +53,7 @@ export interface AgentStreamHandlers {
    *  read/edit/bash hints. Routed separately from `onAssistantDelta`
    *  so the assistant's actual reply text stays clean. */
   onTraceDelta?: (sessionId: string, segment: string) => void;
-  /** Called when Claude invokes a `mcp__app__*` tool — Forgehold-app's
+  /** Called when Claude invokes a `mcp__app__*` tool — Woom-app's
    *  navigation surface (open detail pane, switch view, add editor
    *  column, surface connect modal). The caller has access to all the
    *  reactive state slices and decides what to mutate. Optional — if
@@ -320,7 +320,7 @@ export function handleStreamEvent(
     // generic tool-use line — the card carries the message.
     //
     // Race with action-IPC: the sidecar's MCP tool also emits a
-    // `forgehold:action_request` event when it makes its blocking IPC
+    // `woom:action_request` event when it makes its blocking IPC
     // call to Tauri. Whichever path arrives first creates the card;
     // the other should NOT duplicate. The IPC path fingerprints the
     // card with a `waitId`, so this stream parser checks for an
@@ -395,7 +395,7 @@ export function handleStreamEvent(
         continue;
       }
       default: {
-        // forgehold-app navigation tools — drive the UI directly. We
+        // woom-app navigation tools — drive the UI directly. We
         // also surface a one-line "navigated to X" hint into the chat
         // so the user has a record of what happened.
         if (name.startsWith('mcp__app__')) {

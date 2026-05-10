@@ -1,4 +1,4 @@
-//! Cursor MCP bridge — exposes Forgehold's Jira/GitHub/Sentry/Memory/App
+//! Cursor MCP bridge — exposes Woom's Jira/GitHub/Sentry/Memory/App
 //! sidecars to `cursor-agent` so Cursor sees the same tools as Claude.
 //!
 //! Cursor reads its MCP config from `~/.cursor/mcp.json` (and from
@@ -7,15 +7,15 @@
 //! entries into `~/.cursor/mcp.json` whenever the user's connection state
 //! changes (connect/disconnect → keychain mutation → re-sync).
 //!
-//! Only entries we own (`forgehold:*` namespace) are touched — anything the
+//! Only entries we own (`woom:*` namespace) are touched — anything the
 //! user added by hand via `cursor-agent mcp add` survives. On the first sync
-//! a small `_forgehold_managed` array is written so we know which entries are
+//! a small `_woom_managed` array is written so we know which entries are
 //! ours and can remove stale ones cleanly.
 //!
 //! Security note: the resulting `~/.cursor/mcp.json` contains plaintext
 //! tokens (the `env` block is not Keychain-resolved by cursor-agent). This
 //! matches the threat model for `~/.aws/credentials` and the manual
-//! `cursor-agent mcp add --env` flow — but is weaker than Forgehold's own
+//! `cursor-agent mcp add --env` flow — but is weaker than Woom's own
 //! Keychain-only storage. We accept the trade-off because users opting into
 //! Cursor want parity; if they don't, they can simply not use Cursor.
 
@@ -28,18 +28,18 @@ use crate::keychain;
 /// Marker key in `~/.cursor/mcp.json` listing the server names we own. Lets
 /// us blow away stale entries cleanly without touching ones the user added
 /// themselves.
-const MANAGED_KEY: &str = "_forgehold_managed";
+const MANAGED_KEY: &str = "_woom_managed";
 
 const JIRA_KEYCHAIN_KEY: &str = "jira";
 const GITHUB_KEYCHAIN_KEY: &str = "github";
 const SENTRY_KEYCHAIN_KEY: &str = "sentry";
-const SIDECAR_JIRA: &str = "forgehold-jira";
-const SIDECAR_GITHUB: &str = "forgehold-github";
-const SIDECAR_SENTRY: &str = "forgehold-sentry";
-const SIDECAR_MEMORY: &str = "forgehold-memory";
-const SIDECAR_APP: &str = "forgehold-app";
+const SIDECAR_JIRA: &str = "woom-jira";
+const SIDECAR_GITHUB: &str = "woom-github";
+const SIDECAR_SENTRY: &str = "woom-sentry";
+const SIDECAR_MEMORY: &str = "woom-memory";
+const SIDECAR_APP: &str = "woom-app";
 
-/// Re-derive the set of Forgehold-owned MCP entries from current Keychain
+/// Re-derive the set of Woom-owned MCP entries from current Keychain
 /// state and merge them into `~/.cursor/mcp.json`. Idempotent — call this
 /// after every connect/disconnect, or once at app startup.
 ///
@@ -109,7 +109,7 @@ pub fn sync() -> Result<Vec<String>, String> {
         servers_obj.insert(SIDECAR_MEMORY.into(), cfg);
         written.push(SIDECAR_MEMORY.into());
     }
-    // forgehold-app is unconditional — no creds, just exposes the
+    // woom-app is unconditional — no creds, just exposes the
     // navigation tools (`mcp__app__open_jira_issue`, `switch_view`, …)
     // that Claude already gets via `--mcp-config`. Without this, Cursor
     // saw the tools mentioned in the system preamble but couldn't
@@ -137,7 +137,7 @@ fn cursor_mcp_path() -> Option<PathBuf> {
     Some(home.join(".cursor").join("mcp.json"))
 }
 
-/// Locate the sidecar directory the *currently running* Forgehold app uses.
+/// Locate the sidecar directory the *currently running* Woom app uses.
 /// In dev that's `target/{debug,release}/`, in a bundle it's the .app
 /// `Contents/MacOS/`. We resolve relative to the executable rather than
 /// hard-coding so dev + bundle both work.
@@ -216,21 +216,21 @@ fn build_memory_entry(dir: &Option<PathBuf>) -> Option<Value> {
     let cmd = sidecar_path(dir, SIDECAR_MEMORY)?;
     let home = std::env::var("HOME").ok().map(PathBuf::from)?;
     #[cfg(target_os = "macos")]
-    let app_data = home.join("Library/Application Support/Forgehold");
+    let app_data = home.join("Library/Application Support/Woom");
     #[cfg(target_os = "linux")]
-    let app_data = home.join(".local/share/forgehold");
+    let app_data = home.join(".local/share/woom");
     #[cfg(target_os = "windows")]
-    let app_data = home.join("AppData/Roaming/Forgehold");
+    let app_data = home.join("AppData/Roaming/Woom");
     let _ = std::fs::create_dir_all(&app_data);
     Some(serde_json::json!({
         "command": cmd,
         "env": {
-            "FORGEHOLD_MEMORY_DB": app_data.join("memory.db").to_string_lossy(),
+            "WOOM_MEMORY_DB": app_data.join("memory.db").to_string_lossy(),
         }
     }))
 }
 
-/// Wire up the bundled `forgehold-app` sidecar — exposes UI navigation
+/// Wire up the bundled `woom-app` sidecar — exposes UI navigation
 /// tools (`open_github_pr`, `open_jira_issue`, `switch_view`, …). The
 /// frontend's stream parser intercepts the `mcp__app__*` tool_use events
 /// and drives the Svelte state directly; the sidecar itself just

@@ -5,7 +5,7 @@
 
 import { invoke } from '@tauri-apps/api/core';
 import type { SentryEnvironment, SentryIssue, SentryProject } from '$lib/data';
-import { listInstancesOfKind } from '$lib/state/layout.svelte';
+import { APP_INSTANCE_IDS } from '$lib/state/layout.svelte';
 import {
   DEFAULT_SENTRY_FILTERS,
   inboxState,
@@ -81,7 +81,7 @@ export async function refreshSentryInbox(
 }
 
 export async function refreshAllSentryInboxes(opts: { silent?: boolean } = {}) {
-  const ids = listInstancesOfKind('sentry').map((i) => i.id);
+  const ids = [APP_INSTANCE_IDS.sentry];
   await Promise.all(ids.map((id) => refreshSentryInbox(id, opts)));
 }
 

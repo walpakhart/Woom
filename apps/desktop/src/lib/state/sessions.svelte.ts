@@ -1,7 +1,7 @@
 // Claude + Cursor chat session state. Owns the session list, per-column
 // active-session pointers, the cross-column "currently focused" pointer,
 // per-column scroll containers, and user-authored rules. Persists sessions
-// to disk (~/Library/Application Support/Forgehold/sessions/) via Tauri
+// to disk (~/Library/Application Support/Woom/sessions/) via Tauri
 // fs commands; rules stay in localStorage (small + frequently mutated).
 
 import { invoke } from '@tauri-apps/api/core';
@@ -17,17 +17,18 @@ import type {
 import { notify } from '$lib/state/toaster.svelte';
 import { isImagePath } from '$lib/format';
 import { contextWindowFor } from '$lib/usage';
+import { buildContinuationRecap } from '$lib/services/sessionCwd';
 
-export const SESSIONS_STORAGE_KEY = 'forgehold:claude-sessions:v1';
-export const RULES_STORAGE_KEY = 'forgehold:claude-rules:v1';
-export const EDITOR_STATE_STORAGE_KEY = 'forgehold:editor-state:v1';
+export const SESSIONS_STORAGE_KEY = 'woom:claude-sessions:v1';
+export const RULES_STORAGE_KEY = 'woom:claude-rules:v1';
+export const EDITOR_STATE_STORAGE_KEY = 'woom:editor-state:v1';
 
 // ---- Disk persistence internals ----
 // After `initSessionsFromDisk()` runs, `_diskDir` is set and disk is the
 // source of truth. Pre-migration, we fall back to localStorage so the app
 // still works on the very first run with existing localStorage data.
 
-let _diskDir: string | null = null; // e.g. "…/Forgehold/sessions"
+let _diskDir: string | null = null; // e.g. "…/Woom/sessions"
 let _diskWriteTimer: ReturnType<typeof setTimeout> | null = null;
 
 function sessionIndexPath(): string { return `${_diskDir}/index.json`; }
@@ -207,6 +208,13 @@ export const sessionsState = $state<{
     string,
     { repoPath: string; pendingOpenFile?: string | null }
   >;
+  /** Transient "expand the InlineClaude row for this session" signal.
+   *  Set by `applyRangeToAgent` after a user clicks "Apply to <agent>"
+   *  in the editor selection bar; consumed by InlineClaude's effect
+   *  which auto-expands the matching row so the user can immediately
+   *  type a follow-up alongside the freshly-pinned `@path:line-range`
+   *  mention. Cleared back to `null` after consumption. */
+  requestInlineExpandFor: string | null;
 }>({
   list: __initial.sessions,
   activeIds: {
@@ -217,7 +225,8 @@ export const sessionsState = $state<{
   activeClaudeId: __initial.activeId,
   scrollEls: {},
   userRules: loadStoredRules(),
-  editorInstanceState: loadStoredEditorState()
+  editorInstanceState: loadStoredEditorState(),
+  requestInlineExpandFor: null
 });
 
 // ---- Persistence ----
@@ -312,6 +321,35 @@ export async function initSessionsFromDisk(appDataDir: string): Promise<void> {
         })
       );
       const sessions = settled.filter((s): s is ClaudeSession => s !== null);
+      /* App-restart continuation recap.
+       *
+       * After Woom restarts the CLI's process pool is gone. Sometimes
+       * `--resume <uuid>` rehydrates the prior conversation cleanly,
+       * sometimes the CLI's session store has been auto-compacted /
+       * pruned / reinstalled — in those cases the agent answers the
+       * next turn as if it were a fresh chat ("В этом чате обсуждали
+       * один вопрос…" pointing only at the most recent exchange).
+       *
+       * Cheap insurance: stamp a one-shot continuation recap on every
+       * restored session that has prior turns. The next send picks it
+       * up via the existing `cwdSwitchRecap` channel and clears it on
+       * success, so it doesn't leak into subsequent turns. If the CLI
+       * actually still remembers, the recap is harmless redundancy.
+       *
+       * Skipped when:
+       *   - the session has no messages (nothing to remember)
+       *   - the session already has a recap stamped (don't overwrite —
+       *     a more specific reason was already set, e.g. cwd_switch)
+       *   - the session was never sent (no claudeResumable + no msgs) */
+      for (const s of sessions) {
+        if (!s.messages || s.messages.length === 0) continue;
+        if (s.cwdSwitchRecap) continue;
+        try {
+          s.cwdSwitchRecap = buildContinuationRecap(s, 'app_restart');
+        } catch {
+          /* recap build is best-effort — never block the restore */
+        }
+      }
       sessionsState.list = sessions;
       sessionsState.activeClaudeId = index.activeId ?? sessions[0]?.id ?? null;
       const active = sessions.find((s) => s.id === sessionsState.activeClaudeId);
@@ -664,6 +702,10 @@ export function pruneMentionsByInput(sessionId: string, input: string) {
     present.add(m[1]);
   }
   const next = s.mentions.filter((mention) => {
+    /* External attachments (OS drop / paste) — and all image mentions
+       — are managed by the explicit chip strip, not by the inline
+       `@token` text. Keep them regardless of what's in the textarea. */
+    if (mention.attached) return true;
     if (
       mention.source === 'file' &&
       !mention.isDir &&
@@ -707,7 +749,7 @@ export function attachPathsToSession(sessionId: string, paths: string[]): number
     const token = isImage ? p : (rel ?? name);
     if (existing.has(token)) continue;
     existing.add(token);
-    fresh.push({ source: 'file', externalId: token, title: name, body: p, isDir: false });
+    fresh.push({ source: 'file', externalId: token, title: name, body: p, isDir: false, attached: true });
     if (!isImage) {
       const sep = input && !input.endsWith(' ') ? ' ' : '';
       input = input + sep + '@' + token + ' ';
@@ -789,7 +831,7 @@ export function appendSessionMessage(id: string, msg: ClaudeMessage) {
 //
 //   2. Agent: a "since-last-turn outcomes" block prepended to the next
 //      `runAgentRequest` prompt. The CLI's `--resume` history doesn't
-//      include these (they're Forgehold annotations); inline prepend
+//      include these (they're Woom annotations); inline prepend
 //      is the only channel.
 //
 // The queue lets us decouple WHEN we record from WHEN each consumer
@@ -847,7 +889,7 @@ export function flushActionResultsToUI(sessionId: string) {
     ...sess.messages,
     ...toFlush.map((r) => ({
       role: 'system' as const,
-      content: `[Forgehold action result] ${r.ok ? '✓' : '✗'} ${r.summary}`,
+      content: `[Woom action result] ${r.ok ? '✓' : '✗'} ${r.summary}`,
       at: r.at
     }))
   ];
@@ -881,7 +923,7 @@ export function drainPendingActionResultsForAgent(
  *  prose ambiguity. */
 export function formatActionResultsForPrompt(results: PendingActionResult[]): string {
   if (results.length === 0) return '';
-  const lines = ['[Forgehold: action card outcomes since your last turn]'];
+  const lines = ['[Woom: action card outcomes since your last turn]'];
   for (const r of results) {
     const marker = r.ok ? '✓' : '✗';
     // Indent the multi-line summary so it groups under the bullet
@@ -904,7 +946,7 @@ export function formatActionResultsForPrompt(results: PendingActionResult[]): st
     drops the per-cwd uuid map: those ids are CLI-specific (a saved
     claudeUuid wouldn't resume in cursor-agent), so carrying the map
     across a CLI swap would only mislead future cwd switches. The UI
-    history in Forgehold is retained but neither CLI will remember
+    history in Woom is retained but neither CLI will remember
     earlier turns on the new side. */
 export function switchAgentKind(sessionId: string, kind: 'claude' | 'cursor') {
   const sess = sessionsState.list.find((s) => s.id === sessionId);

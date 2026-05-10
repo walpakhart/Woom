@@ -1,16 +1,16 @@
-# Forgehold — MCP Surface Specification
+# Woom — MCP Surface Specification
 
 **Version:** 0.1
 **Last updated:** 2026-04-29
-**Status:** describes shipping behaviour. Forgehold ships five MCP
-servers as Tauri sidecars (`forgehold-app`, `forgehold-github`,
-`forgehold-jira`, `forgehold-sentry`, `forgehold-memory`) and exposes
+**Status:** describes shipping behaviour. Woom ships five MCP
+servers as Tauri sidecars (`woom-app`, `woom-github`,
+`woom-jira`, `woom-sentry`, `woom-memory`) and exposes
 them to Claude Code (via temporary `--mcp-config`) and Cursor Agent
 (via merged `~/.cursor/mcp.json`). The descriptors the user's IDE
 uses for documentation/linting live separately under
 `/Users/nikolay-khartanovich/.cursor/projects/Users-nikolay-khartanovich-Repos-pers-forge/mcps/`.
 
-> MCP is the contract between Forgehold and the LLM. Each sidecar
+> MCP is the contract between Woom and the LLM. Each sidecar
 > binary speaks JSON-RPC over stdio; each exposes a small bag of
 > tools; each is fed env vars by the parent app at spawn time. The
 > agent is then given an allow-list filtered by `ToolProfile` so a
@@ -50,7 +50,7 @@ always sees what's about to happen.
 
 - **Multi-tenant credentials.** One token per source per app instance.
 - **Custom user-defined MCP tools.** The catalog is closed; adding a
-  tool is a code change in Forgehold.
+  tool is a code change in Woom.
 - **Streaming / progress callbacks** beyond stdio. MCP doesn't have a
   rich progress model and we don't simulate one.
 - **Tool result attachments** beyond text + image. No binary blobs in
@@ -64,18 +64,18 @@ always sees what's about to happen.
 
 | Logical name | Sidecar binary path                                                               | Auth env                                                  |
 |--------------|-----------------------------------------------------------------------------------|-----------------------------------------------------------|
-| `app`        | `apps/desktop/src-tauri/sidecars/forgehold-app/`                                  | (none — talks to the parent UI via local socket)          |
-| `github`     | `apps/desktop/src-tauri/sidecars/forgehold-github/`                               | `GITHUB_TOKEN`                                             |
-| `jira`       | `apps/desktop/src-tauri/sidecars/forgehold-jira/`                                 | `JIRA_HOST`, `JIRA_EMAIL`, `JIRA_TOKEN`                    |
-| `sentry`     | `apps/desktop/src-tauri/sidecars/forgehold-sentry/`                               | `SENTRY_HOST`, `SENTRY_ORG`, `SENTRY_TOKEN`                 |
-| `memory`     | `apps/desktop/src-tauri/sidecars/forgehold-memory/`                               | `FORGEHOLD_MEMORY_DB` (path to sqlite)                     |
+| `app`        | `apps/desktop/src-tauri/sidecars/woom-app/`                                  | (none — talks to the parent UI via local socket)          |
+| `github`     | `apps/desktop/src-tauri/sidecars/woom-github/`                               | `GITHUB_TOKEN`                                             |
+| `jira`       | `apps/desktop/src-tauri/sidecars/woom-jira/`                                 | `JIRA_HOST`, `JIRA_EMAIL`, `JIRA_TOKEN`                    |
+| `sentry`     | `apps/desktop/src-tauri/sidecars/woom-sentry/`                               | `SENTRY_HOST`, `SENTRY_ORG`, `SENTRY_TOKEN`                 |
+| `memory`     | `apps/desktop/src-tauri/sidecars/woom-memory/`                               | `WOOM_MEMORY_DB` (path to sqlite)                     |
 
 The user's Cursor IDE also has descriptor folders for each server
-under `/Users/nikolay-khartanovich/.cursor/projects/Users-nikolay-khartanovich-Repos-pers-forge/mcps/user-forgehold-*/`,
+under `/Users/nikolay-khartanovich/.cursor/projects/Users-nikolay-khartanovich-Repos-pers-forge/mcps/user-woom-*/`,
 each containing a `tools/<tool-name>.json` JSON-Schema descriptor and
 an `INSTRUCTIONS.md` that the IDE shows to the model.
 
-`forgehold-memory` has no `tools/` JSON folder in the user's MCPs dir
+`woom-memory` has no `tools/` JSON folder in the user's MCPs dir
 in the current state — only `SERVER_METADATA.json` and `STATUS.md`.
 The Rust binary still ships with four real tools (`memory_save`,
 `memory_search`, `memory_list`, `memory_delete`) which are visible to
@@ -85,7 +85,7 @@ the agent at runtime.
 
 ## 3. Tool Inventory
 
-### 3.1 `forgehold-app` (UI navigation)
+### 3.1 `woom-app` (UI navigation)
 
 | Tool                       | Purpose                                                                  |
 |----------------------------|--------------------------------------------------------------------------|
@@ -117,22 +117,22 @@ runs the equivalent UI action. The agent's chat does **not** surface
 these calls (they're routed in `+page.svelte`'s
 `handleAppNavigation` / `handleStreamEvent`'s `mcp__app__*` switch).
 
-### 3.2 `forgehold-github`
+### 3.2 `woom-github`
 
-See [`docs/GITHUB.md §13.1`](GITHUB.md#131-user-forgehold-github-read--write).
+See [`docs/GITHUB.md §13.1`](GITHUB.md#131-user-woom-github-read--write).
 Twenty tools across read / search / write / propose-`*`.
 
-### 3.3 `forgehold-jira`
+### 3.3 `woom-jira`
 
-See [`docs/JIRA.md §8`](JIRA.md#8-mcp-tools-user-forgehold-jira).
+See [`docs/JIRA.md §8`](JIRA.md#8-mcp-tools-user-woom-jira).
 Nine tools across read / write / metadata.
 
-### 3.4 `forgehold-sentry`
+### 3.4 `woom-sentry`
 
-See [`docs/SENTRY.md §9`](SENTRY.md#9-mcp-tools-user-forgehold-sentry).
+See [`docs/SENTRY.md §9`](SENTRY.md#9-mcp-tools-user-woom-sentry).
 Nine tools across read / write / metadata.
 
-### 3.5 `forgehold-memory`
+### 3.5 `woom-memory`
 
 A local SQLite-backed key-value-with-search store. Same idea as
 Anthropic's "memory" example MCP, but local-only — useful for the
@@ -146,7 +146,7 @@ memory_list(tags?, limit?)
 memory_delete(key)
 ```
 
-DB location: `FORGEHOLD_MEMORY_DB` env var (set by parent to a path
+DB location: `WOOM_MEMORY_DB` env var (set by parent to a path
 under app data dir).
 
 ---
@@ -162,14 +162,14 @@ fn build_mcp_config(session_id: &str, profile: ToolProfile)
   -> Option<(PathBuf, Vec<String>)> {
   let mcp = serde_json::json!({
     "mcpServers": {
-      "forgehold-app":    { "command": "<bin>", "env": {} },
-      "forgehold-github": { "command": "<bin>", "env": { "GITHUB_TOKEN": "<token>" } },
-      "forgehold-jira":   { "command": "<bin>", "env": { ... } },
-      "forgehold-sentry": { "command": "<bin>", "env": { ... } },
-      "forgehold-memory": { "command": "<bin>", "env": { "FORGEHOLD_MEMORY_DB": "<path>" } }
+      "woom-app":    { "command": "<bin>", "env": {} },
+      "woom-github": { "command": "<bin>", "env": { "GITHUB_TOKEN": "<token>" } },
+      "woom-jira":   { "command": "<bin>", "env": { ... } },
+      "woom-sentry": { "command": "<bin>", "env": { ... } },
+      "woom-memory": { "command": "<bin>", "env": { "WOOM_MEMORY_DB": "<path>" } }
     }
   });
-  let path = std::env::temp_dir().join(format!("forgehold-mcp-{}.json", session_id));
+  let path = std::env::temp_dir().join(format!("woom-mcp-{}.json", session_id));
   std::fs::write(&path, serde_json::to_string(&mcp)?)?;
   let allowed = compute_allow_list(profile);   // see §5
   Some((path, allowed))
@@ -183,16 +183,16 @@ when the session ends.
 
 ### 4.2 Cursor Agent
 
-Cursor reads `~/.cursor/mcp.json` directly. We **merge** Forgehold's
+Cursor reads `~/.cursor/mcp.json` directly. We **merge** Woom's
 servers into that file at app startup (server names prefixed
-`forgehold-`) — see `apps/desktop/src-tauri/src/cursor_mcp.rs`. We
+`woom-`) — see `apps/desktop/src-tauri/src/cursor_mcp.rs`. We
 don't pass `--mcp-config` to `cursor-agent`; instead it picks them up
 from the user's profile file. The `--approve-mcps` and `--trust`
 flags are added so the user isn't prompted on first invocation.
 
 ### 4.3 Tool name normalization
 
-Claude prefixes server names like `mcp__forgehold-app__open_github_pr`
+Claude prefixes server names like `mcp__woom-app__open_github_pr`
 in its tool-use stream. Cursor sometimes normalises differently
 depending on version. `apps/desktop/src-tauri/src/cursor.rs::normalize_mcp_tool_name`
 unifies them so frontend matchers (e.g. `agentStream.ts:229-273`) can
@@ -241,13 +241,13 @@ env vars. The flow:
 
 Cursor's case is similar but the env propagation is via the merged
 `~/.cursor/mcp.json` file's `env` field, written at app startup.
-Re-merging happens on every Forgehold launch so revoked tokens get
+Re-merging happens on every Woom launch so revoked tokens get
 purged.
 
-There is **no** `mcp_auth` tool in the `user-forgehold-*` directories.
+There is **no** `mcp_auth` tool in the `user-woom-*` directories.
 The `mcp_auth` concept (a tool an MCP server exposes for its own
-credential round-trip) is unused here — Forgehold owns the auth,
-sidecars read what they're told. Forgehold itself is PAT-only across
+credential round-trip) is unused here — Woom owns the auth,
+sidecars read what they're told. Woom itself is PAT-only across
 the board (`docs/ROADMAP_1.0.md §6`); a future `mcp_auth` is for
 third-party / community servers we don't ship, not for our own.
 
@@ -258,23 +258,23 @@ third-party / community servers we don't ship, not for our own.
 Each `INSTRUCTIONS.md` ships with a server descriptor and is shown to
 the model as part of the system prompt:
 
-- **`user-forgehold-app`** — UI navigation. Detail panes, top-level
+- **`user-woom-app`** — UI navigation. Detail panes, top-level
   tabs, workbench operations (new/switch/add column, set cwd, focus,
   list_instances). Use `open_connect_modal` when the user mentions an
   integration that isn't connected yet.
-- **`user-forgehold-github`** — READ / WRITE / PROPOSE. Always call
+- **`user-woom-github`** — READ / WRITE / PROPOSE. Always call
   `propose_bash` for anything mutating (git, npm, deploy). Read-only
   shell commands (`git status`, `ls`, `cat`, `rg`) can use `Bash`
   directly.
-- **`user-forgehold-jira`** — READ + WRITE. Markdown auto-converts to
+- **`user-woom-jira`** — READ + WRITE. Markdown auto-converts to
   ADF. Resolve names to ids via `list_assignable_users` /
   `list_sprints` before calling `create_issue` / `update_issue`.
-- **`user-forgehold-sentry`** — Triage flow: `get_issue` → `get_event`
+- **`user-woom-sentry`** — Triage flow: `get_issue` → `get_event`
   → `get_issue_tags` → `list_events` → `search_issues` → `update_issue` /
   `add_comment`.
-- **`user-forgehold-memory`** — `STATUS.md` only in the user's MCPs
+- **`user-woom-memory`** — `STATUS.md` only in the user's MCPs
   folder right now (likely an environment artifact). The actual
-  Forgehold memory binary is wired for the agent at runtime.
+  Woom memory binary is wired for the agent at runtime.
 
 ---
 
@@ -286,12 +286,12 @@ of the macOS app bundle. Tauri spawns them on demand and pipes stdio:
 - Claude path: spawn at session start, kill at session stop.
   `--mcp-config` carries the temp file path.
 - Cursor path: spawned lazily by `cursor-agent` itself when the model
-  invokes a tool. Forgehold's only role is to put the entries in
+  invokes a tool. Woom's only role is to put the entries in
   `~/.cursor/mcp.json`.
 
 Logs (stderr) are forwarded to the parent app's log buffer; if a
 sidecar dies mid-session, the agent gets a tool-error response on its
-next call ("server forgehold-jira disconnected"). No auto-restart in
+next call ("server woom-jira disconnected"). No auto-restart in
 v1.
 
 ---
@@ -300,7 +300,7 @@ v1.
 
 The five-step shape:
 
-1. Add the tool handler in the relevant sidecar (`apps/desktop/src-tauri/sidecars/forgehold-X/src/main.rs`).
+1. Add the tool handler in the relevant sidecar (`apps/desktop/src-tauri/sidecars/woom-X/src/main.rs`).
 2. Update the `tools/` JSON descriptor in the user's Cursor MCPs
    folder *(this is for the IDE / user; runtime doesn't need it)*.
 3. Add the tool name to the right `ToolProfile` allow-list in
@@ -315,18 +315,18 @@ The five-step shape:
 
 ## 10. Open TODOs
 
-1. **`forgehold-memory` descriptors missing.** The runtime tools work,
+1. **`woom-memory` descriptors missing.** The runtime tools work,
    but the user's IDE can't surface schemas — needs the four JSONs.
 2. **No restart-on-crash** for sidecars.
 3. **No metrics** on tool calls (rate, latency, error rate).
 4. **`mcp_auth`** tool not implemented — would be useful if we ever
    add an MCP server whose creds should live inside the server itself
    rather than handed through env.
-5. **Cursor IDE prefix** drift: occasional `mcp__forgehold-app__` vs
+5. **Cursor IDE prefix** drift: occasional `mcp__woom-app__` vs
    `mcp__app__` mismatches. The normalizer handles current versions;
    needs a refresh per Cursor update.
 6. **Tool descriptions in JSON** sometimes lag behind actual server
-   behaviour (e.g. `forgehold-github`'s "read-only phase 2" header
+   behaviour (e.g. `woom-github`'s "read-only phase 2" header
    comment is stale).
 7. **No multi-instance credentials** — one source = one token = one
    MCP env-set. Multi-org hits a wall.
@@ -344,9 +344,9 @@ The five-step shape:
 - **`ToolProfile`** — Rust enum that filters which MCP tools the agent
   is allowed to call this session.
 - **`--mcp-config`** — Claude CLI flag pointing to a JSON file
-  describing servers. Forgehold writes a temp file per session.
+  describing servers. Woom writes a temp file per session.
 - **`~/.cursor/mcp.json`** — Cursor's standard MCP server registry,
-  merged by Forgehold at app startup.
+  merged by Woom at app startup.
 - **`open_connect_modal`** — UI navigation tool the agent calls to ask
   the user to wire up a missing source.
 - **`propose_*`** — write-prefix indicating the tool queues an Action

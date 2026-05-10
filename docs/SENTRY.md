@@ -1,4 +1,4 @@
-# Forgehold — Sentry Integration Specification
+# Woom — Sentry Integration Specification
 
 **Version:** 0.1
 **Last updated:** 2026-04-29
@@ -23,7 +23,7 @@ internal integration token.
 Triage. The user keeps a Sentry column open while shipping; new errors
 roll in, the user clicks one, sees the latest stack frame + breadcrumbs
 + tags, marks resolved. The agent has parallel access through the
-`user-forgehold-sentry` MCP server: `search_issues`, `get_event`,
+`user-woom-sentry` MCP server: `search_issues`, `get_event`,
 `get_issue_tags`, plus mutations for status / comment.
 
 ### 1.2 Goals (v1, shipping)
@@ -61,7 +61,7 @@ roll in, the user clicks one, sees the latest stack frame + breadcrumbs
 
 ```
 ╭─ Sentry column (kind === 'sentry') ────────────────╮
-│ ⠿ ⤢ ✕  Sentry — sentry.io/forgehold     data-kind  │
+│ ⠿ ⤢ ✕  Sentry — sentry.io/woom     data-kind  │
 ├─────────────────────────────────────────────────────┤
 │ filter row 1: [Project ▾]   [Environment ▾]         │
 │ filter row 2: [Status ▾] [Level ▾] [Sort ▾]   ⟳     │
@@ -187,7 +187,7 @@ After mutation, the slide-over patches local state and triggers
 `refreshAllSentryInboxes({ silent: true })` so column lists reflect.
 
 There is **no** `sentry_add_comment` Tauri command in `lib.rs`. The
-comment surface is exclusively MCP-driven (sidecar `forgehold-sentry`
+comment surface is exclusively MCP-driven (sidecar `woom-sentry`
 binary), reflecting that comments are an agent / triage tool more
 than a daily UI gesture.
 
@@ -243,7 +243,7 @@ same paths.
 
 ---
 
-## 9. MCP Tools (`user-forgehold-sentry`)
+## 9. MCP Tools (`user-woom-sentry`)
 
 | Tool             | Required          | Optional                                 |
 |------------------|-------------------|------------------------------------------|
@@ -318,7 +318,7 @@ users (see `docs/WORKBENCH.md §A.15`). New users with Sentry connected
 get a Sentry column auto-spawned at first connect.
 
 Per-instance filters: `localStorage` under
-`forgehold:sentry-col-filters-by-instance:v1`.
+`woom:sentry-col-filters-by-instance:v1`.
 
 ---
 

@@ -17,8 +17,13 @@
     now: number;
     onClose: () => void;
     onOpenBrowser: (url: string) => void;
+    /** Hand the focused issue off to Claude / Cursor. Optional so
+     *  any existing call site that doesn't wire them up still
+     *  compiles — each header button is hidden when undefined. */
+    onSendToClaude?: () => void;
+    onSendToCursor?: () => void;
   }
-  let { issueId, now, onClose, onOpenBrowser }: Props = $props();
+  let { issueId, now, onClose, onOpenBrowser, onSendToClaude, onSendToCursor }: Props = $props();
 
   let issue = $state<SentryIssue | null>(null);
   let issueLoading = $state(false);
@@ -217,6 +222,18 @@
         <polyline points="3 21 3 15 9 15"/>
       </svg>
     </button>
+    {#if onSendToClaude}
+      <button class="sdp-btn sdp-btn--claude" onclick={onSendToClaude} disabled={!issue} title="Send this issue to Claude">
+        <svg class="i i-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="m22 2-7 20-4-9-9-4 20-7z"/></svg>
+        Send to Claude
+      </button>
+    {/if}
+    {#if onSendToCursor}
+      <button class="sdp-btn sdp-btn--cursor" onclick={onSendToCursor} disabled={!issue} title="Send this issue to Cursor">
+        <svg class="i i-sm" viewBox="0 0 24 24" fill="currentColor"><path d="M3 3l8 18 2-8 8-2z"/></svg>
+        Send to Cursor
+      </button>
+    {/if}
     <button class="sdp-btn" onclick={() => issue?.permalink && onOpenBrowser(issue.permalink)} disabled={!issue?.permalink} title="Open on Sentry">
       <svg class="i i-sm" viewBox="0 0 24 24"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><path d="M15 3h6v6M10 14 21 3"/></svg>
       Open on Sentry
@@ -385,7 +402,7 @@
                           <button
                             class="sdp-frame-open"
                             onclick={(e) => { e.preventDefault(); e.stopPropagation(); void openFrameInEditor(f); }}
-                            title="Open in Forgehold's editor at this line"
+                            title="Open in Woom's editor at this line"
                             aria-label="Open in editor"
                           >→ open</button>
                         {/if}
@@ -464,6 +481,28 @@
     border-color: transparent; font-weight: 600;
   }
   .sdp-btn--primary:hover:not(:disabled) { background: var(--accent-bright); }
+  /* Send-to-Claude — brand-tinted ghost so the handoff stands apart
+     from the Sentry-native actions (Resolve / Ignore / Open). */
+  .sdp-btn--claude {
+    color: var(--src-claude);
+    background: color-mix(in srgb, var(--src-claude) 8%, transparent);
+    border-color: color-mix(in srgb, var(--src-claude) 30%, transparent);
+  }
+  .sdp-btn--claude:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--src-claude) 18%, transparent);
+    color: var(--accent-bright);
+    border-color: color-mix(in srgb, var(--src-claude) 50%, transparent);
+  }
+  .sdp-btn--cursor {
+    color: var(--src-cursor, var(--text-1));
+    background: color-mix(in srgb, var(--src-cursor, var(--text-1)) 10%, transparent);
+    border-color: color-mix(in srgb, var(--src-cursor, var(--text-1)) 32%, transparent);
+  }
+  .sdp-btn--cursor:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--src-cursor, var(--text-1)) 22%, transparent);
+    color: var(--text-0);
+    border-color: color-mix(in srgb, var(--src-cursor, var(--text-1)) 50%, transparent);
+  }
 
   .sdp-state { padding: 40px; text-align: center; color: var(--text-2); }
   .sdp-err { color: var(--error); }
@@ -498,8 +537,9 @@
     display: flex; flex-direction: column; gap: 18px;
   }
   .sdp-title {
-    font-size: 22px; line-height: 1.3; font-weight: 600;
-    color: var(--text-0); letter-spacing: -0.01em;
+    font-family: 'Instrument Serif', 'New York', Georgia, serif;
+    font-size: 30px; line-height: 1.18; font-weight: 400;
+    color: var(--text-0); letter-spacing: -0.02em;
     margin: 0;
     overflow-wrap: anywhere;
   }
@@ -523,10 +563,15 @@
     border-radius: 8px; padding: 10px 14px;
   }
   .sdp-stat-k {
-    font-size: 10.5px; color: var(--text-mute);
-    text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600;
+    font-size: 9.5px; color: var(--text-mute);
+    text-transform: uppercase; letter-spacing: 0.10em; font-weight: 700;
   }
-  .sdp-stat-v { font-size: 14px; color: var(--text-0); margin-top: 4px; }
+  .sdp-stat-v {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 18px; font-weight: 600;
+    color: var(--text-0); margin-top: 4px;
+    line-height: 1;
+  }
 
   .sdp-section { display: flex; flex-direction: column; gap: 10px; }
   .sdp-section-head { display: flex; align-items: center; gap: 8px; }
@@ -551,7 +596,7 @@
   }
   .sdp-event-row:hover { background: var(--bg-2); color: var(--text-0); }
   .sdp-event-row--active {
-    background: var(--accent-soft); border-color: rgba(232, 163, 58, 0.3);
+    background: var(--accent-soft); border-color: rgba(204, 120, 92, 0.3);
     color: var(--text-0);
   }
   .sdp-event-id { color: var(--text-2); font-size: 11px; min-width: 70px; }
@@ -586,10 +631,14 @@
 
   .sdp-frames { display: flex; flex-direction: column; gap: 4px; }
   .sdp-frame {
-    background: var(--bg-0); border: 1px solid var(--border-neutral);
-    border-radius: 6px; overflow: hidden;
+    background: var(--bg-2); border: 1px solid var(--border);
+    border-radius: 8px; overflow: hidden;
   }
-  .sdp-frame.in-app { border-color: var(--accent-soft); }
+  .sdp-frame.in-app {
+    border-color: var(--border-accent-2);
+    background: linear-gradient(180deg, var(--bg-2),
+      color-mix(in srgb, var(--bg-2) 85%, var(--accent-soft)));
+  }
   .sdp-frame-summary {
     list-style: none; cursor: pointer; padding: 7px 12px;
     font-size: 11.5px; color: var(--text-1);
@@ -623,7 +672,7 @@
     white-space: pre;
   }
   .sdp-src-line { display: inline-block; min-width: 100%; padding: 0 14px; }
-  .sdp-src-line.active { background: rgba(232, 163, 58, 0.08); }
+  .sdp-src-line.active { background: rgba(204, 120, 92, 0.08); }
   .sdp-src-num {
     display: inline-block; min-width: 36px;
     color: var(--text-mute); margin-right: 12px;

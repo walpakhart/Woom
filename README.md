@@ -1,6 +1,6 @@
-# Forgehold
+# Woom
 
-> A single-player desktop workbench for developers. Your Jira tickets,
+> A single-player desktop app for developers. Your Jira tickets,
 > GitHub PRs, code editor, and Claude/Cursor agents in one window —
 > everything a drag away.
 
@@ -18,25 +18,25 @@ Prerequisites: Node 20+, pnpm 10+, Rust 1.75+, Xcode Command Line Tools.
 
 ```bash
 pnpm install                # install JS deps
-pnpm --filter @forgehold/desktop tauri icon apps/desktop/src-tauri/icons/source.png
+pnpm --filter @woom/desktop tauri icon apps/desktop/src-tauri/icons/source.png
 pnpm dev                    # run Tauri dev (opens the app window)
 ```
 
 Build a signed Universal `.app`:
 
 ```bash
-pnpm build:universal        # produces Forgehold.app + Forgehold_*.dmg
+pnpm build:universal        # produces Woom.app + Woom_*.dmg
 ```
 
 ## Repo layout
 
 ```
-forgehold/
+woom/
 ├── apps/
 │   └── desktop/           # Tauri 2 + SvelteKit app
 │       ├── src/           # Svelte UI
 │       └── src-tauri/     # Rust shell + macOS bundle config + sidecars
-│           └── sidecars/  # forgehold-jira, forgehold-github, forgehold-memory
+│           └── sidecars/  # woom-jira, woom-github, woom-memory
 │                          # (MCP servers wired into Claude via --mcp-config)
 ├── mockup/                # HTML design prototypes (v1–v4) — reference only
 ├── docs/                  # architecture + design specs

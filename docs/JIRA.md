@@ -1,10 +1,10 @@
-# Forgehold — Jira Integration Specification
+# Woom — Jira Integration Specification
 
 **Version:** 0.1
 **Last updated:** 2026-04-29
 **Status:** describes shipping behaviour. Atlassian Cloud only; Server
 / Data Center is not supported. Authentication is workspace + email +
-API token. PAT-only by design — Forgehold does not ship OAuth for any
+API token. PAT-only by design — Woom does not ship OAuth for any
 source (`docs/ROADMAP_1.0.md §6`).
 
 > The Jira column is the inbox of issues you should be looking at, with
@@ -70,7 +70,7 @@ buttons), assignee, priority, labels, worklogs.
 
 ```
 ╭─ Jira column (kind === 'jira') ────────────────────╮
-│ ⠿ ⤢ ✕   Forgehold                  data-kind="jira"│
+│ ⠿ ⤢ ✕   Woom                  data-kind="jira"│
 ├─────────────────────────────────────────────────────┤
 │ inbox-brand:  Ⓙ Jira  forge-cloud  ⟳   New issue   │
 ├─────────────────────────────────────────────────────┤
@@ -278,7 +278,7 @@ Disconnect: `jira_disconnect`.
 
 ---
 
-## 8. MCP Tools (`user-forgehold-jira`)
+## 8. MCP Tools (`user-woom-jira`)
 
 | Tool                    | Required                          | Optional                                                  |
 |-------------------------|-----------------------------------|-----------------------------------------------------------|
@@ -356,7 +356,7 @@ In the v1→v3 layout migration default toggle, **Jira is on** for
 existing users (see `docs/WORKBENCH.md §A.15`).
 
 Per-instance filter persistence: `localStorage` key
-`forgehold:jira-col-filters-by-instance:v1` (mirroring the GitHub one).
+`woom:jira-col-filters-by-instance:v1` (mirroring the GitHub one).
 
 Workspace-global assignee chip persistence: `inboxState.jiraAssignee`
 plus `jiraAssigneeAny`, persisted via the same effect that persists

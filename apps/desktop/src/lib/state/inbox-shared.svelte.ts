@@ -102,15 +102,15 @@ export interface SentryFiltersPersisted {
 /* Per-column-instance filter persistence — one key per source, payload
    is `Record<instanceId, FilterShape>`. Each column owns one entry,
    `cleanupInstanceState` drops the entry when the instance is closed. */
-const GH_COL_FILTERS_KEY = 'forgehold:github-col-filters-by-instance:v1';
-const JIRA_COL_FILTERS_KEY = 'forgehold:jira-col-filters-by-instance:v1';
-const SENTRY_COL_FILTERS_KEY = 'forgehold:sentry-col-filters-by-instance:v1';
+const GH_COL_FILTERS_KEY = 'woom:github-col-filters-by-instance:v1';
+const JIRA_COL_FILTERS_KEY = 'woom:jira-col-filters-by-instance:v1';
+const SENTRY_COL_FILTERS_KEY = 'woom:sentry-col-filters-by-instance:v1';
 /* Tabs (JiraTab / SentryTab) keep their own filter slice so changing
    a board / project / status in the dedicated tab doesn't yank the
-   workbench column out from under the user (and vice-versa). Each tab
+   solo app out from under the user (and vice-versa). Each tab
    persists separately so a reload restores both states independently. */
-const JIRA_TAB_FILTERS_KEY = 'forgehold:jira-tab-filters:v1';
-const SENTRY_TAB_FILTERS_KEY = 'forgehold:sentry-tab-filters:v1';
+const JIRA_TAB_FILTERS_KEY = 'woom:jira-tab-filters:v1';
+const SENTRY_TAB_FILTERS_KEY = 'woom:sentry-tab-filters:v1';
 
 // ---- Defaults --------------------------------------------------------
 
@@ -406,7 +406,7 @@ export const inboxState = $state<{
   // ---- GitHub inbox — per-column-instance ----
   // Each GithubColumn keeps its own filter / item / loading / error slot.
   // Persisted as one Record under
-  // `forgehold:github-col-filters-by-instance:v1`.
+  // `woom:github-col-filters-by-instance:v1`.
   itemsByInstance: Record<string, InboxItem[]>;
   loadingByInstance: Record<string, boolean>;
   errorByInstance: Record<string, string | null>;
@@ -436,11 +436,11 @@ export const inboxState = $state<{
   expandedFiles: Set<string>;
 
   // ---- Jira inbox — per-column-instance ----
-  // Two JiraColumn instances on the same workbench (or across workbenches)
+  // Two JiraColumn instances on the same solo (or across solos)
   // each get their own filter / item / loading / error slot, keyed by
   // PanelInstance.id, so changing a board on column A doesn't reload
   // column B. Filters persist as one Record under
-  // `forgehold:jira-col-filters-by-instance:v1`. When an instance is
+  // `woom:jira-col-filters-by-instance:v1`. When an instance is
   // removed (closed / moved), `cleanupInstanceState` (registered with
   // `registerInstanceRemovedHook`) drops its slots so abandoned ids
   // don't pile up in localStorage.
@@ -475,7 +475,7 @@ export const inboxState = $state<{
 
   // ---- Sentry inbox — per-column-instance ----
   // Same per-instance shape as Jira: each SentryColumn keeps its own
-  // filter and item slots so two Sentry columns on the same workbench can
+  // filter and item slots so two Sentry columns on the same solo can
   // browse different projects / levels / environments simultaneously.
   sentryItemsByInstance: Record<string, SentryIssue[]>;
   sentryItemsLoadingByInstance: Record<string, boolean>;
@@ -609,7 +609,7 @@ export const inboxState = $state<{
 
 /* Drop a closed column's state slots so abandoned instance ids don't
    pile up across reloads. layoutState fires this hook before it removes
-   the instance from the workbench, so we still have the id we need. */
+   the instance from the solo, so we still have the id we need. */
 registerInstanceRemovedHook((id) => {
   delete inboxState.itemsByInstance[id];
   delete inboxState.loadingByInstance[id];

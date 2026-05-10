@@ -36,10 +36,8 @@
   const totalMessages = $derived(
     sessionsState.list.reduce((acc, s) => acc + s.messages.length, 0)
   );
-  const workbenchCount = $derived(layoutState.workbenches.length);
-  const totalColumns = $derived(
-    layoutState.workbenches.reduce((acc, w) => acc + w.instances.length, 0)
-  );
+  const editorLinkCount = $derived(Object.keys(layoutState.links.editorToAgent).length);
+  const canvasLinkCount = $derived(Object.keys(layoutState.links.canvasToAgent).length);
 
   // localStorage usage estimate. UTF-16 chars × 2 bytes is the conservative
   // upper bound; what the browser actually charges depends on the engine,
@@ -266,7 +264,7 @@
         }
       });
       updateInstalledOk = true;
-      updateStatusMessage = 'Update installed. Quit and reopen Forgehold to finish.';
+      updateStatusMessage = 'Update installed. Quit and reopen Woom to finish.';
     } catch (e) {
       updateStatusMessage = `Install failed: ${
         typeof e === 'string' ? e : (e as Error).message ?? 'unknown error'
@@ -286,7 +284,7 @@
    * a live "running / not running" indicator. Sidecars are spawned
    * lazily by Claude / Cursor on first MCP handshake — a
    * `not running` state just means no agent has called any of that
-   * sidecar's tools yet in this Forgehold launch (or the sidecar
+   * sidecar's tools yet in this Woom launch (or the sidecar
    * crashed; either way the next agent call will respawn it). */
   type SidecarHealth = { name: string; running: boolean; pid_count: number };
   let sidecarHealth = $state<SidecarHealth[] | null>(null);
@@ -361,9 +359,9 @@
   /* Repo target for the "Open GitHub issue" button. Configured at
    * build time (or runtime via env when desired); we deliberately
    * don't autodetect from the current working repo — the user might
-   * have multiple Forgehold checkouts. Empty string disables the
+   * have multiple Woom checkouts. Empty string disables the
    * "Open issue" path; the user can still copy or download. */
-  const BUG_REPORT_GITHUB_REPO = ''; /* e.g. "forgehold/forgehold" — wire up at 1.0 */
+  const BUG_REPORT_GITHUB_REPO = ''; /* e.g. "woom-app/woom" — wire up at 1.0 */
 
   let bugReportDescription = $state('');
   let bugReportPreview = $state<string | null>(null);
@@ -372,7 +370,7 @@
   function refreshBugReportPreview() {
     bugReportPreview = buildBugReport({
       description: bugReportDescription,
-      appVersion: 'Forgehold 1.0.0'
+      appVersion: 'Woom 1.0.0'
     });
   }
 
@@ -468,7 +466,7 @@
         <h2 class="card-title">Storage</h2>
         <p class="card-sub">
           Chat history, rules, and layout live in Tauri's localStorage. Worktrees are real git
-          checkouts on disk under <span class="mono">{worktreeDir ?? '~/Library/Application Support/Forgehold/worktrees'}</span>.
+          checkouts on disk under <span class="mono">{worktreeDir ?? '~/Library/Application Support/Woom/worktrees'}</span>.
         </p>
       </header>
       <div class="grid">
@@ -485,8 +483,8 @@
           <div class="stat-value mono">{totalMessages}</div>
         </div>
         <div class="stat">
-          <div class="stat-label">Workbenches · columns</div>
-          <div class="stat-value mono">{workbenchCount} · {totalColumns}</div>
+          <div class="stat-label">Editor · canvas links</div>
+          <div class="stat-value mono">{editorLinkCount} · {canvasLinkCount}</div>
         </div>
         <div class="stat">
           <div class="stat-label">Sessions size</div>
@@ -651,13 +649,13 @@
       <header class="card-head">
         <h2 class="card-title">Updates</h2>
         <p class="card-sub">
-          Auto-update channel for new Forgehold builds. Signed and notarized releases pull from the public manifest configured in <span class="mono">tauri.conf.json</span>.
+          Auto-update channel for new Woom builds. Signed and notarized releases pull from the public manifest configured in <span class="mono">tauri.conf.json</span>.
         </p>
       </header>
       <div class="grid">
         <div class="stat">
           <div class="stat-label">Current version</div>
-          <div class="stat-value mono">Forgehold 1.0.0</div>
+          <div class="stat-value mono">Woom 1.0.0</div>
         </div>
         <div class="stat">
           <div class="stat-label">Last checked</div>
@@ -764,7 +762,7 @@
       <header class="card-head">
         <h2 class="card-title">MCP servers</h2>
         <p class="card-sub">
-          Forgehold's bundled sidecars. Spawned by Claude / Cursor on first MCP handshake; "not running" means no agent has talked to that sidecar yet this launch.
+          Woom's bundled sidecars. Spawned by Claude / Cursor on first MCP handshake; "not running" means no agent has talked to that sidecar yet this launch.
         </p>
       </header>
       <div class="update-actions">
@@ -796,7 +794,7 @@
       <header class="card-head">
         <h2 class="card-title">Documentation</h2>
         <p class="card-sub">
-          The full Forgehold spec set, bundled with the app. Each entry is rendered from <span class="mono">docs/*.md</span> in the repo. Pick one to read inline, or open the file in Finder.
+          The full Woom spec set, bundled with the app. Each entry is rendered from <span class="mono">docs/*.md</span> in the repo. Pick one to read inline, or open the file in Finder.
         </p>
       </header>
       {#if docsListError}
@@ -842,7 +840,7 @@
       <div class="grid">
         <div class="stat">
           <div class="stat-label">Build</div>
-          <div class="stat-value mono">Forgehold 1.0.0 · aarch64</div>
+          <div class="stat-value mono">Woom 1.0.0 · aarch64</div>
         </div>
         <div class="stat">
           <div class="stat-label">Storage keys</div>
@@ -864,13 +862,25 @@
 </section>
 
 <style>
-  .settings-view { overflow-y: auto; flex: 1; display: flex; flex-direction: column; }
-  .settings-header { padding: 48px 56px 12px; max-width: 980px; margin: 0 auto; width: 100%; }
-  .view-title { font-size: 28px; font-weight: 600; letter-spacing: -0.025em; color: var(--text-0); margin-bottom: 6px; }
-  .view-sub { font-size: 13.5px; color: var(--text-2); margin: 0; }
+  .settings-view {
+    overflow-y: auto; flex: 1;
+    display: flex; flex-direction: column;
+    padding: 30px 60px 60px;
+    background: var(--bg-0);
+  }
+  .settings-header { padding: 8px 0 28px; max-width: 880px; margin: 0 auto; width: 100%; }
+  .view-title {
+    font-family: 'Instrument Serif', 'New York', Georgia, serif;
+    font-size: 38px; font-weight: 400;
+    font-style: italic;
+    letter-spacing: -0.02em;
+    color: var(--text-0);
+    margin: 0 0 6px;
+  }
+  .view-sub { font-size: 14px; color: var(--text-2); margin: 0; line-height: 1.5; }
 
   .settings-body {
-    padding: 8px 56px 48px; max-width: 980px; margin: 0 auto; width: 100%;
+    padding: 0; max-width: 880px; margin: 0 auto; width: 100%;
     display: flex; flex-direction: column; gap: 18px;
   }
 
@@ -911,8 +921,8 @@
     display: flex; flex-direction: column; gap: 4px;
   }
   .alert--error {
-    background: rgba(214, 72, 44, 0.08);
-    border-color: rgba(214, 72, 44, 0.4);
+    background: rgba(232, 130, 100, 0.08);
+    border-color: rgba(232, 130, 100, 0.4);
     color: var(--error);
   }
   .alert .mono { color: var(--text-1); }
@@ -961,7 +971,7 @@
     width: 14px; height: 14px;
     border-radius: 50%;
     flex-shrink: 0;
-    box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.08);
+    box-shadow: 0 0 0 2px rgba(245, 240, 234, 0.08);
   }
   .theme-swatch-text { letter-spacing: -0.02em; }
   .theme-label {
@@ -1057,8 +1067,8 @@
   .diag-latency, .diag-time { font-size: 10.5px; color: var(--text-mute); }
   .diag-row--connected .diag-kind { color: var(--accent-bright); }
   .diag-row--disconnected .diag-kind { color: var(--text-2); }
-  .diag-row--rate_limited .diag-kind { color: #f59e0b; }
-  .diag-row--error .diag-kind { color: #f87171; }
+  .diag-row--rate_limited .diag-kind { color: #D9B86E; }
+  .diag-row--error .diag-kind { color: #F0A38A; }
   .diag-empty {
     padding: 16px; border: 1px dashed var(--border-neutral);
     border-radius: 8px; text-align: center;
@@ -1076,13 +1086,13 @@
     font-size: 12.5px; line-height: 1.5;
   }
   .update-status--ready {
-    background: rgba(16, 185, 129, 0.08);
-    border-color: rgba(16, 185, 129, 0.35);
+    background: rgba(168, 217, 184, 0.08);
+    border-color: rgba(168, 217, 184, 0.35);
     color: var(--accent-bright);
   }
   .update-status--installed {
-    background: rgba(16, 185, 129, 0.14);
-    border-color: rgba(16, 185, 129, 0.5);
+    background: rgba(168, 217, 184, 0.14);
+    border-color: rgba(168, 217, 184, 0.5);
     color: var(--accent-bright);
     font-weight: 500;
   }

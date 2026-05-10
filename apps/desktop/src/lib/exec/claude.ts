@@ -37,7 +37,7 @@ export interface AgentRunRequest {
     | 'sentry'
     | 'triage'
     | null;
-  /** Per-turn UI context: a description of the active workbench, sibling
+  /** Per-turn UI context: a description of the active solo, sibling
    *  instances + names + cwds, and which instance the calling session is
    *  bound to. Lets the agent address specific columns by name (e.g.
    *  "switch the editor Sagrada-Familia") and know what already exists

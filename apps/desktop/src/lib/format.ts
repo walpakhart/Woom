@@ -1,5 +1,5 @@
 // Pure presentation helpers — no Svelte, no reactivity, no I/O. Imported by
-// the workbench UI to format paths, tool calls, byte counts, etc. Kept off
+// the solo UI to format paths, tool calls, byte counts, etc. Kept off
 // the +page.svelte shell so the same helpers can be reused across extracted
 // components without a circular import.
 

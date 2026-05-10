@@ -1,0 +1,189 @@
+/* ============================================================
+   Woom · Apps — shared chassis (matches mockup/v7.html)
+   ============================================================
+   Each App view sets its own --app-tone / --app-glow + a
+   `grid-template-columns` (via inline style) — this file owns
+   only the universal chassis: outer shell padding/gap, pane
+   surface, pane head, hero typography, empty state. */
+
+:root {
+  --app-r-pane: 14px;
+  --app-r-card: 10px;
+  --app-pad: 14px;
+  --app-gap: 14px;
+  --app-pane-head-h: 56px;
+}
+
+/* Outer shell — grid container, fills the main area, brand halo
+   on the background. Each view overrides grid-template-columns. */
+.app-shell {
+  flex: 1;
+  display: grid;
+  width: 100%; height: 100%;
+  min-width: 0; min-height: 0;
+  position: relative;
+  overflow: hidden;
+  padding: var(--app-pad);
+  gap: var(--app-gap);
+}
+.app-shell::before {
+  content: '';
+  position: absolute; inset: 0;
+  background: radial-gradient(ellipse 1100px 700px at 0% 100%,
+    color-mix(in srgb, var(--app-tone, var(--accent)) 10%, transparent),
+    transparent 65%);
+  pointer-events: none;
+  z-index: 0;
+}
+.app-shell > * { position: relative; z-index: 1; }
+
+/* Pane — every "panel" inside a solo (sidebar, main, side). */
+.app-pane {
+  display: flex; flex-direction: column;
+  background: var(--bg-1);
+  border: 1px solid var(--border-neutral);
+  border-radius: var(--app-r-pane);
+  box-shadow: var(--shadow-1);
+  overflow: hidden;
+  min-height: 0; min-width: 0;
+  position: relative;
+}
+
+/* Pane header — 56px, editorial serif title + actions. */
+.app-pane-head {
+  flex: 0 0 var(--app-pane-head-h);
+  display: flex; align-items: center; gap: 14px;
+  padding: 14px 20px 12px;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(180deg, var(--bg-2), var(--bg-1));
+  min-height: var(--app-pane-head-h);
+}
+.app-pane-head-h {
+  font-family: 'Instrument Serif', 'New York', Georgia, serif;
+  font-size: 22px; font-weight: 400;
+  letter-spacing: -0.02em; line-height: 1.2;
+  color: var(--text-0);
+  margin: 0;
+  flex: 1; min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.app-pane-head-meta {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px; color: var(--text-mute);
+  padding: 2px 7px;
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+}
+
+.app-pane-body {
+  flex: 1; min-height: 0;
+  overflow-y: auto;
+}
+
+/* Hero typography for empty states / detail headers. */
+.app-h1 {
+  font-family: 'Instrument Serif', 'New York', Georgia, serif;
+  font-size: 30px; font-weight: 400;
+  letter-spacing: -0.02em; line-height: 1.18;
+  color: var(--text-0);
+  margin: 0;
+}
+.app-h2 {
+  font-family: 'Instrument Serif', 'New York', Georgia, serif;
+  font-size: 22px; font-weight: 400;
+  letter-spacing: -0.02em; line-height: 1.2;
+  color: var(--text-0);
+  margin: 0;
+}
+
+/* Empty state card — themed with brand glow icon. */
+.app-empty {
+  flex: 1;
+  display: grid; place-items: center;
+  background:
+    radial-gradient(ellipse 900px 600px at 50% 100%,
+      color-mix(in srgb, var(--app-tone, var(--accent)) 10%, transparent),
+      transparent 60%);
+}
+.app-empty-card {
+  max-width: 460px;
+  padding: 36px 32px;
+  text-align: center;
+  background: var(--bg-1);
+  border: 1px solid var(--border-hi);
+  border-radius: 16px;
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--app-tone, var(--accent)) 14%, transparent),
+    var(--shadow-3);
+}
+.app-empty-icon {
+  width: 56px; height: 56px;
+  margin: 0 auto 16px;
+  display: grid; place-items: center;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--app-tone, var(--accent)) 14%, var(--bg-2));
+  color: var(--app-tone, var(--accent-bright));
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--app-tone, var(--accent)) 35%, transparent),
+    0 0 30px var(--app-glow, var(--accent-glow));
+}
+.app-empty-icon svg { width: 26px; height: 26px; stroke: currentColor; fill: none; stroke-width: 1.5; }
+.app-empty-h {
+  font-family: 'Instrument Serif', 'New York', Georgia, serif;
+  font-size: 26px; font-weight: 400; letter-spacing: -0.02em;
+  color: var(--text-0);
+  margin: 0 0 10px;
+}
+.app-empty-p {
+  font-size: 13.5px; color: var(--text-1);
+  line-height: 1.55;
+  margin: 0 0 22px;
+}
+.app-empty-actions { display: flex; gap: 8px; justify-content: center; }
+
+/* Universal chip — used in pane heads to show linked-app badges. */
+.app-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 10px;
+  font-size: 11.5px; font-weight: 500;
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-1);
+  white-space: nowrap;
+}
+.app-chip svg { width: 12px; height: 12px; }
+.app-chip-link {
+  background: color-mix(in srgb, var(--src-editor) 12%, var(--bg-3));
+  border-color: color-mix(in srgb, var(--src-editor) 28%, transparent);
+  color: var(--src-editor);
+}
+.app-chip:hover { border-color: var(--border-hi); }
+
+/* Universal section label — uppercase tracked caption. */
+.app-label {
+  font-size: 9.5px; font-weight: 700;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  color: var(--text-mute);
+}
+
+/* Square icon button — used in pane heads + secondary controls. */
+.app-iconbtn {
+  width: 26px; height: 26px;
+  display: grid; place-items: center;
+  border-radius: 6px;
+  color: var(--text-2);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  transition: all 120ms;
+}
+.app-iconbtn:hover { background: var(--bg-3); color: var(--text-0); }
+.app-iconbtn svg {
+  width: 14px; height: 14px;
+  stroke: currentColor; fill: none;
+  stroke-width: 1.7;
+  stroke-linecap: round; stroke-linejoin: round;
+}

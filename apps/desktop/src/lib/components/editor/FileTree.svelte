@@ -290,7 +290,7 @@
       /* Directory delete needs a recursive command; not in 1.0
        * scope. Surface a hint instead of attempting a partial
        * delete. */
-      window.alert(`Delete a directory from Finder — Forgehold's tree only deletes files in 1.0.`);
+      window.alert(`Delete a directory from Finder — Woom's tree only deletes files in 1.0.`);
       return;
     }
     if (!window.confirm(`Delete ${it.name}? This cannot be undone.`)) return;
@@ -324,7 +324,7 @@
         // dragover, so drop targets can't rely on the mime to detect us).
         // We still set the mime for non-WKWebView platforms / other apps.
         setDragPayload({ source: 'file', ...payload });
-        e.dataTransfer.setData('application/x-forgehold-file', JSON.stringify(payload));
+        e.dataTransfer.setData('application/x-woom-file', JSON.stringify(payload));
         e.dataTransfer.setData('text/plain', it.path);
         e.dataTransfer.effectAllowed = 'copy';
         attachDragChip(e, it.is_dir ? 'dir' : 'file', it.name);
@@ -450,12 +450,12 @@
     flex-shrink: 0;
     min-width: 14px; text-align: center;
   }
-  .tree-git--mod { color: var(--warning); background: rgba(229, 162, 42, 0.14); }
-  .tree-git--add { color: var(--success); background: rgba(217, 145, 60, 0.16); }
-  .tree-git--del { color: var(--error); background: rgba(214, 72, 44, 0.18); }
+  .tree-git--mod { color: var(--warning); background: rgba(217, 184, 110, 0.14); }
+  .tree-git--add { color: var(--success); background: rgba(204, 120, 92, 0.16); }
+  .tree-git--del { color: var(--error); background: rgba(232, 130, 100, 0.18); }
   .tree-git--new { color: var(--accent-bright); background: var(--accent-soft); }
   .tree-git--ren { color: var(--accent); background: var(--accent-soft); }
-  .tree-git--conflict { color: var(--error); background: rgba(214, 72, 44, 0.25); }
+  .tree-git--conflict { color: var(--error); background: rgba(232, 130, 100, 0.25); }
 
   /* Inline rename input — sized to fit the row, takes the same font
      so the swap doesn't shift the row height. */
@@ -492,6 +492,6 @@
     color: var(--text-1); font-size: 12px; cursor: pointer;
   }
   .tree-ctx-item:hover { background: var(--bg-2); color: var(--text-0); }
-  .tree-ctx-item--danger { color: #f87171; }
-  .tree-ctx-item--danger:hover { background: rgba(248, 113, 113, 0.12); }
+  .tree-ctx-item--danger { color: #F0A38A; }
+  .tree-ctx-item--danger:hover { background: rgba(232, 130, 100, 0.12); }
 </style>

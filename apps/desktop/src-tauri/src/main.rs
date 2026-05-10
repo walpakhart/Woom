@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    forgehold_desktop_lib::run()
+    woom_desktop_lib::run()
 }

@@ -14,7 +14,7 @@ current scope; this doc describes the intended architecture.
 > `ROADMAP_1.0.md` for what's planned. Several decisions in this
 > document have since been **reversed or made permanent**:
 >
-> - **OAuth (§6.1, §6.2, §6.5).** Cancelled — Forgehold is PAT-only
+> - **OAuth (§6.1, §6.2, §6.5).** Cancelled — Woom is PAT-only
 >   forever (`docs/ROADMAP_1.0.md §6`). Ignore the OAuth flow tables
 >   and `forge://` URL scheme; we use macOS Keychain with manual PAT
 >   entry, no redirect handler.
@@ -447,14 +447,14 @@ CREATE INDEX idx_rule_set_workspace ON rule_set(workspace_id, scope);
 
 ## 6. Auth & Security
 
-> **Reversed:** §6.1 and §6.2 are obsolete. Forgehold is PAT-only
+> **Reversed:** §6.1 and §6.2 are obsolete. Woom is PAT-only
 > permanently — no OAuth, no redirect handler (`docs/ROADMAP_1.0.md §6`).
 > The current auth shape is `docs/CONNECTIONS.md`. Sections below kept
 > for historical context only.
 
 ### 6.1 ~~OAuth flows~~ (cancelled)
 
-~~All providers use OAuth 2.0 with PKCE.~~ Forgehold uses Personal
+~~All providers use OAuth 2.0 with PKCE.~~ Woom uses Personal
 Access Tokens / API tokens for every source — see
 `docs/CONNECTIONS.md §3` for the actual scopes per provider.
 
@@ -778,7 +778,7 @@ About panel.
 | Credential storage            | Keychain Services via `keyring` crate               |
 | Run-completed notifications   | `UNUserNotificationCenter` via Tauri notify plugin  |
 | "Open in Zed / VS Code"       | `NSWorkspace` / direct `spawn`                      |
-| ~~OAuth callbacks~~           | Cancelled — Forgehold is PAT-only (`ROADMAP_1.0.md §6`) |
+| ~~OAuth callbacks~~           | Cancelled — Woom is PAT-only (`ROADMAP_1.0.md §6`) |
 | Dark Mode                     | Follows system (`NSRequiresAquaSystemAppearance = NO`) |
 | Dock badge (unread count)     | `NSApplication.setDockBadge` (v0.2)                 |
 | Global shortcut (summon)      | Tauri `global-shortcut` plugin (v0.2)               |

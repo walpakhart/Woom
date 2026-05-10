@@ -16,18 +16,15 @@
   import RulesView from '$lib/views/RulesView.svelte';
   import ConnectionsView from '$lib/views/ConnectionsView.svelte';
   import SettingsView from '$lib/views/SettingsView.svelte';
-  import GithubTab from '$lib/views/GithubTab.svelte';
-  import JiraTab from '$lib/views/JiraTab.svelte';
-  import SentryTab from '$lib/views/SentryTab.svelte';
+  import AgentApp from '$lib/views/apps/AgentApp.svelte';
+  import JiraApp from '$lib/views/apps/JiraApp.svelte';
+  import GithubApp from '$lib/views/apps/GithubApp.svelte';
+  import SentryApp from '$lib/views/apps/SentryApp.svelte';
+  import EditorApp from '$lib/views/apps/EditorApp.svelte';
+  import CanvasApp from '$lib/views/apps/CanvasApp.svelte';
+  import TerminalApp from '$lib/views/apps/TerminalApp.svelte';
   import CommandPalette from '$lib/components/ui/CommandPalette.svelte';
   import ModalsRoot from '$lib/components/modals/ModalsRoot.svelte';
-  import GithubColumn from '$lib/components/workbench/GithubColumn.svelte';
-  import JiraColumn from '$lib/components/workbench/JiraColumn.svelte';
-  import SentryColumn from '$lib/components/workbench/SentryColumn.svelte';
-  import AgentColumn from '$lib/components/workbench/AgentColumn.svelte';
-  import EditorColumn from '$lib/components/workbench/EditorColumn.svelte';
-  import CanvasColumn from '$lib/components/workbench/CanvasColumn.svelte';
-  import TerminalColumn from '$lib/components/workbench/TerminalColumn.svelte';
   import {
     restoreCanvasState,
     dropCanvasInstance,
@@ -78,25 +75,9 @@
     layoutState,
     persistPanelState,
     restorePanelState,
-    scrollInstanceIntoView,
-    scrollKindIntoView,
-    addPanelInstance,
-    addWorkbench,
-    removeWorkbench,
-    renameWorkbench,
-    setActiveWorkbench,
-    activeInstances,
-    activeWorkbench,
-    firstInstanceOfKind,
-    findInstanceAnywhere,
-    listInstancesOfKind,
-    listArchivedOfKind,
-    unarchiveInstance,
-    goToInstance,
-    moveInstanceToWorkbench,
     registerInstanceRemovedHook,
-    restoreMaximized,
-    toggleMaximize
+    APP_INSTANCE_IDS,
+    kindForInstanceId
   } from '$lib/state/layout.svelte';
   import {
     sessionsState,
@@ -204,7 +185,7 @@
     isResumeOrphanError,
     RESUME_ORPHAN_PREFIX
   } from '$lib/exec/claude';
-  import type { ClaudeAction, ClaudeSession, Mention, PanelInstance, PanelKind, RepoInfo } from '$lib/types';
+  import type { ClaudeAction, ClaudeSession, Mention, PanelKind, RepoInfo } from '$lib/types';
   import {
     connectionsMeta,
     externalId,
@@ -221,17 +202,42 @@
     type JiraSprint,
     type JiraUser,
     type JiraUserSummary,
+    type SentryIssue,
     type SentryUser,
     type RepoBranch,
-    type Repository
+    type Repository,
+    relativeTime
   } from '$lib/data';
   import { basename, formatToolUse, isImagePath, truncInline } from '$lib/format';
 
-  type View = 'workbench' | 'githubTab' | 'jiraTab' | 'sentryTab' | 'rules' | 'connections' | 'settings';
+  type View =
+    | 'jiraApp'
+    | 'githubApp'
+    | 'sentryApp'
+    | 'claudeApp'
+    | 'cursorApp'
+    | 'editorApp'
+    | 'canvasApp'
+    | 'terminalApp'
+    | 'rules'
+    | 'connections'
+    | 'settings';
   type DetailTab = 'conversation' | 'commits' | 'files' | 'reviews' | 'checks';
 
-  // View & layout state
-  let view = $state<View>('workbench');
+  /* Default view = Claude solo. Fresh installs land here (or get
+   * redirected to Connections by the rail if nothing is set up). */
+  let view = $state<View>('claudeApp');
+
+  /** True whenever the user is in a source-solo view (Jira / GitHub /
+   *  Sentry). Used to gate keyboard shortcuts that only make sense
+   *  inside an inbox view (j/k navigation). The detail rendering is
+   *  always inline in the right pane of the source app — there is
+   *  no global slide-over modal anymore, so each app's focus state
+   *  persists across navigation and the user can leave + return
+   *  without losing the PR/ticket/issue they were reading. */
+  const isSourceApp = $derived(
+    view === 'jiraApp' || view === 'githubApp' || view === 'sentryApp'
+  );
   let paletteOpen = $state(false);
   /* Cheatsheet overlay (`?` toggles). Owned at +page level so any
    * shortcut, anywhere, can flip it without prop-drilling. */
@@ -242,7 +248,14 @@
   // credentials in keychain can't be pulled until the user taps Touch ID
   // (or confirms with the Mac passcode). `biometryError` surfaces the last
   // LAContext failure so we can show "cancelled" / "not enrolled" etc.
-  let appLocked = $state(true);
+  //
+  // Skip the gate when not running inside Tauri (e.g. browser dev preview):
+  // there's no Keychain, no biometric API — locking would just leave the
+  // browser preview stuck on a screen that can never unlock.
+  const inTauri =
+    typeof window !== 'undefined' &&
+    !!(window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+  let appLocked = $state(inTauri);
   let biometryInFlight = $state(false);
   let biometryError = $state<string | null>(null);
 
@@ -251,7 +264,7 @@
     biometryInFlight = true;
     biometryError = null;
     try {
-      await invoke('biometric_unlock', { reason: 'Unlock Forgehold to access your stored credentials' });
+      await invoke('biometric_unlock', { reason: 'Unlock Woom to access your stored credentials' });
       appLocked = false;
       // Now that we're allowed through, pull connection status + inboxes.
       // `refreshAllStatusOnBoot` wraps each source's status call in an
@@ -278,23 +291,23 @@
   // GitHub-tab state lives in GithubTab now; parent keeps a handle
   // via `bind:this` so cross-cutting actions (e.g. merging a PR) can refresh
   // the repo items list.
-  let repositoriesView = $state<{ refreshItems: () => void } | null>(null);
+  // Legacy GithubTab repositories binding — kept as null since the
+  // tab view is gone (GithubColumn does both inbox + focus now).
+  // Removing this would also remove the optional-chained refresh hook
+  // below, so we keep the binding ref for backward compatibility.
+  let repositoriesView: { refreshItems: () => void } | null = null;
 
   // Shared editor repo path. In multi-instance world we have one path per
   // editor column instance (see sessionsState.editorInstanceState). For
   // Claude sessions without an explicit cwd, we fall back to the FIRST editor
-  // instance in panel order. Kept as a $derived so effects fire on change.
-  // Migrated legacy single-editor-root localStorage key into the first editor
-  // instance's slot on mount.
-  const editorRepoPath = $derived.by(() => {
-    const first = activeInstances().find((i) => i.kind === 'editor');
-    return first ? sessionsState.editorInstanceState[first.id]?.repoPath ?? '' : '';
-  });
+  // Editor singleton: there's exactly one editor surface in solo mode, so
+  // the repo path is just the slot keyed on `APP_INSTANCE_IDS.editor`.
+  const editorRepoPath = $derived(
+    sessionsState.editorInstanceState[APP_INSTANCE_IDS.editor]?.repoPath ?? ''
+  );
 
   function setEditorRepoPath(value: string, instanceId?: string) {
-    const id =
-      instanceId ?? activeInstances().find((i) => i.kind === 'editor')?.id ?? null;
-    if (!id) return;
+    const id = instanceId ?? APP_INSTANCE_IDS.editor;
     if (!sessionsState.editorInstanceState[id]) {
       sessionsState.editorInstanceState[id] = { repoPath: value };
     } else {
@@ -305,7 +318,7 @@
 
   // ---- Drag autoscroll for card DnD (Jira/GitHub → Claude column) ----
   // When the user grabs a card and drags it toward an off-screen column,
-  // the workbench auto-scrolls so the drop target comes into view.
+  // the solo auto-scrolls so the drop target comes into view.
   let dragPointerX = $state(0);
   let dragAutoscrollRaf: number | null = null;
 
@@ -372,7 +385,7 @@
   }
 
   // ClaudeMessage, Mention, ClaudeSession, ClaudeAction and RepoInfo
-  // are imported from $lib/types so the workbench column components can
+  // are imported from $lib/types so the solo app components can
   // share the same shapes.
 
   let activeRepoInfo = $state<RepoInfo | null>(null);
@@ -387,36 +400,55 @@
     sessionsState.list.find((s) => s.id === sessionsState.activeClaudeId) ?? null
   );
 
+  /** Group agent sessions by relative date for the soloAgent sidebar.
+   *  Returns four buckets with non-empty contents only — Today /
+   *  Yesterday / This week / Older. The "now" arg makes the result
+   *  reactive when the parent ticks. Sessions with no messages yet
+   *  bucket into "Older" so they don't pollute Today. */
+  function groupAgentSessions(
+    kind: 'claude' | 'cursor',
+    nowMs: number
+  ): { label: string; items: typeof sessionsState.list }[] {
+    const items = sessionsState.list.filter((s) => s.agentKind === kind);
+    const dayMs = 24 * 60 * 60 * 1000;
+    const sessTime = (s: typeof items[number]) => {
+      const last = s.messages[s.messages.length - 1]?.at;
+      return last ? new Date(last).getTime() : 0;
+    };
+    const sorted = [...items].sort((a, b) => sessTime(b) - sessTime(a));
+    const today: typeof items = [];
+    const yesterday: typeof items = [];
+    const week: typeof items = [];
+    const older: typeof items = [];
+    for (const s of sorted) {
+      const t = sessTime(s);
+      if (t === 0) { older.push(s); continue; }
+      const ageDays = Math.floor((nowMs - t) / dayMs);
+      if (ageDays < 1) today.push(s);
+      else if (ageDays < 2) yesterday.push(s);
+      else if (ageDays < 7) week.push(s);
+      else older.push(s);
+    }
+    return [
+      { label: 'Today', items: today },
+      { label: 'Yesterday', items: yesterday },
+      { label: 'This week', items: week },
+      { label: 'Older', items: older }
+    ].filter((g) => g.items.length > 0);
+  }
+
   // Thinking-time label for the typing indicator
   let thinkingStartedAt = $state<number | null>(null);
   let thinkingTick = $state(0);
   let thinkingTimer: ReturnType<typeof setInterval> | null = null;
 
-  // Auto-create initial chat + Claude column when Claude connects for the
-  // first time and we have neither sessions nor a claude panel. Do NOT wipe
-  // on disconnect — persisted sessions and panels should survive.
+  // Auto-create initial chat in the Claude app singleton when Claude
+  // connects for the first time and the user has no sessions yet. App
+  // singletons always exist so there's nothing to spawn.
   $effect(() => {
     if (connectedClaude && sessionsState.list.length === 0) {
-      let claude = firstInstanceOfKind('claude');
-      if (!claude) {
-        const id = addPanelInstance('claude');
-        claude = activeInstances().find((i) => i.id === id) ?? null;
-      }
-      newClaudeSession({ title: 'Chat 1', columnInstanceId: claude?.id ?? null });
+      newClaudeSession({ title: 'Chat 1', columnInstanceId: APP_INSTANCE_IDS.claude });
     }
-  });
-
-  // First-run: if a connected user's active workbench has zero instances,
-  // seed reasonable defaults (github/jira/claude) so the workbench isn't
-  // empty on a fresh install.
-  $effect(() => {
-    const inst = activeInstances();
-    if (inst.length > 0) return;
-    if (!connectedGithub && !connectedJira && !connectedSentry && !connectedClaude) return;
-    if (connectedGithub) addPanelInstance('github');
-    if (connectedJira) addPanelInstance('jira');
-    if (connectedSentry) addPanelInstance('sentry');
-    if (connectedClaude) addPanelInstance('claude');
   });
 
   // Modal payloads live in the registry — see `$lib/state/modals.svelte`.
@@ -510,17 +542,6 @@
       pick: () => (cheatsheetOpen = true)
     });
     a.push({
-      id: 'workbench:new',
-      label: 'New workbench',
-      sub: 'Create a fresh column tab',
-      keywords: 'create add tab',
-      pick: () => {
-        const id = addWorkbench('Workbench ' + (layoutState.workbenches.length + 1));
-        setActiveWorkbench(id);
-        view = 'workbench';
-      }
-    });
-    a.push({
       id: 'view:settings',
       label: 'Open settings',
       keywords: 'preferences config theme privacy updates docs',
@@ -543,8 +564,11 @@
   const connectedGithub = $derived(githubStatus.kind === 'connected');
   const connectedJira = $derived(jiraStatus.kind === 'connected');
   const connectedSentry = $derived(sentryStatus.kind === 'connected');
-  const connectedClaude = $derived(claudeStatus?.ready ?? false);
-  const connectedCursor = $derived(cursorStatus?.ready ?? false);
+  // In browser preview (non-Tauri) we pretend Claude/Cursor are ready so the
+  // full agent UI renders instead of the "connect first" empty card. The
+  // actual invoke calls will still no-op, which is fine for visual review.
+  const connectedClaude = $derived((claudeStatus?.ready ?? false) || !inTauri);
+  const connectedCursor = $derived((cursorStatus?.ready ?? false) || !inTauri);
   const connectedIds = $derived.by(() => {
     const set = new Set<string>();
     if (connectedGithub) set.add('github');
@@ -580,7 +604,7 @@
   let removeFocusListener: (() => void) | null = null;
 
   /** Unlisten for the action-IPC event from MCP sidecars. Each
-   *  forgehold-github `propose_*` MCP call ends up emitting this
+   *  woom-github `propose_*` MCP call ends up emitting this
    *  event; the handler attaches the IPC `wait_id` to the matching
    *  pending action card so its eventual resolution routes back to
    *  the sidecar via `resolve_action_wait`. */
@@ -697,15 +721,14 @@
     return null;
   }
 
-  // Wire the layout→sessions hook once. Any closed panel instance (via the X
-  // button or workbench deletion) orphans its pinned sessions back to the
-  // floating pool so they reattach elsewhere instead of vanishing.
+  // Wire the layout→sessions hook once. If a singleton's data is ever
+  // explicitly cleared, its pinned sessions float back to the pool so
+  // they reattach elsewhere instead of vanishing.
   registerInstanceRemovedHook((id) => {
     orphanSessionsForInstance(id);
-    /* Canvas columns own per-instance tab state (which canvases are pinned
-       to this column, which one is active). Closing the column drops that
-       map entry — but does NOT delete the canvases themselves; they stay
-       in the library so a future canvas column can reopen them. */
+    /* Canvas owns per-instance tab state (which canvases are pinned,
+       which one is active). Clearing it drops that map entry — but does
+       NOT delete the canvases themselves; they stay in the library. */
     dropCanvasInstance(id);
   });
 
@@ -734,7 +757,7 @@
     // drag sources forgetting their own ondragend wiring.
     installGlobalDragSafetyNet();
     // Subscribe to action-IPC requests from MCP sidecars. Each event
-    // fires when forgehold-github's `propose_*` MCP tool wants the
+    // fires when woom-github's `propose_*` MCP tool wants the
     // user to approve a card. We attach the IPC `wait_id` to the
     // matching pending action card (or create one if the stream
     // parser hasn't yet) so when the card resolves later in
@@ -742,7 +765,7 @@
     // via `resolve_action_wait` — and the agent receives it as the
     // tool_result IN THE SAME TURN (no end-turn / next-turn drain).
     actionIpcUnlisten = await listen<ActionRequestPayload>(
-      'forgehold:action_request',
+      'woom:action_request',
       (event) => handleActionRequest(event.payload)
     );
     // Plan-usage snapshot for the chip. Fire-and-forget — the chip
@@ -773,28 +796,26 @@
        layout to per-canvas JSON files on disk, or — when an
        `index.json` is already present — re-hydrates from disk
        (which IS now the source of truth) and clears the legacy
-       `forgehold:canvas:v1:*` localStorage keys to free origin
+       `woom:canvas:v1:*` localStorage keys to free origin
        quota. Failures fall back to localStorage transparently. */
     await initCanvasFromDisk(appDataDir);
-    // One-shot v1 → v2 migration: seed the legacy `forgehold:editor:root`
+    // One-shot v1 → v2 migration: seed the legacy `woom:editor:root`
     // localStorage value into the first editor instance, ONLY if that
     // instance has no persisted v2 state yet. Without this guard the
     // migration would clobber the editor's open folder on every reload
     // (v2 persistence already restored the right path; the legacy key
     // would re-overwrite it back to the original v1 value).
     try {
-      const savedEditorRoot = localStorage.getItem('forgehold:editor:root');
+      const savedEditorRoot = localStorage.getItem('woom:editor:root');
       if (savedEditorRoot) {
-        const ed = firstInstanceOfKind('editor');
-        const alreadyHasV2 = ed
-          ? !!sessionsState.editorInstanceState[ed.id]?.repoPath
-          : false;
-        if (ed && !alreadyHasV2) {
-          setEditorRepoPath(savedEditorRoot, ed.id);
+        const edId = APP_INSTANCE_IDS.editor;
+        const alreadyHasV2 = !!sessionsState.editorInstanceState[edId]?.repoPath;
+        if (!alreadyHasV2) {
+          setEditorRepoPath(savedEditorRoot, edId);
         }
         // Drop the legacy key once we know v2 is in place — keeps
         // re-mounts cheap and prevents future regressions of this kind.
-        if (alreadyHasV2) localStorage.removeItem('forgehold:editor:root');
+        if (alreadyHasV2) localStorage.removeItem('woom:editor:root');
       }
     } catch {/* ignore */}
     tickInterval = setInterval(() => (now = Date.now()), 30_000);
@@ -1004,12 +1025,6 @@
   function onDragEnd() {
     setDragPayload(null);
     clearAgentDragState();
-    pillDragOverKind = null;
-    pillDragOverInstance = null;
-    if (pillDragLeaveTimer) {
-      clearTimeout(pillDragLeaveTimer);
-      pillDragLeaveTimer = null;
-    }
     justDragged = true;
     setTimeout(() => (justDragged = false), 120);
     document.removeEventListener('dragover', trackDragPointer);
@@ -1022,7 +1037,7 @@
   function agentCanAccept(e: DragEvent): boolean {
     const types = e.dataTransfer?.types;
     if (dragState.payload) return true;
-    if (types?.includes('application/x-forgehold-file')) return true;
+    if (types?.includes('application/x-woom-file')) return true;
     if (types?.includes('Files')) return true;
     if (types?.includes('text/uri-list')) return true;
     return false;
@@ -1207,7 +1222,7 @@
     if (internal && internal.source === 'file') {
       filePayload = { path: internal.path, isDir: internal.isDir, name: internal.name };
     } else {
-      const raw = e.dataTransfer?.getData('application/x-forgehold-file');
+      const raw = e.dataTransfer?.getData('application/x-woom-file');
       if (raw) {
         try {
           const p = JSON.parse(raw) as { path: string; isDir: boolean; name: string };
@@ -1362,6 +1377,122 @@
     setTimeout(() => (justDragged = false), 200);
   }
 
+  /** Build a Mention from an inbox payload. Mirrors the shape the
+   *  drag→drop pipeline produces in `onAgentDrop`, so the click-driven
+   *  "Send to agent" buttons attach the exact same context the user
+   *  would get by dragging the row. */
+  function mentionFromInboxPayload(
+    payload:
+      | { kind: 'github'; item: InboxItem }
+      | { kind: 'jira'; item: JiraItem }
+      | { kind: 'sentry'; item: SentryIssue }
+  ): Mention {
+    if (payload.kind === 'github') {
+      return {
+        source: 'github',
+        externalId: externalId(payload.item),
+        title: payload.item.title,
+        body: payload.item.body
+      };
+    }
+    if (payload.kind === 'jira') {
+      return {
+        source: 'jira',
+        externalId: payload.item.key,
+        title: payload.item.summary,
+        body: payload.item.description
+      };
+    }
+    const issue = payload.item;
+    const ref = issue.short_id || issue.id;
+    const summary = [
+      issue.metadata_type && issue.metadata_value
+        ? `${issue.metadata_type}: ${issue.metadata_value}`
+        : issue.title,
+      issue.culprit ? `culprit: ${issue.culprit}` : null,
+      `level: ${issue.level} · status: ${issue.status}`,
+      `project: ${issue.project_slug} · last seen: ${issue.last_seen}`,
+      issue.permalink ? `url: ${issue.permalink}` : null
+    ]
+      .filter(Boolean)
+      .join('\n');
+    return { source: 'sentry', externalId: ref, title: issue.title, body: summary };
+  }
+
+  /** Quick-send a free-form prompt into a specific session without
+   *  the user having to switch view. Used by InlineClaude's per-row
+   *  composer in the editor's right pane: write a question, click
+   *  Send, response streams in the Claude app — user can switch over
+   *  later to read it. If the session is currently mid-turn, the
+   *  message goes into its `pendingQueue` and auto-fires when the
+   *  current turn finishes. The active-session pointer flips to the
+   *  target so `sendClaudeMessage` (which reads `activeSession`)
+   *  picks it up; the rail view stays put — user is still in
+   *  whatever app they were on. */
+  function quickSendToSession(sessionId: string, text: string) {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    const s = sessionsState.list.find((x) => x.id === sessionId);
+    if (!s) return;
+    if (s.sending) {
+      const next = [...(s.pendingQueue ?? []), trimmed];
+      updateSession(sessionId, { pendingQueue: next });
+      return;
+    }
+    /* Idle — flip activeClaudeId so sendClaudeMessage targets this
+       session, set the input, fire. We do NOT change `view`, so the
+       user stays in the editor / wherever they were. */
+    sessionsState.activeClaudeId = sessionId;
+    sessionsState.activeIds[s.agentKind] = sessionId;
+    setSessionInput(sessionId, trimmed);
+    void sendClaudeMessage();
+  }
+
+  /** Click-driven equivalent of the drag→drop pipeline for inbox
+   *  items (GitHub PR / Jira ticket / Sentry issue). Used by every
+   *  "Send to agent" affordance — per-row chips on each list, action
+   *  buttons in detail panes, etc. Picks/creates a session in the
+   *  agent column, splices `@<externalId>` into the input, and
+   *  switches the top-level view so the user lands on the chat
+   *  ready to type. */
+  function sendInboxItemToAgent(
+    payload:
+      | { kind: 'github'; item: InboxItem }
+      | { kind: 'jira'; item: JiraItem }
+      | { kind: 'sentry'; item: SentryIssue },
+    kind: 'claude' | 'cursor' = 'claude'
+  ) {
+    const instanceId = kind === 'claude' ? APP_INSTANCE_IDS.claude : APP_INSTANCE_IDS.cursor;
+    const mention = mentionFromInboxPayload(payload);
+    const activeId = sessionsState.activeByInstance[instanceId];
+    let target = activeId ? sessionsState.list.find((s) => s.id === activeId) ?? null : null;
+    if (!target) target = sessionsState.list.find((s) => s.columnInstanceId === instanceId) ?? null;
+    if (!target) {
+      target = sessionsState.list.find(
+        (s) => s.agentKind === kind && s.columnInstanceId === null
+      ) ?? null;
+      if (target) updateSession(target.id, { columnInstanceId: instanceId });
+    }
+    if (!target) {
+      const id = newClaudeSession({ agentKind: kind, columnInstanceId: instanceId });
+      target = sessionsState.list.find((s) => s.id === id) ?? null;
+    }
+    if (!target) return;
+    const dedup = target.mentions.filter(
+      (m) => !(m.source === mention.source && m.externalId === mention.externalId)
+    );
+    const tokenAlreadyInInput = new RegExp(
+      `(?:^|\\s)@${mention.externalId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:\\s|$)`
+    ).test(target.input);
+    const sep = target.input && !target.input.endsWith(' ') ? ' ' : '';
+    updateSession(target.id, {
+      input: tokenAlreadyInInput ? target.input : target.input + sep + `@${mention.externalId} `,
+      mentions: [...dedup, mention]
+    });
+    setActiveSessionInColumn(instanceId, target.id);
+    view = kind === 'claude' ? 'claudeApp' : 'cursorApp';
+  }
+
   /** If user drops a file before setting cwd, infer the enclosing directory. */
   function deriveCwd(path: string, isDir: boolean): string | null {
     if (isDir) return path;
@@ -1457,12 +1588,9 @@
         linkedToEditorInstanceId: null
       });
     } else {
-      // Pick the first Editor instance in the active workbench. If none
-      // exists, user-initiated link is a no-op (button is disabled in the UI
-      // when no editor instance is available).
-      const editorInst = firstInstanceOfKind('editor');
-      if (!editorInst) return;
-      linkActiveSessionToEditor(editorInst.id);
+      /* Link to whichever editor instance the rail currently has
+         active (default = primary). Multi-instance aware. */
+      linkActiveSessionToEditor(layoutState.activeInstance.editor);
     }
   }
 
@@ -1473,14 +1601,31 @@
       (empty column → there was nothing to link). */
   function linkEditorToAgent(
     editorInstanceId: string,
-    agentInstanceId: string
+    agentInstanceId: string,
+    sessionId?: string
   ) {
     const editorPath = sessionsState.editorInstanceState[editorInstanceId]?.repoPath || '';
     if (!editorPath) return;
-    const inst = activeInstances().find((i) => i.id === agentInstanceId);
-    if (!inst || (inst.kind !== 'claude' && inst.kind !== 'cursor')) return;
-    const kind = inst.kind;
-    const currentId = sessionsState.activeByInstance[inst.id] ?? null;
+    const kind = kindForInstanceId(agentInstanceId);
+    if (kind !== 'claude' && kind !== 'cursor') return;
+    /* If the picker passed a specific session id, link that one (and
+       activate it in its column so the editor's chat header switches
+       to match). Otherwise fall back to whatever session is already
+       active in the agent column — original behaviour. */
+    const explicit = sessionId
+      ? sessionsState.list.find((s) => s.id === sessionId) ?? null
+      : null;
+    if (explicit) {
+      setActiveSessionInColumn(agentInstanceId, explicit.id);
+      updateSession(explicit.id, {
+        cwd: editorPath,
+        linkedToEditor: true,
+        linkedToEditorInstanceId: editorInstanceId,
+        columnInstanceId: agentInstanceId
+      });
+      return;
+    }
+    const currentId = sessionsState.activeByInstance[agentInstanceId] ?? null;
     const current = currentId
       ? sessionsState.list.find((s) => s.id === currentId) ?? null
       : null;
@@ -1489,7 +1634,7 @@
         cwd: editorPath,
         linkedToEditor: true,
         linkedToEditorInstanceId: editorInstanceId,
-        columnInstanceId: inst.id
+        columnInstanceId: agentInstanceId
       });
     } else {
       newClaudeSession({
@@ -1497,10 +1642,9 @@
         cwd: editorPath,
         linkedToEditor: true,
         linkedToEditorInstanceId: editorInstanceId,
-        columnInstanceId: inst.id
+        columnInstanceId: agentInstanceId
       });
     }
-    void scrollInstanceIntoView(inst.id);
   }
 
   // ---- Worktree management for the active Claude session ----
@@ -1512,7 +1656,7 @@
     branch: string | null;
     head: string | null;
     is_main: boolean;
-    forgehold_session: string | null;
+    woom_session: string | null;
   }
 
   async function createWorktree() {
@@ -1528,7 +1672,7 @@
     }
     const ok = confirm(
       `Isolate this Claude session in its own git worktree?\n\n` +
-      `Forgehold will create a fresh branch "forgehold/${activeSession.id.slice(0, 8)}" ` +
+      `Woom will create a fresh branch "woom/${activeSession.id.slice(0, 8)}" ` +
       `off your current HEAD and check it out into a private directory.\n\n` +
       `Your main working tree stays untouched. Claude will only write there.`
     );
@@ -1582,19 +1726,12 @@
   }
 
   /** Ensure at least one editor column instance exists, set its repo path,
-      and scroll it into view. Returns the editor instance id. */
+      and switch the rail to it. Returns the editor singleton id. */
   function ensureEditorShowing(path: string): string {
-    let editor = firstInstanceOfKind('editor');
-    if (!editor) {
-      const id = addPanelInstance('editor');
-      editor = activeInstances().find((i) => i.id === id) ?? null;
-    }
-    if (editor) {
-      setEditorRepoPath(path, editor.id);
-      void scrollInstanceIntoView(editor.id);
-      return editor.id;
-    }
-    return '';
+    const id = APP_INSTANCE_IDS.editor;
+    setEditorRepoPath(path, id);
+    view = 'editorApp';
+    return id;
   }
 
   function openWorktreeInEditor() {
@@ -1611,17 +1748,6 @@
   function openSessionFolderInEditor() {
     const path = activeSession?.worktreePath || activeSession?.cwd || editorRepoPath;
     if (!path) return;
-    const boundId = activeSession?.linkedToEditorInstanceId ?? null;
-    const bound = boundId ? findInstanceAnywhere(boundId) : null;
-    if (bound && bound.inst.kind === 'editor') {
-      // Linked editor still exists — push the path there and scroll it
-      // into view. Don't touch any OTHER editor (was the bug: clicking
-      // the link pill clobbered the first editor's folder regardless of
-      // which editor the session was actually linked to).
-      setEditorRepoPath(path, bound.inst.id);
-      void scrollInstanceIntoView(bound.inst.id);
-      return;
-    }
     ensureEditorShowing(path);
   }
 
@@ -1680,66 +1806,26 @@
     }
   }
 
-  /** Open (or scroll to) a column of the given kind. Singleton kinds only
-      ever get one instance. Multi-instance kinds open their first matching
-      instance (or create one if none exist). Close via the X on the column
-      itself. */
-  function openColumn(kind: PanelKind) {
-    void scrollKindIntoView(kind);
-  }
-
-  /** Spawn a new column instance of the given kind and scroll it into view.
-      Bound to the "+" button in the pill bar. All kinds support multiple
-      instances — see `addPanelInstance` in layout.svelte.ts. */
-  function spawnColumnInstance(kind: PanelKind) {
-    const id = addPanelInstance(kind);
-    void scrollInstanceIntoView(id);
-  }
-
-  /** Spawn a fresh chat in the Claude/Cursor column and make sure the column
-      is visible. Bound to the "+" button next to agent pills. */
+  /** Spawn a fresh chat in the Claude/Cursor singleton. */
   function spawnAgentChat(kind: 'claude' | 'cursor') {
-    let inst = firstInstanceOfKind(kind);
-    if (!inst) {
-      const id = addPanelInstance(kind);
-      inst = activeInstances().find((i) => i.id === id) ?? null;
-    }
-    newClaudeSession({ agentKind: kind, columnInstanceId: inst?.id ?? null });
-    if (inst) void scrollInstanceIntoView(inst.id);
+    newClaudeSession({ agentKind: kind, columnInstanceId: APP_INSTANCE_IDS[kind] });
   }
 
-  /** Keep every linked session's cwd in sync with the specific Editor
-      instance it's bound to (`linkedToEditorInstanceId`). Fall back to the
-      first editor in the active workbench when the binding is stale (editor
-      was closed). Manually picking a cwd (via pickCwd / worktree ops)
-      breaks the link elsewhere. */
+  /** Keep every linked session's cwd in sync with the editor singleton's
+   *  open repoPath. Manually picking a cwd (via pickCwd / worktree ops)
+   *  breaks the link elsewhere. App mode: only one editor, so the
+   *  binding never goes stale unless the user explicitly unlinks. */
   $effect(() => {
+    const editorId = APP_INSTANCE_IDS.editor;
+    const editorPath = sessionsState.editorInstanceState[editorId]?.repoPath ?? null;
     for (const s of sessionsState.list) {
       if (!s.linkedToEditor) continue;
-      const boundId = s.linkedToEditorInstanceId;
-      const boundExists = boundId ? !!findInstanceAnywhere(boundId) : false;
-      const fallback = firstInstanceOfKind('editor');
       const patch: Partial<ClaudeSession> = {};
-      // Heal stale `linkedToEditorInstanceId` — the bound editor was closed.
-      // If a fallback editor exists, re-bind silently so the pill shows the
-      // current editor's name instead of "LINKED TO …" with no name. If no
-      // editor remains, drop the link entirely so the pill disappears.
-      if (!boundExists) {
-        if (fallback) {
-          patch.linkedToEditorInstanceId = fallback.id;
-        } else {
-          patch.linkedToEditor = false;
-          patch.linkedToEditorInstanceId = null;
-        }
+      if (s.linkedToEditorInstanceId !== editorId) {
+        patch.linkedToEditorInstanceId = editorId;
       }
-      const effectiveBoundId = patch.linkedToEditorInstanceId !== undefined
-        ? patch.linkedToEditorInstanceId
-        : boundId;
-      const path = effectiveBoundId
-        ? sessionsState.editorInstanceState[effectiveBoundId]?.repoPath ?? null
-        : null;
-      if (s.cwd !== path) {
-        patch.cwd = path;
+      if (s.cwd !== editorPath) {
+        patch.cwd = editorPath;
       }
       if (Object.keys(patch).length > 0) {
         updateSession(s.id, patch);
@@ -1749,15 +1835,6 @@
 
   function toggleWorktreeMenu() {
     worktreeMenuOpen = !worktreeMenuOpen;
-  }
-
-  // Small helpers that keep AgentColumn's prop surface purely functional:
-  // the component doesn't import editingMsg directly — it mutates via these.
-  function cancelEditMessage() {
-    editingMsg = null;
-  }
-  function setEditingMsgDraft(draft: string) {
-    if (editingMsg) editingMsg = { ...editingMsg, draft };
   }
 
   async function copyWorktreeBranch() {
@@ -1778,7 +1855,7 @@
     if (!activeSession || !activeSession.worktreePath || !activeSession.worktreeRepo || !activeSession.worktreeBranch) return;
     const ok = confirm(
       `Apply Claude's work to your current branch?\n\n` +
-      `Forgehold will run \`git merge --no-ff ${activeSession.worktreeBranch}\` in ${activeSession.worktreeRepo} ` +
+      `Woom will run \`git merge --no-ff ${activeSession.worktreeBranch}\` in ${activeSession.worktreeRepo} ` +
       `and then remove the isolated worktree.\n\n` +
       `Make sure your main repo is checked out to the branch you want to merge into, ` +
       `and that its working tree is clean. If the merge has conflicts, the worktree stays — resolve conflicts in the main repo, commit, then discard the worktree manually.`
@@ -1903,7 +1980,7 @@
 
   /** When the CLI orphans the resume target uuid, we mint a new uuid
    *  and prime the next turn's system prompt with a recap drawn from
-   *  Forgehold's own in-memory transcript — the chat history the CLI
+   *  Woom's own in-memory transcript — the chat history the CLI
    *  has just lost. We piggyback on `cwdSwitchRecap` because the
    *  injection mechanism already exists (the field is read by
    *  `agentContext.ts` and stamped into `appendSystemPrompt`); the
@@ -1919,7 +1996,23 @@
 
   async function sendClaudeMessage() {
     const s = activeSession;
-    if (!s || s.sending) return;
+    if (!s) return;
+    /* Queue while a turn is in flight: instead of dropping the click,
+       push the current input to `pendingQueue` and clear the composer.
+       The drain in the `finally` block at end-of-turn pops the next
+       queued message and re-fires sendClaudeMessage automatically.
+       Mentions can't be queued reliably (they're snapshot at send-
+       time and a queued turn wouldn't get a fair share of file
+       refs / images), so we only queue plain-text drafts. If there
+       are pending mentions we still queue but warn — the mentions
+       stay attached for now and the next free moment uses them. */
+    if (s.sending) {
+      const draft = s.input.trim();
+      if (!draft) return;
+      const nextQueue = [...(s.pendingQueue ?? []), draft];
+      updateSession(s.id, { input: '', pendingQueue: nextQueue });
+      return;
+    }
     // Allow send with empty text as long as there's at least one attachment —
     // dropping just an image with no extra prompt is a valid "look at this"
     // turn (the image goes to the model as a vision content block).
@@ -1940,6 +2033,11 @@
       (m) => m.source === 'file' && !m.isDir && !!m.body && isImagePath(m.body)
     );
     const userImages = imageMentions.map((m) => ({ path: m.body!, name: m.title }));
+    /* Only image attachments live on the user-message bubble. @-style
+       mentions (Jira/GH/Sentry/file refs/chat) are fed into the prompt
+       text below — they aren't "attachments" and shouldn't render as
+       chips on the bubble. The user typed `@foo` inline; that's their
+       reference, no extra surface needed. */
     appendSessionMessage(id, {
       role: 'user',
       content: text,
@@ -2006,7 +2104,7 @@
     // Drain any action-card outcomes that landed since the agent's last
     // turn (commit/PR/bash/cwd-switch results) and prepend them as a
     // structured block. The CLI's `--resume` history doesn't include
-    // these — they're Forgehold-side annotations — so this is the only
+    // these — they're Woom-side annotations — so this is the only
     // channel the agent has for learning whether its proposed commit
     // pushed cleanly, what stderr a bash card produced, etc. The drain
     // also clears the queue so a result is never delivered twice.
@@ -2021,7 +2119,7 @@
     //      in a worktree, never touches main working tree").
     //   2. Explicit cwd set by user via pickCwd.
     //   3. Editor column's open repo (shared state).
-    //   4. None → agent inherits Forgehold's cwd (last-resort fallback).
+    //   4. None → agent inherits Woom's cwd (last-resort fallback).
     const cwd = sess?.worktreePath || sess?.cwd || editorRepoPath || null;
     const claudeUuid = sess?.claudeUuid ?? genUuid();
     const resume = Boolean(sess?.claudeResumable);
@@ -2251,6 +2349,27 @@
         stopThinkingTimer();
         updateSession(id, { sending: false });
       }
+      /* Drain the per-session queue. If the user typed more messages
+         while the previous turn was running, they're parked here in
+         FIFO order — fire the next one. Re-uses the session's normal
+         send pipeline by setting it active + writing the queued text
+         into `input`, then calling sendClaudeMessage(). The new
+         active-session flip is a feature, not a bug: the user is
+         intentionally driving this session forward. */
+      const sessAfterDrain = sessionsState.list.find((x) => x.id === id);
+      const queue = sessAfterDrain?.pendingQueue ?? [];
+      if (queue.length > 0) {
+        const [nextDraft, ...rest] = queue;
+        updateSession(id, { pendingQueue: rest, input: nextDraft });
+        sessionsState.activeClaudeId = id;
+        sessionsState.activeIds[sessAfterDrain!.agentKind] = id;
+        /* queueMicrotask: let Svelte settle the input/pendingQueue
+           updates before the recursive send reads them. Otherwise
+           the early "no input" guard could fire on a stale read. */
+        queueMicrotask(() => {
+          void sendClaudeMessage();
+        });
+      }
     }
   }
 
@@ -2262,9 +2381,9 @@
     void scrollChatBottom();
   }
 
-  /** Forgehold-app MCP navigation: the agent calls `mcp__app__open_jira_issue`
+  /** Woom-app MCP navigation: the agent calls `mcp__app__open_jira_issue`
    *  / `switch_view` / `add_editor_instance` / etc., the stream parser sees
-   *  the `tool_use` event, and we drive Forgehold's reactive state directly
+   *  the `tool_use` event, and we drive Woom's reactive state directly
    *  here — same outcome as if the user had clicked through the UI by hand.
    *  No approval card, since these are read-only navigations.
    *
@@ -2315,22 +2434,20 @@
     environment?: string | null;
   };
   /** MCP `switch_view` ships platform-named views (`github` / `jira` /
-   *  `sentry`) so a future GitLab/Bitbucket tab can claim its own slot.
-   *  The internal `View` enum kept the `Tab` suffix to avoid colliding
-   *  with workbench column kinds (the kind `github` is a workbench
-   *  column; `githubTab` is the top-level page). Translate here so the
-   *  agent never sees the suffix. Returns `null` for unknown values so
-   *  the handler can no-op cleanly instead of forcing an `as View`
-   *  cast that would route to a blank screen. */
+   *  `sentry` / `claude` / `cursor` / `editor` / `canvas` / `terminal`)
+   *  so a future GitLab/Bitbucket tab can claim its own slot. Translate
+   *  to the internal `…App` view name. Returns `null` for unknown
+   *  values so the handler can no-op cleanly. */
   function mapAgentViewToInternal(v: string): View | null {
     switch (v) {
-      case 'github':
-        return 'githubTab';
-      case 'jira':
-        return 'jiraTab';
-      case 'sentry':
-        return 'sentryTab';
-      case 'workbench':
+      case 'github':       return 'githubApp';
+      case 'jira':         return 'jiraApp';
+      case 'sentry':       return 'sentryApp';
+      case 'claude':       return 'claudeApp';
+      case 'cursor':       return 'cursorApp';
+      case 'editor':       return 'editorApp';
+      case 'canvas':       return 'canvasApp';
+      case 'terminal':     return 'terminalApp';
       case 'rules':
       case 'connections':
       case 'settings':
@@ -2507,7 +2624,10 @@
     switch (name) {
       case 'mcp__app__open_jira_issue': {
         const key = str('key');
-        if (key) inboxState.jiraFocusKey = key;
+        if (key) {
+          inboxState.jiraFocusKey = key;
+          view = 'jiraApp';
+        }
         return;
       }
       case 'mcp__app__open_sentry_issue': {
@@ -2515,13 +2635,19 @@
         // "latest" so a stale event id from a previous open_sentry_event
         // call doesn't carry over.
         const id = str('id');
-        if (id) openSentryFocus(id);
+        if (id) {
+          openSentryFocus(id);
+          view = 'sentryApp';
+        }
         return;
       }
       case 'mcp__app__open_sentry_event': {
         const id = str('issue_id');
         const eventId = str('event_id') || null;
-        if (id) openSentryFocus(id, eventId);
+        if (id) {
+          openSentryFocus(id, eventId);
+          view = 'sentryApp';
+        }
         return;
       }
       case 'mcp__app__open_github_pr':
@@ -2541,22 +2667,18 @@
       }
       case 'mcp__app__switch_view': {
         const v = str('view');
-        // The MCP tool exposes platform-named views (`github` / `jira`
-        // / `sentry`) so a future GitLab tab can claim its own slot
-        // without colliding with GitHub. Internal `View` keys still
-        // carry the `Tab` suffix to disambiguate from workbench column
-        // kinds (`github` the column kind vs `githubTab` the top-level
-        // page) — translate here. Anything else passes through
-        // unchanged (`workbench`, `rules`, `connections`, `settings`).
+        // Translate platform-named views (`github` / `jira` / `sentry` /
+        // `claude` / `cursor` / `editor` / `canvas` / `terminal`) to the
+        // matching `…App`. `rules` / `connections` / `settings` pass
+        // through unchanged.
         const mapped = mapAgentViewToInternal(v);
         if (mapped) view = mapped;
         return;
       }
-      case 'mcp__app__add_editor_instance': {
+      case 'mcp__app__open_repo': {
         const repoPath = str('repo_path');
-        view = 'workbench';
-        const newId = addPanelInstance('editor');
-        if (repoPath && newId) setEditorRepoPath(repoPath, newId);
+        view = 'editorApp';
+        if (repoPath) setEditorRepoPath(repoPath, APP_INSTANCE_IDS.editor);
         return;
       }
       case 'mcp__app__open_connect_modal': {
@@ -2565,62 +2687,13 @@
         if (conn) openConnectModal(conn);
         return;
       }
-      case 'mcp__app__add_workbench_instance': {
-        const kind = str('kind');
-        const validKinds: PanelKind[] = ['github', 'jira', 'sentry', 'claude', 'cursor', 'editor', 'canvas'];
-        if (!validKinds.includes(kind as PanelKind)) return;
-        view = 'workbench';
-        const newId = addPanelInstance(kind as PanelKind);
-        if (kind === 'editor') {
-          const repoPath = str('repo_path');
-          if (repoPath && newId) setEditorRepoPath(repoPath, newId);
-        }
-        // Scroll the new column into view so the user actually sees the
-        // change — addPanelInstance can drop a column off-screen on a
-        // wide layout.
-        if (newId) void scrollInstanceIntoView(newId);
-        return;
-      }
-      case 'mcp__app__new_workbench': {
-        const name = str('name') || 'Workbench';
-        const activate = input.activate !== false; // default true
-        const newId = addWorkbench(name);
-        if (activate && newId) setActiveWorkbench(newId);
-        view = 'workbench';
-        return;
-      }
-      case 'mcp__app__switch_workbench': {
-        const name = str('name');
-        const indexRaw = input.index;
-        view = 'workbench';
-        if (name) {
-          const target = layoutState.workbenches.find(
-            (w) => w.name.toLowerCase() === name.toLowerCase()
-          );
-          if (target) setActiveWorkbench(target.id);
-          return;
-        }
-        if (typeof indexRaw === 'number' && Number.isInteger(indexRaw)) {
-          const target = layoutState.workbenches[indexRaw];
-          if (target) setActiveWorkbench(target.id);
-        }
-        return;
-      }
-      case 'mcp__app__focus_workbench_instance': {
-        const kind = str('kind');
-        const validKinds: PanelKind[] = ['github', 'jira', 'sentry', 'claude', 'cursor', 'editor', 'canvas'];
-        if (!validKinds.includes(kind as PanelKind)) return;
-        view = 'workbench';
-        void scrollKindIntoView(kind as PanelKind);
-        return;
-      }
       case 'mcp__app__open_github_repo': {
         const owner = str('owner');
         const repo = str('repo');
         const section = str('section') || 'pulls';
         const path = str('path');
         if (!owner || !repo) return;
-        view = 'githubTab';
+        view = 'githubApp';
         // GithubTab watches this slot and clears it after opening.
         // `path` only honoured for section=code (server validates too).
         inboxState.pendingRepoNav = {
@@ -2650,7 +2723,7 @@
         if (Array.isArray(input.sprint_ids)) {
           patch.sprintIds = parseSprintScopes(input.sprint_ids);
         }
-        view = 'jiraTab';
+        view = 'jiraApp';
         updateJiraTabFilters(patch);
         return;
       }
@@ -2660,7 +2733,7 @@
         // patch. Mutate field-by-field — `scheduleSentryTabFilterRefresh`
         // persists and re-runs the query the same way the dropdown
         // change handlers do.
-        view = 'sentryTab';
+        view = 'sentryApp';
         if (Array.isArray(input.projects)) {
           inboxState.sentryTabProjects = input.projects
             .map((x) => String(x))
@@ -2697,9 +2770,8 @@
         }
         if ('search' in input) patch.search = str('search');
         if ('custom_user' in input) patch.customUser = str('custom_user');
-        view = 'workbench';
+        view = 'githubApp';
         updateGithubFilters(inst.id, patch);
-        void scrollInstanceIntoView(inst.id);
         return;
       }
       case 'mcp__app__set_jira_column': {
@@ -2723,9 +2795,8 @@
         if (Array.isArray(input.sprint_ids)) {
           patch.sprintIds = parseSprintScopes(input.sprint_ids);
         }
-        view = 'workbench';
+        view = 'jiraApp';
         updateJiraFilters(inst.id, patch);
-        void scrollInstanceIntoView(inst.id);
         return;
       }
       case 'mcp__app__set_sentry_column': {
@@ -2750,9 +2821,8 @@
           const e = str('environment');
           patch.environment = e ? e : null;
         }
-        view = 'workbench';
+        view = 'sentryApp';
         setSentryFilters(inst.id, patch);
-        void scrollInstanceIntoView(inst.id);
         return;
       }
       case 'mcp__app__set_editor_repo_path': {
@@ -2768,7 +2838,7 @@
         if (!repoPath) return;
         const editor = findInstanceByNameOrId('editor', instName, instId);
         if (!editor) return;
-        view = 'workbench';
+        view = 'editorApp';
         setEditorRepoPath(repoPath, editor.id);
         // Linked agents follow. `applySessionCwd` rotates the agent's
         // claudeUuid + resets `claudeResumable` when the new cwd actually
@@ -2780,7 +2850,6 @@
             applySessionCwd(s.id, repoPath, { breakLink: false });
           }
         }
-        void scrollInstanceIntoView(editor.id);
         return;
       }
       case 'mcp__app__set_agent_cwd': {
@@ -2800,8 +2869,7 @@
           const inst = findInstanceByNameOrId('claude', instName, instId)
             ?? findInstanceByNameOrId('cursor', instName, instId);
           if (inst) {
-            view = 'workbench';
-            void scrollInstanceIntoView(inst.id);
+            view = inst.kind === 'cursor' ? 'cursorApp' : 'claudeApp';
             sessId = sessionsState.activeByInstance[inst.id] ?? null;
           }
         }
@@ -3121,25 +3189,17 @@
     return s.linkedCanvasId;
   }
 
-  /** Look up a workbench instance by name or id within a given kind, across
-   *  every workbench (not just the active one). Returns the first match —
-   *  art-names are unique pool entries within a workbench, but the agent
-   *  might reference one that's in a different workbench. */
+  /** Resolve the singleton record for a given kind. App mode keeps
+   *  this shape so MCP-dispatch callers don't have to know the
+   *  concrete id format — `name` is unused here (legacy art-names are
+   *  gone), and `width` is a stub (`0`) since solo apps fill the
+   *  whole window. */
   function findInstanceByNameOrId(
     kind: PanelKind,
-    name: string,
-    id: string
-  ): PanelInstance | null {
-    const wantName = name.trim().toLowerCase();
-    const wantId = id.trim();
-    for (const wb of layoutState.workbenches) {
-      for (const inst of wb.instances) {
-        if (inst.kind !== kind) continue;
-        if (wantId && inst.id === wantId) return inst;
-        if (wantName && inst.name.toLowerCase() === wantName) return inst;
-      }
-    }
-    return null;
+    _name: string,
+    _id: string
+  ): { id: string; kind: PanelKind; name: string; width: number } | null {
+    return { id: APP_INSTANCE_IDS[kind], kind, name: kind, width: 0 };
   }
 
   /** Pull a single GitHub item by `(owner, repo, number)` and slot it into
@@ -3165,6 +3225,11 @@
       });
       openFocusItem(item);
       tab = tabHint ?? 'conversation';
+      /* Inline-only architecture — there's no global modal that can
+         render the PR over Claude/Cursor. So when the agent triggers
+         an open from another view, we have to switch the user TO the
+         GitHub app or they wouldn't see anything. */
+      view = 'githubApp';
     } catch (e) {
       console.warn('open_github_pr resolution failed:', e);
     }
@@ -3180,7 +3245,10 @@
     switch (shape.kind) {
       case 'jira-card': {
         const key = typeof p.ticketKey === 'string' ? p.ticketKey : '';
-        if (key) inboxState.jiraFocusKey = key;
+        if (key) {
+          inboxState.jiraFocusKey = key;
+          view = 'jiraApp';
+        }
         return;
       }
       case 'github-pr-card':
@@ -3197,7 +3265,10 @@
         const issueId = typeof p.issueId === 'string' ? p.issueId : '';
         const shortId = typeof p.shortId === 'string' ? p.shortId : '';
         const id = issueId || shortId;
-        if (id) openSentryFocus(id);
+        if (id) {
+          openSentryFocus(id);
+          view = 'sentryApp';
+        }
         return;
       }
       case 'file-card': {
@@ -3210,273 +3281,30 @@
         return;
       }
       case 'chat-message-card': {
-        /* Locate the column the source session belongs to and scroll
-           it into view, then activate the session there. The session
-           may have been moved since the card was pinned; we look it up
-           live from sessionsState to handle that. */
+        // Activate the session in the agent solo it lives on, then switch
+        // the rail to that app. App singletons mean we can resolve the
+        // kind from the session's `columnInstanceId` directly.
         const sessionId = typeof p.sessionId === 'string' ? p.sessionId : '';
         if (!sessionId) return;
         const sess = sessionsState.list.find((s) => s.id === sessionId);
         if (!sess?.columnInstanceId) return;
-        const found = findInstanceAnywhere(sess.columnInstanceId);
-        if (!found) return;
-        void goToInstance(found.inst.id, found.wb.id);
-        setActiveSessionInColumn(found.inst.id, sessionId);
+        const kind = kindForInstanceId(sess.columnInstanceId);
+        if (kind !== 'claude' && kind !== 'cursor') return;
+        setActiveSessionInColumn(sess.columnInstanceId, sessionId);
+        view = kind === 'cursor' ? 'cursorApp' : 'claudeApp';
         return;
       }
     }
   }
 
   // ---- Message replay / edit ----
-  let editingMsg = $state<{ sessionId: string; index: number; draft: string } | null>(null);
-
-  // Workbench-tab inline rename state.
-  let editingWorkbench = $state<{ id: string; draft: string } | null>(null);
-
-  // Workbench-bar pill hover/click state. A delayed leave lets the user
-  // slide their mouse from the pill onto the menu without it snapping
-  // shut mid-transit.
-  let hoveredPill = $state<PanelKind | null>(null);
-  let pillLeaveTimer: ReturnType<typeof setTimeout> | null = null;
-  function onPillEnter(kind: PanelKind) {
-    if (pillLeaveTimer) {
-      clearTimeout(pillLeaveTimer);
-      pillLeaveTimer = null;
-    }
-    hoveredPill = kind;
-  }
-  function onPillLeave() {
-    if (pillLeaveTimer) clearTimeout(pillLeaveTimer);
-    pillLeaveTimer = setTimeout(() => {
-      hoveredPill = null;
-      pillLeaveTimer = null;
-    }, 140);
-  }
-  /** Click handler for the main pill body. Prefers an instance in the
-      active workbench; otherwise jumps (and switches workbench) to the
-      first one found. Creates nothing — the `+` button owns creation. */
-  function navToKind(kind: PanelKind) {
-    const insts = listInstancesOfKind(kind);
-    if (insts.length === 0) return;
-    const inCurrent = insts.find(
-      (i) => i.workbenchId === layoutState.activeWorkbenchId
-    );
-    const target = inCurrent ?? insts[0];
-    void goToInstance(target.id, target.workbenchId);
-  }
-
-  // ---- Pill drop targets ----
-  // Drag a Jira/GH ticket (or a file from the Editor tree) onto a pill and
-  // drop it on a specific column instance — even one living in a different
-  // workbench. Cross-workbench "attach this to that chat" shortcut.
-  let pillDragOverKind = $state<PanelKind | null>(null);
-  let pillDragOverInstance = $state<string | null>(null);
-  // Delay clearing the drag-over highlight by 140ms so the cursor can travel
-  // from the pill body into the menu (or between sibling menu items) without
-  // the menu snapping shut mid-transit. Mirrors the hover-leave behavior.
-  let pillDragLeaveTimer: ReturnType<typeof setTimeout> | null = null;
-
-  /** Only agent pills accept drops — github/jira/editor don't host
-      sessions that can take @mentions. Require something droppable:
-      internal drag payload (ticket / file-tree) or OS files in the
-      dataTransfer. */
-  function pillCanAccept(e: DragEvent, kind: PanelKind): boolean {
-    if (kind !== 'claude' && kind !== 'cursor') return false;
-    const types = e.dataTransfer?.types;
-    if (dragState.payload) return true;
-    if (types?.includes('application/x-forgehold-file')) return true;
-    if (types && types.length > 0) return true;
-    return false;
-  }
-
-  // Spring-loaded pill menu, macOS Finder-style. Hovering a pill mid-drag
-  // opens its menu after a short delay (`PILL_OPEN_DELAY`); leaving keeps it
-  // open for `PILL_CLOSE_DELAY` so the cursor can travel from pill body to
-  // a menu-item or between sibling items without snapping shut.
-  //
-  // The counter (`pillDragCount`) collapses dragenter/dragleave from child
-  // nodes — without it every dragenter on a menu item would count as a new
-  // entry and dragleave on the previous would force-close the menu.
-  const PILL_OPEN_DELAY = 220;
-  const PILL_CLOSE_DELAY = 160;
-  const pillDragCounts = new Map<PanelKind, number>();
-  let pillOpenTimer: ReturnType<typeof setTimeout> | null = null;
-
-  function clearPillTimers() {
-    if (pillOpenTimer) { clearTimeout(pillOpenTimer); pillOpenTimer = null; }
-    if (pillDragLeaveTimer) { clearTimeout(pillDragLeaveTimer); pillDragLeaveTimer = null; }
-  }
-
-  function onPillDragEnter(e: DragEvent, kind: PanelKind, instanceId: string | null) {
-    if (!pillCanAccept(e, kind)) return;
-    e.preventDefault();
-    const cur = pillDragCounts.get(kind) ?? 0;
-    pillDragCounts.set(kind, cur + 1);
-    // Cancel any pending close — cursor came back.
-    if (pillDragLeaveTimer) { clearTimeout(pillDragLeaveTimer); pillDragLeaveTimer = null; }
-    if (pillDragOverKind === kind) {
-      // Already over this pill — instance change is instant (no flash).
-      if (instanceId !== null) pillDragOverInstance = instanceId;
-      return;
-    }
-    // Spring-load: open after a short delay. Cancels if cursor leaves before.
-    if (pillOpenTimer) clearTimeout(pillOpenTimer);
-    pillOpenTimer = setTimeout(() => {
-      pillDragOverKind = kind;
-      pillDragOverInstance = instanceId;
-      pillOpenTimer = null;
-    }, PILL_OPEN_DELAY);
-  }
-
-  function onPillDragOver(e: DragEvent, kind: PanelKind, instanceId: string | null) {
-    if (!pillCanAccept(e, kind)) return;
-    e.preventDefault();
-    e.stopPropagation();
-    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
-    // If the menu is already open and the cursor is over a specific
-    // instance row, surface that instance immediately for the drop-target
-    // accent — no debouncing here, just track the live target.
-    if (pillDragOverKind === kind && instanceId !== null) {
-      pillDragOverInstance = instanceId;
-    }
-  }
-
-  function onPillDragLeave(kind: PanelKind, instanceId: string | null) {
-    const cur = pillDragCounts.get(kind) ?? 0;
-    if (cur > 1) {
-      pillDragCounts.set(kind, cur - 1);
-      return;
-    }
-    // Last leave for this pill — schedule close.
-    pillDragCounts.delete(kind);
-    if (pillOpenTimer) { clearTimeout(pillOpenTimer); pillOpenTimer = null; }
-    if (pillDragOverKind !== kind) return;
-    if (instanceId !== null && pillDragOverInstance !== instanceId) {
-      // Just left the specific menu-item but still inside the pill area —
-      // counter > 0 case is handled above; if we got here, fall through.
-    }
-    if (pillDragLeaveTimer) clearTimeout(pillDragLeaveTimer);
-    pillDragLeaveTimer = setTimeout(() => {
-      pillDragOverKind = null;
-      pillDragOverInstance = null;
-      pillDragLeaveTimer = null;
-    }, PILL_CLOSE_DELAY);
-  }
-
-  // ---- Workbench-tab drop targets (move a column to another workbench) ----
-  // The column header's "move" button (ColumnControls.svelte) sets a custom
-  // mime `application/x-forgehold-column` with the instanceId. Workbench
-  // tabs accept that mime and call `moveInstanceToWorkbench`. Same UX as
-  // dragging tabs in iTerm/Chrome — drop the column onto a workbench name
-  // and it relocates there.
-  let tabDragOverId = $state<string | null>(null);
-
-  function tabAcceptsDrop(e: DragEvent): boolean {
-    return !!e.dataTransfer?.types.includes('application/x-forgehold-column');
-  }
-
-  function onTabDragEnter(e: DragEvent, wbId: string) {
-    if (!tabAcceptsDrop(e)) return;
-    e.preventDefault();
-    tabDragOverId = wbId;
-  }
-
-  function onTabDragOver(e: DragEvent, wbId: string) {
-    if (!tabAcceptsDrop(e)) return;
-    e.preventDefault();
-    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
-    tabDragOverId = wbId;
-  }
-
-  function onTabDragLeave(wbId: string) {
-    if (tabDragOverId === wbId) tabDragOverId = null;
-  }
-
-  function onTabDrop(e: DragEvent, wbId: string) {
-    if (!tabAcceptsDrop(e)) return;
-    e.preventDefault();
-    tabDragOverId = null;
-    const instanceId = e.dataTransfer?.getData('application/x-forgehold-column');
-    if (!instanceId) return;
-    const target = layoutState.workbenches.find((w) => w.id === wbId);
-    if (!target) return;
-    const ok = moveInstanceToWorkbench(instanceId, wbId);
-    if (ok) {
-      // Switch to the destination so the user sees the result of their drag.
-      setActiveWorkbench(wbId);
-      notify({ kind: 'success', title: `Moved to ${target.name}`, ttlMs: 2000 });
-    } else {
-      notify({
-        kind: 'warning',
-        title: "Couldn't move column",
-        body: 'Source or target workbench disappeared.'
-      });
-    }
-  }
-
-  function onPillDrop(e: DragEvent, kind: PanelKind, specificInstanceId: string | null) {
-    if (!pillCanAccept(e, kind)) return;
-    e.preventDefault();
-    e.stopPropagation();
-    clearPillTimers();
-    pillDragCounts.clear();
-    pillDragOverKind = null;
-    pillDragOverInstance = null;
-
-    const insts = listInstancesOfKind(kind);
-    if (insts.length === 0) return;
-    const target = specificInstanceId
-      ? insts.find((i) => i.id === specificInstanceId)
-      : insts.find((i) => i.workbenchId === layoutState.activeWorkbenchId) ?? insts[0];
-    if (!target) return;
-
-    // Switch workbench if the target column lives elsewhere, so the user
-    // visibly "lands" on it.
-    if (target.workbenchId !== layoutState.activeWorkbenchId) {
-      setActiveWorkbench(target.workbenchId);
-    }
-    void scrollInstanceIntoView(target.id);
-
-    // Reuse the per-column drop logic — same event, specific instanceId.
-    onAgentDrop(target.id, kind as 'claude' | 'cursor', e);
-  }
-
-  function startWorkbenchRename(id: string, current: string) {
-    editingWorkbench = { id, draft: current };
-  }
-  function commitWorkbenchRename() {
-    if (!editingWorkbench) return;
-    const { id, draft } = editingWorkbench;
-    editingWorkbench = null;
-    if (draft.trim()) renameWorkbench(id, draft.trim());
-  }
-  function askRemoveWorkbench(id: string) {
-    const wb = layoutState.workbenches.find((w) => w.id === id);
-    if (!wb) return;
-    if (layoutState.workbenches.length <= 1) return;
-    if (wb.instances.length > 0) {
-      const ok = confirm(
-        `Delete workbench "${wb.name}"?\n\n` +
-        `It has ${wb.instances.length} column(s). Sessions pinned to those columns will float back and reattach to the first matching column in another workbench.`
-      );
-      if (!ok) return;
-    }
-    removeWorkbench(id);
-  }
-
+  /** Edit = lift the user's prior message back into the composer, drop
+   *  everything after it from the transcript, and let the user tweak +
+   *  re-send. Same truncate semantics as Resend but no confirm dialog
+   *  and no immediate send — the user explicitly wanted to change
+   *  something. The composer textarea gets focus + caret-at-end so they
+   *  can start typing right away. */
   function startEditMessage(sessionId: string, index: number, content: string) {
-    editingMsg = { sessionId, index, draft: content };
-  }
-
-  async function commitEditMessage() {
-    if (!editingMsg) return;
-    const { sessionId, index, draft } = editingMsg;
-    const trimmed = draft.trim();
-    if (!trimmed) return;
-    editingMsg = null;
-    // Snapshot the images attached to the message we're editing BEFORE the
-    // truncate drops it from the transcript — so resending still carries the
-    // same vision payload.
     const orig = sessionsState.list.find((s) => s.id === sessionId)?.messages[index];
     const images = orig?.images ?? [];
     sessionsState.activeClaudeId = sessionId;
@@ -3484,8 +3312,13 @@
     if (images.length) {
       attachPathsToSession(sessionId, images.map((i) => i.path));
     }
-    setSessionInput(sessionId, trimmed);
-    await sendClaudeMessage();
+    setSessionInput(sessionId, content);
+    queueMicrotask(() => {
+      const ta = document.querySelector<HTMLTextAreaElement>('.cmp-area');
+      if (!ta) return;
+      ta.focus();
+      try { ta.setSelectionRange(content.length, content.length); } catch { /* ignore */ }
+    });
   }
 
   async function resendMessage(sessionId: string, index: number, content: string) {
@@ -3795,20 +3628,20 @@
       inbox store) fires alongside. */
   async function reloadDetailAndLists() {
     await reloadDetailAndListsCore();
-    // Ask GithubTab to refresh its list if a repo is currently open
+    // Ask the open GithubApp repos view to refresh if one is open
     // (merge/close/comment flows need to see the new state reflected there).
     repositoriesView?.refreshItems();
   }
 
-  /** Open a freshly-created PR (or any GitHub PR URL) inside Forgehold's workbench
-      by synthesizing a minimal `InboxItem` and letting the `focusItem` effect
-      hit the API for the full detail. Called from the action card's "Open in
-      Forgehold" button after Claude creates a PR.
+  /** Open a freshly-created PR (or any GitHub PR URL) inside Woom by
+      synthesizing a minimal `InboxItem` and letting the `focusItem` effect
+      hit the API for the full detail. Called from the action card's
+      "Open in Woom" button after Claude creates a PR.
 
       URL shape: `https://github.com/<owner>/<repo>/pull/<number>` (trailing
       path segments like `/files` are ignored). Returns silently if the URL
       doesn't match — the card's raw link remains usable. */
-  function openPrUrlInForgehold(url: string, action: (ClaudeAction & { kind: 'pr' }) | null) {
+  function openPrUrlInWoom(url: string, action: (ClaudeAction & { kind: 'pr' }) | null) {
     const m = url.match(/^https:\/\/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/);
     if (!m) return;
     const [, owner, repo, numberStr] = m;
@@ -3837,7 +3670,7 @@
       updated_at: iso
     };
     openFocusItem(item);
-    view = 'workbench';
+    view = 'githubApp';
   }
 
   async function openCommit(c: CommitEntry) {
@@ -4072,7 +3905,7 @@
       markTokenInstalled('github');
       closeModal('pat');
       await refreshAllInboxes();
-      view = 'workbench';
+      view = 'githubApp';
     } catch (e) {
       patchModal('pat', { busy: false, error: typeof e === 'string' ? e : String(e) });
     }
@@ -4136,51 +3969,14 @@
       if (inboxState.focusItem) closeFocusItem();
       if (inboxState.jiraFocusKey) inboxState.jiraFocusKey = null;
       if (inboxState.sentryFocusId) inboxState.sentryFocusId = null;
-      /* Restore the maximized column if no other ESC-target was active.
-         Defer one frame so single-press ESC closes the topmost overlay
-         first (modals / focus panes), and only the *second* ESC drops
-         the maximize. */
-      if (
-        layoutState.maximizedInstanceId !== null &&
-        !anyModalOpen() &&
-        !inboxState.focusItem &&
-        !inboxState.jiraFocusKey &&
-        !inboxState.sentryFocusId
-      ) {
-        restoreMaximized();
-      }
     } else if (e.key === '?' && !isTextInput(e.target) && !anyModalOpen()) {
       /* `?` toggles the cheatsheet. Skip when an input/textarea has
          focus so it doesn't hijack a literal `?` the user is typing. */
       e.preventDefault();
       cheatsheetOpen = !cheatsheetOpen;
-    } else if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'm' || e.key === 'M')) {
-      /* ⌘⇧M — toggle maximize. If a column is already maximized
-         (any column), this un-maximizes it. Otherwise we pick the
-         first instance in the active workbench as the maximize
-         target — there's no "focused column" concept in inboxState
-         today, so going by panel order is the least-surprising
-         fallback. Power users tend to hit the keyboard from a
-         specific column anyway and can re-press to cycle. */
-      e.preventDefault();
-      const target =
-        layoutState.maximizedInstanceId
-          ?? activeInstances()[0]?.id
-          ?? null;
-      if (target) toggleMaximize(target);
-    } else if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && /^[1-9]$/.test(e.key)) {
-      /* ⌘1..⌘9 — jump to the Nth workbench tab. Silently no-op when
-         the index is out of range so an idle ⌘5 in a 2-workbench
-         setup doesn't surprise the user. */
-      const idx = Number(e.key) - 1;
-      const target = layoutState.workbenches[idx];
-      if (target) {
-        e.preventDefault();
-        setActiveWorkbench(target.id);
-      }
-    } else if (e.key === 'j' && view === 'workbench' && !anyModalOpen()) {
+    } else if (e.key === 'j' && isSourceApp && !anyModalOpen()) {
       moveSelection(1);
-    } else if (e.key === 'k' && view === 'workbench' && !(e.metaKey || e.ctrlKey) && !anyModalOpen()) {
+    } else if (e.key === 'k' && isSourceApp && !(e.metaKey || e.ctrlKey) && !anyModalOpen()) {
       moveSelection(-1);
     } else if (e.key === 'o' && !isTextInput(e.target) && !anyModalOpen() && !(e.metaKey || e.ctrlKey)) {
       /* Open the focused inbox row in the system browser
@@ -4257,7 +4053,7 @@
 
   function githubTokenUrl() {
     const scopes = ['repo', 'read:user', 'read:org'].join(',');
-    return `https://github.com/settings/tokens/new?scopes=${scopes}&description=Forgehold%20Desktop`;
+    return `https://github.com/settings/tokens/new?scopes=${scopes}&description=Woom%20Desktop`;
   }
 
   function mergeDisabled(): boolean {
@@ -4388,7 +4184,7 @@
   // ---- GitHub Create PR ----
 
   async function openGithubCreatePr() {
-    /* Pull repo default from the first GitHub column's filter, same
+    /* Pull repo default from the first inbox's filter, same
        trade-off as openJiraCreateIssue. */
     const firstId = Object.keys(inboxState.githubFiltersByInstance)[0];
     const activeRepo = firstId
@@ -4563,7 +4359,7 @@
         inboxState.itemsByInstance[id] = [created, ...inboxState.itemsByInstance[id]];
       }
       openFocusItem(created);
-      view = 'workbench';
+      view = 'githubApp';
       void refreshAllInboxes({ silent: true });
     } catch (e) {
       patchModal('githubCreatePr', { busy: false, error: typeof e === 'string' ? e : String(e) });
@@ -4597,7 +4393,7 @@
   <div class="lock-screen" role="dialog" aria-modal="true">
     <div class="lock-card">
       <Sigil size={72} />
-      <h1 class="lock-title">Forgehold is locked</h1>
+      <h1 class="lock-title">Woom is locked</h1>
       <p class="lock-sub">
         Authenticate with Touch ID (or your Mac passcode) to unlock your stored
         credentials for Jira, GitHub, and Claude.
@@ -4629,456 +4425,106 @@
     {sentryStatus}
     {claudeStatus}
     {cursorStatus}
+    onAgentDrop={(kind, e) => onAgentDrop(
+      kind === 'claude' ? APP_INSTANCE_IDS.claude : APP_INSTANCE_IDS.cursor,
+      kind,
+      e
+    )}
   />
 
   <div class="main">
-    {#if view === 'workbench'}
-      {#if !anythingConnected && !statusLoading}
-        <section class="full-center">
-          <div class="empty">
-            <Sigil size={56} />
-            <h2 class="empty-title">Connect a source</h2>
-            <p class="empty-sub">Pick GitHub, Jira, or Claude Code — each lives in its own column. Drag any card onto the Claude column to hand it to the agent.</p>
-            <button class="btn btn--primary" onclick={() => (view = 'connections')}>Set up connections</button>
+
+    <!-- Themed empty card — shown when a solo view's source isn't
+         connected yet. -->
+
+    {#snippet soloEmpty(label: string, tone: string, glow: string, blurb: string)}
+      <section class="full-center app-stub-shell" style="--app-tone: {tone}; --app-glow: {glow};">
+        <div class="app-stub">
+          <div class="app-stub-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 10h18"/></svg>
           </div>
-        </section>
+          <h2 class="app-stub-title">{label}</h2>
+          <p class="app-stub-sub">{blurb}</p>
+          <div class="app-stub-actions">
+            <button class="btn btn--primary" onclick={() => (view = 'connections')}>Open connections</button>
+          </div>
+        </div>
+      </section>
+    {/snippet}
+
+    {#if view === 'githubApp'}
+      {#if !connectedGithub}
+        {@render soloEmpty('GitHub', 'var(--src-github)', 'rgba(181,132,255,0.40)', 'Connect GitHub first — paste a PAT in Connections to see PRs and issues.')}
       {:else}
-        {@const instances = activeInstances()}
-        {@const hasGithub = !!instances.find((i) => i.kind === 'github')}
-        {@const hasJira = !!instances.find((i) => i.kind === 'jira')}
-        {@const hasClaude = !!instances.find((i) => i.kind === 'claude')}
-        {@const hasCursor = !!instances.find((i) => i.kind === 'cursor')}
-        {@const hasEditor = !!instances.find((i) => i.kind === 'editor')}
-        <div class="wb-tabs">
-          {#each layoutState.workbenches as wb (wb.id)}
-            <div
-              class="wb-tab"
-              class:active={wb.id === layoutState.activeWorkbenchId}
-              class:drag-over={tabDragOverId === wb.id}
-              role="button"
-              tabindex="0"
-              ondblclick={() => startWorkbenchRename(wb.id, wb.name)}
-              onclick={() => setActiveWorkbench(wb.id)}
-              onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setActiveWorkbench(wb.id); } }}
-              ondragenter={(e) => onTabDragEnter(e, wb.id)}
-              ondragover={(e) => onTabDragOver(e, wb.id)}
-              ondragleave={() => onTabDragLeave(wb.id)}
-              ondrop={(e) => onTabDrop(e, wb.id)}
-              title="Click to switch · double-click to rename · drop a column here to move it"
-            >
-              {#if editingWorkbench && editingWorkbench.id === wb.id}
-                <input
-                  class="wb-tab-rename"
-                  value={editingWorkbench.draft}
-                  oninput={(e) => { if (editingWorkbench) editingWorkbench = { ...editingWorkbench, draft: (e.currentTarget as HTMLInputElement).value }; }}
-                  onblur={commitWorkbenchRename}
-                  onkeydown={(e) => {
-                    if (e.key === 'Enter') { e.preventDefault(); commitWorkbenchRename(); }
-                    if (e.key === 'Escape') { e.preventDefault(); editingWorkbench = null; }
-                  }}
-                  {@attach (node: HTMLInputElement) => { node.focus(); node.select(); }}
-                />
-              {:else}
-                <span class="wb-tab-name">{wb.name}</span>
-                {#if wb.instances.length > 0}<span class="wb-tab-count mono">{wb.instances.length}</span>{/if}
-                {#if layoutState.workbenches.length > 1 && wb.id !== layoutState.activeWorkbenchId}
-                  <span
-                    class="wb-tab-close"
-                    role="button"
-                    tabindex="0"
-                    aria-label="Delete workbench"
-                    onclick={(e) => { e.stopPropagation(); askRemoveWorkbench(wb.id); }}
-                    onkeydown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); askRemoveWorkbench(wb.id); } }}
-                  >
-                    <svg class="i i-sm" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>
-                  </span>
-                {/if}
-              {/if}
-            </div>
-          {/each}
-          <button class="wb-tab-add" onclick={() => { const id = addWorkbench('Workbench ' + (layoutState.workbenches.length + 1)); setActiveWorkbench(id); startWorkbenchRename(id, 'Workbench ' + layoutState.workbenches.length); }} title="New workbench">
-            <svg class="i i-sm" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
-            <span>New workbench</span>
-          </button>
-        </div>
-        <div class="wb-bar">
-          {#snippet pill(kind: PanelKind, label: string, meta: typeof connectionsMeta[number] | undefined)}
-            {@const insts = listInstancesOfKind(kind)}
-            {@const archived = listArchivedOfKind(kind)}
-            {@const count = insts.length}
-            {@const inCurrent = insts.some((i) => i.workbenchId === layoutState.activeWorkbenchId)}
-            <div
-              class="pill-group"
-              class:active={inCurrent}
-              class:dim={count === 0 && archived.length === 0}
-              class:has-menu={count > 0 || archived.length > 0}
-              class:drag-over={pillDragOverKind === kind && pillDragOverInstance === null}
-              class:drag-armed={pillDragOverKind === kind}
-              ondragenter={(e) => onPillDragEnter(e, kind, null)}
-              ondragover={(e) => onPillDragOver(e, kind, null)}
-              ondragleave={() => onPillDragLeave(kind, null)}
-              ondrop={(e) => onPillDrop(e, kind, null)}
-              role="presentation"
-            >
-              <button
-                class="pill"
-                onclick={() => navToKind(kind)}
-                disabled={count === 0}
-                title={count === 0 ? `No ${label} columns yet — click + to create` : `Jump to ${label}`}
-              >
-                {#if meta?.iconImg}
-                  <!-- Raster brand mark (Claude / Cursor) — true-colour
-                       PNG instead of single-tone SVG so the official
-                       gradient / palette comes through. -->
-                  <span class="pill-icon pill-icon--img"><img src={meta.iconImg} alt="" class="pill-icon-img" /></span>
-                {:else if meta?.iconSvg}
-                  <span class="pill-icon {meta.iconClass}"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">{@html meta.iconSvg}</svg></span>
-                {:else if kind === 'editor'}
-                  <!-- Folder icon — matches the EditorView header so the
-                       Editor's identity is the same in pill / column / tab. -->
-                  <span class="pill-icon pill-icon--editor"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v11a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-7L10 5H5a2 2 0 0 0-2 2z"/></svg></span>
-                {:else if kind === 'canvas'}
-                  <!-- Stacked-frames icon — same glyph as the column's
-                       brand mark so the Canvas identity is consistent
-                       across pill / header / library tile. -->
-                  <span class="pill-icon pill-icon--canvas"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="14" rx="2"/><rect x="6" y="6" width="9" height="6" rx="1"/><rect x="13" y="13" width="5" height="3" rx="0.5"/></svg></span>
-                {:else if kind === 'terminal'}
-                  <!-- Chevron-prompt icon — same as TerminalColumn brand
-                       so the Terminal identity reads the same in pill +
-                       column header. -->
-                  <span class="pill-icon pill-icon--terminal"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg></span>
-                {/if}
-                <span class="pill-label">{label}</span>
-                {#if count > 0}
-                  <span class="pill-count mono">{count}</span>
-                {/if}
-                {#if archived.length > 0}
-                  <span
-                    class="pill-count pill-count--archived mono"
-                    title={`${archived.length} archived — hover the menu to restore`}
-                  >
-                    {archived.length}
-                  </span>
-                {/if}
-              </button>
-              <button
-                class="pill-add"
-                onclick={() => spawnColumnInstance(kind)}
-                title={`New ${label} column`}
-                aria-label={`New ${label} column`}
-              >
-                <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
-              </button>
-              {#if count > 0 || archived.length > 0}
-                <div class="pill-menu" role="menu">
-                  <div class="pill-menu-head">{label} · {count} {count === 1 ? 'column' : 'columns'}</div>
-                  {#each insts as inst (inst.id)}
-                    {@const isCurrent = inst.workbenchId === layoutState.activeWorkbenchId}
-                    <button
-                      class="pill-menu-item"
-                      class:is-current={isCurrent}
-                      class:drag-over={pillDragOverKind === kind && pillDragOverInstance === inst.id}
-                      role="menuitem"
-                      ondragenter={(e) => onPillDragEnter(e, kind, inst.id)}
-                      ondragover={(e) => onPillDragOver(e, kind, inst.id)}
-                      ondragleave={() => onPillDragLeave(kind, inst.id)}
-                      ondrop={(e) => onPillDrop(e, kind, inst.id)}
-                      onclick={() => void goToInstance(inst.id, inst.workbenchId)}
-                    >
-                      <span class="pill-menu-dot" class:is-active={isCurrent}></span>
-                      <span class="pill-menu-name mono">{inst.name}</span>
-                      <span class="pill-menu-wb mono" title="Workbench">{inst.workbenchName}</span>
-                    </button>
-                  {/each}
-                  {#if archived.length > 0}
-                    <div class="pill-menu-head pill-menu-head--archive">Archived · {archived.length}</div>
-                    {#each archived as a (a.id)}
-                      <div class="pill-menu-item pill-menu-item--archived" role="presentation">
-                        <span class="pill-menu-dot"></span>
-                        <span class="pill-menu-name mono">{a.name}</span>
-                        <span class="pill-menu-wb mono" title="Originally on this workbench">{a.originalWorkbenchName}</span>
-                        <button
-                          class="pill-menu-restore"
-                          title="Restore — back to original workbench, or current if it was deleted"
-                          aria-label="Restore"
-                          onclick={(e) => {
-                            e.stopPropagation();
-                            unarchiveInstance(a.id, layoutState.activeWorkbenchId);
-                          }}
-                        >
-                          <svg class="i i-sm" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5"/></svg>
-                        </button>
-                      </div>
-                    {/each}
-                  {/if}
-                </div>
-              {/if}
-            </div>
-          {/snippet}
-
-          {#if connectedGithub}
-            {@render pill('github', 'GitHub', connectionsMeta.find((c) => c.id === 'github'))}
-          {/if}
-          {#if connectedJira}
-            {@render pill('jira', 'Jira', connectionsMeta.find((c) => c.id === 'jira'))}
-          {/if}
-          {#if connectedSentry}
-            {@render pill('sentry', 'Sentry', connectionsMeta.find((c) => c.id === 'sentry'))}
-          {/if}
-          {#if connectedClaude}
-            {@render pill('claude', 'Claude', connectionsMeta.find((c) => c.id === 'claude'))}
-          {/if}
-          {#if connectedCursor}
-            {@render pill('cursor', 'Cursor', connectionsMeta.find((c) => c.id === 'cursor'))}
-          {/if}
-          {@render pill('editor', 'Editor', undefined)}
-          {@render pill('canvas', 'Canvas', undefined)}
-          {@render pill('terminal', 'Terminal', undefined)}
-
-          <div style="flex:1"></div>
-          <button class="icon-btn" title="Search" aria-label="Search" onclick={() => (paletteOpen = true)}>
-            <svg class="i i-sm" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" /><path d="m20 20-3-3" /></svg>
-          </button>
-        </div>
-        <div class="wb-columns">
-          {#if instances.length === 0}
-            <!-- Empty workbench hint (M4 §2.6.8). Shown when the
-                 active workbench has zero columns but at least one
-                 source is connected — a fresh "Workbench 2" tab,
-                 say. The pill bar is the canonical place to add
-                 columns; this is a discoverability nudge, not a
-                 button itself. -->
-            <div class="wb-empty-hint" role="note">
-              <div class="wb-empty-hint-title">This workbench is empty</div>
-              <div class="wb-empty-hint-sub">
-                Drag a chip from the bar above to add a column, or press <span class="mono">⌘K</span> and search "new column".
-              </div>
-            </div>
-          {/if}
-          {#each instances as inst (inst.id)}
-            {#if inst.kind === 'github' && connectedGithub}
-              <GithubColumn
-                instanceId={inst.id}
-                {githubStatus}
-                {now}
-                {tab}
-                {actionBusy}
-                onSelectInboxItem={selectInboxItem}
-                onRefreshInbox={() => refreshInbox(inst.id)}
-                onOpenPalette={() => (paletteOpen = true)}
-                {onDragStart}
-                {onDragEnd}
-                {onCardMouseDown}
-                {isClickNotDrag}
-                onTabChange={(t) => (tab = t)}
-                onToggleFile={toggleFile}
-                onRetryLoadDetail={() => loadDetail()}
-                onOpenCommit={openCommit}
-                onOpenComment={() => openModal('comment', { body: '', busy: false, error: null })}
-                onOpenReview={() => openModal('review', { event: 'APPROVE', body: '', busy: false, error: null })}
-                onOpenMerge={() => openModal('merge', { method: 'squash', busy: false, error: null })}
-                onAskClose={askClose}
-                onReopen={() => setState('open')}
-                onOpenBrowser={openBrowser}
-                onOpenCheckDetails={(url) => void openUrl(url)}
-                onCloseFocus={closeFocusItem}
-                {mergeDisabled}
-                onOpenCreatePr={openGithubCreatePr}
-              />
-            {:else if inst.kind === 'jira' && connectedJira}
-              <JiraColumn
-                instanceId={inst.id}
-                {jiraStatus}
-                {now}
-                onOpenUserPicker={openUserPicker}
-                onRefreshJiraInbox={() => refreshJiraInbox(inst.id)}
-                {onDragStart}
-                {onDragEnd}
-                {onCardMouseDown}
-                {isClickNotDrag}
-                onOpenBrowser={openBrowser}
-                onOpenCreateIssue={openJiraCreateIssue}
-              />
-            {:else if inst.kind === 'sentry' && connectedSentry}
-              <SentryColumn
-                instanceId={inst.id}
-                {sentryStatus}
-                {now}
-                {onDragStart}
-                {onDragEnd}
-                {onCardMouseDown}
-                {isClickNotDrag}
-                onOpenBrowser={openBrowser}
-              />
-            {:else if inst.kind === 'claude' && connectedClaude}
-              <AgentColumn
-                kind="claude"
-                instanceId={inst.id}
-                {claudeStatus}
-                {cursorStatus}
-                {githubStatus}
-                {editorRepoPath}
-                {activeRepoInfo}
-                {dragOverInstanceId}
-                {worktreeBusy}
-                {worktreeMenuOpen}
-                {editingMsg}
-                {thinkingStartedAt}
-                {thinkingTick}
-                {now}
-                {onAgentDragEnter}
-                {onAgentDragOver}
-                {onAgentDragLeave}
-                {onAgentDrop}
-                onPickCwd={pickCwd}
-                onClearCwd={clearCwd}
-                onOpenSessionFolderInEditor={openSessionFolderInEditor}
-                onToggleEditorLink={toggleSessionEditorLink}
-                onLinkToEditorInstance={linkActiveSessionToEditor}
-                onCreateWorktree={createWorktree}
-                onToggleWorktreeMenu={toggleWorktreeMenu}
-                onOpenWorktreeDiff={openWorktreeDiff}
-                onOpenWorktreeInEditor={openWorktreeInEditor}
-                onCopyWorktreeBranch={copyWorktreeBranch}
-                onApplyWorktree={applyWorktree}
-                onRemoveWorktree={removeWorktree}
-                onUpdateSessionCursorModel={(id, model) => updateSession(id, { cursorModel: model })}
-                onUpdateSessionClaudeModel={(id, model) => updateSession(id, { claudeModel: model })}
-                onUpdateSessionClaudeToolProfile={(id, profile) => updateSession(id, { claudeToolProfile: profile })}
-                onCompactSession={runCompactSession}
-                onExportSession={exportSession}
-                onDeleteClaudeSession={deleteClaudeSessionWithCleanup}
-                onNewClaudeSession={newClaudeSession}
-                onStartEditMessage={startEditMessage}
-                onResendMessage={resendMessage}
-                onCancelEditMessage={cancelEditMessage}
-                onCommitEditMessage={() => void commitEditMessage()}
-                onSetEditingMsgDraft={setEditingMsgDraft}
-                onUpdateAction={updateAction}
-                onRemoveAction={dismissAction}
-                onExecuteAction={executeAction}
-                onOpenPrInForgehold={openPrUrlInForgehold}
-                onSetSessionInput={setSessionInput}
-                onSendClaudeMessage={() => void sendClaudeMessage()}
-                onStopClaude={() => void stopActiveAgent()}
-                onOpenMentionPath={(p) => void openMentionPath(p)}
-                onPasteImages={pasteImagesIntoColumn}
-              />
-            {:else if inst.kind === 'cursor' && connectedCursor}
-              <AgentColumn
-                kind="cursor"
-                instanceId={inst.id}
-                {claudeStatus}
-                {cursorStatus}
-                {githubStatus}
-                {editorRepoPath}
-                {activeRepoInfo}
-                {dragOverInstanceId}
-                {worktreeBusy}
-                {worktreeMenuOpen}
-                {editingMsg}
-                {thinkingStartedAt}
-                {thinkingTick}
-                {now}
-                {onAgentDragEnter}
-                {onAgentDragOver}
-                {onAgentDragLeave}
-                {onAgentDrop}
-                onPickCwd={pickCwd}
-                onClearCwd={clearCwd}
-                onOpenSessionFolderInEditor={openSessionFolderInEditor}
-                onToggleEditorLink={toggleSessionEditorLink}
-                onLinkToEditorInstance={linkActiveSessionToEditor}
-                onCreateWorktree={createWorktree}
-                onToggleWorktreeMenu={toggleWorktreeMenu}
-                onOpenWorktreeDiff={openWorktreeDiff}
-                onOpenWorktreeInEditor={openWorktreeInEditor}
-                onCopyWorktreeBranch={copyWorktreeBranch}
-                onApplyWorktree={applyWorktree}
-                onRemoveWorktree={removeWorktree}
-                onUpdateSessionCursorModel={(id, model) => updateSession(id, { cursorModel: model })}
-                onUpdateSessionClaudeModel={(id, model) => updateSession(id, { claudeModel: model })}
-                onUpdateSessionClaudeToolProfile={(id, profile) => updateSession(id, { claudeToolProfile: profile })}
-                onCompactSession={runCompactSession}
-                onExportSession={exportSession}
-                onDeleteClaudeSession={deleteClaudeSessionWithCleanup}
-                onNewClaudeSession={newClaudeSession}
-                onStartEditMessage={startEditMessage}
-                onResendMessage={resendMessage}
-                onCancelEditMessage={cancelEditMessage}
-                onCommitEditMessage={() => void commitEditMessage()}
-                onSetEditingMsgDraft={setEditingMsgDraft}
-                onUpdateAction={updateAction}
-                onRemoveAction={dismissAction}
-                onExecuteAction={executeAction}
-                onOpenPrInForgehold={openPrUrlInForgehold}
-                onSetSessionInput={setSessionInput}
-                onSendClaudeMessage={() => void sendClaudeMessage()}
-                onStopClaude={() => void stopActiveAgent()}
-                onOpenMentionPath={(p) => void openMentionPath(p)}
-                onPasteImages={pasteImagesIntoColumn}
-              />
-            {:else if inst.kind === 'editor'}
-              <EditorColumn
-                instanceId={inst.id}
-                onLinkToAgent={(agentId) => linkEditorToAgent(inst.id, agentId)}
-              />
-            {:else if inst.kind === 'canvas'}
-              <CanvasColumn instanceId={inst.id} onCardOpen={openCanvasCardSource} />
-            {:else if inst.kind === 'terminal'}
-              <TerminalColumn instanceId={inst.id} cwd={editorRepoPath || null} />
-            {/if}
-          {/each}
-
-          {#if worktreeDiffOpen && activeSession?.worktreePath && activeSession.worktreeRepo && activeSession.worktreeBranch}
-            <WorktreeDiffModal
-              repo={activeSession.worktreeRepo}
-              sessionId={activeSession.id}
-              branch={activeSession.worktreeBranch}
-              onClose={() => (worktreeDiffOpen = false)}
-            />
-          {/if}
-
-        </div>
+        <GithubApp
+          instanceId={APP_INSTANCE_IDS.github}
+          {githubStatus}
+          {now}
+          {tab}
+          {actionBusy}
+          onSelect={selectInboxItem}
+          onRefresh={() => refreshInbox(APP_INSTANCE_IDS.github)}
+          onOpenCreatePr={openGithubCreatePr}
+          onTabChange={(t) => (tab = t)}
+          onToggleFile={toggleFile}
+          onRetryLoadDetail={() => loadDetail()}
+          onOpenCommit={openCommit}
+          onOpenComment={() => openModal('comment', { body: '', busy: false, error: null })}
+          onOpenReview={() => openModal('review', { event: 'APPROVE', body: '', busy: false, error: null })}
+          onOpenMerge={() => openModal('merge', { method: 'squash', busy: false, error: null })}
+          onAskClose={askClose}
+          onReopen={() => setState('open')}
+          onOpenBrowser={openBrowser}
+          onOpenCheckDetails={(url) => void openUrl(url)}
+          onCloseFocus={closeFocusItem}
+          {mergeDisabled}
+          {onDragStart}
+          {onDragEnd}
+          {onCardMouseDown}
+          {isClickNotDrag}
+          onSendToClaude={(item) => sendInboxItemToAgent({ kind: 'github', item }, 'claude')}
+          onSendToCursor={(item) => sendInboxItemToAgent({ kind: 'github', item }, 'cursor')}
+        />
       {/if}
 
-    {:else if view === 'githubTab'}
-      <GithubTab
-        bind:this={repositoriesView}
-        {connectedGithub}
-        {now}
-        bind:view
-        {tab}
-        {actionBusy}
-        onOpenFocusItem={openFocusItem}
-        onRetryLoadDetail={() => loadDetail()}
-        onTabChange={(t) => (tab = t)}
-        onToggleFile={toggleFile}
-        onOpenCommit={openCommit}
-        onOpenComment={() => openModal('comment', { body: '', busy: false, error: null })}
-        onOpenReview={() => openModal('review', { event: 'APPROVE', body: '', busy: false, error: null })}
-        onOpenMerge={() => openModal('merge', { method: 'squash', busy: false, error: null })}
-        onAskClose={askClose}
-        onReopen={() => setState('open')}
-        onOpenBrowser={openBrowser}
-        onOpenCheckDetails={(url) => void openUrl(url)}
-        {mergeDisabled}
-      />
+    {:else if view === 'jiraApp'}
+      {#if !connectedJira}
+        {@render soloEmpty('Jira', 'var(--src-jira)', 'rgba(79,142,255,0.40)', 'Connect Jira first — workspace URL + email + API token in Connections.')}
+      {:else}
+        <JiraApp
+          instanceId={APP_INSTANCE_IDS.jira}
+          {jiraStatus}
+          {now}
+          onRefresh={() => refreshJiraInbox(APP_INSTANCE_IDS.jira)}
+          onOpenCreateIssue={openJiraCreateIssue}
+          onOpenBrowser={openBrowser}
+          {onDragStart}
+          {onDragEnd}
+          {onCardMouseDown}
+          {isClickNotDrag}
+          {refreshAllJiraInboxes}
+          onSendToClaude={(item) => sendInboxItemToAgent({ kind: 'jira', item }, 'claude')}
+          onSendToCursor={(item) => sendInboxItemToAgent({ kind: 'jira', item }, 'cursor')}
+        />
+      {/if}
 
-    {:else if view === 'jiraTab'}
-      <JiraTab
-        {jiraStatus}
-        bind:view
-        {now}
-        onOpenCreateIssue={openJiraCreateIssue}
-      />
-
-    {:else if view === 'sentryTab'}
-      <SentryTab
-        {sentryStatus}
-        bind:view
-        {now}
-      />
+    {:else if view === 'sentryApp'}
+      {#if !connectedSentry}
+        {@render soloEmpty('Sentry', 'var(--src-sentry)', 'rgba(232,130,100,0.40)', 'Connect Sentry first — host + organization slug + API token in Connections.')}
+      {:else}
+        <SentryApp
+          instanceId={APP_INSTANCE_IDS.sentry}
+          {sentryStatus}
+          {now}
+          onOpenBrowser={openBrowser}
+          {onDragStart}
+          {onDragEnd}
+          {onCardMouseDown}
+          {isClickNotDrag}
+          onSendToClaude={(item) => sendInboxItemToAgent({ kind: 'sentry', item }, 'claude')}
+          onSendToCursor={(item) => sendInboxItemToAgent({ kind: 'sentry', item }, 'cursor')}
+        />
+      {/if}
 
     {:else if view === 'rules'}
       <RulesView />
@@ -5100,6 +4546,116 @@
       />
     {:else if view === 'settings'}
       <SettingsView />
+
+    {:else if view === 'claudeApp'}
+      {#if !connectedClaude}
+        {@render soloEmpty('Claude', 'var(--src-claude)', 'rgba(232,155,125,0.42)', 'Connect Claude Code first — the agent needs a working CLI.')}
+      {:else}
+        <AgentApp
+          kind="claude"
+          instanceId={APP_INSTANCE_IDS.claude}
+          {now}
+          {thinkingStartedAt}
+          {thinkingTick}
+          {worktreeBusy}
+          {editorRepoPath}
+          onPickCwd={pickCwd}
+          onClearCwd={clearCwd}
+          onToggleEditorLink={toggleSessionEditorLink}
+          onLinkToEditorInstance={linkActiveSessionToEditor}
+          onCreateWorktree={createWorktree}
+          onOpenWorktreeDiff={openWorktreeDiff}
+          onOpenWorktreeInEditor={openWorktreeInEditor}
+          onCopyWorktreeBranch={copyWorktreeBranch}
+          onRemoveWorktree={removeWorktree}
+          onStartEditMessage={startEditMessage}
+          onResendMessage={resendMessage}
+          onUpdateAction={updateAction}
+          onRemoveAction={dismissAction}
+          onExecuteAction={executeAction}
+          onOpenPrInWoom={openPrUrlInWoom}
+          onSend={() => void sendClaudeMessage()}
+          onStop={() => void stopActiveAgent()}
+          onPasteImages={(k, blobs) => pasteImagesIntoColumn(APP_INSTANCE_IDS.claude, k, blobs)}
+          onDragOver={(e) => onAgentDragOver(APP_INSTANCE_IDS.claude, 'claude', e)}
+          onDrop={(e) => onAgentDrop(APP_INSTANCE_IDS.claude, 'claude', e)}
+          onDragLeave={() => onAgentDragLeave(APP_INSTANCE_IDS.claude)}
+          onOpenFile={(path) => void openMentionPath(path)}
+        />
+      {/if}
+
+    {:else if view === 'cursorApp'}
+      {#if !connectedCursor}
+        {@render soloEmpty('Cursor', 'var(--src-cursor)', 'rgba(220,220,220,0.30)', 'Cursor CLI not detected. Install Cursor and re-check connections.')}
+      {:else}
+        <AgentApp
+          kind="cursor"
+          instanceId={APP_INSTANCE_IDS.cursor}
+          {now}
+          {thinkingStartedAt}
+          {thinkingTick}
+          {worktreeBusy}
+          {editorRepoPath}
+          onPickCwd={pickCwd}
+          onClearCwd={clearCwd}
+          onToggleEditorLink={toggleSessionEditorLink}
+          onLinkToEditorInstance={linkActiveSessionToEditor}
+          onCreateWorktree={createWorktree}
+          onOpenWorktreeDiff={openWorktreeDiff}
+          onOpenWorktreeInEditor={openWorktreeInEditor}
+          onCopyWorktreeBranch={copyWorktreeBranch}
+          onRemoveWorktree={removeWorktree}
+          onStartEditMessage={startEditMessage}
+          onResendMessage={resendMessage}
+          onUpdateAction={updateAction}
+          onRemoveAction={dismissAction}
+          onExecuteAction={executeAction}
+          onOpenPrInWoom={openPrUrlInWoom}
+          onSend={() => void sendClaudeMessage()}
+          onStop={() => void stopActiveAgent()}
+          onPasteImages={(k, blobs) => pasteImagesIntoColumn(APP_INSTANCE_IDS.cursor, k, blobs)}
+          onDragOver={(e) => onAgentDragOver(APP_INSTANCE_IDS.cursor, 'cursor', e)}
+          onDrop={(e) => onAgentDrop(APP_INSTANCE_IDS.cursor, 'cursor', e)}
+          onDragLeave={() => onAgentDragLeave(APP_INSTANCE_IDS.cursor)}
+          onOpenFile={(path) => void openMentionPath(path)}
+        />
+      {/if}
+
+    {:else if view === 'editorApp'}
+      <!-- Multi-instance: re-key on the active editor instance id so
+           Svelte re-mounts EditorApp when the user picks a different
+           instance from the rail popover. Keeps per-instance state
+           cleanly isolated. -->
+      {#key layoutState.activeInstance.editor}
+        <EditorApp
+          instanceId={layoutState.activeInstance.editor}
+          onLinkToAgent={(agentId, sessionId) => linkEditorToAgent(layoutState.activeInstance.editor, agentId, sessionId)}
+          onOpenClaude={() => (view = 'claudeApp')}
+          onOpenSettings={() => (view = 'settings')}
+          onQuickSend={quickSendToSession}
+          onOpenSession={(sessionId, agentInstanceId) => {
+            const sess = sessionsState.list.find((x) => x.id === sessionId);
+            if (!sess) return;
+            setActiveSessionInColumn(agentInstanceId, sessionId);
+            view = sess.agentKind === 'cursor' ? 'cursorApp' : 'claudeApp';
+          }}
+        />
+      {/key}
+
+    {:else if view === 'canvasApp'}
+      {#key layoutState.activeInstance.canvas}
+        <CanvasApp instanceId={layoutState.activeInstance.canvas} onCardOpen={openCanvasCardSource} />
+      {/key}
+
+    {:else if view === 'terminalApp'}
+      {#key layoutState.activeInstance.terminal}
+        <TerminalApp
+          instanceId={layoutState.activeInstance.terminal}
+          cwd={editorRepoPath || null}
+          onOpenClaude={() => (view = 'claudeApp')}
+        />
+      {/key}
+
     {:else}
       <section class="full-center">
         <div class="empty"><Sigil size={56} />
@@ -5111,57 +4667,22 @@
   </div>
 </div>
 
-<!-- Global focus overlays. Hoisted to page root so they appear in *any*
-     view — workbench, github, jira, sentry, etc. The earlier per-view
-     mounts only rendered when their owning component was on screen,
-     which broke the `mcp__app__open_*` navigation tools (PR opened in
-     the focus state but no overlay rendered until the user manually
-     flipped to the GitHub tab). -->
-{#if inboxState.focusItem}
-  <GithubFocusOverlay
-    {now}
-    {tab}
-    {actionBusy}
-    onCloseFocus={closeFocusItem}
-    onRetryLoadDetail={() => loadDetail()}
-    onTabChange={(t) => (tab = t)}
-    onToggleFile={toggleFile}
-    onOpenCommit={openCommit}
-    onOpenComment={() => openModal('comment', { body: '', busy: false, error: null })}
-    onOpenReview={() => openModal('review', { event: 'APPROVE', body: '', busy: false, error: null })}
-    onOpenMerge={() => openModal('merge', { method: 'squash', busy: false, error: null })}
-    onAskClose={askClose}
-    onReopen={() => setState('open')}
-    onOpenBrowser={openBrowser}
-    onOpenCheckDetails={(url) => void openUrl(url)}
-    {mergeDisabled}
+<!-- Inbox focus state (PR / ticket / issue) is now persisted per app
+     and rendered ONLY inline in the matching source app's right pane.
+     There's no global slide-over modal anymore — leaving GitHub for
+     Claude no longer pops the PR over the chat, and returning to GitHub
+     keeps the same PR open. Agent tools that target a source item
+     (`mcp__app__open_github_pr`, etc.) switch the view to that source
+     app on the way in, so the inline pane is the single render path. -->
+
+
+{#if worktreeDiffOpen && activeSession?.worktreePath && activeSession.worktreeRepo && activeSession.worktreeBranch}
+  <WorktreeDiffModal
+    repo={activeSession.worktreeRepo}
+    sessionId={activeSession.id}
+    branch={activeSession.worktreeBranch}
+    onClose={() => (worktreeDiffOpen = false)}
   />
-{/if}
-
-{#if inboxState.jiraFocusKey}
-  <div class="slide-over" onclick={(e) => { if (e.target === e.currentTarget) inboxState.jiraFocusKey = null; }} onkeydown={(e) => { if (e.key === 'Escape') inboxState.jiraFocusKey = null; }} role="dialog" aria-modal="true" tabindex="-1">
-    <div class="slide-panel">
-      <JiraDetailPane
-        issueKey={inboxState.jiraFocusKey}
-        {now}
-        onClose={() => (inboxState.jiraFocusKey = null)}
-        onStatusChange={() => void refreshAllJiraInboxes({ silent: true })}
-      />
-    </div>
-  </div>
-{/if}
-
-{#if inboxState.sentryFocusId}
-  <div class="slide-over" onclick={(e) => { if (e.target === e.currentTarget) inboxState.sentryFocusId = null; }} onkeydown={(e) => { if (e.key === 'Escape') inboxState.sentryFocusId = null; }} role="dialog" aria-modal="true" tabindex="-1">
-    <div class="slide-panel">
-      <SentryDetailPane
-        issueId={inboxState.sentryFocusId}
-        {now}
-        onClose={() => (inboxState.sentryFocusId = null)}
-        onOpenBrowser={openBrowser}
-      />
-    </div>
-  </div>
 {/if}
 
 <ModalsRoot
@@ -5201,12 +4722,12 @@
     position: fixed; inset: 0; pointer-events: none; z-index: 0;
     background:
       radial-gradient(ellipse 1200px 600px at 10% 0%, rgba(30, 58, 107, 0.18), transparent 60%),
-      radial-gradient(ellipse 900px 500px at 90% 100%, rgba(16, 185, 129, 0.06), transparent 60%);
+      radial-gradient(ellipse 900px 500px at 90% 100%, rgba(168, 217, 184, 0.06), transparent 60%);
   }
   #app { position: relative; z-index: 1; display: grid; grid-template-columns: 56px 1fr; height: 100vh; }
 
   /* Touch ID / device-owner-auth gate shown at launch. Sits over the app
-     (z-index 500) so the workbench doesn't flash through before unlock —
+     (z-index 500) so the solo doesn't flash through before unlock —
      the underlying app still mounts so the moment we flip `appLocked=false`
      the usual UI is already primed. */
   .lock-screen {
@@ -5237,8 +4758,8 @@
   .lock-err {
     font-size: 12px; color: var(--error);
     padding: 8px 12px; border-radius: 6px;
-    background: rgba(214, 72, 44, 0.1);
-    border: 1px solid rgba(214, 72, 44, 0.25);
+    background: rgba(232, 130, 100, 0.1);
+    border: 1px solid rgba(232, 130, 100, 0.25);
   }
   .lock-card .btn {
     margin-top: 6px;
@@ -5256,425 +4777,57 @@
   }
   .full-center { flex: 1; display: flex; align-items: center; justify-content: center; padding: 40px; }
   .empty { display: flex; flex-direction: column; align-items: center; gap: 16px; text-align: center; max-width: 420px; }
-  .empty-title { font-size: 22px; font-weight: 600; margin: 12px 0 0; color: var(--text-0); letter-spacing: -0.015em; }
+  .empty-title {
+    font-family: 'Instrument Serif', 'New York', Georgia, serif;
+    font-size: 28px; font-weight: 400;
+    margin: 14px 0 0; color: var(--text-0);
+    letter-spacing: -0.02em; line-height: 1.18;
+  }
   .empty-sub { font-size: 13.5px; color: var(--text-1); margin: 0; line-height: 1.55; max-width: 380px; }
 
-  /* Workbench tabs — named presets of column layouts */
-  .wb-tabs {
-    display: flex; align-items: center; gap: 2px;
-    padding: 6px 12px 4px;
-    border-bottom: 1px solid var(--border-neutral);
-    /* `bg-2` is the "elevated header" surface: lighter than bg-0 in
-       dark themes, darker than bg-0 in light. Either way the strip
-       reads as its own toolbar instead of melting into the page bg. */
-    background: var(--bg-2);
-    overflow-x: auto;
-    scrollbar-width: none;
-  }
-  .wb-tabs::-webkit-scrollbar { display: none; }
-  .wb-tab {
-    display: inline-flex; align-items: center; gap: 6px;
-    padding: 5px 10px;
-    border-radius: 6px 6px 0 0;
-    font-size: 12px; font-weight: 500;
-    color: var(--text-2);
-    background: var(--bg-1);
-    cursor: pointer;
-    /* Visible outline on every tab so the tab strip reads as a row of
-       clickable pills, not text. Active state gets a stronger border +
-       accent under-line; hover bumps the contrast a notch. */
-    border: 1px solid var(--border-neutral);
-    border-bottom: none;
-    transition: all 120ms;
-    flex-shrink: 0;
-    max-width: 200px;
-    position: relative;
-  }
-  .wb-tab:hover {
-    color: var(--text-0);
-    background: var(--bg-2);
-    border-color: var(--border-hi);
-  }
-  .wb-tab.active {
-    color: var(--text-0);
-    background: var(--bg-0);
-    border-color: var(--border-hi);
-    box-shadow: var(--shadow-1);
-  }
-  /* Accent under-line on the active tab — sits flush with the tab-strip
-     bottom border so the tab "owns" that section of the strip. */
-  .wb-tab.active::after {
-    content: '';
-    position: absolute;
-    left: 0; right: 0; bottom: -1px;
-    height: 2px;
-    background: var(--accent);
-    border-radius: 1px 1px 0 0;
-  }
-  /* Drag-over highlight when the user is moving a column onto this tab. */
-  .wb-tab.drag-over {
-    color: var(--accent-fg);
-    background: var(--accent);
-    border-color: var(--accent);
-    box-shadow: 0 0 0 2px var(--accent), 0 0 12px var(--accent-glow);
-  }
-  .wb-tab.drag-over .wb-tab-count { background: color-mix(in srgb, var(--accent-fg) 18%, transparent); color: var(--accent-fg); }
-  .wb-tab-name {
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    letter-spacing: -0.005em;
-  }
-  .wb-tab-count {
-    padding: 0 5px;
-    min-width: 16px; height: 15px;
-    border-radius: 8px;
-    background: var(--bg-3);
-    font-size: 10px; font-weight: 600;
-    display: inline-flex; align-items: center; justify-content: center;
-    color: var(--text-1);
-  }
-  .wb-tab.active .wb-tab-count { background: var(--accent-soft); color: var(--accent-bright); }
-  .wb-tab-close {
-    display: inline-flex; align-items: center; justify-content: center;
-    width: 16px; height: 16px;
-    border-radius: 3px;
-    color: var(--text-mute);
-    opacity: 0; transition: all 120ms;
-    cursor: pointer;
-  }
-  .wb-tab:hover .wb-tab-close { opacity: 1; }
-  .wb-tab-close:hover { color: #fca5a5; background: var(--bg-3); }
-  .wb-tab-close svg { width: 10px; height: 10px; }
-  .wb-tab-rename {
-    padding: 0 4px;
-    background: var(--bg-0);
-    border: 1px solid var(--border-hi);
-    border-radius: 4px;
-    color: var(--text-0);
-    font: inherit;
-    font-size: 12px;
-    width: 140px;
-    outline: none;
-  }
-  .wb-tab-add {
-    display: inline-flex; align-items: center; gap: 4px;
-    padding: 5px 10px;
-    color: var(--text-2);
-    background: transparent;
-    border: 1px dashed var(--border-neutral-hi);
-    border-radius: 6px;
-    font-size: 11.5px;
-    cursor: pointer;
-    margin-left: 6px;
-    transition: all 120ms;
-    flex-shrink: 0;
-  }
-  .wb-tab-add:hover { color: var(--accent-bright); border-color: var(--border-hi); background: var(--accent-soft); }
-  .wb-tab-add svg { width: 11px; height: 11px; stroke: currentColor; stroke-width: 2; fill: none; stroke-linecap: round; }
 
-  /* Workbench — kanban columns */
-  .wb-bar {
-    display: flex; align-items: center; gap: 6px;
-    padding: 10px 16px;
-    border-bottom: 1px solid var(--border-neutral);
-    background: var(--bg-1);
+  /* App stubs — themed empty state shown when a rail app
+     view (Claude / Cursor / Editor / Canvas / Terminal) is selected
+     before its full implementation lands. The card adopts the rail
+     button's brand tone via --app-tone / --app-glow. */
+  .app-stub-shell {
+    background:
+      radial-gradient(ellipse 1100px 700px at 4% 100%, color-mix(in srgb, var(--app-tone, var(--accent)) 14%, transparent), transparent 65%),
+      radial-gradient(ellipse 900px 600px at 100% 0%, rgba(110, 90, 130, 0.05), transparent 60%);
   }
-
-  /* Pill-group — a single pill or a pill + plus-button compound. The whole
-     group shares one border, so the icon + label + "+" read as one unit. */
-  .pill-group {
-    display: inline-flex; align-items: stretch;
-    border: 1px solid var(--border-neutral);
-    border-radius: 999px;
-    background: var(--bg-1);
-    /* No `overflow: hidden` — it would clip the absolute-positioned
-       hover menu (and any focus ring). Rounded corners on inner buttons
-       use border-radius directly so nothing pokes out of the pill shape. */
-    transition: border-color 140ms, background 140ms, box-shadow 140ms;
-    position: relative;
-  }
-  .pill-group:hover {
-    border-color: var(--border-neutral-hi);
-    background: var(--bg-2);
-    box-shadow: var(--shadow-1);
-  }
-  .pill-group.active {
-    border-color: var(--border-hi);
-    background: var(--bg-2);
-    box-shadow: 0 0 0 1px var(--border-hi), var(--shadow-1), 0 0 12px var(--accent-glow);
-  }
-  .pill-group.active::after {
-    /* Little glow dot at the bottom-center when column is open. */
-    content: ''; position: absolute; left: 50%; bottom: -5px;
-    width: 4px; height: 4px; border-radius: 50%;
-    background: var(--accent-bright);
-    box-shadow: 0 0 6px var(--accent-glow);
-    transform: translateX(-50%);
-  }
-  .pill {
-    display: inline-flex; align-items: center; gap: 8px;
-    padding: 5px 12px;
-    color: var(--text-1);
-    font-size: 12.5px; font-weight: 500;
-    background: none; border: none; cursor: pointer;
-    transition: color 140ms;
-    border-top-left-radius: 999px;
-    border-bottom-left-radius: 999px;
-  }
-  .pill:hover { color: var(--text-0); }
-  .pill-group.active .pill { color: var(--text-0); }
-  .pill-icon {
-    display: inline-flex; align-items: center; justify-content: center;
-    width: 16px; height: 16px; border-radius: 3px;
-    flex-shrink: 0;
-  }
-  .pill-icon svg { width: 12px; height: 12px; display: block; color: currentColor; }
-  .pill-icon--editor { color: var(--warning); }
-  /* Terminal pill — share the editor's amber so the chrome cluster
-     reads as "live workbench surfaces" rather than singling out the
-     terminal with a green badge. Internal column is still the same
-     phosphor-green inside (matches the cursor / selection colour). */
-  .pill-icon--terminal { color: var(--warning); }
-  .pill-label { letter-spacing: -0.005em; }
-  .pill-count {
-    padding: 0 6px;
-    min-width: 16px; height: 16px;
-    border-radius: 8px;
-    background: var(--bg-3);
-    font-size: 10.5px; font-weight: 600;
-    display: inline-flex; align-items: center; justify-content: center;
-    color: var(--text-1);
-  }
-  .pill-group.active .pill-count { background: var(--accent-soft); color: var(--accent-bright); }
-  /* Archived counter — dotted border + transparent fill so it reads as
-     "in storage, not running" next to the solid live counter. The
-     non-active fallback for `.pill-count` is `var(--bg-3)`; we override
-     it to transparent and replace with a dotted ring. */
-  .pill-count--archived {
-    background: transparent;
-    border: 1px dotted var(--text-mute);
-    color: var(--text-mute);
-    /* `border` adds 2px to width/height — shrink min-width to keep the
-       ring the same overall diameter as the live counter. */
-    min-width: 14px; height: 14px;
-    padding: 0 5px;
-  }
-  .pill-group.active .pill-count--archived {
-    background: transparent;
-    border-color: var(--accent-bright);
-    color: var(--accent-bright);
-  }
-  .pill-add {
-    display: inline-flex; align-items: center; justify-content: center;
-    width: 26px;
-    color: var(--text-2);
-    background: none; border: none; cursor: pointer;
-    border-left: 1px solid var(--border-neutral);
-    border-top-right-radius: 999px;
-    border-bottom-right-radius: 999px;
-    transition: all 140ms;
-  }
-  .pill-add:hover { color: var(--accent-bright); background: var(--accent-soft); }
-  .pill-add svg { width: 12px; height: 12px; stroke: currentColor; stroke-width: 2; stroke-linecap: round; fill: none; }
-
-  /* "No columns yet" state — the pill body is disabled but the + next to
-     it still pops to the foreground so the create path reads clearly. */
-  .pill-group.dim { opacity: 0.55; }
-  .pill-group.dim .pill { cursor: default; }
-  .pill-group.dim:hover { opacity: 0.85; border-color: var(--border-neutral-hi); }
-  .pill:disabled { cursor: default; }
-
-  /* Hover-expand menu: lists every instance of this kind with its bench
-     name + workbench it lives in. Clicking an item switches workbench (if
-     needed) and scrolls the column into view.
-     Kept in the DOM all the time (when count>0) but hidden — that way the
-     CSS `:hover` chain covers both pill AND menu (since the menu is a DOM
-     descendant of `.pill-group`), so sliding from pill to menu never
-     triggers a close. `top: 100%` (no gap) keeps the hit area continuous. */
-  .pill-menu {
-    position: absolute; top: 100%; left: 0;
-    margin-top: 4px;
-    min-width: 240px; max-width: 320px;
-    background: var(--bg-2);
-    border: 1px solid var(--border-hi);
-    border-radius: 10px;
-    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
-    padding: 4px;
-    display: none;
-    flex-direction: column; gap: 1px;
-    z-index: 40;
-  }
-  /* Transparent "bridge" filling the 4px margin gap so the hover hit-area
-     between pill and menu is continuous. */
-  .pill-menu::before {
-    content: '';
-    position: absolute; top: -6px; left: 0; right: 0; height: 6px;
-  }
-  /* Menu open triggers:
-     - `:hover` for normal mouse use,
-     - `.drag-armed` while a drag is currently springing this pill open
-       (set by `onPillDragEnter`, persists while cursor is anywhere over
-       pill body OR any menu item, with a small close-delay so cursor
-       can travel between them). */
-  .pill-group.has-menu:hover .pill-menu,
-  .pill-group.has-menu.drag-armed .pill-menu {
-    display: flex;
-    animation: fadeIn 120ms ease-out;
-  }
-  /* Drag-hover — accent outline so "here's the drop target" reads clearly,
-     distinct from plain `:hover`. */
-  .pill-group.drag-over {
-    box-shadow: 0 0 0 2px var(--accent), 0 0 12px var(--accent-glow);
-  }
-  .pill-menu-item.drag-over {
-    background: var(--accent);
-    color: var(--accent-fg);
-  }
-  .pill-menu-item.drag-over .pill-menu-dot {
-    background: var(--accent-fg); box-shadow: none;
-  }
-  .pill-menu-item.drag-over .pill-menu-wb {
-    background: color-mix(in srgb, var(--accent-fg) 20%, transparent); color: var(--accent-fg); border-color: transparent;
-  }
-  .pill-menu-head {
-    font-size: 10px; font-weight: 600; letter-spacing: 0.05em;
-    color: var(--text-mute); text-transform: uppercase;
-    padding: 7px 10px 5px;
-    border-bottom: 1px solid var(--border-neutral);
-    margin-bottom: 3px;
-  }
-  .pill-menu-item {
-    display: flex; align-items: center; gap: 8px;
-    padding: 7px 10px;
-    border-radius: 6px;
-    font-size: 12px; color: var(--text-1);
-    text-align: left;
-    transition: background 100ms;
-    cursor: pointer;
-  }
-  .pill-menu-item:hover { background: var(--bg-3); color: var(--text-0); }
-  .pill-menu-item.is-current { background: var(--accent-soft); color: var(--accent-bright); }
-  .pill-menu-dot {
-    width: 6px; height: 6px; border-radius: 50%;
-    background: var(--text-mute);
-    flex-shrink: 0;
-  }
-  .pill-menu-dot.is-active {
-    background: var(--accent-bright);
-    box-shadow: 0 0 6px var(--accent-glow);
-  }
-  .pill-menu-name {
-    flex: 1; font-size: 11.5px; color: inherit;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  }
-  .pill-menu-wb {
-    font-size: 10px; color: var(--text-mute);
-    padding: 1px 6px; border-radius: 3px;
-    background: var(--bg-1);
-    border: 1px solid var(--border-neutral);
-    flex-shrink: 0;
-  }
-
-  /* Archived block — sits below the live columns, separator above. */
-  .pill-menu-head--archive {
-    margin-top: 6px;
-    color: var(--text-mute);
-  }
-  .pill-menu-item--archived {
-    /* Inactive look: dim text, no hover highlight on the row itself
-       (only the restore button is interactive). */
-    opacity: 0.55;
-    cursor: default;
-  }
-  .pill-menu-item--archived:hover { background: transparent; color: var(--text-1); }
-  .pill-menu-restore {
-    display: inline-flex; align-items: center; justify-content: center;
-    width: 22px; height: 22px; border-radius: 5px;
-    color: var(--text-2); background: transparent; border: none; cursor: pointer;
-    flex-shrink: 0;
-    transition: all 120ms;
-  }
-  .pill-menu-restore:hover {
-    background: var(--accent-soft);
-    color: var(--accent-bright);
-  }
-  .pill-menu-item--archived:hover .pill-menu-restore { opacity: 1; }
-
-  .wb-columns {
-    flex: 1;
-    display: flex;
-    min-height: 0;
-    overflow-x: auto;
-    overflow-y: hidden;
-    position: relative;
-    /* Hide the horizontal scrollbar visually but keep content
-       horizontally scrollable (two-finger swipe / shift+wheel still
-       works). The earlier "force-show the bar" approach was meant
-       to hint that scroll was available, but it ended up reading
-       as visual noise across the bottom of the workbench whenever
-       there were enough columns to overflow. macOS auto-hide
-       behavior is enough — when the user swipes, the bar appears
-       briefly. */
-    scrollbar-width: none;
-  }
-  .wb-columns::-webkit-scrollbar { height: 0; display: none; }
-
-  /* Empty-workbench discoverability nudge. Centered with generous
-     padding so it reads as guidance rather than a permanent fixture. */
-  :global(.wb-empty-hint) {
-    margin: auto;
-    padding: 28px 36px;
-    max-width: 520px;
+  .app-stub {
+    max-width: 560px;
     text-align: center;
-    color: var(--text-2);
-    border: 1px dashed var(--border-neutral);
-    border-radius: 14px;
+    padding: 44px 40px 36px;
     background: var(--bg-1);
+    border: 1px solid var(--border-hi);
+    border-radius: 18px;
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--app-tone, var(--accent)) 14%, transparent),
+      var(--shadow-3, 0 24px 64px rgba(0,0,0,0.55));
   }
-  :global(.wb-empty-hint-title) {
-    font-size: 15px; font-weight: 600; color: var(--text-0);
-    margin-bottom: 8px;
+  .app-stub-icon {
+    width: 64px; height: 64px;
+    margin: 0 auto 20px;
+    display: grid; place-items: center;
+    border-radius: 16px;
+    background: color-mix(in srgb, var(--app-tone, var(--accent)) 12%, var(--bg-2));
+    color: var(--app-tone, var(--accent-bright));
+    box-shadow:
+      inset 0 0 0 1px color-mix(in srgb, var(--app-tone, var(--accent)) 32%, transparent),
+      0 0 28px var(--app-glow, var(--accent-glow));
   }
-  :global(.wb-empty-hint-sub) {
-    font-size: 12.5px; line-height: 1.6;
+  .app-stub-icon svg { width: 30px; height: 30px; }
+  .app-stub-title {
+    font-family: 'Instrument Serif', 'New York', Georgia, serif;
+    font-size: 30px; font-weight: 400; letter-spacing: -0.02em;
+    color: var(--text-0);
+    margin: 0 0 12px;
   }
-  :global(.wb-empty-hint-sub .mono) {
-    background: var(--bg-2);
-    border: 1px solid var(--border-neutral);
-    padding: 1px 6px; border-radius: 5px;
+  .app-stub-sub {
+    font-size: 14px; line-height: 1.55;
     color: var(--text-1);
+    margin: 0 0 22px;
   }
-
-  /* ======================================================================
-     Maximize-overlay: one column expanded to fill the whole workbench area.
-     Layered above its siblings, leaving them in the DOM (state untouched —
-     scroll positions, in-flight requests, focused inputs all keep working).
-     ESC / the toolbar button restore. .wb-columns is already
-     `position: relative` so `inset: 0` anchors to it, not the viewport.
-     `!important` overrides the inline `style="flex: 0 0 …px"` written by
-     the resize handler — without it the column would still try to honour
-     its width.
-  ====================================================================== */
-  .wb-columns:has(.wb-column--maximized) > :global(.wb-column:not(.wb-column--maximized)) {
-    /* Visually hide siblings but keep them mounted. visibility:hidden over
-       display:none so we don't tear down their internal state (chat scroll,
-       editor selection, ongoing streams). */
-    visibility: hidden;
-    pointer-events: none;
-  }
-  :global(.wb-column.wb-column--maximized) {
-    position: absolute !important;
-    inset: 0 !important;
-    z-index: 50 !important;
-    flex: 1 1 100% !important;
-    width: auto !important;
-    box-shadow: 0 0 0 1px var(--border-hi), 0 8px 30px rgba(0, 0, 0, 0.55) !important;
-    animation: wb-max-in 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
-  }
-  /* Hide the resize handle of a maximized column — there's nothing to resize
-     against. Don't drop the wb-col-controls bar; that's where Restore lives. */
-  :global(.wb-column.wb-column--maximized > .wb-col-resize) { display: none !important; }
-  @keyframes wb-max-in {
-    from { opacity: 0.6; transform: scale(0.985); }
-    to   { opacity: 1; transform: scale(1); }
-  }
+  .app-stub-actions { display: flex; gap: 8px; justify-content: center; }
 </style>

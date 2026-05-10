@@ -5,11 +5,17 @@
   interface Props {
     /** `horizontal` = side-by-side (vertical divider), `vertical` = stacked (horizontal divider). */
     direction?: 'horizontal' | 'vertical';
-    /** Initial size in px of the *start* pane. */
+    /** Which pane has the fixed/persisted dimension. The other pane
+     *  flex-grows to fill what's left. Default `start` keeps the
+     *  legacy "left sidebar fixed width" behaviour. Use `end` when
+     *  the right-hand (or bottom) pane is the inspector and the
+     *  left-hand (or top) pane is the main content. */
+    fixedSide?: 'start' | 'end';
+    /** Initial size in px of the *fixed* pane. */
     initial?: number;
     min?: number;
     max?: number;
-    /** If set, the chosen size is persisted in localStorage under `forgehold:splitter:<persistKey>`. */
+    /** If set, the chosen size is persisted in localStorage under `woom:splitter:<persistKey>`. */
     persistKey?: string;
     start: Snippet;
     end: Snippet;
@@ -17,6 +23,7 @@
 
   let {
     direction = 'horizontal',
+    fixedSide = 'start',
     initial = 280,
     min = 120,
     max = 900,
@@ -32,7 +39,7 @@
   onMount(() => {
     size = initial;
     if (persistKey) {
-      const saved = localStorage.getItem(`forgehold:splitter:${persistKey}`);
+      const saved = localStorage.getItem(`woom:splitter:${persistKey}`);
       if (saved) {
         const n = parseFloat(saved);
         if (!isNaN(n) && n >= min && n <= max) size = n;
@@ -51,15 +58,22 @@
 
     const onMove = (ev: PointerEvent) => {
       const cur = direction === 'horizontal' ? ev.clientX : ev.clientY;
-      const delta = cur - startPos;
+      const rawDelta = cur - startPos;
+      /* When the FIXED pane is on the END (right/bottom), dragging the
+       *  divider toward it (i.e. positive delta in horizontal mode)
+       *  SHRINKS that pane. Invert so the user always feels "drag the
+       *  divider toward the pane to shrink it". */
+      const delta = fixedSide === 'end' ? -rawDelta : rawDelta;
       let next = startSize + delta;
       next = Math.max(min, Math.min(max, next));
+      /* Reserve room for the flex pane so the user can't collapse it
+       *  to zero by overshooting the divider. */
       next = Math.min(next, containerSize - minEnd);
       size = next;
     };
     const onUp = () => {
       dragging = false;
-      if (persistKey) localStorage.setItem(`forgehold:splitter:${persistKey}`, String(size));
+      if (persistKey) localStorage.setItem(`woom:splitter:${persistKey}`, String(size));
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
     };
@@ -71,17 +85,20 @@
   function onKeyDown(e: KeyboardEvent) {
     // Keyboard nudge: ←/→ for horizontal, ↑/↓ for vertical. 10px step, 40px with shift.
     const step = (e.shiftKey ? 40 : 10);
-    let delta = 0;
+    let raw = 0;
     if (direction === 'horizontal') {
-      if (e.key === 'ArrowLeft') delta = -step;
-      else if (e.key === 'ArrowRight') delta = step;
+      if (e.key === 'ArrowLeft') raw = -step;
+      else if (e.key === 'ArrowRight') raw = step;
     } else {
-      if (e.key === 'ArrowUp') delta = -step;
-      else if (e.key === 'ArrowDown') delta = step;
+      if (e.key === 'ArrowUp') raw = -step;
+      else if (e.key === 'ArrowDown') raw = step;
     }
-    if (delta !== 0) {
+    if (raw !== 0) {
+      /* Same sign-flip the pointer drag uses — keyboard arrows are
+       *  consistent with the visual divider direction. */
+      const delta = fixedSide === 'end' ? -raw : raw;
       size = Math.max(min, Math.min(max, size + delta));
-      if (persistKey) localStorage.setItem(`forgehold:splitter:${persistKey}`, String(size));
+      if (persistKey) localStorage.setItem(`woom:splitter:${persistKey}`, String(size));
       e.preventDefault();
     }
   }
@@ -91,11 +108,14 @@
   class="splitter"
   class:vertical={direction === 'vertical'}
   class:dragging
+  class:fixed-end={fixedSide === 'end'}
   bind:this={containerEl}
 >
   <div
     class="s-start"
-    style={direction === 'horizontal' ? `width: ${size}px` : `height: ${size}px`}
+    style={fixedSide === 'start'
+      ? (direction === 'horizontal' ? `width: ${size}px` : `height: ${size}px`)
+      : ''}
   >
     {@render start()}
   </div>
@@ -113,7 +133,12 @@
     onpointerdown={startDrag}
     onkeydown={onKeyDown}
   ></div>
-  <div class="s-end">
+  <div
+    class="s-end"
+    style={fixedSide === 'end'
+      ? (direction === 'horizontal' ? `width: ${size}px` : `height: ${size}px`)
+      : ''}
+  >
     {@render end()}
   </div>
 </div>
@@ -125,28 +150,34 @@
     min-width: 0; min-height: 0;
   }
   .splitter.vertical { flex-direction: column; }
-  .s-start { flex-shrink: 0; min-width: 0; min-height: 0; overflow: hidden; }
+  .s-start { flex: 1; min-width: 0; min-height: 0; overflow: hidden; }
   .s-end { flex: 1; min-width: 0; min-height: 0; overflow: hidden; }
+  /* Default mode: start is fixed (sidebar), end is flex. */
+  .splitter:not(.fixed-end) > .s-start { flex: 0 0 auto; }
+  /* Inverted mode: end is fixed (right inspector), start is flex. */
+  .splitter.fixed-end > .s-end { flex: 0 0 auto; }
   .s-divider {
     position: relative;
     flex-shrink: 0;
-    width: 5px;
+    width: 10px;
     cursor: col-resize;
     user-select: none;
     background: transparent;
     z-index: 5;
     transition: background 100ms ease;
   }
-  .s-divider.vert { width: 100%; height: 5px; cursor: row-resize; }
+  .s-divider.vert { width: 100%; height: 10px; cursor: row-resize; }
+  /* Thin visible groove centered in a 10px hit-target. */
   .s-divider::before {
     content: '';
     position: absolute;
     inset: 0;
-    margin: 0 2px;
+    margin: 0 4px;
     background: var(--border-neutral);
+    border-radius: 1px;
     transition: background 100ms ease;
   }
-  .s-divider.vert::before { margin: 2px 0; }
+  .s-divider.vert::before { margin: 4px 0; }
   .s-divider:hover::before,
   .s-divider:focus-visible::before,
   .splitter.dragging .s-divider::before { background: var(--accent); }

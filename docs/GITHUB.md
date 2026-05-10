@@ -1,4 +1,4 @@
-# Forgehold — GitHub Integration Specification
+# Woom — GitHub Integration Specification
 
 **Version:** 0.1
 **Last updated:** 2026-04-29
@@ -8,7 +8,7 @@ involving me") and the **GitHub top-level tab** (a repo browser with
 `code / pulls / issues / actions / releases` sections). Detail view is
 a global slide-over (`GithubFocusOverlay`).
 
-> Forgehold gives GitHub two homes. The column lives next to the agent
+> Woom gives GitHub two homes. The column lives next to the agent
 > and is for *triage* — the ten things you should look at this morning.
 > The tab is for *exploration* — pick a repo, browse code, watch a
 > workflow run, see a release note. They share an inbox cache, the
@@ -28,7 +28,7 @@ narrow to a repo or change the relationship lens (`authored`,
 
 The GitHub tab answers: *let me poke around.* Pick a repo from the
 dropdown, switch between Code / PRs / Issues / Actions / Releases like
-on github.com — but inside Forgehold's chrome, with the same hotkeys
+on github.com — but inside Woom's chrome, with the same hotkeys
 and the same agent integration.
 
 The slide-over `GithubFocusOverlay` is a **shared** PR / issue detail —
@@ -161,7 +161,7 @@ export type GithubFilterMode =
 
 ### 4.1 Persistence
 
-`localStorage` key `forgehold:github-col-filters-by-instance:v1`
+`localStorage` key `woom:github-col-filters-by-instance:v1`
 maps `instanceId → GithubFilters`. Filters survive across restarts and
 are scoped per column, so two GitHub columns can be set to different
 modes.
@@ -267,14 +267,14 @@ post-mutation).
 
 ### 6.2 MCP `open_github_pr` tab argument
 
-The MCP `open_github_pr` tool (`apps/desktop/src-tauri/sidecars/forgehold-app/src/main.rs:785-799`)
+The MCP `open_github_pr` tool (`apps/desktop/src-tauri/sidecars/woom-app/src/main.rs:785-799`)
 takes an optional `tab` parameter:
 
 ```ts
 tab?: 'conversation' | 'commits' | 'files' | 'reviews' | 'checks';
 ```
 
-Forgehold opens the slide-over with the specified tab pre-selected.
+Woom opens the slide-over with the specified tab pre-selected.
 Useful for "Claude, take me to the files of #4123".
 
 ---
@@ -404,11 +404,11 @@ pre-filled scopes:
 ```ts
 function githubTokenUrl() {
   const scopes = ['repo', 'read:user', 'read:org'].join(',');
-  return `https://github.com/settings/tokens/new?scopes=${scopes}&description=Forgehold%20Desktop`;
+  return `https://github.com/settings/tokens/new?scopes=${scopes}&description=Woom%20Desktop`;
 }
 ```
 
-Sidecar `forgehold-github` reads the token from `GITHUB_TOKEN` env var
+Sidecar `woom-github` reads the token from `GITHUB_TOKEN` env var
 that the parent process sets (see `docs/MCP.md`).
 
 ---
@@ -449,7 +449,7 @@ that repo loads). See [`CANVAS.md §5.4`](CANVAS.md#54-forge-live-cards).
 
 ## 13. MCP Tools
 
-### 13.1 `user-forgehold-github` (read + write)
+### 13.1 `user-woom-github` (read + write)
 
 | Tool              | Required args                                | Notes                                |
 |-------------------|----------------------------------------------|--------------------------------------|
@@ -477,7 +477,7 @@ that repo loads). See [`CANVAS.md §5.4`](CANVAS.md#54-forge-live-cards).
 Auth: `GITHUB_TOKEN` env var passed to the sidecar by the parent app
 (see `claude_mcp.rs:188-327`).
 
-### 13.2 `user-forgehold-app` (UI navigation; not GitHub-specific but commonly invoked alongside)
+### 13.2 `user-woom-app` (UI navigation; not GitHub-specific but commonly invoked alongside)
 
 Subset relevant to GitHub:
 
@@ -505,7 +505,7 @@ Multiple GitHub columns are valid per workbench. Each carries its own
 `GithubFilters` (per `instanceId`) so a "Reviews" column and an
 "Authored by me" column can sit side by side.
 
-The historical comment in `forgehold-app`'s `add_workbench_instance`
+The historical comment in `woom-app`'s `add_workbench_instance`
 description ("github / jira / sentry are singletons") is **stale**;
 `addPanelInstance` always mints a new instance.
 
@@ -622,9 +622,9 @@ is always pull-based.
 
 ## 19. Open TODOs
 
-1. Stale header comment in `apps/desktop/src-tauri/sidecars/forgehold-github/src/main.rs:1-6`
+1. Stale header comment in `apps/desktop/src-tauri/sidecars/woom-github/src/main.rs:1-6`
    still says "read-only phase 2" while the file ships writes.
-2. Stale comment in `forgehold-app` `add_workbench_instance` description
+2. Stale comment in `woom-app` `add_workbench_instance` description
    says GitHub / Jira / Sentry are singletons; multi-instance is the
    actual behaviour.
 3. No dedicated review-thread reply UI (per-line comment threads).

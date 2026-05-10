@@ -2,7 +2,7 @@
   // Canvas library overlay — the full grid of every canvas in the
   // workspace. Triggered by ⌘P while a Canvas column is focused, or by
   // the column-header dropdown chevron. Renders ON TOP of the column
-  // (not the whole app) so the user keeps their workbench context.
+  // (not the whole app) so the user keeps their solo context.
   //
   // Each tile shows: name, last-edited time, shape count, and a hover
   // row of actions (rename, duplicate, archive / unarchive, export,
@@ -557,5 +557,5 @@
     cursor: pointer;
   }
   .cv-tile-act:hover { background: var(--bg-1); color: var(--text-0); border-color: var(--border-neutral); }
-  .cv-tile-act--danger:hover { color: var(--error, #ef4444); border-color: rgba(239, 68, 68, 0.4); }
+  .cv-tile-act--danger:hover { color: var(--error, #E88264); border-color: rgba(232, 130, 100, 0.4); }
 </style>

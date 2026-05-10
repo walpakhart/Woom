@@ -19,7 +19,7 @@ import type {
   Review,
   ReviewComment
 } from '$lib/data';
-import { listInstancesOfKind } from '$lib/state/layout.svelte';
+import { APP_INSTANCE_IDS } from '$lib/state/layout.svelte';
 import {
   DEFAULT_GH_FILTERS,
   inboxState,
@@ -119,11 +119,11 @@ export async function refreshInbox(
   }
 }
 
-/** Refresh every GitHub column on every workbench. Used by page-level
+/** Refresh every GitHub column on every solo. Used by page-level
  *  handlers (bootstrap on connect, after a PR is created, etc.) that
  *  don't have a specific instanceId in scope. */
 export async function refreshAllInboxes(opts: { silent?: boolean } = {}) {
-  const ids = listInstancesOfKind('github').map((i) => i.id);
+  const ids = [APP_INSTANCE_IDS.github];
   await Promise.all(ids.map((id) => refreshInbox(id, opts)));
 }
 
@@ -179,7 +179,7 @@ export function selectInboxItem(id: number) {
 }
 
 /** Open an InboxItem in the focus pane. Does NOT switch views — callers are
- *  expected to toggle `view = 'workbench'` themselves if they need to. */
+ *  expected to flip the rail view themselves if they need to. */
 export function openFocusItem(item: InboxItem) {
   inboxState.focusItem = item;
 }

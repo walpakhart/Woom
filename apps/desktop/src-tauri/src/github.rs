@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-const USER_AGENT: &str = concat!("Forgehold-Desktop/", env!("CARGO_PKG_VERSION"));
+const USER_AGENT: &str = concat!("Woom-Desktop/", env!("CARGO_PKG_VERSION"));
 const API_BASE: &str = "https://api.github.com";
 
 // ---------- Primitive types ----------
@@ -1780,7 +1780,7 @@ pub async fn fetch_default_branch(
 
 /// Create a PR via the REST API (`POST /repos/{owner}/{repo}/pulls`). Returns
 /// the new PR's `html_url`. Replaces the legacy `gh pr create` shell-out so
-/// Forgehold only needs the Keychain token — no `gh` CLI install required.
+/// Woom only needs the Keychain token — no `gh` CLI install required.
 pub async fn create_pr(
     token: &str,
     owner: &str,

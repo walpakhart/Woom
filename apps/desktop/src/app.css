@@ -1,63 +1,113 @@
+/* Woom · solo modes — shared CSS tokens.
+   Imported first so :root vars from below override defaults inside. */
+@import url('./lib/views/apps/_shared/app.css');
+
 :root {
-  /* Forgehold palette: cold steel + molten gold.
-     Deep graphite surfaces (near-black with a blue undertone) let the warm
-     gold accent read as literal glow — the anvil-in-the-dark metaphor.
-     Per-source brand colors (Jira blue / GitHub violet / Slack pink) stay
-     per-source in +page.svelte :global(.conn-icon--*) rules for recognition. */
+  /* Woom palette — Claude design language (v6 redesign).
+     Anthropic noir surfaces (warm slate, never pure black) + clay coral
+     accent + faded-white text. Editorial: Instrument Serif used for
+     hero titles where editorial pause matters. Per-source brand
+     colours are first-class CSS vars now (--src-*) so the Rail and
+     headers share a single source of truth. */
 
-  /* Surfaces — cold graphite, progressively elevated. */
-  --bg-0: #0C1117;
-  --bg-1: #131A23;
-  --bg-2: #1B2330;
-  --bg-3: #232D3C;
+  /* Surfaces — warm noir, progressively lifted. */
+  --bg-0: #1A1410;
+  --bg-1: #221C17;
+  --bg-2: #2A231C;
+  --bg-3: #342B22;
+  --bg-4: #3F352A;
+  --bg-glass: rgba(34, 28, 23, 0.66);
+  --bg-elev: rgba(245, 240, 234, 0.045);
 
-  /* Borders — tuned off the surface, no orange tint. */
-  --border: rgba(60, 80, 108, 0.10);
-  --border-hi: rgba(232, 163, 58, 0.14);
-  --border-hi2: rgba(232, 163, 58, 0.26);
-  --border-neutral: rgba(200, 215, 235, 0.06);
-  --border-neutral-hi: rgba(200, 215, 235, 0.12);
+  /* Borders — faded-white at low opacities + clay-tinted accent borders. */
+  --border:        rgba(245, 240, 234, 0.07);
+  --border-hi:     rgba(245, 240, 234, 0.13);
+  --border-hi2:    rgba(245, 240, 234, 0.22);
+  --border-accent: rgba(204, 120, 92, 0.42);
+  --border-accent-2: rgba(204, 120, 92, 0.22);
+  --border-neutral: rgba(245, 240, 234, 0.06);
+  --border-neutral-hi: rgba(245, 240, 234, 0.14);
 
-  /* Text — warm off-white on cold surface, slight cream. */
-  --text-0: #EDE5D1;
-  --text-1: #C3BEAF;
-  --text-2: #8C8776;
-  --text-mute: #5E6472;
+  /* Text — Claude faded-white stack. */
+  --text-0: #F5F0EA;
+  --text-1: #D9CFC0;
+  --text-2: #A39687;
+  --text-mute: #6B5F50;
 
-  /* Primary accent — molten gold (the anvil glow). */
-  --accent: #B8822E;
-  --accent-bright: #E8A33A;
-  --accent-soft: rgba(232, 163, 58, 0.10);
-  --accent-glow: rgba(232, 163, 58, 0.28);
+  /* Clay accent — Anthropic primary. */
+  --accent: #CC785C;
+  --accent-bright: #E89B7D;
+  --accent-deep: #9C5A41;
+  --accent-soft: rgba(204, 120, 92, 0.10);
+  --accent-glow: rgba(204, 120, 92, 0.42);
+  --accent-fg: #1F1410;
 
-  /* Legacy `--blue*` vars kept for source files that reference them; repointed
-     to gold tones so we don't need to touch every callsite. */
-  --blue: #E8A33A;
-  --blue-bright: #F5C571;
-  --blue-deep: #6D4A12;
+  /* Legacy `--blue*` aliases — older callsites still reference them.
+     Repointed to clay tones so palette stays unified without touching
+     every site. */
+  --blue: #E89B7D;
+  --blue-bright: #F2B89E;
+  --blue-deep: #9C5A41;
 
-  --success: #6FAE88;
-  --warning: #D99540;
-  --error: #D4664A;
+  /* Per-source brand colours — first-class. Used by Rail glow,
+     column stripes, conn-icon variants. Saturated enough to triage
+     a column at a glance, calm enough to live next to the clay accent. */
+  --src-jira:    #4F8EFF;
+  --src-jira-2:  #75A8FF;
+  --src-github:  #B584FF;
+  --src-github-2:#D5B7FF;
+  --src-sentry:  #E88264;
+  --src-sentry-2:#F0A38A;
+  --src-claude:  #E89B7D;
+  --src-claude-2:#F2B89E;
+  --src-cursor:  #DDDDDD;
+  --src-canvas:  #7DC9B0;
+  --src-canvas-2:#A8DEC8;
+  --src-editor:  #CC785C;
+  --src-term:    #F5F0EA;
 
-  /* Foreground colour readable on `--accent` background — used by
-     buttons / pills / chips that paint accent as their bg. Keeps
-     contrast right when the accent itself flips between bright gold
-     (Iconic), dark chocolate (Light) and cream (Dark). */
-  --accent-fg: #1A0A04;
-  /* Modal & popover backdrop — translucent layer drawn over the app
-     when a dialog opens. Per-theme so the haze reads as "darker than
-     the surface" everywhere. */
-  --backdrop: rgba(10, 17, 30, 0.78);
+  /* Vivid-but-warm IDE syntax palette. Used by the editor + diff hunks. */
+  --tk-key:    #B98AD9;
+  --tk-fn:     #E89B7D;
+  --tk-str:    #A8D9B8;
+  --tk-num:    #88C2DD;
+  --tk-type:   #D9B86E;
+  --tk-prop:   #CC9F8A;
+  --tk-cmt:    #6B5F50;
+  --tk-punc:   #A39687;
+  --tk-tag:    #D98AA9;
+  --tk-attr:   #B98AD9;
+  --tk-ghost:  rgba(232, 155, 125, 0.62);
 
-  /* Elevation shadows — soft drop-shadows for "this surface sits
-     above the page". Three intensities so callers can tier elements
-     (cards · panels · modals). On dark themes the colour is near-
-     black; Light theme overrides this with a softer brown that reads
-     on cream surfaces. */
-  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.20), 0 2px 6px rgba(0, 0, 0, 0.18);
-  --shadow-2: 0 2px 4px rgba(0, 0, 0, 0.24), 0 8px 22px rgba(0, 0, 0, 0.32);
-  --shadow-3: 0 4px 10px rgba(0, 0, 0, 0.30), 0 22px 50px rgba(0, 0, 0, 0.42);
+  /* Diff. */
+  --diff-add: rgba(168, 217, 184, 0.10);
+  --diff-add-stroke: #A8D9B8;
+  --diff-rem: rgba(232, 130, 100, 0.10);
+  --diff-rem-stroke: #E88264;
+
+  /* Semantic. */
+  --success: #A8D9B8;
+  --warning: #D9B86E;
+  --error:   #E88264;
+  --info:    #88C2DD;
+  --running: #CC785C;
+
+  /* Modal & popover backdrop — warm noir glass. */
+  --backdrop: rgba(10, 7, 6, 0.74);
+
+  /* Radii. */
+  --r-card: 12px;
+  --r-pane: 14px;
+  --r-modal: 16px;
+  --r-chip: 6px;
+  --r-btn:  8px;
+
+  /* Elevation shadows. Near-black on warm noir reads as natural depth;
+     Light theme overrides below with a brown halo for cream surfaces. */
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.32), 0 2px 6px rgba(0, 0, 0, 0.22);
+  --shadow-2: 0 8px 24px rgba(0, 0, 0, 0.42), 0 1px 0 rgba(255, 255, 255, 0.025) inset;
+  --shadow-3: 0 24px 64px rgba(0, 0, 0, 0.58), 0 1px 0 rgba(255, 255, 255, 0.04) inset;
+  --shadow-glow-clay: 0 0 0 1px rgba(204, 120, 92, 0.12), 0 12px 32px rgba(204, 120, 92, 0.24);
 }
 
 /* ---- Light theme ----
@@ -238,25 +288,60 @@ kbd {
    GithubColumn, JiraColumn, AgentColumn, EditorColumn, Modals, etc.
    ============================================================ */
 
-/* Workbench columns */
+/* Workbench columns — v6 floating cards.
+   Each column is its own panel: raised bg, subtle border on all sides,
+   medium radius, soft shadow. The .wb-columns container provides the
+   gap + side padding. App shell wraps a single column at full
+   width (without changing the column's interior styling) so the
+   composite workbench and solo modes share the same visual language. */
 .wb-column {
   flex: 1 1 360px;
   min-width: 280px;
   min-height: 0;
-  border-right: 1px solid var(--border);
   display: flex; flex-direction: column;
-  background: var(--bg-0);
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: var(--r-pane, 14px);
   position: relative;
-  /* Subtle depth — pulls each column slightly off the workbench
-     background so the eye groups its content as one panel. Crosses
-     the right border so adjacent columns don't double-up. */
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02), var(--shadow-1);
+  overflow: hidden;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 240, 220, 0.025),
+    var(--shadow-2);
+  transition: border-color 200ms;
 }
-.wb-column + .wb-column { background: var(--bg-0); }
-.wb-column:last-child { border-right: none; }
+.wb-column:hover { border-color: var(--border-hi); }
 .wb-column.inbox { background: var(--bg-1); }
-.wb-column--editor { background: var(--bg-0); min-width: 420px; }
+.wb-column--editor { min-width: 420px; }
 .wb-column--editor .ev { height: 100%; }
+
+/* Per-source brand stripe — 3px on the left edge, glows in the
+   source's brand colour. Uses the column's existing `data-kind`
+   attr so no component-side changes are needed. The stripe sits
+   inside the rounded corner and clips with the column. */
+.wb-column[data-kind] {
+  --col-tone: var(--accent);
+  --col-glow: var(--accent-glow);
+}
+.wb-column[data-kind="github"]   { --col-tone: var(--src-github);  --col-glow: rgba(181, 132, 255, 0.32); }
+.wb-column[data-kind="jira"]     { --col-tone: var(--src-jira);    --col-glow: rgba(79, 142, 255, 0.32); }
+.wb-column[data-kind="sentry"]   { --col-tone: var(--src-sentry);  --col-glow: rgba(232, 130, 100, 0.32); }
+.wb-column[data-kind="claude"]   { --col-tone: var(--src-claude);  --col-glow: rgba(232, 155, 125, 0.32); }
+.wb-column[data-kind="cursor"]   { --col-tone: var(--src-cursor);  --col-glow: rgba(220, 220, 220, 0.20); }
+.wb-column[data-kind="canvas"]   { --col-tone: var(--src-canvas);  --col-glow: rgba(125, 201, 176, 0.30); }
+.wb-column[data-kind="editor"]   { --col-tone: var(--src-editor);  --col-glow: rgba(204, 120, 92, 0.32); }
+.wb-column[data-kind="terminal"] { --col-tone: var(--src-term);    --col-glow: rgba(245, 240, 234, 0.20); }
+.wb-column[data-kind]::before {
+  content: '';
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 2.5px;
+  z-index: 4;
+  pointer-events: none;
+  background: var(--col-tone);
+  box-shadow: 0 0 12px var(--col-glow);
+  /* The column itself has overflow: hidden, so the stripe inherits the
+     column's rounded corners on the left edge. */
+}
 
 .wb-col-controls {
   position: absolute;
@@ -321,8 +406,8 @@ kbd {
   transition: background 180ms, box-shadow 180ms;
 }
 .claude-col.drag-over {
-  background: rgba(16, 185, 129, 0.05);
-  box-shadow: inset 0 0 0 2px rgba(16, 185, 129, 0.4);
+  background: rgba(168, 217, 184, 0.05);
+  box-shadow: inset 0 0 0 2px rgba(168, 217, 184, 0.4);
 }
 .claude-col .inbox-brand { border-bottom: 1px solid var(--border-neutral); }
 
@@ -337,8 +422,8 @@ kbd {
   transition: all 220ms;
 }
 .claude-drop.drag-over {
-  border-color: rgba(16, 185, 129, 0.55);
-  background: radial-gradient(ellipse at center, rgba(16, 185, 129, 0.08), transparent 70%);
+  border-color: rgba(168, 217, 184, 0.55);
+  background: radial-gradient(ellipse at center, rgba(168, 217, 184, 0.08), transparent 70%);
   transform: scale(1.01);
 }
 .claude-drop-title {
@@ -425,7 +510,7 @@ kbd {
 
 .inbox-list { flex: 1; overflow-y: auto; padding: 6px 8px 20px; }
 .inbox-state { padding: 40px 16px; text-align: center; font-size: 12.5px; color: var(--text-2); }
-.inbox-state--error { color: #fca5a5; }
+.inbox-state--error { color: #F0A38A; }
 .link-inline { display: inline-block; margin-left: 8px; color: var(--accent-bright); font-weight: 500; text-decoration: underline; }
 
 .inbox-group-label {
@@ -447,20 +532,31 @@ kbd {
      row3: optional muted secondary line — repo path / project key /
            events count, etc. Per-column choice. */
 .inbox-item {
-  display: flex; flex-direction: column; gap: 3px;
-  padding: 8px 10px 8px 12px;
-  border-radius: 7px;
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 10px 12px 11px 14px;
+  border-radius: 9px;
   background: var(--bg-1);
-  border: 1px solid var(--border-neutral);
-  border-left-width: 3px;
+  border: 1px solid transparent;
+  border-left-width: 2.5px;
   border-left-color: var(--border-neutral-hi);
   cursor: pointer;
-  transition: background 120ms, border-color 120ms, transform 120ms;
+  transition: background 140ms, border-color 140ms, transform 140ms, box-shadow 140ms;
   width: 100%; text-align: left;
   user-select: none;
 }
-.inbox-item:hover { background: var(--bg-2); border-color: var(--border-neutral-hi); }
-.inbox-item.active { background: var(--bg-2); border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent-soft); }
+.inbox-item:hover {
+  background: var(--bg-2);
+  border-color: var(--border);
+  border-left-color: color-mix(in srgb, var(--accent) 50%, var(--border-neutral-hi));
+}
+.inbox-item.active {
+  background: var(--bg-2);
+  border-color: var(--border-hi);
+  border-left-color: var(--accent);
+  box-shadow:
+    0 0 0 1px var(--border-accent-2),
+    0 12px 24px rgba(0, 0, 0, 0.30);
+}
 .inbox-item:active { cursor: grabbing; transform: scale(0.99); }
 .inbox-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 
@@ -543,43 +639,43 @@ kbd {
    Each `.tag--*` class is applied to the `.inbox-item` itself; the
    matching `.state-pill.tag--*` rule below colors the inline pill. */
 .inbox-item.tag--open   { border-left-color: var(--success); }
-.inbox-item.tag--draft  { border-left-color: #fcd34d; }
-.inbox-item.tag--merged { border-left-color: #b199f6; }
+.inbox-item.tag--draft  { border-left-color: #E4C885; }
+.inbox-item.tag--merged { border-left-color: #D5B7FF; }
 .inbox-item.tag--closed { border-left-color: var(--border-neutral-hi); }
-.inbox-item.tag--inprogress { border-left-color: #f59e0b; }
+.inbox-item.tag--inprogress { border-left-color: #D9B86E; }
 .inbox-item.tag--inreview   { border-left-color: #60a5fa; }
 .inbox-item.tag--done       { border-left-color: var(--success); }
 .inbox-item.tag--todo       { border-left-color: var(--text-mute); }
 .inbox-item.tag--error   { border-left-color: var(--error); }
-.inbox-item.tag--warning { border-left-color: #f59e0b; }
+.inbox-item.tag--warning { border-left-color: #D9B86E; }
 .inbox-item.tag--info    { border-left-color: #60a5fa; }
 .inbox-item.tag--fatal   { border-left-color: #f87171; }
 
 .inbox-item.tag--open    .state-dot { background: var(--success); }
-.inbox-item.tag--draft   .state-dot { background: #fcd34d; }
-.inbox-item.tag--merged  .state-dot { background: #b199f6; }
+.inbox-item.tag--draft   .state-dot { background: #E4C885; }
+.inbox-item.tag--merged  .state-dot { background: #D5B7FF; }
 .inbox-item.tag--closed  .state-dot { background: var(--border-neutral-hi); }
-.inbox-item.tag--inprogress .state-dot { background: #f59e0b; }
+.inbox-item.tag--inprogress .state-dot { background: #D9B86E; }
 .inbox-item.tag--inreview   .state-dot { background: #60a5fa; }
 .inbox-item.tag--done       .state-dot { background: var(--success); }
 .inbox-item.tag--todo       .state-dot { background: var(--text-mute); }
 .inbox-item.tag--error   .state-dot { background: var(--error); }
-.inbox-item.tag--warning .state-dot { background: #f59e0b; }
+.inbox-item.tag--warning .state-dot { background: #D9B86E; }
 .inbox-item.tag--info    .state-dot { background: #60a5fa; }
 .inbox-item.tag--fatal   .state-dot { background: #f87171; }
 
 /* State-pill colors — same hue as the stripe, soft background so
    the row stays readable. */
 .state-pill.tag--open   { color: var(--success);          background: rgba(101, 211, 150, 0.14); }
-.state-pill.tag--draft  { color: #fcd34d;                 background: rgba(245, 158, 11, 0.14); }
-.state-pill.tag--merged { color: #b199f6;                 background: rgba(139, 92, 246, 0.14); }
+.state-pill.tag--draft  { color: #E4C885;                 background: rgba(217, 184, 110, 0.14); }
+.state-pill.tag--merged { color: #D5B7FF;                 background: rgba(181, 132, 255, 0.14); }
 .state-pill.tag--closed { color: var(--text-mute);        background: rgba(139, 150, 171, 0.10); }
-.state-pill.tag--inprogress { color: #f59e0b;             background: rgba(245, 158, 11, 0.14); }
+.state-pill.tag--inprogress { color: #D9B86E;             background: rgba(217, 184, 110, 0.14); }
 .state-pill.tag--inreview   { color: #60a5fa;             background: rgba(96, 165, 250, 0.14); }
 .state-pill.tag--done       { color: var(--success);      background: rgba(101, 211, 150, 0.14); }
 .state-pill.tag--todo       { color: var(--text-mute);    background: rgba(139, 150, 171, 0.10); }
 .state-pill.tag--error   { color: var(--error);           background: rgba(229, 113, 92, 0.14); }
-.state-pill.tag--warning { color: #f59e0b;                background: rgba(245, 158, 11, 0.14); }
+.state-pill.tag--warning { color: #D9B86E;                background: rgba(217, 184, 110, 0.14); }
 .state-pill.tag--info    { color: #60a5fa;                background: rgba(96, 165, 250, 0.14); }
 .state-pill.tag--fatal   { color: #f87171;                background: rgba(248, 113, 113, 0.18); }
 
@@ -587,10 +683,10 @@ kbd {
    haven't migrated yet. Kept intentionally distinct from state-pill
    so the new pill style doesn't accidentally override the legacy
    look on a pre-migration card mid-rollout. */
-.mini-tag.tag--open   { color: var(--accent-bright); background: var(--accent-soft); border: 1px solid rgba(16, 185, 129, 0.22); }
+.mini-tag.tag--open   { color: var(--accent-bright); background: var(--accent-soft); border: 1px solid rgba(168, 217, 184, 0.22); }
 .mini-tag.tag--closed { color: #8b96ab; background: rgba(139, 150, 171, 0.08); border: 1px solid rgba(139, 150, 171, 0.2); }
-.mini-tag.tag--merged { color: #b199f6; background: rgba(139, 92, 246, 0.08); border: 1px solid rgba(139, 92, 246, 0.24); }
-.mini-tag.tag--draft  { color: #fcd34d; background: rgba(245, 158, 11, 0.06); border: 1px solid rgba(245, 158, 11, 0.2); }
+.mini-tag.tag--merged { color: #D5B7FF; background: rgba(181, 132, 255, 0.08); border: 1px solid rgba(181, 132, 255, 0.24); }
+.mini-tag.tag--draft  { color: #E4C885; background: rgba(217, 184, 110, 0.06); border: 1px solid rgba(217, 184, 110, 0.2); }
 
 /* Focus pane */
 .focus { display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
@@ -607,7 +703,22 @@ kbd {
 .focus-source-name { font-size: 12px; color: var(--text-2); }
 .focus-branches { font-size: 11.5px; color: var(--text-2); background: var(--bg-1); padding: 2px 8px; border-radius: 5px; border: 1px solid var(--border-neutral); }
 
-.focus-title { font-size: 26px; line-height: 1.2; letter-spacing: -0.02em; font-weight: 600; margin-bottom: 16px; max-width: 720px; color: var(--text-0); }
+.focus-title {
+  font-family: 'Instrument Serif', 'New York', Georgia, serif;
+  font-size: 30px; line-height: 1.18; letter-spacing: -0.02em;
+  font-weight: 400;
+  margin-bottom: 16px; max-width: 720px;
+  color: var(--text-0);
+}
+
+/* Utility: editorial serif. Use for hero titles, empty-state heads,
+   detail-pane page titles. Inter stays for dense UI; serif lives only
+   on the moments that benefit from a slower, editorial pace. */
+.serif {
+  font-family: 'Instrument Serif', 'New York', Georgia, serif;
+  font-weight: 400;
+  letter-spacing: -0.015em;
+}
 .focus-labels { display: flex; gap: 6px; margin-bottom: 16px; flex-wrap: wrap; }
 .label-chip {
   font-size: 11px; padding: 2px 9px; border-radius: 999px;
@@ -626,7 +737,7 @@ kbd {
 .focus-meta-item { display: inline-flex; align-items: center; gap: 6px; }
 .meta-avatar { width: 18px; height: 18px; border-radius: 50%; }
 .chg-add { color: var(--accent-bright); }
-.chg-del { color: #fca5a5; }
+.chg-del { color: #F0A38A; }
 
 .detail-tabs { display: flex; gap: 2px; margin-bottom: 20px; border-bottom: 1px solid var(--border-neutral); }
 .detail-tab {
@@ -644,16 +755,16 @@ kbd {
   color: var(--text-1);
 }
 .detail-tab.active .tab-count { background: var(--accent-soft); color: var(--accent-bright); }
-.tab-count--ok { background: rgba(16, 185, 129, 0.18); color: #34d399; }
-.tab-count--err { background: rgba(239, 68, 68, 0.18); color: #fca5a5; }
-.tab-count--pending { background: rgba(234, 179, 8, 0.16); color: #fcd34d; }
+.tab-count--ok { background: rgba(168, 217, 184, 0.18); color: #A8D9B8; }
+.tab-count--err { background: rgba(232, 130, 100, 0.18); color: #F0A38A; }
+.tab-count--pending { background: rgba(234, 179, 8, 0.16); color: #E4C885; }
 
 .tab-pane { min-height: 100px; }
 .tab-state { padding: 40px; text-align: center; color: var(--text-2); font-size: 13px; }
-.tab-state--error { color: #fca5a5; }
+.tab-state--error { color: #F0A38A; }
 .tab-error {
-  padding: 12px 14px; font-size: 12.5px; color: #fca5a5;
-  background: rgba(239, 68, 68, 0.06); border: 1px solid rgba(239, 68, 68, 0.22);
+  padding: 12px 14px; font-size: 12.5px; color: #F0A38A;
+  background: rgba(232, 130, 100, 0.06); border: 1px solid rgba(232, 130, 100, 0.22);
   border-radius: 8px; margin-bottom: 16px;
 }
 
@@ -670,9 +781,9 @@ kbd {
   border: 1px solid var(--border-neutral);
 }
 .check-pill--total { background: var(--bg-2); color: var(--text-1); }
-.check-pill--ok { background: rgba(16, 185, 129, 0.12); color: #34d399; border-color: rgba(16, 185, 129, 0.3); }
-.check-pill--err { background: rgba(239, 68, 68, 0.12); color: #fca5a5; border-color: rgba(239, 68, 68, 0.3); }
-.check-pill--pending { background: rgba(234, 179, 8, 0.12); color: #fcd34d; border-color: rgba(234, 179, 8, 0.3); }
+.check-pill--ok { background: rgba(168, 217, 184, 0.12); color: #A8D9B8; border-color: rgba(168, 217, 184, 0.3); }
+.check-pill--err { background: rgba(232, 130, 100, 0.12); color: #F0A38A; border-color: rgba(232, 130, 100, 0.3); }
+.check-pill--pending { background: rgba(234, 179, 8, 0.12); color: #E4C885; border-color: rgba(234, 179, 8, 0.3); }
 .check-pill--skip { background: var(--bg-2); color: var(--text-mute); }
 
 .check-list { display: flex; flex-direction: column; }
@@ -689,9 +800,9 @@ kbd {
   font-size: 12px; font-weight: 700;
   flex-shrink: 0;
 }
-.check-icon--success { background: rgba(16, 185, 129, 0.15); color: #34d399; }
-.check-icon--failure { background: rgba(239, 68, 68, 0.15); color: #fca5a5; }
-.check-icon--pending { background: rgba(234, 179, 8, 0.15); color: #fcd34d; animation: check-spin 1.6s linear infinite; }
+.check-icon--success { background: rgba(168, 217, 184, 0.15); color: #A8D9B8; }
+.check-icon--failure { background: rgba(232, 130, 100, 0.15); color: #F0A38A; }
+.check-icon--pending { background: rgba(234, 179, 8, 0.15); color: #E4C885; animation: check-spin 1.6s linear infinite; }
 .check-icon--skipped,
 .check-icon--cancelled,
 .check-icon--neutral { background: var(--bg-2); color: var(--text-mute); }
@@ -740,19 +851,19 @@ kbd {
 }
 .meta-time { margin-left: auto; color: var(--text-mute); font-size: 11px; }
 
-.review-item.rev--approved .review-state { color: var(--accent-bright); background: var(--accent-soft); border-color: rgba(16, 185, 129, 0.3); }
-.review-item.rev--changes .review-state { color: #fca5a5; background: rgba(239, 68, 68, 0.08); border-color: rgba(239, 68, 68, 0.28); }
-.review-item.rev--commented .review-state { color: var(--blue-bright); background: rgba(59, 130, 246, 0.08); border-color: rgba(59, 130, 246, 0.24); }
+.review-item.rev--approved .review-state { color: var(--accent-bright); background: var(--accent-soft); border-color: rgba(168, 217, 184, 0.3); }
+.review-item.rev--changes .review-state { color: #F0A38A; background: rgba(232, 130, 100, 0.08); border-color: rgba(232, 130, 100, 0.28); }
+.review-item.rev--commented .review-state { color: var(--blue-bright); background: rgba(79, 142, 255, 0.08); border-color: rgba(79, 142, 255, 0.24); }
 .review-item.rev--approved { border-left: 3px solid var(--accent); }
-.review-item.rev--changes { border-left: 3px solid #fca5a5; }
+.review-item.rev--changes { border-left: 3px solid #F0A38A; }
 
 .review-empty { font-size: 12.5px; color: var(--text-mute); font-style: italic; }
 .review-inline-link {
   margin-top: 10px;
   display: inline-flex; align-items: center; gap: 6px;
   padding: 6px 10px;
-  background: rgba(59, 130, 246, 0.08);
-  border: 1px solid rgba(59, 130, 246, 0.22);
+  background: rgba(79, 142, 255, 0.08);
+  border: 1px solid rgba(79, 142, 255, 0.22);
   border-radius: 7px;
   color: var(--blue-bright);
   font-size: 12px; font-weight: 500;
@@ -760,8 +871,8 @@ kbd {
   cursor: pointer;
 }
 .review-inline-link:hover {
-  background: rgba(59, 130, 246, 0.14);
-  border-color: rgba(59, 130, 246, 0.35);
+  background: rgba(79, 142, 255, 0.14);
+  border-color: rgba(79, 142, 255, 0.35);
   transform: translateY(-1px);
 }
 
@@ -811,10 +922,10 @@ kbd {
   font-size: 10px; font-weight: 700; text-transform: uppercase;
   letter-spacing: 0.06em; padding: 2px 7px; border-radius: 4px;
 }
-.file-status--added    { color: var(--accent-bright); background: var(--accent-soft); border: 1px solid rgba(16, 185, 129, 0.24); }
-.file-status--modified { color: var(--blue-bright); background: rgba(59, 130, 246, 0.08); border: 1px solid rgba(59, 130, 246, 0.22); }
-.file-status--removed  { color: #fca5a5; background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.22); }
-.file-status--renamed  { color: #fcd34d; background: rgba(245, 158, 11, 0.06); border: 1px solid rgba(245, 158, 11, 0.22); }
+.file-status--added    { color: var(--accent-bright); background: var(--accent-soft); border: 1px solid rgba(168, 217, 184, 0.24); }
+.file-status--modified { color: var(--blue-bright); background: rgba(79, 142, 255, 0.08); border: 1px solid rgba(79, 142, 255, 0.22); }
+.file-status--removed  { color: #F0A38A; background: rgba(232, 130, 100, 0.08); border: 1px solid rgba(232, 130, 100, 0.22); }
+.file-status--renamed  { color: #E4C885; background: rgba(217, 184, 110, 0.06); border: 1px solid rgba(217, 184, 110, 0.22); }
 .file-name { flex: 1; font-size: 12.5px; color: var(--text-0); overflow-wrap: anywhere; }
 .file-changes { display: inline-flex; gap: 8px; font-size: 11px; }
 .file-comments-badge {
@@ -822,7 +933,7 @@ kbd {
   padding: 1px 7px;
   border-radius: 999px;
   background: var(--blue-deep); color: var(--blue-bright);
-  border: 1px solid rgba(59, 130, 246, 0.3);
+  border: 1px solid rgba(79, 142, 255, 0.3);
 }
 
 /* Diff view */
@@ -854,10 +965,10 @@ kbd {
   position: sticky; left: 0;
 }
 .diff-line-content { padding: 0 14px; white-space: pre; color: var(--text-1); }
-.diff-line.add .diff-line-content { background: rgba(16, 185, 129, 0.08); color: #6ee7b7; }
-.diff-line.add .diff-line-num { background: rgba(16, 185, 129, 0.12); color: #6ee7b7; }
-.diff-line.del .diff-line-content { background: rgba(239, 68, 68, 0.07); color: #fca5a5; }
-.diff-line.del .diff-line-num { background: rgba(239, 68, 68, 0.1); color: #fca5a5; }
+.diff-line.add .diff-line-content { background: rgba(168, 217, 184, 0.08); color: #A8DEC8; }
+.diff-line.add .diff-line-num { background: rgba(168, 217, 184, 0.12); color: #A8DEC8; }
+.diff-line.del .diff-line-content { background: rgba(232, 130, 100, 0.07); color: #F0A38A; }
+.diff-line.del .diff-line-num { background: rgba(232, 130, 100, 0.1); color: #F0A38A; }
 
 /* Inline comments on files */
 .inline-comments {
@@ -904,24 +1015,28 @@ kbd {
 .btn--ghost:hover:not(:disabled) { background: var(--bg-1); color: var(--text-0); border-color: var(--border-hi2); }
 .btn--primary {
   color: var(--accent-fg);
-  background: linear-gradient(135deg, #34d399, #10b981);
-  box-shadow: 0 4px 14px rgba(16, 185, 129, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  background: linear-gradient(180deg, var(--accent-bright), var(--accent));
+  box-shadow:
+    0 6px 18px rgba(204, 120, 92, 0.30),
+    inset 0 1px 0 rgba(255, 230, 200, 0.32);
   font-weight: 600;
 }
 .btn--primary:hover:not(:disabled) {
   transform: translateY(-1px);
-  box-shadow: 0 6px 20px rgba(16, 185, 129, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+  box-shadow:
+    0 8px 22px rgba(204, 120, 92, 0.38),
+    inset 0 1px 0 rgba(255, 230, 200, 0.36);
 }
 .btn--danger {
   color: #ffe4e4;
-  background: linear-gradient(135deg, #ef4444, #b91c1c);
-  border: 1px solid rgba(239, 68, 68, 0.4);
-  box-shadow: 0 4px 14px rgba(239, 68, 68, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.14);
+  background: linear-gradient(135deg, #E88264, #b91c1c);
+  border: 1px solid rgba(232, 130, 100, 0.4);
+  box-shadow: 0 4px 14px rgba(232, 130, 100, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.14);
   font-weight: 600;
 }
 .btn--danger:hover:not(:disabled) {
   transform: translateY(-1px);
-  box-shadow: 0 6px 20px rgba(239, 68, 68, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  box-shadow: 0 6px 20px rgba(232, 130, 100, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.2);
 }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .btn--small { padding: 6px 12px; font-size: 12px; justify-content: flex-start; }
@@ -1012,7 +1127,7 @@ kbd {
 .cwd-chip:hover { border-color: var(--border-hi); color: var(--text-0); }
 .cwd-chip.has-cwd {
   border-style: solid;
-  border-color: rgba(16, 185, 129, 0.25);
+  border-color: rgba(168, 217, 184, 0.25);
   background: var(--accent-soft);
   color: var(--accent-bright);
 }
@@ -1197,7 +1312,7 @@ kbd {
   padding: 1px 5px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.linked-pill--compact :global(svg) { width: 10px; height: 10px; }
+.linked-pill--compact svg { width: 10px; height: 10px; }
 /* Embedded X button inside a compact pill (used by Editor's per-agent
    list — the chat side has a separate dashed Unlink button next to its
    pill instead). Stays muted at rest, flares red on hover. */
@@ -1373,14 +1488,14 @@ kbd {
   border-radius: 50%;
   display: inline-flex; align-items: center; justify-content: center;
   font-size: 10px; font-weight: 600;
-  background: linear-gradient(135deg, #3b82f6, #10b981);
+  background: linear-gradient(135deg, #4F8EFF, #7DC9B0);
   color: #fff;
   object-fit: cover;
   overflow: hidden;
   flex-shrink: 0;
 }
 .chat-avatar--claude {
-  background: linear-gradient(135deg, #10b981, #047857);
+  background: linear-gradient(135deg, #7DC9B0, #047857);
   color: var(--accent-fg);
   font-weight: 700;
 }
@@ -1459,24 +1574,24 @@ img.chat-avatar { padding: 0; }
   flex-shrink: 0;
   border-radius: 10px;
   color: var(--accent-fg);
-  background: linear-gradient(135deg, #34d399, #10b981);
-  box-shadow: 0 2px 8px rgba(16, 185, 129, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  background: linear-gradient(135deg, #A8D9B8, #7DC9B0);
+  box-shadow: 0 2px 8px rgba(168, 217, 184, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.2);
   display: inline-flex; align-items: center; justify-content: center;
   transition: all 120ms;
 }
 .chat-send:hover:not(:disabled) {
-  box-shadow: 0 4px 14px rgba(16, 185, 129, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+  box-shadow: 0 4px 14px rgba(168, 217, 184, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.25);
   transform: translateY(-1px);
 }
 .chat-send:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .chat-stop {
-  background: linear-gradient(135deg, #f87171, #ef4444);
-  box-shadow: 0 2px 8px rgba(239, 68, 68, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  background: linear-gradient(135deg, #f87171, #E88264);
+  box-shadow: 0 2px 8px rgba(232, 130, 100, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.2);
   color: #fff;
 }
 .chat-stop:hover {
-  box-shadow: 0 4px 14px rgba(239, 68, 68, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+  box-shadow: 0 4px 14px rgba(232, 130, 100, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.25);
   transform: translateY(-1px);
 }
 
@@ -1535,7 +1650,7 @@ img.chat-avatar { padding: 0; }
 }
 .chat-tab:hover .chat-tab-close,
 .chat-tab.active .chat-tab-close { opacity: 1; }
-.chat-tab-close:hover { background: var(--bg-3); color: #fca5a5; }
+.chat-tab-close:hover { background: var(--bg-3); color: #F0A38A; }
 
 .chat-new {
   width: 26px; height: 26px;
@@ -1619,36 +1734,42 @@ img.chat-avatar { padding: 0; }
 .user-row-email { font-size: 11.5px; color: var(--text-2); margin-top: 2px; }
 
 /* Conn-icon color variants — used by ConnectionsView and inbox source marks. */
-.conn-icon--jira   { background: rgba(59, 130, 246, 0.12); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.24); }
-.conn-icon--github { background: rgba(139, 92, 246, 0.1);  color: #b199f6; border: 1px solid rgba(139, 92, 246, 0.22); }
+.conn-icon--jira   { background: rgba(79, 142, 255, 0.12); color: #60a5fa; border: 1px solid rgba(79, 142, 255, 0.24); }
+.conn-icon--github { background: rgba(181, 132, 255, 0.1);  color: #D5B7FF; border: 1px solid rgba(181, 132, 255, 0.22); }
 .conn-icon--sentry { background: rgba(248, 143, 116, 0.08); color: #f8a994; border: 1px solid rgba(248, 143, 116, 0.2); }
 .conn-icon--slack  { background: rgba(236, 72, 153, 0.1);  color: #f472b6; border: 1px solid rgba(236, 72, 153, 0.22); }
-.conn-icon--claude { background: rgba(16, 185, 129, 0.12); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.24); }
+.conn-icon--claude { background: rgba(168, 217, 184, 0.12); color: #A8D9B8; border: 1px solid rgba(168, 217, 184, 0.24); }
 .conn-icon--cursor { background: rgba(255, 255, 255, 0.05); color: #e5ebf4; border: 1px solid rgba(255, 255, 255, 0.1); }
 .conn-icon--codex  { background: rgba(255, 255, 255, 0.05); color: #e5ebf4; border: 1px solid rgba(255, 255, 255, 0.1); }
-.conn-icon--aider  { background: rgba(167, 139, 250, 0.08); color: #b199f6; border: 1px solid rgba(167, 139, 250, 0.2); }
+.conn-icon--aider  { background: rgba(167, 139, 250, 0.08); color: #D5B7FF; border: 1px solid rgba(167, 139, 250, 0.2); }
 .conn-icon--copilot{ background: rgba(100, 116, 139, 0.1); color: #8b96ab; border: 1px solid rgba(255, 255, 255, 0.12); }
 .conn-icon--linear { background: rgba(94, 106, 210, 0.12); color: #8e9ae8; border: 1px solid rgba(94, 106, 210, 0.22); }
 .conn-icon--notion { background: rgba(255, 255, 255, 0.05); color: #e5ebf4; border: 1px solid rgba(255, 255, 255, 0.1); }
 .conn-icon--teams  { background: rgba(70, 87, 192, 0.12); color: #8795eb; border: 1px solid rgba(70, 87, 192, 0.22); }
-.conn-icon--gitlab { background: rgba(245, 158, 11, 0.08); color: #fcd34d; border: 1px solid rgba(245, 158, 11, 0.22); }
+.conn-icon--gitlab { background: rgba(217, 184, 110, 0.08); color: #E4C885; border: 1px solid rgba(217, 184, 110, 0.22); }
 .conn-icon--asana  { background: rgba(236, 105, 106, 0.08); color: #f4888a; border: 1px solid rgba(236, 105, 106, 0.2); }
 
 /* Modals (shared) */
 .modal-backdrop {
   position: fixed; inset: 0;
   background: var(--backdrop);
-  backdrop-filter: blur(20px);
+  backdrop-filter: blur(22px) saturate(1.1);
+  -webkit-backdrop-filter: blur(22px) saturate(1.1);
   display: flex; align-items: center; justify-content: center;
   z-index: 210;
   animation: fadeIn 180ms ease-out;
 }
 .modal {
   width: 480px; max-width: 90vw;
-  background: var(--bg-1); border: 1px solid var(--border-hi2); border-radius: 14px;
-  box-shadow: var(--shadow-3), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  background: linear-gradient(180deg, var(--bg-2), var(--bg-1));
+  border: 1px solid var(--border-hi);
+  border-radius: var(--r-modal, 16px);
+  box-shadow:
+    var(--shadow-3),
+    0 0 0 1px var(--border-accent-2),
+    inset 0 1px 0 rgba(245, 240, 234, 0.04);
   overflow: hidden;
-  animation: slideDown 220ms cubic-bezier(0.34, 1.56, 0.64, 1);
+  animation: slideDown 220ms cubic-bezier(0.2, 0.9, 0.3, 1.2);
   display: flex; flex-direction: column;
   max-height: 90vh;
 }
@@ -1656,12 +1777,22 @@ img.chat-avatar { padding: 0; }
 .modal-xl { width: min(1040px, 96vw); max-height: 92vh; }
 .modal-head {
   display: flex; align-items: center; gap: 12px;
-  padding: 20px 20px 14px;
-  border-bottom: 1px solid var(--border-neutral);
+  padding: 22px 22px 16px;
+  border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
-.modal-title { font-size: 15px; font-weight: 600; color: var(--text-0); }
-.modal-sub { font-size: 12px; color: var(--text-2); margin-top: 2px; }
+.modal-title {
+  font-family: 'Instrument Serif', 'New York', Georgia, serif;
+  font-size: 22px; font-weight: 400;
+  letter-spacing: -0.015em; line-height: 1.2;
+  color: var(--text-0);
+}
+.modal-sub {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10.5px; color: var(--text-mute);
+  margin-top: 4px;
+  letter-spacing: 0.06em; text-transform: uppercase;
+}
 .modal-close {
   margin-left: auto; width: 28px; height: 28px;
   border-radius: 7px; color: var(--text-2);
@@ -1733,9 +1864,9 @@ img.chat-avatar { padding: 0; }
 .radio-desc { font-size: 11.5px; color: var(--text-2); margin-top: 2px; }
 
 .modal-error {
-  font-size: 12px; color: #fca5a5;
-  background: rgba(239, 68, 68, 0.08);
-  border: 1px solid rgba(239, 68, 68, 0.22);
+  font-size: 12px; color: #F0A38A;
+  background: rgba(232, 130, 100, 0.08);
+  border: 1px solid rgba(232, 130, 100, 0.22);
   border-radius: 7px;
   padding: 8px 10px;
 }
@@ -1916,6 +2047,35 @@ img.chat-avatar { padding: 0; }
   animation: slideInRight 240ms cubic-bezier(0.34, 1.56, 0.64, 1);
   position: relative;
 }
+
+/* Inline mode for slide-over panels rendered INSIDE an `.app-shell`
+   (e.g. when used as a column-pane instead of a global modal). The
+   chrome — fixed positioning, backdrop, slide animation, border-
+   left, drop shadow — is stripped so the panel reads as a regular
+   pane. Components that have a dedicated inline prop (like
+   GithubFocusOverlay) opt out of `.slide-over` entirely; this rule
+   covers components that still emit `.slide-over` markup (e.g.
+   JiraDetailPane / SentryDetailPane wrappers in +page.svelte) when
+   they happen to land inside an app-shell. */
+.app-shell .slide-over {
+  position: static;
+  inset: auto;
+  background: transparent;
+  backdrop-filter: none;
+  z-index: auto;
+  animation: none;
+  display: flex;
+  flex: 1; min-height: 0;
+  justify-content: stretch;
+}
+.app-shell .slide-panel {
+  width: 100%;
+  height: auto;
+  border-left: none;
+  box-shadow: none;
+  animation: none;
+  flex: 1; min-height: 0;
+}
 .slide-close {
   position: absolute;
   top: 12px; right: 16px;
@@ -1960,3 +2120,4 @@ img.chat-avatar { padding: 0; }
   from { transform: translateX(40px); opacity: 0; }
   to   { transform: translateX(0); opacity: 1; }
 }
+

@@ -1,7 +1,7 @@
 //! Localhost HTTP bridge for the terminal MCP tools.
 //!
-//! Why HTTP at all? The `forgehold-app` MCP sidecar lives in its own
-//! process — spawned by Claude / Cursor, not by Forgehold-desktop —
+//! Why HTTP at all? The `woom-app` MCP sidecar lives in its own
+//! process — spawned by Claude / Cursor, not by Woom-desktop —
 //! so it can't reach the in-memory `TerminalRegistry` directly. The
 //! cleanest IPC is a tiny axum server bound to `127.0.0.1:<random>`
 //! that exposes the registry as a small REST surface. Sidecar reads
@@ -61,7 +61,6 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 use std::io::Write as _;
 use tauri::{AppHandle, Emitter, Manager};
-use uuid::Uuid;
 
 use crate::terminal::TerminalRegistry;
 

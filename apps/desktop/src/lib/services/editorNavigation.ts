@@ -16,75 +16,35 @@ import {
   sessionsState,
   requestEditorOpenFile
 } from '$lib/state/sessions.svelte';
-import {
-  findInstanceAnywhere,
-  firstInstanceOfKind,
-  addPanelInstance,
-  scrollInstanceIntoView
-} from '$lib/state/layout.svelte';
+import { APP_INSTANCE_IDS } from '$lib/state/layout.svelte';
 
 export interface OpenFileInEditorOpts {
-  /** Preferred editor column id — usually the session's
-   *  `linkedToEditorInstanceId`. We check it still exists; if it was
-   *  closed we fall back to the first editor in the active workbench
-   *  (and, last resort, spawn a new editor). */
+  /** Kept for API compat with callers that used to pass a preferred
+   *  editor instance id. App mode has only one editor — the value is
+   *  ignored when it doesn't match the singleton id. */
   preferInstanceId?: string | null;
 }
 
-/** Open `filePath` in an editor column, creating one if needed. Steps:
- *    1. Pick the target editor:
- *         a. `preferInstanceId` if it still exists.
- *         b. else first editor in the active workbench.
- *         c. else spawn a fresh editor in the active workbench.
- *    2. ONLY set the editor's repoPath when the editor has none yet —
- *       i.e. it was just spawned, or has never had a folder opened.
- *       In that case we resolve `git_repo_root(filePath)` (or fall
- *       back to the file's parent directory) and use that as the
- *       initial root.
+/** Open `filePath` in the editor solo singleton.
  *
- *       We deliberately do NOT touch the repoPath when the editor
- *       already has one, even if it doesn't cover `filePath`. Users
- *       click file paths from agent output expecting to *peek* at the
- *       file in a tab — clobbering FileTree's root would lose their
- *       navigation context (and was a real bug — clicking a path from
- *       another repo dragged the editor into that repo and left the
- *       user looking at the wrong file tree).
- *    3. Stash `filePath` in the editor's `pendingOpenFile` slot —
- *       EditorView's $effect picks it up and runs the local
- *       `openFile` (which adds a tab + activates it). Tabs are
- *       repoPath-independent, so files outside the current root just
- *       show up as standalone tabs without affecting the tree.
- *    4. Scroll the column into view so the user sees the result.
+ *  When the editor has no repoPath yet, we resolve `git_repo_root` for
+ *  the file and use it as the initial root. If the editor already has
+ *  a repoPath, we leave it alone — files outside the root open as
+ *  orphan tabs, which is what users want ("peek at one file from repo
+ *  B without losing my tree in repo A").
  *
- *  Errors are swallowed — the worst case is "the editor opens its
- *  folder but doesn't focus the file" or "no editor opens at all"; we
- *  prefer that to a noisy notify when the user just wanted to peek at
- *  a path and the lookup hit a transient git failure. */
+ *  Errors are swallowed: the worst case is "no folder gets bootstrapped"
+ *  or "the file just opens as an orphan tab" — preferable to a noisy
+ *  toast when the user just wanted to peek at a path. */
 export async function openFileInEditor(
   filePath: string,
-  opts: OpenFileInEditorOpts = {}
+  _opts: OpenFileInEditorOpts = {}
 ): Promise<void> {
   if (!filePath) return;
 
-  let instanceId: string | null = null;
-  if (opts.preferInstanceId) {
-    const found = findInstanceAnywhere(opts.preferInstanceId);
-    if (found && found.inst.kind === 'editor') instanceId = found.inst.id;
-  }
-  if (!instanceId) {
-    const first = firstInstanceOfKind('editor');
-    if (first) instanceId = first.id;
-  }
-  if (!instanceId) {
-    instanceId = addPanelInstance('editor');
-  }
-  if (!instanceId) return;
+  const instanceId = APP_INSTANCE_IDS.editor;
 
   const currentRepo = sessionsState.editorInstanceState[instanceId]?.repoPath ?? '';
-  // Bootstrap repoPath only when the editor is empty. If the user
-  // already has a folder open, leave it alone — files outside the root
-  // open as orphan tabs, which is what users expect ("I'm browsing repo
-  // A, let me peek at one file from repo B without losing my tree").
   if (!currentRepo) {
     let nextRoot = '';
     try {
@@ -108,5 +68,4 @@ export async function openFileInEditor(
   }
 
   requestEditorOpenFile(instanceId, filePath);
-  void scrollInstanceIntoView(instanceId);
 }

@@ -148,13 +148,13 @@
     flex-shrink: 0;
     font-size: 10.5px; color: var(--accent-bright);
     background: var(--accent-soft);
-    border: 1px solid rgba(232, 163, 58, 0.18);
+    border: 1px solid rgba(204, 120, 92, 0.18);
     border-radius: 3px;
     padding: 1px 5px;
     cursor: pointer;
     line-height: 1.4;
   }
-  .hp-sha:hover { background: rgba(232, 163, 58, 0.18); }
+  .hp-sha:hover { background: rgba(204, 120, 92, 0.18); }
   .hp-body { flex: 1; min-width: 0; }
   .hp-subject {
     font-size: 12px; color: var(--text-0); line-height: 1.35;

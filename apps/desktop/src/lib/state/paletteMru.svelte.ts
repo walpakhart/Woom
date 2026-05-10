@@ -6,12 +6,12 @@
  * small score boost so a row the user has just touched is more
  * likely to surface for the next abbreviated query.
  *
- * Stored in localStorage under `forgehold:palette-mru:v1` so the
+ * Stored in localStorage under `woom:palette-mru:v1` so the
  * boost survives app restarts. Bounded list keeps the tracker O(1)
  * lookup via the in-memory Map regardless of history depth.
  */
 
-const STORAGE_KEY = 'forgehold:palette-mru:v1';
+const STORAGE_KEY = 'woom:palette-mru:v1';
 const MAX_ENTRIES = 50;
 
 const initial = loadMru();

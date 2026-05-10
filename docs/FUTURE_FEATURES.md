@@ -1,4 +1,4 @@
-# Forgehold — Future Features (post-1.0 backlog)
+# Woom — Future Features (post-1.0 backlog)
 
 **Version:** 0.1
 **Last updated:** 2026-04-29
@@ -34,7 +34,7 @@ is well-trodden; the cost is mostly per-source domain modelling.
 - **Pitch:** A column for the channels and threads the user actually
   follows, with the agent able to post / search / DM and link any
   message into a canvas.
-- **Anatomy:** `forgehold-slack` sidecar (Bolt + RTM); `slack` column
+- **Anatomy:** `woom-slack` sidecar (Bolt + RTM); `slack` column
   with Workspace → Channel filters; slide-over for a thread; agent
   tools `slack.search`, `slack.post_message`, `slack.add_reaction`.
 - **Effort:** L. Slack's surface is huge; we ship channels + threads
@@ -49,7 +49,7 @@ is well-trodden; the cost is mostly per-source domain modelling.
 - **Pitch:** Mirror of the Jira pattern. Column with views / cycles /
   triage; slide-over with sub-issues / parent / project; agent can
   triage / move / comment.
-- **Anatomy:** `forgehold-linear` sidecar over Linear's GraphQL.
+- **Anatomy:** `woom-linear` sidecar over Linear's GraphQL.
   `LinearColumn`, `LinearTab` (org browser), filters as chips.
 - **Effort:** M (Linear's API is clean).
 - **Value:** essential for Linear-native teams.
@@ -58,7 +58,7 @@ is well-trodden; the cost is mostly per-source domain modelling.
 ### A.3 GitLab
 
 - **Pitch:** GitHub-shaped column for self-hosted teams.
-- **Anatomy:** `forgehold-gitlab` sidecar; same `code/MRs/issues/CI/
+- **Anatomy:** `woom-gitlab` sidecar; same `code/MRs/issues/CI/
   releases` sections; same propose-* shape.
 - **Effort:** M (mostly remap the GitHub adapter).
 - **Value:** important.
@@ -69,7 +69,7 @@ is well-trodden; the cost is mostly per-source domain modelling.
 
 - **Pitch:** A read-mostly column for design docs, plus drag-into-
   agent / canvas for any page.
-- **Anatomy:** `forgehold-notion` sidecar; "page tree" sidebar plus
+- **Anatomy:** `woom-notion` sidecar; "page tree" sidebar plus
   page renderer (Notion-flavour MD); slide-over with page content.
 - **Effort:** M.
 - **Value:** important for doc-heavy teams.
@@ -79,7 +79,7 @@ is well-trodden; the cost is mostly per-source domain modelling.
 ### A.5 Discord
 
 - **Pitch:** Same as Slack but for community / OSS workflows.
-- **Anatomy:** `forgehold-discord` sidecar; Server → Channel; same
+- **Anatomy:** `woom-discord` sidecar; Server → Channel; same
   slide-over thread. No DMs unless explicitly opted in.
 - **Effort:** L.
 - **Value:** nice-to-have (niche audience).
@@ -88,7 +88,7 @@ is well-trodden; the cost is mostly per-source domain modelling.
 
 - **Pitch:** Logs, metrics, traces, dashboards in a column. Drag a
   trace into an agent; pin a flame-graph onto a canvas.
-- **Anatomy:** `forgehold-datadog` sidecar; column flavours `Logs`,
+- **Anatomy:** `woom-datadog` sidecar; column flavours `Logs`,
   `Metrics`, `APM`, `Dashboards`. Logs section streams via Datadog's
   events API. Metrics widget renders sparklines.
 - **Effort:** XL — APM data is its own beast.
@@ -101,7 +101,7 @@ is well-trodden; the cost is mostly per-source domain modelling.
 
 - **Pitch:** Active incident column + on-call schedule overlay so you
   see who's primary right now.
-- **Anatomy:** `forgehold-pagerduty` sidecar; `Incidents` column;
+- **Anatomy:** `woom-pagerduty` sidecar; `Incidents` column;
   slide-over per incident with timeline; "ack / resolve / escalate"
   mutations.
 - **Effort:** M.
@@ -124,7 +124,7 @@ is well-trodden; the cost is mostly per-source domain modelling.
 
 - **Pitch:** `kubectl get pods --watch` as a column, with a slide-
   over per pod (logs + events + describe).
-- **Anatomy:** `forgehold-k8s` sidecar talking to a kubeconfig; column
+- **Anatomy:** `woom-k8s` sidecar talking to a kubeconfig; column
   filters context + namespace + label-selector; slide-over with
   `Logs / Events / Describe / Exec` tabs (exec opens an embedded
   terminal).
@@ -136,7 +136,7 @@ is well-trodden; the cost is mostly per-source domain modelling.
 
 - **Pitch:** A timeline column with today's meetings + linked
   tickets / PRs / docs per event.
-- **Anatomy:** `forgehold-calendar` sidecar; column shows agenda +
+- **Anatomy:** `woom-calendar` sidecar; column shows agenda +
   busy-slots; per-event tabs link to a workbench preset.
 - **Effort:** M.
 - **Value:** nice-to-have for solo devs, important in PM-heavy roles.
@@ -145,7 +145,7 @@ is well-trodden; the cost is mostly per-source domain modelling.
 
 - **Pitch:** Customer support workflow — find an order, refund, see
   the related Sentry trace.
-- **Anatomy:** `forgehold-stripe` sidecar; `Customers` column with
+- **Anatomy:** `woom-stripe` sidecar; `Customers` column with
   search; per-customer slide-over with charges / refunds / linked
   Sentry user.
 - **Effort:** L.
@@ -162,14 +162,14 @@ is well-trodden; the cost is mostly per-source domain modelling.
 
 ---
 
-## B. New columns (Forgehold-internal surfaces)
+## B. New columns (Woom-internal surfaces)
 
 Things that don't reach out to a third party — they just give the user
 new tools inside the workbench.
 
 ### B.1 Terminal column
 
-- **Pitch:** A real terminal column (like iTerm2 inside Forgehold) so
+- **Pitch:** A real terminal column (like iTerm2 inside Woom) so
   the agent's `effectiveCwd` and your shell live side-by-side.
 - **Anatomy:** xterm.js + a Tauri PTY backend; tabs per shell session;
   inherits `effectiveCwd` from the linked agent / editor; `propose_
@@ -183,7 +183,7 @@ new tools inside the workbench.
 
 - **Pitch:** Connect a Postgres / MySQL / SQLite / Mongo / Redis;
   browse schemas, run queries, save snippets, inspect row counts.
-- **Anatomy:** `forgehold-db` sidecar (per backend); column with
+- **Anatomy:** `woom-db` sidecar (per backend); column with
   `Schema sidebar / Query editor (CodeMirror SQL) / Result table`;
   slide-over with row detail + edit; agent gets `db.run_query` tool.
 - **Effort:** XL.
@@ -206,7 +206,7 @@ new tools inside the workbench.
 - **Pitch:** Plain markdown notes per workspace, wiki-linked
   (`[[other-note]]`), drag-to-canvas to import the body as a sticky.
 - **Anatomy:** A flat folder of `.md` files
-  (`~/Library/Application Support/Forgehold/notes/`); column shows
+  (`~/Library/Application Support/Woom/notes/`); column shows
   list + active note; CodeMirror MD editor with preview pane.
 - **Effort:** M.
 - **Value:** essential — every dev keeps scratch notes somewhere.
@@ -245,7 +245,7 @@ new tools inside the workbench.
 
 ### B.8 Memory / RAG column
 
-- **Pitch:** Visualise what `forgehold-memory` knows. Pin facts,
+- **Pitch:** Visualise what `woom-memory` knows. Pin facts,
   archive, search.
 - **Anatomy:** Renders the memory graph as a list + inline edit; right-
   click "Pin to context" to keep it fresh.
@@ -376,7 +376,7 @@ modes of agent operation.
 
 - **Pitch:** Agent answers "where do we set the auth header?" without
   reading the entire tree by hitting an embedded vector index.
-- **Anatomy:** `forgehold-rag` sidecar building / refreshing a local
+- **Anatomy:** `woom-rag` sidecar building / refreshing a local
   vector index per repo; `rag.query` and `rag.refresh` tools.
 - **Effort:** XL — embeddings + chunking + invalidation is its own
   product.
@@ -430,7 +430,7 @@ have.
 
 ### D.3 Daily digest
 
-- **Pitch:** Morning email-style summary inside Forgehold: "yesterday
+- **Pitch:** Morning email-style summary inside Woom: "yesterday
   you closed 3 tickets, got 2 reviews, X new Sentry errors, here's
   today's calendar".
 - **Anatomy:** Same aggregator as §D.2 + a templated MD output;
@@ -464,7 +464,7 @@ have.
 
 ## E. Workflow & automation
 
-Programmable Forgehold — let users automate the boring routes.
+Programmable Woom — let users automate the boring routes.
 
 ### E.1 Triggers + actions framework
 
@@ -512,7 +512,7 @@ Programmable Forgehold — let users automate the boring routes.
 - **Pitch:** Beyond Keychain — a per-workspace encrypted vault for
   cloud creds / DB strings / SSH keys. Agents request access via an
   approval flow.
-- **Anatomy:** `forgehold-vault` sidecar wrapping age / sops /
+- **Anatomy:** `woom-vault` sidecar wrapping age / sops /
   keyring; agent tool `vault.get(secretName)` that surfaces a
   "Vault: Claude wants `aws-prod-readonly`. Allow?" modal.
 - **Effort:** L.
@@ -531,14 +531,14 @@ Programmable Forgehold — let users automate the boring routes.
 
 ## F. Collaboration / teams
 
-We currently target solo. These flip Forgehold into a team product.
+We currently target solo. These flip Woom into a team product.
 
 ### F.1 Shared workbenches
 
 - **Pitch:** A workbench saved as a doc in the team org; teammates
   open the same canvas, see the same Sentry filter, follow each
   other's cursor.
-- **Anatomy:** A backend (Forgehold Cloud or self-host) holding
+- **Anatomy:** A backend (Woom Cloud or self-host) holding
   layouts + canvases + chat transcripts. CRDT sync (Y.js).
 - **Effort:** XL.
 - **Value:** essential for any team-positioning move.
@@ -596,7 +596,7 @@ We currently target solo. These flip Forgehold into a team product.
 
 - **Pitch:** Share a canvas via a public URL; recipient sees a read-
   only render in any browser.
-- **Anatomy:** Static SSR of `Canvas.toJSON()`; hosted by Forgehold
+- **Anatomy:** Static SSR of `Canvas.toJSON()`; hosted by Woom
   Cloud.
 - **Effort:** M.
 - **Value:** nice-to-have for design review / external sharing.
@@ -622,9 +622,9 @@ We currently target solo. These flip Forgehold into a team product.
 ### G.4 Browser extension
 
 - **Pitch:** Right-click any GitHub PR / Jira issue / Sentry event in
-  the browser → "Open in Forgehold". Skips the search step.
+  the browser → "Open in Woom". Skips the search step.
 - **Anatomy:** Chrome / Firefox extension calling a local
-  Forgehold-installed deep link (`forgehold://`).
+  Woom-installed deep link (`woom://`).
 - **Effort:** S.
 - **Value:** important — frictionless entry.
 
@@ -635,8 +635,8 @@ We currently target solo. These flip Forgehold into a team product.
 ### H.1 Public MCP API
 
 - **Pitch:** Document the MCP-on-loopback contract so third parties
-  can ship sidecars Forgehold loads.
-- **Anatomy:** Stable IPC contract + a `~/.config/forgehold/mcps/`
+  can ship sidecars Woom loads.
+- **Anatomy:** Stable IPC contract + a `~/.config/woom/mcps/`
   directory; settings UI to enable / disable user-installed servers.
 - **Effort:** M.
 - **Value:** important for ecosystem moves.
@@ -728,7 +728,7 @@ Small but loved.
 
 ### I.8 Compact / mini mode
 
-- **Pitch:** Collapse Forgehold to a 320×240 widget pinned in the
+- **Pitch:** Collapse Woom to a 320×240 widget pinned in the
   corner showing notifications + agent approvals.
 - **Effort:** M.
 - **Value:** nice-to-have.
@@ -737,7 +737,7 @@ Small but loved.
 
 ## J. Insights / observability for the user
 
-Forgehold has rich data on what the user does. Surface it back.
+Woom has rich data on what the user does. Surface it back.
 
 ### J.1 Personal usage dashboard
 
@@ -776,20 +776,20 @@ Forgehold has rich data on what the user does. Surface it back.
 
 ### K.2 Auto-installer / package managers
 
-- **Pitch:** `brew install forgehold` and `winget install`.
+- **Pitch:** `brew install woom` and `winget install`.
 - **Effort:** S.
 - **Value:** nice-to-have.
 
 ### K.3 Headless mode (CLI)
 
-- **Pitch:** `forgehold run workflow my-triage` — execute a workflow
+- **Pitch:** `woom run workflow my-triage` — execute a workflow
   from the terminal without UI; useful for CI and for cron.
 - **Effort:** L.
 - **Value:** experimental.
 
 ### K.4 Public docs site
 
-- **Pitch:** A real `forgehold.dev` with the module specs, screenshots,
+- **Pitch:** A real `woom.dev` with the module specs, screenshots,
   workflow recipes, integrations directory.
 - **Effort:** M.
 - **Value:** important once we go public.
@@ -843,7 +843,7 @@ If we have to pick what defines 2.0 (a year-ish after 1.0), I'd pick
 
 Devs who try this lock in.
 
-### Anchor 2 — "Forgehold is the inbox"
+### Anchor 2 — "Woom is the inbox"
 
 - A.1 Slack
 - A.2 Linear (if not in 1.x)
@@ -853,7 +853,7 @@ Devs who try this lock in.
 
 Solves the "five tabs, all unread" complaint definitively.
 
-### Anchor 3 — "Forgehold runs itself"
+### Anchor 3 — "Woom runs itself"
 
 - C.1 Watch mode
 - C.2 Auto-pilot
@@ -886,7 +886,7 @@ Things we explicitly *do not* want to be:
 - **A general LLM playground.** Agents are tied to a workspace; no
   "untethered chat" mode.
 
-Keeping this list short and honest is what stops Forgehold from
+Keeping this list short and honest is what stops Woom from
 sprawling into a Microsoft Office of dev tools.
 
 ---

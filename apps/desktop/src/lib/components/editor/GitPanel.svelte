@@ -552,7 +552,7 @@
     padding: 4px 12px 8px;
     font-size: 11.5px; color: var(--error);
     background: var(--bg-2);
-    border-top: 1px dashed rgba(214, 72, 44, 0.3);
+    border-top: 1px dashed rgba(232, 130, 100, 0.3);
     flex-shrink: 0;
   }
 
@@ -584,6 +584,6 @@
   .gp-pr-check { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-1); }
   .gp-pr-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 4px; }
 
-  .gp-error { padding: 8px 12px; font-size: 11.5px; color: var(--error); border-bottom: 1px solid rgba(214, 72, 44, 0.24); background: rgba(214, 72, 44, 0.1); }
+  .gp-error { padding: 8px 12px; font-size: 11.5px; color: var(--error); border-bottom: 1px solid rgba(232, 130, 100, 0.24); background: rgba(232, 130, 100, 0.1); }
   .gp-busy { padding: 6px 12px; font-size: 11px; color: var(--text-2); font-style: italic; }
 </style>

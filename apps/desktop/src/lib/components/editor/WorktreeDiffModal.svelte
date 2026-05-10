@@ -194,9 +194,9 @@
     font-size: 10.5px; font-weight: 600;
     flex-shrink: 0;
   }
-  .wdf-s-add { color: var(--success); background: rgba(217, 145, 60, 0.15); }
-  .wdf-s-mod { color: var(--warning); background: rgba(229, 162, 42, 0.15); }
-  .wdf-s-del { color: var(--error); background: rgba(214, 72, 44, 0.18); }
+  .wdf-s-add { color: var(--success); background: rgba(204, 120, 92, 0.15); }
+  .wdf-s-mod { color: var(--warning); background: rgba(217, 184, 110, 0.15); }
+  .wdf-s-del { color: var(--error); background: rgba(232, 130, 100, 0.18); }
   .wdf-s-ren { color: var(--accent); background: var(--accent-soft); }
   .wdf-file-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .wdf-file-delta { font-size: 10.5px; display: inline-flex; gap: 6px; flex-shrink: 0; }
@@ -208,11 +208,11 @@
     padding: 8px 0 40px;
   }
   .wdf-row { display: flex; white-space: pre; min-height: 18px; }
-  .wdf-row--add { background: rgba(217, 145, 60, 0.10); }
+  .wdf-row--add { background: rgba(204, 120, 92, 0.10); }
   .wdf-row--add .wdf-marker, .wdf-row--add .wdf-text { color: var(--success); }
-  .wdf-row--del { background: rgba(214, 72, 44, 0.10); }
+  .wdf-row--del { background: rgba(232, 130, 100, 0.10); }
   .wdf-row--del .wdf-marker, .wdf-row--del .wdf-text { color: var(--error); }
-  .wdf-row--hunk { background: rgba(238, 107, 31, 0.08); color: var(--accent-bright); font-style: italic; }
+  .wdf-row--hunk { background: rgba(232, 130, 100, 0.08); color: var(--accent-bright); font-style: italic; }
   .wdf-row--meta { color: var(--text-2); font-style: italic; }
   .wdf-row--ctx { color: var(--text-1); }
   .wdf-marker { width: 18px; text-align: center; user-select: none; font-weight: 600; flex-shrink: 0; }

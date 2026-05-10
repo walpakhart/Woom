@@ -16,7 +16,7 @@ import type {
   JiraWorkflowStatus
 } from '$lib/data';
 import { closeModal, modalsState, openModal, patchModal } from '$lib/state/modals.svelte';
-import { listInstancesOfKind } from '$lib/state/layout.svelte';
+import { APP_INSTANCE_IDS } from '$lib/state/layout.svelte';
 import {
   DEFAULT_JIRA_FILTERS,
   inboxState,
@@ -162,7 +162,7 @@ export async function refreshJiraInbox(
 }
 
 export async function refreshAllJiraInboxes(opts: { silent?: boolean } = {}) {
-  const ids = listInstancesOfKind('jira').map((i) => i.id);
+  const ids = [APP_INSTANCE_IDS.jira];
   await Promise.all(ids.map((id) => refreshJiraInbox(id, opts)));
 }
 

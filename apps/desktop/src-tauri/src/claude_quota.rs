@@ -126,7 +126,7 @@ pub async fn fetch_plan_usage() -> Result<PlanUsage, QuotaError> {
         .get(USAGE_URL)
         .bearer_auth(token)
         .header("anthropic-beta", USAGE_BETA)
-        .header("user-agent", "Forgehold/0.1")
+        .header("user-agent", "Woom/0.1")
         .send()
         .await
         .map_err(|e| QuotaError::Network(e.to_string()))?;

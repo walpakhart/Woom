@@ -414,7 +414,7 @@
   });
 
   /* Mermaid is dynamic-imported on first render of any mermaid shape so
-     the ~100 KB gz library doesn't bloat first-paint of the workbench
+     the ~100 KB gz library doesn't bloat first-paint of the solo
      column. Each shape calls into the same module-level instance. */
   let mermaidEl = $state<HTMLDivElement | null>(null);
   let mermaidErr = $state<string | null>(null);
@@ -476,19 +476,19 @@
      `'yellow'` to a softer post-it tone, etc. Anything unrecognised falls
      back to the forge accent. */
   const STICKY_BG: Record<string, string> = {
-    forge: 'rgba(238, 107, 31, 0.18)',
+    forge: 'rgba(232, 130, 100, 0.18)',
     yellow: 'rgba(244, 196, 48, 0.20)',
     pink: 'rgba(232, 78, 158, 0.18)',
-    blue: 'rgba(96, 165, 250, 0.18)',
-    green: 'rgba(34, 197, 94, 0.18)',
+    blue: 'rgba(79, 142, 255, 0.18)',
+    green: 'rgba(168, 217, 184, 0.18)',
     gray: 'rgba(168, 172, 180, 0.16)'
   };
   const STICKY_BORDER: Record<string, string> = {
-    forge: 'rgba(238, 107, 31, 0.55)',
+    forge: 'rgba(232, 130, 100, 0.55)',
     yellow: 'rgba(244, 196, 48, 0.55)',
     pink: 'rgba(232, 78, 158, 0.55)',
-    blue: 'rgba(96, 165, 250, 0.55)',
-    green: 'rgba(34, 197, 94, 0.55)',
+    blue: 'rgba(79, 142, 255, 0.55)',
+    green: 'rgba(168, 217, 184, 0.55)',
     gray: 'rgba(168, 172, 180, 0.45)'
   };
   const stickyBg = $derived(STICKY_BG[pSticky.tint] ?? STICKY_BG.forge);
@@ -806,7 +806,7 @@
      drag-translate signal) but a faint accent shadow to telegraph
      "double-click does something". */
   .cv-shape--openable:hover :global(.cv-card) {
-    box-shadow: 0 0 0 1px var(--accent), 0 4px 12px rgba(238, 107, 31, 0.15);
+    box-shadow: 0 0 0 1px var(--accent), 0 4px 12px rgba(232, 130, 100, 0.15);
   }
 
   .cv-shape svg {
@@ -919,7 +919,7 @@
     z-index: 2;
   }
   .cv-shape-edit--text   { background: rgba(0, 0, 0, 0.45); }
-  .cv-shape-edit--sticky { background: var(--sticky-bg, rgba(238, 107, 31, 0.18)); }
+  .cv-shape-edit--sticky { background: var(--sticky-bg, rgba(232, 130, 100, 0.18)); }
   .cv-shape-edit--mermaid,
   .cv-shape-edit--code {
     font-family: 'JetBrains Mono', 'Geist Mono', ui-monospace, monospace;
@@ -1066,7 +1066,7 @@
     border-radius: 8px;
     background: var(--bg-1);
     border: 1px solid var(--border-neutral);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    box-shadow: inset 0 1px 0 rgba(245, 240, 234, 0.04);
     display: flex;
     overflow: hidden;
     user-select: none;
@@ -1124,12 +1124,12 @@
   }
   .cv-card-chip--merged { color: #c084fc; border-color: rgba(192, 132, 252, 0.4); }
   .cv-card-chip--draft  { color: var(--text-2); }
-  .cv-card-chip--open   { color: #34d399; border-color: rgba(52, 211, 153, 0.35); }
+  .cv-card-chip--open   { color: #A8D9B8; border-color: rgba(52, 211, 153, 0.35); }
   .cv-card-chip--closed { color: var(--text-2); }
-  .cv-card-chip--error    { color: #ef4444; border-color: rgba(239, 68, 68, 0.4); }
-  .cv-card-chip--warning  { color: #f59e0b; border-color: rgba(245, 158, 11, 0.4); }
-  .cv-card-chip--info     { color: #3b82f6; border-color: rgba(59, 130, 246, 0.4); }
-  .cv-card-chip--fatal    { color: #ef4444; border-color: rgba(239, 68, 68, 0.6); background: rgba(239, 68, 68, 0.08); }
+  .cv-card-chip--error    { color: #E88264; border-color: rgba(232, 130, 100, 0.4); }
+  .cv-card-chip--warning  { color: #D9B86E; border-color: rgba(217, 184, 110, 0.4); }
+  .cv-card-chip--info     { color: #4F8EFF; border-color: rgba(79, 142, 255, 0.4); }
+  .cv-card-chip--fatal    { color: #E88264; border-color: rgba(232, 130, 100, 0.6); background: rgba(232, 130, 100, 0.08); }
   .cv-card-chip--debug    { color: var(--text-2); }
   .cv-card-stale-tag {
     margin-left: auto;

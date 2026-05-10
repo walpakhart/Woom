@@ -1,4 +1,4 @@
-# Forgehold — 1.0 Release Plan
+# Woom — 1.0 Release Plan
 
 **Version:** 1.0 (shipped)
 **Last updated:** 2026-05-01
@@ -19,11 +19,11 @@ what was deliberately cut. The forward-looking backlog lives in
 
 ### 1.1 Persistence durability — **shipped**
 
-- Sessions on disk: `~/Library/Application Support/Forgehold/sessions/<id>.json` plus `index.json`. Migrates from `localStorage` on first launch with a debounced 1.5 s write cadence and a localStorage fallback if disk init fails.
-- Canvas on disk: `~/Library/Application Support/Forgehold/canvases/<id>.json` + `index.json`. Same migration shape, eager-load of the index on boot so synchronous `ensureCanvasLoaded` callers keep working.
+- Sessions on disk: `~/Library/Application Support/Woom/sessions/<id>.json` plus `index.json`. Migrates from `localStorage` on first launch with a debounced 1.5 s write cadence and a localStorage fallback if disk init fails.
+- Canvas on disk: `~/Library/Application Support/Woom/canvases/<id>.json` + `index.json`. Same migration shape, eager-load of the index on boot so synchronous `ensureCanvasLoaded` callers keep working.
 - Workbench layout, per-instance filters, theme stay in localStorage (small + frequently mutated).
 - Quota dashboard in `SettingsView` shows per-key bytes for support diagnostics.
-- **Cut:** explicit cold-store / restore-from-archived path. Out of scope; users are expected to back up `~/Library/Application Support/Forgehold/` themselves if they care about long-term retention.
+- **Cut:** explicit cold-store / restore-from-archived path. Out of scope; users are expected to back up `~/Library/Application Support/Woom/` themselves if they care about long-term retention.
 
 ### 1.2 Token UX — **shipped (PAT-only)**
 
@@ -31,7 +31,7 @@ what was deliberately cut. The forward-looking backlog lives in
 - Test connection per source.
 - Quota / rate-limit visibility — GitHub shipped (Jira / Sentry don't expose `x-ratelimit-*`).
 - Connection diagnostics + 200-event log.
-- Token rotation reminders at 180 / 300 / 365 days (`forgehold:token-installed-at:v1`).
+- Token rotation reminders at 180 / 300 / 365 days (`woom:token-installed-at:v1`).
 - Workspace identity badge in the rail (avatar popover lists every connected source's identity).
 - Encryption at rest beyond Keychain.
 - **Cut:** multi-account per source. The UX cost (per-column picker, keychain key suffixes everywhere, MCP env per session) didn't earn a 1.0 slot. PAT users with multiple orgs swap tokens through Settings — slow but workable.
@@ -40,7 +40,7 @@ what was deliberately cut. The forward-looking backlog lives in
 
 - `tauri-plugin-updater` wired with a manifest endpoint + placeholder pubkey in `tauri.conf.json`. Real release pipeline replaces the pubkey via `tauri signer generate` and points `endpoints` at the published manifest.
 - `scripts/build-dmg.sh` runs the full Developer ID + hardened-runtime + notarization path when `APPLE_SIGNING_IDENTITY` / `APPLE_ID` / `APPLE_PASSWORD` / `APPLE_TEAM_ID` env vars are set; falls back to ad-hoc signing for local dev.
-- Crash reporting: opt-out toggle backed by a flag file at `~/Library/Application Support/Forgehold/telemetry-opt-out.flag`. The Sentry SDK init shape is in `crash_reporting.rs` behind a TODO; flipping the toggle takes effect on next launch. Shipping releases wire `FORGEHOLD_SENTRY_DSN` env var + uncomment the marked init block.
+- Crash reporting: opt-out toggle backed by a flag file at `~/Library/Application Support/Woom/telemetry-opt-out.flag`. The Sentry SDK init shape is in `crash_reporting.rs` behind a TODO; flipping the toggle takes effect on next launch. Shipping releases wire `WOOM_SENTRY_DSN` env var + uncomment the marked init block.
 - "Report bug" form in Settings copies a Markdown bundle (env, connection state, last 50 status events, layout snapshot, user description) to the clipboard or opens a GitHub new-issue URL.
 
 ### 1.4 Polling / live updates — **shipped**
@@ -52,7 +52,7 @@ what was deliberately cut. The forward-looking backlog lives in
 
 ### 1.5 Onboarding & cheatsheet — **shipped**
 
-- 3-step welcome flow: theme → first source → first agent. Skippable, persisted via `forgehold:welcome-completed:v1`. "Show welcome flow again" button in Settings → App.
+- 3-step welcome flow: theme → first source → first agent. Skippable, persisted via `woom:welcome-completed:v1`. "Show welcome flow again" button in Settings → App.
 - Global `?` opens a focus-trapped cheatsheet listing every shortcut, categorized.
 - Empty-workbench discoverability hint when an active workbench has zero columns.
 
@@ -91,7 +91,7 @@ plugin systems, full IDE features) to 1.x.
 
 ### 2.1 Editor — **shipped**
 
-- Cursor / selection / scroll persistence per file (`forgehold:editor:cursors:v1`, 200-file LRU).
+- Cursor / selection / scroll persistence per file (`woom:editor:cursors:v1`, 200-file LRU).
 - Right-click tree menu: Reveal in Finder, Copy path, Rename, Delete.
 - "Apply to agent" inline popover at the selection edge.
 - CodeMirror 6, lazy file tree, repo-path pinning, agent linking, Apply-to-agent, save on `⌘S`, fs watcher, MergeView for git diffs (all from 0.1).
@@ -103,7 +103,7 @@ plugin systems, full IDE features) to 1.x.
 - Sessions on disk (§1.1).
 - Slash commands: `/compact`, `/clear`, `/usage`, `/help`. Strict whole-line match; "/compact please" stays a normal message.
 - Failure UX retry button — surfaces below the chat when the last assistant turn errored, re-sends the user prompt with one click.
-- Save-as-note context action on assistant messages → writes into the `forgehold-memory` SQLite store as a `note` with tag `chat-export`.
+- Save-as-note context action on assistant messages → writes into the `woom-memory` SQLite store as a `note` with tag `chat-export`.
 - Session export — Markdown (default) or JSON (Shift-click). Copy-to-clipboard via the Export chip in the column header.
 - Token / cost meter on every assistant turn + cumulative session badge.
 
@@ -154,7 +154,7 @@ See §1.2.
 - Relevance ranking inside each section by score descending.
 - MRU bias (50-pick history boosts recently-used rows for ambiguous queries).
 - Top-level Action verbs: Connect/Reconnect/Disconnect <Source>, Check Claude/Cursor status, Show keyboard shortcuts, New workbench, Open settings/connections/rules.
-- Pinned items: star a row to keep it on top across sessions (`forgehold:pinned-palette:v1`).
+- Pinned items: star a row to keep it on top across sessions (`woom:pinned-palette:v1`).
 - focus-trap + `aria-modal`.
 
 **Cut from 1.0:** "+N more" footer per section, section nav (`⌘↓` / `⌘↑`), file search via `rg`, chat session search, slash commands inside the palette, hover preview pane, breadcrumbs, theme picker inline, plugin command extensions, multi-step "wizard" commands, voice commands, LLM-augmented query rewriting.
@@ -163,7 +163,7 @@ See §1.2.
 
 - 5 sidecars, profile filters, `--mcp-config` temp file, `~/.cursor/mcp.json` merge, env-injected tokens.
 - Stale sidecars killed on app start + on app exit (avoids old-tool-schema bugs after DMG upgrade).
-- `forgehold-memory` reworked: `kind` taxonomy (user/feedback/project/reference/note), `unicode61` tokenizer (works on Russian + English), `memory_update` + `memory_get` tools, ISO timestamps in output, fixed tag LIKE escape. Found-and-fixed bug: FTS5 triggers were never created in 0.1 because of a Rust string-literal pitfall.
+- `woom-memory` reworked: `kind` taxonomy (user/feedback/project/reference/note), `unicode61` tokenizer (works on Russian + English), `memory_update` + `memory_get` tools, ISO timestamps in output, fixed tag LIKE escape. Found-and-fixed bug: FTS5 triggers were never created in 0.1 because of a Rust string-literal pitfall.
 - MCP server health panel in Settings (per-sidecar running indicator).
 
 **Cut from 1.0:** auto-restart with explicit backoff (sidecars are respawned by Cursor/Claude on next handshake — implicit restart), per-tool metrics persisted, live profile switching, `mcp_auth` flow for plugins, multi-instance credentials, Cursor IDE prefix normalisation sweep on every release, tool-call audit log, tool descriptions as Markdown, tool dry-run / preview.
@@ -224,7 +224,7 @@ The 1.0 bar matched the build:
 - **LLM-driven query rewriting in palette.**
 - **Plugin system anywhere.**
 - **Localisation beyond `en-US`.**
-- **Workspace identity / Forgehold account model.**
+- **Workspace identity / Woom account model.**
 
 ### Post-1.0 backlog (1.1 candidates)
 

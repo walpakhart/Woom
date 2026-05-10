@@ -1,9 +1,9 @@
-# Forgehold — Workbench Shell Specification
+# Woom — Workbench Shell Specification
 
 **Version:** 0.1
 **Last updated:** 2026-04-29
 **Status:** describes shipping behaviour. The workbench is the
-top-level surface of every Forgehold view that isn't a settings page.
+top-level surface of every Woom view that isn't a settings page.
 
 > A workbench is **a named layout of columns**. The user has many
 > workbenches (tabs at the top), each with its own set of column
@@ -102,7 +102,7 @@ side-by-side carry independent filters; two Editor columns carry
 independent open repos and tabs.
 
 `addPanelInstance(kind)` always creates a fresh instance — there is no
-"singleton" pathway despite stale comments in `forgehold-app`'s tool
+"singleton" pathway despite stale comments in `woom-app`'s tool
 descriptions.
 
 ### 3.2 Visibility
@@ -181,8 +181,8 @@ export type DragPayload =
   | { source: 'chat-message'; sessionId: string; messageIndex: number };
 ```
 
-We also use raw `application/x-forgehold-column` (column move) and
-`application/x-forgehold-file` (file path) MIME types for redundancy
+We also use raw `application/x-woom-column` (column move) and
+`application/x-woom-file` (file path) MIME types for redundancy
 across WKWebView quirks.
 
 ### 5.2 Chip preview
@@ -209,7 +209,7 @@ removes the element on next tick.
 | Agent column body      | `github / jira / sentry / file / chat-message`      | Adds a `Mention` to the active session's composer            |
 | Pill (claude / cursor) | Same as above                                        | Spring-loaded menu of instances; drop on row → mention       |
 | Pill (other kinds)     | Nothing — `pillCanAccept` returns false             | Visually rejects the hover                                   |
-| Workbench tab          | Column move (`application/x-forgehold-column`)       | `moveInstanceToWorkbench(...)` to that workbench             |
+| Workbench tab          | Column move (`application/x-woom-column`)       | `moveInstanceToWorkbench(...)` to that workbench             |
 | Canvas surface         | inbox payloads, file payloads, OS files, OS images   | Live card / file card / image shape (see `CANVAS.md §9`)     |
 
 ### 5.4 Snap flash
@@ -399,7 +399,7 @@ handle:
 
 ```ts
 attachDragChip(e, kind === 'editor' ? 'file' : kind, `${inst.name}`);
-e.dataTransfer.setData('application/x-forgehold-column', JSON.stringify({ instanceId, kind }));
+e.dataTransfer.setData('application/x-woom-column', JSON.stringify({ instanceId, kind }));
 ```
 
 `ColumnControls.svelte:112-114, 116`. The chip uses the same chip
@@ -465,7 +465,7 @@ fight against text input or open detail panes.
 
 ## 15. Persistence
 
-`forgehold:workbenches:v1` (current canonical key) holds:
+`woom:workbenches:v1` (current canonical key) holds:
 
 ```jsonc
 {
@@ -488,11 +488,11 @@ fight against text input or open detail panes.
 Older keys are still read for migration:
 
 ```text
-forgehold:workbench:columns   v1: per-kind boolean
-forgehold:workbench:order     v1: kind ordering
-forgehold:workbench:widths    v1: kind widths
-forgehold:layout:v2           v2: flat instance list
-forgehold:workbenches:v1      v3: current
+woom:workbench:columns   v1: per-kind boolean
+woom:workbench:order     v1: kind ordering
+woom:workbench:widths    v1: kind widths
+woom:layout:v2           v2: flat instance list
+woom:workbenches:v1      v3: current
 ```
 
 `restorePanelState()` (`layout.svelte.ts:209-363`) chains these:
@@ -541,7 +541,7 @@ Switching view via `setView` is one-call from anywhere. The MCP
 
 1. Stale comment in `+page.svelte:1299-1301` claims `spawnColumnInstance`
    is a "singleton no-op" — it's not, every call adds a new instance.
-2. Stale comment in `forgehold-app`'s `add_workbench_instance`
+2. Stale comment in `woom-app`'s `add_workbench_instance`
    description says GitHub / Jira / Sentry are singletons.
 3. No double-click-to-reset on resize handle.
 4. No FLIP / animated reorder when columns move.

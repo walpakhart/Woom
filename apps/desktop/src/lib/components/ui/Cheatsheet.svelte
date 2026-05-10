@@ -1,7 +1,7 @@
 <script lang="ts">
   /* Keyboard shortcut overlay (`?` to toggle).
    *
-   * Single source of truth for every shortcut Forgehold listens to —
+   * Single source of truth for every shortcut Woom listens to —
    * if you add a new binding in +page.svelte or a child, list it here
    * too. Categorised so the user can scan; rendered as a focus-trapped
    * dialog with an Escape close path for screen readers (matches the
@@ -17,7 +17,7 @@
 
   let { open, onClose }: Props = $props();
 
-  /* Detect macOS for the ⌘ vs Ctrl rendering. Forgehold ships macOS-
+  /* Detect macOS for the ⌘ vs Ctrl rendering. Woom ships macOS-
    * only today (`docs/SPEC.md §13`), but the rest of the codebase
    * still does this check defensively in a few places. */
   const isMac =
@@ -35,16 +35,14 @@
       rows: [
         { keys: `${mod} K`, label: 'Open command palette' },
         { keys: '?', label: 'Show this cheatsheet' },
-        { keys: 'Esc', label: 'Close overlay / restore maximized column' }
+        { keys: 'Esc', label: 'Close overlay / focus pane' }
       ]
     },
     {
-      title: 'Workbench',
+      title: 'Inbox (Jira / GitHub / Sentry)',
       rows: [
-        { keys: `${mod} 1 — ${mod} 9`, label: 'Switch to workbench by index' },
-        { keys: `${mod}${shift} M`, label: 'Toggle maximize for the focused column' },
         { keys: 'j / k', label: 'Move selection in inbox lists' },
-        { keys: 'o', label: 'Open focused row in browser (GitHub / Jira / Sentry)' }
+        { keys: 'o', label: 'Open focused row in browser' }
       ]
     },
     {
@@ -56,7 +54,7 @@
       ]
     },
     {
-      title: 'Agent column',
+      title: 'Agent (Claude / Cursor)',
       rows: [
         { keys: 'Enter', label: 'Send message' },
         { keys: `${shift} Enter`, label: 'Newline in composer' },

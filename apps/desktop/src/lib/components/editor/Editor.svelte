@@ -35,8 +35,21 @@
           }
         | null
     ) => void;
+    /** Fires on every cursor move (including collapsed carets) — drives
+     *  the status bar's "Ln, Col" readout + line-endings indicator.
+     *  Cheap to compute (CodeMirror exposes `lineAt(pos)`); no debounce
+     *  needed because the bar only re-renders when these numbers
+     *  actually change. */
+    onCursorChange?: (
+      info: {
+        line: number;
+        col: number;
+        lineEndings: 'lf' | 'crlf';
+        bytes: number;
+      } | null
+    ) => void;
   }
-  let { path, onDirty, onSaved, onSelectionChange }: Props = $props();
+  let { path, onDirty, onSaved, onSelectionChange, onCursorChange }: Props = $props();
 
   let editorEl: HTMLDivElement;
   let view: EditorView | null = null;
@@ -136,6 +149,26 @@
                     from: sel.from,
                     to: sel.to,
                     scrollTop: u.view.scrollDOM.scrollTop
+                  });
+                }
+                /* Fire the cursor-info callback on every dispatch.
+                   The status bar uses this to render "Ln 11, Col 38";
+                   Svelte's reactivity will skip re-render if the
+                   numbers haven't changed, so the cost is just one
+                   shallow object creation per dispatch. */
+                if (onCursorChange) {
+                  const sel = u.state.selection.main;
+                  const lineInfo = u.state.doc.lineAt(sel.head);
+                  const col = sel.head - lineInfo.from + 1;
+                  /* Probe the document for the first \r\n vs \n run.
+                     Cheap: scan up to the first 4KB for a newline. */
+                  const head = u.state.doc.sliceString(0, Math.min(4096, u.state.doc.length));
+                  const lineEndings = head.includes('\r\n') ? 'crlf' : 'lf';
+                  onCursorChange({
+                    line: lineInfo.number,
+                    col,
+                    lineEndings,
+                    bytes: u.state.doc.length
                   });
                 }
                 if (onSelectionChange) {
@@ -263,9 +296,9 @@
   .ed-surface :global(.cm-scroller) { font-family: inherit; }
   .ed-error {
     padding: 8px 14px;
-    background: rgba(214, 72, 44, 0.12);
+    background: rgba(232, 130, 100, 0.12);
     color: var(--error);
-    border-bottom: 1px solid rgba(214, 72, 44, 0.24);
+    border-bottom: 1px solid rgba(232, 130, 100, 0.24);
     font-size: 12.5px;
   }
   .ed-spinner {

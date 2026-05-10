@@ -1,4 +1,4 @@
-//! Unix-socket IPC between Forgehold MCP sidecars (forgehold-github)
+//! Unix-socket IPC between Woom MCP sidecars (woom-github)
 //! and the Tauri shell. Used to make `propose_*` MCP tools BLOCKING.
 //!
 //! Why: each propose_* tool needs to hold its MCP response open until
@@ -36,7 +36,7 @@ use tokio::sync::{oneshot, Mutex};
 /// hold the connection open until the frontend resolves it."
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CardRequest {
-    /// Forgehold session id (passed via FORGEHOLD_SESSION_ID env when
+    /// Woom session id (passed via WOOM_SESSION_ID env when
     /// the sidecar was spawned). Tells the frontend WHICH chat the
     /// card belongs to — important when multiple agents run in
     /// parallel and the same MCP-server-name is shared.
@@ -163,11 +163,11 @@ async fn handle_connection(
         w.insert(req.wait_id.clone(), tx);
     }
 
-    // Emit to frontend — `forgehold:action_request` carries the full
+    // Emit to frontend — `woom:action_request` carries the full
     // request payload. The frontend matches by session_id, creates a
     // pending action card with `wait_id`, and on user approve runs
     // the action and invokes `resolve_action_wait(wait_id, …)`.
-    let _ = app.emit("forgehold:action_request", &req);
+    let _ = app.emit("woom:action_request", &req);
 
     // Block waiting for resolution. If the channel is dropped without
     // a send (frontend gone, session deleted, app shutting down) we

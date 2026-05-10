@@ -29,7 +29,7 @@ case "$ARCH" in
   *) echo "unsupported arch: $ARCH" >&2; exit 1 ;;
 esac
 
-SIDECARS=(forgehold-jira forgehold-github forgehold-memory forgehold-sentry forgehold-app)
+SIDECARS=(woom-jira woom-github woom-memory woom-sentry woom-app)
 
 for name in "${SIDECARS[@]}"; do
   src="$TARGET_DIR/$name"

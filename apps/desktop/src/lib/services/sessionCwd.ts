@@ -216,19 +216,19 @@ export function buildContinuationRecap(
   let intro: string;
   switch (reason) {
     case 'cli_orphan':
-      intro = "You are CONTINUING a chat that was already in progress. The Claude CLI's session for this conversation was pruned (CLI reinstall, manual cleanup, or the session-id store was wiped), so its short-term memory is gone — but Forgehold preserved the full transcript and feeds you the relevant slice below.";
+      intro = "You are CONTINUING a chat that was already in progress. The Claude CLI's session for this conversation was pruned (CLI reinstall, manual cleanup, or the session-id store was wiped), so its short-term memory is gone — but Woom preserved the full transcript and feeds you the relevant slice below.";
       break;
     case 'stop':
-      intro = "You are CONTINUING a chat the user just paused with Stop. Forgehold force-killed the prior CLI process, rotated to a fresh uuid (so a now-locked session-id can't trip up the next spawn), and hands you the prior transcript below as the canonical record of what you'd been doing.";
+      intro = "You are CONTINUING a chat the user just paused with Stop. Woom force-killed the prior CLI process, rotated to a fresh uuid (so a now-locked session-id can't trip up the next spawn), and hands you the prior transcript below as the canonical record of what you'd been doing.";
       break;
     case 'cwd_switch_fresh':
-      intro = "You are CONTINUING a chat whose working directory just changed to a project the session has not visited before. The CLI gets a fresh session here (CLI memory is project-scoped), so its short-term memory of THIS chat is empty. Forgehold's transcript below is the only record of what the user has been working on — including from the prior project.";
+      intro = "You are CONTINUING a chat whose working directory just changed to a project the session has not visited before. The CLI gets a fresh session here (CLI memory is project-scoped), so its short-term memory of THIS chat is empty. Woom's transcript below is the only record of what the user has been working on — including from the prior project.";
       break;
     case 'cwd_switch_resume':
       intro = "You are CONTINUING a chat whose cwd just returned to a project you've worked in before. The CLI's resumed session here has full memory of THIS project's prior turns, but missed any work that happened in OTHER projects since you left. The transcript slice below covers ALL recent turns regardless of project — read it for cross-project context that may now apply here.";
       break;
     case 'app_restart':
-      intro = "You are CONTINUING a chat that was loaded from disk after Forgehold restarted. The CLI's own session memory may or may not be intact; the transcript below is the authoritative record either way.";
+      intro = "You are CONTINUING a chat that was loaded from disk after Woom restarted. The CLI's own session memory may or may not be intact; the transcript below is the authoritative record either way.";
       break;
   }
 

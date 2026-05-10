@@ -1,4 +1,4 @@
-# Forgehold — Command Palette Specification
+# Woom — Command Palette Specification
 
 **Version:** 0.1
 **Last updated:** 2026-04-29
@@ -12,7 +12,7 @@ and **not** raw MCP tool catalogs.
 > The palette is the global "where do I want to go?" prompt.
 > It's substring search across known structured objects, not full-text
 > search across content. The use cases are concrete: "open the
-> GitHub-Forgehold column", "jump to PROJ-1234", "show me the Sentry
+> GitHub-Woom column", "jump to PROJ-1234", "show me the Sentry
 > issues for billing-frontend". Power-user keyboard navigation; modal
 > backdrop closes on Escape or click-outside.
 

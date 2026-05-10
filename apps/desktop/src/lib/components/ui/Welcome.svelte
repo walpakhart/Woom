@@ -7,8 +7,8 @@
    * regular connect modal, so the actual auth UX stays in one place.
    *
    * Skippable at any time. Completion is persisted via
-   * `markWelcomeCompleted` so re-launches go straight to the
-   * workbench. SettingsView exposes a "Show welcome again" button
+   * `markWelcomeCompleted` so re-launches go straight to the default
+   * solo view. SettingsView exposes a "Show welcome again" button
    * (via `resetWelcome`) for users who want to revisit.
    */
 
@@ -72,15 +72,15 @@
 </script>
 
 <!-- The welcome flow always renders behind any modal (z lower than the
-     connect modals it triggers), but in front of the workbench so the
+     connect modals it triggers), but in front of the solo so the
      user lands here on first run. Backdrop click does NOT dismiss to
      avoid accidental skips — explicit Skip / Done buttons. -->
 <div class="welcome-backdrop" role="dialog" aria-modal="true" aria-labelledby="welcome-title" use:focusTrap>
-  <section class="welcome-panel" aria-label="Welcome to Forgehold">
+  <section class="welcome-panel" aria-label="Welcome to Woom">
     <header class="welcome-head">
       <Sigil size={48} />
       <div class="welcome-head-text">
-        <h2 id="welcome-title" class="welcome-title">Welcome to Forgehold</h2>
+        <h2 id="welcome-title" class="welcome-title">Welcome to Woom</h2>
         <p class="welcome-sub">Step {step + 1} of {STEP_COUNT}</p>
       </div>
       <button class="welcome-skip" onclick={skip} aria-label="Skip onboarding">Skip</button>
@@ -114,7 +114,7 @@
       {:else if step === 1}
         <h3 class="welcome-step-title">Connect a source</h3>
         <p class="welcome-step-desc">
-          Tokens live in your macOS Keychain — Forgehold never stores plaintext credentials. You can connect more later.
+          Tokens live in your macOS Keychain — Woom never stores plaintext credentials. You can connect more later.
         </p>
         <div class="welcome-sources">
           {#each implementedSources.filter((s) => s.kind === 'source') as conn (conn.id)}
@@ -133,7 +133,7 @@
       {:else}
         <h3 class="welcome-step-title">Pick an agent</h3>
         <p class="welcome-step-desc">
-          Forgehold drives Claude Code or Cursor as a CLI subprocess. Install at least one to enable agent columns. We won't store any credentials — they auth to their own services.
+          Woom drives Claude Code or Cursor as a CLI subprocess. Install at least one to enable agent columns. We won't store any credentials — they auth to their own services.
         </p>
         <div class="welcome-sources">
           {#each implementedSources.filter((s) => s.kind === 'agent') as conn (conn.id)}
@@ -164,28 +164,40 @@
 <style>
   .welcome-backdrop {
     position: fixed; inset: 0;
-    background: rgba(0, 0, 0, 0.7);
-    backdrop-filter: blur(6px);
+    background: var(--backdrop);
+    backdrop-filter: blur(22px) saturate(1.1);
+    -webkit-backdrop-filter: blur(22px) saturate(1.1);
     display: flex; align-items: center; justify-content: center;
     z-index: 900;
     padding: 32px;
   }
   .welcome-panel {
     width: 100%; max-width: 640px;
-    background: var(--bg-1);
-    border: 1px solid var(--border-neutral-hi);
-    border-radius: 16px;
-    box-shadow: 0 36px 72px rgba(0, 0, 0, 0.45);
+    background: linear-gradient(180deg, var(--bg-2), var(--bg-1));
+    border: 1px solid var(--border-hi);
+    border-radius: var(--r-modal, 16px);
+    box-shadow: var(--shadow-3), 0 0 0 1px var(--border-accent-2);
     display: flex; flex-direction: column;
     overflow: hidden;
   }
   .welcome-head {
     display: flex; align-items: center; gap: 14px;
-    padding: 18px 22px;
+    padding: 22px 24px 14px;
   }
   .welcome-head-text { flex: 1; min-width: 0; }
-  .welcome-title { margin: 0; font-size: 18px; font-weight: 600; color: var(--text-0); }
-  .welcome-sub { margin: 2px 0 0; font-size: 11.5px; color: var(--text-mute); letter-spacing: 0.04em; text-transform: uppercase; }
+  .welcome-title {
+    margin: 0;
+    font-family: 'Instrument Serif', 'New York', Georgia, serif;
+    font-size: 28px; font-weight: 400;
+    letter-spacing: -0.02em; line-height: 1.18;
+    color: var(--text-0);
+  }
+  .welcome-sub {
+    margin: 4px 0 0;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10.5px; color: var(--text-mute);
+    letter-spacing: 0.10em; text-transform: uppercase;
+  }
   .welcome-skip {
     background: none; border: none; cursor: pointer;
     color: var(--text-2); font-size: 12px;
@@ -248,8 +260,8 @@
   }
   .welcome-source:hover { border-color: var(--border-hi2); background: var(--bg-2); }
   .welcome-source.connected {
-    border-color: rgba(16, 185, 129, 0.4);
-    background: rgba(16, 185, 129, 0.06);
+    border-color: rgba(168, 217, 184, 0.40);
+    background: rgba(168, 217, 184, 0.06);
   }
   .welcome-source-name { font-size: 13px; color: var(--text-0); font-weight: 500; }
   .welcome-source-status { font-size: 11px; color: var(--text-2); text-transform: uppercase; letter-spacing: 0.04em; }
@@ -275,10 +287,12 @@
   .welcome-back:hover:not(:disabled) { background: var(--bg-2); color: var(--text-0); }
   .welcome-back:disabled { opacity: 0.4; cursor: not-allowed; }
   .welcome-next {
-    background: var(--accent);
+    background: linear-gradient(180deg, var(--accent-bright), var(--accent));
     color: var(--accent-fg);
     font-weight: 600;
-    box-shadow: 0 2px 8px rgba(232, 163, 58, 0.25);
+    box-shadow:
+      0 6px 18px rgba(204, 120, 92, 0.30),
+      inset 0 1px 0 rgba(255, 230, 200, 0.32);
   }
-  .welcome-next:hover { filter: brightness(1.07); }
+  .welcome-next:hover { transform: translateY(-1px); }
 </style>

@@ -592,28 +592,28 @@ export interface JiraWorkflowStatus {
  *  unexpected. */
 export function jiraStatusColor(s: { color?: string; category_key?: string }): string {
   const byName: Record<string, string> = {
-    'blue-gray': '#60a5fa',
-    blue: '#60a5fa',
-    'medium-gray': '#8b96ab',
-    gray: '#8b96ab',
-    yellow: '#fcd34d',
-    green: '#34d399',
-    warm_red: '#fca5a5',
-    'warm-red': '#fca5a5',
-    red: '#fca5a5',
-    purple: '#b199f6'
+    'blue-gray': '#75A8FF',
+    blue: '#75A8FF',
+    'medium-gray': '#A39687',
+    gray: '#A39687',
+    yellow: '#E4C885',
+    green: '#A8D9B8',
+    warm_red: '#F0A38A',
+    'warm-red': '#F0A38A',
+    red: '#F0A38A',
+    purple: '#D5B7FF'
   };
   const fromName = s.color ? byName[s.color.toLowerCase()] : undefined;
   if (fromName) return fromName;
   switch (s.category_key) {
     case 'done':
-      return '#34d399';
+      return '#A8D9B8';
     case 'indeterminate':
-      return '#fcd34d';
+      return '#E4C885';
     case 'new':
-      return '#60a5fa';
+      return '#75A8FF';
     default:
-      return '#8b96ab';
+      return '#A39687';
   }
 }
 

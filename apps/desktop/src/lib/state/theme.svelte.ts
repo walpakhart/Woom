@@ -12,7 +12,7 @@
  * `var(--accent)` / etc.
  */
 
-const KEY = 'forgehold:theme:v1';
+const KEY = 'woom:theme:v1';
 
 export type ThemeName = 'iconic' | 'light' | 'dark';
 

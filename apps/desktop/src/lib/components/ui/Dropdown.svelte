@@ -1,6 +1,6 @@
 <script lang="ts" generics="T">
   // Custom dropdown that replaces native `<select>` so popups match the
-  // Forgehold dark palette. Keyboard: ArrowUp/Down navigate, Enter selects,
+  // Woom dark palette. Keyboard: ArrowUp/Down navigate, Enter selects,
   // Escape closes, letter keys type-to-search within visible labels. Opens
   // below by default and flips above (or right-aligns) when it would spill
   // out of the viewport.
@@ -42,6 +42,11 @@
     ariaLabel?: string;
     /** Optional compact mode — smaller padding/font. */
     compact?: boolean;
+    /** Force the panel to open upward regardless of available space.
+     *  Useful when the trigger is anchored to the bottom of the viewport
+     *  (composer, status bar) and the auto-flip would briefly render
+     *  downward before correcting. */
+    forceUp?: boolean;
     /** When provided, the dropdown enters multi-select mode:
      *   - trigger shows a comma-joined list of selected option labels
      *     (CSS truncates with ellipsis when it doesn't fit)
@@ -68,6 +73,7 @@
     onOpen,
     ariaLabel,
     compact = false,
+    forceUp = false,
     selectedValues = null
   }: Props<T> = $props();
 
@@ -117,6 +123,10 @@
 
   function openPanel() {
     open = true;
+    /* Pre-set alignUp from `forceUp` so the panel renders in the right
+       direction on the first frame — auto-detection in `computeAlignment`
+       still runs after RAF and may flip if reality disagrees. */
+    if (forceUp) alignUp = true;
     // Reset keyboard cursor to the currently-selected option so ArrowDown
     // from the closed state lands somewhere useful.
     const idx = options.findIndex((o) => o.value === value);
@@ -155,8 +165,9 @@
     const margin = 12;
     alignRight = tRect.left + pRect.width > window.innerWidth - margin;
     alignUp =
-      tRect.bottom + pRect.height + margin > window.innerHeight &&
-      tRect.top > pRect.height + margin;
+      forceUp ||
+      (tRect.bottom + pRect.height + margin > window.innerHeight &&
+        tRect.top > pRect.height + margin);
   }
 
   function onDocClick(e: MouseEvent) {

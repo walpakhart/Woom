@@ -23,16 +23,16 @@ const KIND_GLYPH: Record<DragChipKind, string> = {
 };
 
 const KIND_ACCENT: Record<DragChipKind, string> = {
-  file: 'rgba(232, 163, 58, 0.95)',
-  dir: 'rgba(232, 163, 58, 0.95)',
-  jira: 'rgba(96, 165, 250, 0.95)',
-  github: 'rgba(177, 153, 246, 0.95)',
-  sentry: 'rgba(248, 143, 116, 0.95)',
-  cursor: 'rgba(177, 153, 246, 0.95)',
-  claude: 'rgba(232, 163, 58, 0.95)',
-  editor: 'rgba(232, 163, 58, 0.95)',
-  canvas: 'rgba(232, 163, 58, 0.95)',
-  terminal: 'rgba(232, 163, 58, 0.95)'
+  file: 'rgba(204, 120, 92, 0.95)',     // clay
+  dir: 'rgba(204, 120, 92, 0.95)',
+  jira: 'rgba(79, 142, 255, 0.95)',     // src-jira
+  github: 'rgba(181, 132, 255, 0.95)',  // src-github
+  sentry: 'rgba(232, 130, 100, 0.95)',  // src-sentry
+  cursor: 'rgba(220, 220, 220, 0.85)',  // src-cursor
+  claude: 'rgba(232, 155, 125, 0.95)',  // src-claude
+  editor: 'rgba(204, 120, 92, 0.95)',
+  canvas: 'rgba(125, 201, 176, 0.95)',  // src-canvas
+  terminal: 'rgba(245, 240, 234, 0.85)' // src-term
 };
 
 /** Attach a styled drag chip to the event. Call inside an `ondragstart`
@@ -56,8 +56,8 @@ export function attachDragChip(
     'border-radius: 999px',
     'background: rgba(28, 22, 18, 0.96)',
     'border: 1px solid ' + KIND_ACCENT[kind],
-    'box-shadow: 0 8px 20px rgba(0, 0, 0, 0.45), 0 0 0 4px rgba(232, 163, 58, 0.08)',
-    'color: #f5f0eb',
+    'box-shadow: 0 8px 20px rgba(0, 0, 0, 0.45), 0 0 0 4px rgba(204, 120, 92, 0.10)',
+    'color: #f5f0ea',
     'font: 500 12.5px -apple-system, system-ui, sans-serif',
     'pointer-events: none',
     'white-space: nowrap',
@@ -73,7 +73,7 @@ export function attachDragChip(
     'width: 18px',
     'height: 18px',
     'border-radius: 4px',
-    'background: rgba(255, 255, 255, 0.08)',
+    'background: rgba(245, 240, 234, 0.08)',
     'color: ' + KIND_ACCENT[kind],
     'font: 700 10.5px -apple-system, system-ui, sans-serif'
   ].join(';');

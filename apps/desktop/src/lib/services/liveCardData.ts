@@ -4,7 +4,7 @@
 // at drop-time when no column has the object loaded right now.
 //
 // Inbox state is **per-instance** — two Jira columns can browse two
-// different boards on the same workbench. We scan every Jira / GH /
+// different boards on the same solo. We scan every Jira / GH /
 // Sentry instance and return the first match. That matches user intent:
 // if any column has the ticket loaded, the card is live; if none does,
 // it's a stale snapshot.

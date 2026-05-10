@@ -8,7 +8,7 @@
  * top of the document.
  *
  * Used primarily for keyboard-only users — alongside the
- * `aria-modal="true"` already set on Forgehold's dialogs, this
+ * `aria-modal="true"` already set on Woom's dialogs, this
  * satisfies the §1.6 (`docs/ROADMAP_1.0.md`) a11y requirement that
  * modals not leak keyboard focus to background content.
  */

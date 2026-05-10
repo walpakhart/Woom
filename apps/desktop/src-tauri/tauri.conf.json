@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Forgehold",
+  "productName": "Woom",
   "version": "1.0.0",
-  "identifier": "com.forgehold.desktop",
+  "identifier": "com.woom.desktop",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Forgehold",
+        "title": "Woom",
         "width": 1440,
         "height": 900,
         "minWidth": 960,
@@ -42,11 +42,11 @@
     "active": true,
     "targets": ["app", "dmg"],
     "externalBin": [
-      "binaries/forgehold-github",
-      "binaries/forgehold-jira",
-      "binaries/forgehold-memory",
-      "binaries/forgehold-sentry",
-      "binaries/forgehold-app"
+      "binaries/woom-github",
+      "binaries/woom-jira",
+      "binaries/woom-memory",
+      "binaries/woom-sentry",
+      "binaries/woom-app"
     ],
     "resources": ["../../../docs/*.md"],
     "icon": [
@@ -57,9 +57,9 @@
       "icons/icon.ico"
     ],
     "category": "DeveloperTool",
-    "copyright": "© 2026 Forgehold",
-    "shortDescription": "Team-scale operating layer for developers",
-    "longDescription": "Forgehold aggregates objects from Jira, GitHub, Slack, and Claude Code into a single workbench, and lets you compose workflows between them with drag and drop.",
+    "copyright": "© 2026 Woom",
+    "shortDescription": "A focused, warm-lit workspace for software work",
+    "longDescription": "Woom is a focused, warm-lit workspace for software work. Tickets, pull requests, errors, agents, code, canvas, terminal — each gets a full window when it has your attention, and they all link together when you need them to.",
     "macOS": {
       "minimumSystemVersion": "13.0",
       "entitlements": null,
@@ -74,7 +74,7 @@
       "active": true,
       "dialog": false,
       "endpoints": [
-        "https://forgehold.app/updates/{{target}}/{{arch}}/{{current_version}}"
+        "https://woom.app/updates/{{target}}/{{arch}}/{{current_version}}"
       ],
       "pubkey": "PLACEHOLDER_REPLACE_WITH_TAURI_SIGNER_OUTPUT"
     }

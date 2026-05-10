@@ -25,7 +25,7 @@
 
 import { invoke } from '@tauri-apps/api/core';
 
-const KEY = 'forgehold:scale:v1';
+const KEY = 'woom:scale:v1';
 
 export const SCALE_OPTIONS = [
   { value: 0.8, label: '80%' },

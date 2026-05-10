@@ -1,4 +1,4 @@
-# Forgehold — Agents (Claude / Cursor) Specification
+# Woom — Agents (Claude / Cursor) Specification
 
 **Version:** 0.1
 **Last updated:** 2026-04-29
@@ -6,7 +6,7 @@
 production today (`claude`, `cursor`). Codex / Aider / Copilot exist
 in the connections list as `implemented: false` placeholders only.
 
-> Agent columns are how Forgehold talks to coding LLMs. Each column is
+> Agent columns are how Woom talks to coding LLMs. Each column is
 > a viewing window on a single conversation with a CLI-driven agent —
 > Claude Code or Cursor Agent — whose stdout is parsed live into a
 > structured stream of text, tool traces, edit cards, and proposed
@@ -22,7 +22,7 @@ in the connections list as `implemented: false` placeholders only.
 ### 1.1 Vision
 
 LLM coding tools are CLIs at heart. `claude` and `cursor-agent` both
-print streamed JSONL on stdout, and that's what Forgehold renders.
+print streamed JSONL on stdout, and that's what Woom renders.
 Three things matter:
 
 1. **Structure the stream.** Raw stdout is unreadable. We parse every
@@ -88,7 +88,7 @@ The Rust side mirrors this:
 pub enum AgentKind { Claude, Cursor }
 ```
 
-The MCP descriptor folder names use the `forgehold-` prefix and have
+The MCP descriptor folder names use the `woom-` prefix and have
 no agent-specific server (the agent itself is the consumer of MCPs,
 not a producer).
 
@@ -138,7 +138,7 @@ Persistence:
 
 ```ts
 // apps/desktop/src/lib/state/sessions.svelte.ts
-export const SESSIONS_STORAGE_KEY = 'forgehold:claude-sessions:v1';
+export const SESSIONS_STORAGE_KEY = 'woom:claude-sessions:v1';
 ```
 
 Payload: `{ sessions: ClaudeSession[], activeId: string | null }`.
@@ -313,7 +313,7 @@ function executeAction(sessionId: string, action: ClaudeAction) {
 
 // onActionResolved → continueAgentTurn with synthetic prompt:
 const continuation = recentActionSummaries
-  ? `[Forgehold: action card resolved]\n${recentActionSummaries}\n\nLast result: ${result.ok ? '✓' : '✗'} ${result.summary}\n\nContinue with what you were doing.`
+  ? `[Woom: action card resolved]\n${recentActionSummaries}\n\nLast result: ${result.ok ? '✓' : '✗'} ${result.summary}\n\nContinue with what you were doing.`
   : '';
 ```
 
@@ -399,7 +399,7 @@ checks.
 
 There is **no** structured slash-command parser in v1. Anything starting
 with `/` goes through to the agent verbatim. Claude Code and Cursor
-both define their own slash commands which stay invisible to Forgehold.
+both define their own slash commands which stay invisible to Woom.
 
 ---
 
@@ -456,7 +456,7 @@ Sidecar MCP servers wired by `apps/desktop/src-tauri/src/claude_mcp.rs`:
 
 | Server logical name | Description                                                       |
 |---------------------|-------------------------------------------------------------------|
-| `app`               | Forgehold app navigation. See [`MCP.md`](MCP.md).                 |
+| `app`               | Woom app navigation. See [`MCP.md`](MCP.md).                 |
 | `github`            | GitHub read + propose-commit/PR/bash/switch-cwd writes.           |
 | `jira`              | Atlassian read + write (markdown→ADF).                            |
 | `sentry`            | Sentry read + write (status / comments).                          |
@@ -536,12 +536,12 @@ unfound → returns a typed error → frontend shows a status modal with a
 
 | Field                              | Where                              |
 |------------------------------------|------------------------------------|
-| Sessions list, activeId            | `localStorage: forgehold:claude-sessions:v1` |
+| Sessions list, activeId            | `localStorage: woom:claude-sessions:v1` |
 | Per-instance active session        | `sessionsState.activeByInstance` (in same blob) |
-| Editor instance state              | `localStorage: forgehold:editor-state:v1` |
-| Rules templates (system prompts)   | `localStorage: forgehold:claude-rules:v1` |
+| Editor instance state              | `localStorage: woom:editor-state:v1` |
+| Rules templates (system prompts)   | `localStorage: woom:claude-rules:v1` |
 | Worktree on-disk dirs              | filesystem (`worktreePath`)        |
-| Memory MCP db                      | `FORGEHOLD_MEMORY_DB` env (sqlite) |
+| Memory MCP db                      | `WOOM_MEMORY_DB` env (sqlite) |
 
 There is **no** per-session JSON on disk. The whole conversation lives
 in `localStorage`. Quota is a real risk (~5 MB) for long chats with

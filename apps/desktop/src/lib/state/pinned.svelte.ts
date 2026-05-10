@@ -6,8 +6,8 @@
  * use the set membership and sort their own lists.
  */
 
-const REPO_KEY = 'forgehold:pinned-repos:v1';
-const PALETTE_KEY = 'forgehold:pinned-palette:v1';
+const REPO_KEY = 'woom:pinned-repos:v1';
+const PALETTE_KEY = 'woom:pinned-palette:v1';
 
 export const pinnedState = $state<{
   /** GitHub repo full names (`owner/repo`). */

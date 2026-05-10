@@ -1,7 +1,7 @@
-/* Horizontal autoscroll for card drag-and-drop in the workbench.
+/* Horizontal autoscroll for card drag-and-drop in the solo.
  *
  * When the user grabs a card (Jira / GitHub / Sentry / file / canvas
- * shape) and drags it toward the workbench's off-screen edge, this
+ * shape) and drags it toward the solo's off-screen edge, this
  * scrolls `.wb-columns` so the intended drop target comes into view.
  * The handlers are attached at the document level by `+page.svelte`
  * (see the drag-related event wiring); this module is the pointer-

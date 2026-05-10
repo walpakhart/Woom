@@ -1,4 +1,4 @@
-# Forgehold — Editor (In-App Code Editor) Specification
+# Woom — Editor (In-App Code Editor) Specification
 
 **Version:** 0.1
 **Last updated:** 2026-04-29
@@ -287,11 +287,11 @@ record if absent). Defined in `+page.svelte` ~239 and called from:
 
 ### 5.2 Persistence
 
-A separate `localStorage` key `forgehold:editor-state:v1`
+A separate `localStorage` key `woom:editor-state:v1`
 (`EDITOR_STATE_STORAGE_KEY`) stores `{ instanceId: { repoPath } }`.
 `EditorView.svelte` *also* persists the **last-opened root** under
-`forgehold:editor:root` and the **open tabs** under
-`forgehold:editor:tabs`, used as a fallback when the column has no
+`woom:editor:root` and the **open tabs** under
+`woom:editor:tabs`, used as a fallback when the column has no
 prior repo path on first mount.
 
 Cursor / selection positions inside files are **not** persisted — open
@@ -415,7 +415,7 @@ Each tree row is `draggable="true"`:
 ondragstart={(e) => {
   const payload = { path: it.path, isDir: it.is_dir, name: it.name };
   setDragPayload({ source: 'file', ...payload });
-  e.dataTransfer.setData('application/x-forgehold-file', JSON.stringify(payload));
+  e.dataTransfer.setData('application/x-woom-file', JSON.stringify(payload));
   e.dataTransfer.setData('text/plain', it.path);
 }}
 ```
@@ -516,11 +516,11 @@ There is no built-in Find dialog override beyond `basicSetup`'s default
 
 | Key                                | Owner                | Shape                                          |
 |------------------------------------|----------------------|------------------------------------------------|
-| `forgehold:editor:root`            | `EditorView.svelte`  | `string` (last open repo)                      |
-| `forgehold:editor:tabs`            | `EditorView.svelte`  | `string[]` (open paths)                        |
-| `forgehold:editor:sidebar-tab`     | `EditorView.svelte`  | `'tree' \| 'git'`                              |
-| `forgehold:editor-state:v1`        | `sessions.svelte.ts` | `Record<instanceId, { repoPath }>`             |
-| `forgehold:editor-main` (splitter) | `Splitter`           | `number` (px)                                  |
+| `woom:editor:root`            | `EditorView.svelte`  | `string` (last open repo)                      |
+| `woom:editor:tabs`            | `EditorView.svelte`  | `string[]` (open paths)                        |
+| `woom:editor:sidebar-tab`     | `EditorView.svelte`  | `'tree' \| 'git'`                              |
+| `woom:editor-state:v1`        | `sessions.svelte.ts` | `Record<instanceId, { repoPath }>`             |
+| `woom:editor-main` (splitter) | `Splitter`           | `number` (px)                                  |
 
 Worktrees, sessions, and chat history live elsewhere — see
 `docs/AGENTS.md §13`.
@@ -557,7 +557,7 @@ with payload `{ path, kind }`. See §6.2.
 
 1. **Cursor position persistence** is missing. Re-opening a tab snaps
    to line 1. Trivially backed by `localStorage` once we decide on a
-   key shape (`forgehold:editor:cursors:v1` keyed by repoPath + relPath).
+   key shape (`woom:editor:cursors:v1` keyed by repoPath + relPath).
 2. **No file-level rename / delete UI.** Easy `fs.rs` additions, but
    the agent-driven workflow rarely needs it. Re-evaluate if real
    usage shows otherwise.
@@ -591,4 +591,4 @@ with payload `{ path, kind }`. See §6.2.
 - **`fs:changed`** — Tauri event emitted by the Rust watcher; drives
   buffer reload and tree decoration refresh.
 - **Sidebar tab** — `'tree' | 'git'`, persisted under
-  `forgehold:editor:sidebar-tab`.
+  `woom:editor:sidebar-tab`.

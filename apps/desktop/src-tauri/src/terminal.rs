@@ -9,7 +9,7 @@
 //!
 //! Phase 2 (MCP) — the same Session is exposed via a localhost HTTP
 //! bridge in `terminal_bridge.rs`. Agents (Claude / Cursor) call MCP
-//! tools in `forgehold-app` that POST to the bridge and read/write
+//! tools in `woom-app` that POST to the bridge and read/write
 //! the same master fd the user is staring at. Each Session keeps a
 //! ring buffer of its last ~64 KB of output so `run_command` can
 //! sentinel-detect "command finished" without re-spawning a shell.
@@ -71,7 +71,7 @@ pub struct Session {
     /// bridge as the cwd for agent subprocesses (`bash -c <cmd>`)
     /// so agent commands run in the same place the user expects,
     /// even though they're NOT executed through the shell PTY.
-    /// `None` means inherit from the Forgehold process cwd
+    /// `None` means inherit from the Woom process cwd
     /// (rarely the right thing, but safe fallback).
     pub spawn_cwd: Option<std::path::PathBuf>,
 }

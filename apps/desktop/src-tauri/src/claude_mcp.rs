@@ -256,7 +256,7 @@ pub(crate) fn build_mcp_config(
         allowed.push("mcp__sentry__list_releases".into());
     }
 
-    // forgehold-app: in-app navigation. Tool calls are intercepted by
+    // woom-app: in-app navigation. Tool calls are intercepted by
     // the frontend's stream parser to drive the UI (open detail panes,
     // switch views, add editor instances, surface connect modals).
     // Always wired — no creds needed.
@@ -328,7 +328,7 @@ pub(crate) fn build_mcp_config(
 
     let config = serde_json::json!({ "mcpServers": servers });
     let body = serde_json::to_string(&config).ok()?;
-    let path = std::env::temp_dir().join(format!("forgehold-mcp-{}.json", session_id));
+    let path = std::env::temp_dir().join(format!("woom-mcp-{}.json", session_id));
     std::fs::write(&path, body).ok()?;
     Some((path, allowed))
 }
@@ -336,7 +336,7 @@ pub(crate) fn build_mcp_config(
 fn build_jira_server() -> Option<serde_json::Value> {
     let stored = keychain::get(JIRA_KEYCHAIN_KEY).ok().flatten()?;
     let creds: JiraCredentials = serde_json::from_str(&stored).ok()?;
-    let sidecar = find_sidecar("forgehold-jira")?;
+    let sidecar = find_sidecar("woom-jira")?;
     Some(serde_json::json!({
         "command": sidecar.to_string_lossy(),
         "env": {
@@ -352,7 +352,7 @@ fn build_github_server(session_id: &str, ipc_socket: &str) -> Option<serde_json:
     if token.trim().is_empty() {
         return None;
     }
-    let sidecar = find_sidecar("forgehold-github")?;
+    let sidecar = find_sidecar("woom-github")?;
     // Plumb the action-IPC socket path + session id so the sidecar's
     // `propose_*` tools can reach the Tauri shell to BLOCK on user
     // approval — without these, propose_bash et al. fall back to the
@@ -362,8 +362,8 @@ fn build_github_server(session_id: &str, ipc_socket: &str) -> Option<serde_json:
         "command": sidecar.to_string_lossy(),
         "env": {
             "GITHUB_TOKEN": token,
-            "FORGEHOLD_IPC_SOCKET": ipc_socket,
-            "FORGEHOLD_SESSION_ID": session_id,
+            "WOOM_IPC_SOCKET": ipc_socket,
+            "WOOM_SESSION_ID": session_id,
         }
     }))
 }
@@ -371,7 +371,7 @@ fn build_github_server(session_id: &str, ipc_socket: &str) -> Option<serde_json:
 fn build_sentry_server() -> Option<serde_json::Value> {
     let stored = keychain::get(SENTRY_KEYCHAIN_KEY).ok().flatten()?;
     let creds: SentryCredentials = serde_json::from_str(&stored).ok()?;
-    let sidecar = find_sidecar("forgehold-sentry")?;
+    let sidecar = find_sidecar("woom-sentry")?;
     Some(serde_json::json!({
         "command": sidecar.to_string_lossy(),
         "env": {
@@ -382,12 +382,12 @@ fn build_sentry_server() -> Option<serde_json::Value> {
     }))
 }
 
-/// Wire up the bundled `forgehold-memory` sidecar — a SQLite-backed notes store
+/// Wire up the bundled `woom-memory` sidecar — a SQLite-backed notes store
 /// exposed via MCP. Ships with the .app, no external install. Persists under
-/// the app's data dir (`~/Library/Application Support/Forgehold/memory.db` on
+/// the app's data dir (`~/Library/Application Support/Woom/memory.db` on
 /// macOS) so notes survive across sessions.
 fn build_memory_server() -> Option<serde_json::Value> {
-    let sidecar = find_sidecar("forgehold-memory")?;
+    let sidecar = find_sidecar("woom-memory")?;
     let db_path = app_data_dir().map(|d| d.join("memory.db"));
     let db_str = db_path
         .as_ref()
@@ -396,17 +396,17 @@ fn build_memory_server() -> Option<serde_json::Value> {
     Some(serde_json::json!({
         "command": sidecar.to_string_lossy(),
         "env": {
-            "FORGEHOLD_MEMORY_DB": db_str,
+            "WOOM_MEMORY_DB": db_str,
         }
     }))
 }
 
-/// Wire up the bundled `forgehold-app` sidecar — exposes UI navigation
+/// Wire up the bundled `woom-app` sidecar — exposes UI navigation
 /// tools (open detail panes, switch views, add editor columns). Tool
 /// calls are intercepted by the frontend's stream parser; the sidecar
 /// is intentionally thin (just registers the schemas).
 fn build_app_server() -> Option<serde_json::Value> {
-    let sidecar = find_sidecar("forgehold-app")?;
+    let sidecar = find_sidecar("woom-app")?;
     Some(serde_json::json!({
         "command": sidecar.to_string_lossy(),
     }))
@@ -417,11 +417,11 @@ fn build_app_server() -> Option<serde_json::Value> {
 fn app_data_dir() -> Option<PathBuf> {
     let home = claude::home_dir()?;
     #[cfg(target_os = "macos")]
-    let dir = home.join("Library/Application Support/Forgehold");
+    let dir = home.join("Library/Application Support/Woom");
     #[cfg(target_os = "linux")]
-    let dir = home.join(".local/share/forgehold");
+    let dir = home.join(".local/share/woom");
     #[cfg(target_os = "windows")]
-    let dir = home.join("AppData/Roaming/Forgehold");
+    let dir = home.join("AppData/Roaming/Woom");
     std::fs::create_dir_all(&dir).ok()?;
     Some(dir)
 }

@@ -99,7 +99,7 @@
     return `${hours}h`;
   }
 
-  /* Sources whose credential is owned by Forgehold (PAT / API token in
+  /* Sources whose credential is owned by Woom (PAT / API token in
    * Keychain) — only these are eligible for rotation reminders. Agents
    * (claude, cursor) auth to their own services. */
   const TOKEN_AGE_SOURCES: Record<string, TokenSource> = {
@@ -299,54 +299,90 @@
 </section>
 
 <style>
-  .connections-view { overflow-y: auto; flex: 1; }
-  .connections-header { padding: 48px 56px 20px; text-align: center; }
-  .view-title { font-size: 28px; font-weight: 600; letter-spacing: -0.025em; color: var(--text-0); margin-bottom: 10px; }
-  .view-sub { font-size: 14px; color: var(--text-2); max-width: 520px; margin: 0 auto; line-height: 1.5; }
-  .connections-body { padding: 0 56px 100px; max-width: 980px; margin: 0 auto; width: 100%; }
-
-  .conn-category { margin-top: 36px; }
-  .conn-category-head {
-    display: flex; align-items: center; gap: 12px; margin-bottom: 16px;
-    font-size: 11px; font-weight: 600; letter-spacing: 0.08em;
-    color: var(--text-2); text-transform: uppercase;
+  .connections-view {
+    overflow-y: auto; flex: 1;
+    padding: 30px 60px;
+    background: var(--bg-0);
   }
-  .conn-category-head::after { content: ''; flex: 1; height: 1px; background: var(--border-neutral); }
+  .connections-header { padding: 8px 0 28px; max-width: 880px; margin: 0 auto; }
+  .view-title {
+    font-family: 'Instrument Serif', 'New York', Georgia, serif;
+    font-size: 38px; font-weight: 400;
+    letter-spacing: -0.02em;
+    color: var(--text-0);
+    margin: 0 0 6px;
+    font-style: italic;
+  }
+  .view-sub {
+    font-size: 14px; color: var(--text-2);
+    line-height: 1.5;
+    margin: 0;
+  }
+  .connections-body { max-width: 880px; margin: 0 auto; width: 100%; padding-bottom: 60px; }
+
+  .conn-category { margin-top: 30px; }
+  .conn-category-head {
+    display: flex; align-items: center; gap: 12px; margin-bottom: 14px;
+    font-size: 9.5px; font-weight: 700; letter-spacing: 0.10em;
+    color: var(--text-mute); text-transform: uppercase;
+  }
+  .conn-category-head::after { content: ''; flex: 1; height: 1px; background: linear-gradient(90deg, var(--border), transparent); }
   .conn-category-count { font-family: 'JetBrains Mono', monospace; color: var(--text-mute); font-size: 10.5px; letter-spacing: 0; }
 
-  .conn-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .conn-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
   .conn-card {
-    padding: 18px 18px 14px;
-    background: var(--bg-1); border: 1px solid var(--border-neutral);
-    border-radius: 11px;
-    display: flex; flex-direction: column; gap: 12px;
+    padding: 18px 20px;
+    background: var(--bg-1); border: 1px solid var(--border);
+    border-radius: 14px;
+    box-shadow: var(--shadow-1);
+    display: flex; flex-direction: column; gap: 10px;
     transition: all 180ms;
   }
-  .conn-card:hover { border-color: var(--border-neutral-hi); background: var(--bg-2); transform: translateY(-2px); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3); }
-  .conn-card.connected { border-color: rgba(16, 185, 129, 0.18); }
-  .conn-card.connected:hover { border-color: rgba(16, 185, 129, 0.32); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3), 0 0 20px rgba(16, 185, 129, 0.05); }
+  .conn-card:hover { border-color: var(--border-hi); transform: translateY(-1px); box-shadow: var(--shadow-2); }
+  .conn-card.connected { border-color: var(--border-hi); }
   .conn-card.disabled { opacity: 0.55; }
-  .conn-card.disabled:hover { transform: none; }
+  .conn-card.disabled:hover { transform: none; box-shadow: var(--shadow-1); }
 
-  .conn-head { display: flex; align-items: center; gap: 12px; }
+  .conn-head { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }
   .conn-icon {
     width: 36px; height: 36px; border-radius: 9px;
     display: inline-flex; align-items: center; justify-content: center;
     font-size: 13px; font-weight: 700; letter-spacing: -0.02em; flex-shrink: 0;
   }
+  .conn-icon.conn-icon--github { background: rgba(181, 132, 255, 0.14); color: var(--src-github); }
+  .conn-icon.conn-icon--jira   { background: rgba(79, 142, 255, 0.14); color: var(--src-jira); }
+  .conn-icon.conn-icon--sentry { background: rgba(232, 130, 100, 0.14); color: var(--src-sentry); }
+  .conn-icon.conn-icon--claude { background: rgba(232, 155, 125, 0.14); color: var(--src-claude); }
+  .conn-icon.conn-icon--cursor { background: rgba(220, 220, 220, 0.10); color: var(--src-cursor); }
   .conn-icon--svg svg {
     width: 20px; height: 20px;
     color: currentColor;
     display: block;
   }
 
-  .conn-name { font-size: 14px; font-weight: 600; color: var(--text-0); }
-  .conn-status { font-size: 10.5px; color: var(--text-mute); margin-left: auto; font-weight: 500; }
-  .conn-status.connected { color: var(--accent-bright); }
+  .conn-name { font-size: 16px; font-weight: 600; color: var(--text-0); flex: 1; }
+  .conn-status {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 3px 9px;
+    font-size: 11px; font-weight: 500;
+    border-radius: 4px;
+    background: var(--bg-3);
+    color: var(--text-mute);
+    margin-left: auto;
+  }
+  .conn-status.connected {
+    background: rgba(101, 211, 150, 0.14);
+    color: var(--success);
+  }
   .conn-status.connected::before {
     content: ''; display: inline-block;
-    width: 5px; height: 5px; background: var(--accent-bright); border-radius: 50%;
-    box-shadow: 0 0 6px var(--accent-glow); margin-right: 6px; vertical-align: middle;
+    width: 6px; height: 6px; background: var(--success); border-radius: 50%;
+    box-shadow: 0 0 6px var(--success);
+    animation: conn-status-blink 2s ease-in-out infinite;
+  }
+  @keyframes conn-status-blink {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.55; }
   }
   /* Retrying: warm-tone pulse so the user sees "still trying" rather
      than "permanently broken". Connected wins if both flags happen
@@ -369,11 +405,11 @@
   .conn-btn { padding: 6px 14px; border-radius: 6px; font-size: 11.5px; font-weight: 500; transition: all 140ms; background: none; border: none; cursor: pointer; }
   .conn-btn--connect {
     color: var(--accent-fg);
-    background: linear-gradient(135deg, #34d399, #10b981);
-    box-shadow: 0 2px 8px rgba(16, 185, 129, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+    background: linear-gradient(135deg, #A8D9B8, #7DC9B0);
+    box-shadow: 0 2px 8px rgba(168, 217, 184, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.2);
     font-weight: 600;
   }
-  .conn-btn--connect:hover { box-shadow: 0 4px 14px rgba(16, 185, 129, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.25); transform: translateY(-1px); }
+  .conn-btn--connect:hover { box-shadow: 0 4px 14px rgba(168, 217, 184, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.25); transform: translateY(-1px); }
   .conn-btn--configure { background: transparent; color: var(--text-1); border: 1px solid var(--border-neutral-hi); }
   .conn-btn--configure:hover { background: var(--bg-3); color: var(--text-0); border-color: var(--border-hi); }
 
@@ -403,8 +439,8 @@
   .conn-event-sep { opacity: 0.6; }
   .conn-event--connected .conn-event-kind { color: var(--accent-bright); }
   .conn-event--disconnected .conn-event-kind { color: var(--text-2); }
-  .conn-event--rate_limited .conn-event-kind { color: #f59e0b; }
-  .conn-event--error .conn-event-kind { color: #f87171; }
+  .conn-event--rate_limited .conn-event-kind { color: #D9B86E; }
+  .conn-event--error .conn-event-kind { color: #F0A38A; }
 
   /* GitHub rate-limit chip in the per-card test-row. Pushed to the
      right with margin-left:auto so the most-relevant info (test
@@ -422,9 +458,9 @@
     cursor: help;
   }
   .conn-quota--low {
-    background: rgba(245, 158, 11, 0.10);
-    border-color: rgba(245, 158, 11, 0.45);
-    color: #f59e0b;
+    background: rgba(217, 184, 110, 0.10);
+    border-color: rgba(217, 184, 110, 0.45);
+    color: #D9B86E;
   }
 
   /* Token rotation reminder banner. Shown only when severity is
@@ -432,28 +468,28 @@
   .conn-token-age {
     margin-top: 6px; padding: 6px 10px;
     border-radius: 8px;
-    border: 1px solid rgba(245, 158, 11, 0.35);
-    background: rgba(245, 158, 11, 0.07);
-    color: #f59e0b;
+    border: 1px solid rgba(217, 184, 110, 0.35);
+    background: rgba(217, 184, 110, 0.07);
+    color: #D9B86E;
     font-size: 11.5px; line-height: 1.45;
   }
   .conn-token-age--strong-warn {
-    border-color: rgba(245, 158, 11, 0.55);
-    background: rgba(245, 158, 11, 0.10);
+    border-color: rgba(217, 184, 110, 0.55);
+    background: rgba(217, 184, 110, 0.10);
   }
   .conn-token-age--expired {
-    border-color: rgba(248, 113, 113, 0.55);
-    background: rgba(248, 113, 113, 0.10);
-    color: #f87171;
+    border-color: rgba(232, 130, 100, 0.55);
+    background: rgba(232, 130, 100, 0.10);
+    color: #F0A38A;
   }
 
   .you-quota { display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; }
-  .you-quota--low { color: #f59e0b; }
+  .you-quota--low { color: #D9B86E; }
   .you-quota-pct { color: var(--text-mute); font-size: 11.5px; }
 
   .you-are {
     margin-top: 28px; padding: 14px 16px;
-    background: var(--bg-1); border: 1px solid rgba(16, 185, 129, 0.16);
+    background: var(--bg-1); border: 1px solid rgba(168, 217, 184, 0.16);
     border-radius: 10px;
     display: flex; align-items: center; gap: 10px;
     font-size: 12.5px; color: var(--text-1);

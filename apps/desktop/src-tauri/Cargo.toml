@@ -1,16 +1,16 @@
 [workspace]
-members = ["sidecars/forgehold-jira", "sidecars/forgehold-github", "sidecars/forgehold-memory", "sidecars/forgehold-sentry", "sidecars/forgehold-app"]
+members = ["sidecars/woom-jira", "sidecars/woom-github", "sidecars/woom-memory", "sidecars/woom-sentry", "sidecars/woom-app"]
 
 [package]
-name = "forgehold-desktop"
+name = "woom-desktop"
 version = "1.0.0"
-description = "Forgehold — a team-scale operating layer for developers"
-authors = ["Forgehold"]
+description = "Woom — a focused, warm-lit workspace for software work"
+authors = ["Woom"]
 edition = "2021"
 rust-version = "1.75"
 
 [lib]
-name = "forgehold_desktop_lib"
+name = "woom_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
@@ -38,15 +38,15 @@ notify = "8"
 base64 = "0.22"
 urlencoding = "2"
 rusqlite = { version = "0.32", features = ["bundled"] }
-# Terminal column — PTY-backed shell session per workbench instance.
+# Terminal solo — PTY-backed shell session for SoloTerminal.
 # `portable-pty` spawns a real /bin/zsh attached to a master/slave pair;
 # `parking_lot` is the cheap RwLock for the active-instance map.
 portable-pty = "0.9"
 parking_lot = "0.12"
 uuid = { version = "1", features = ["v4"] }
 # Terminal MCP bridge — axum HTTP server on 127.0.0.1 so the
-# `forgehold-app` sidecar (separate process spawned by Claude/Cursor)
-# can drive the same PTYs the user sees in their workbench column.
+# `woom-app` sidecar (separate process spawned by Claude/Cursor)
+# can drive the same PTY the user sees in SoloTerminal.
 # Port is published to `<app_data>/bridge.port` for sidecar discovery.
 axum = "0.8"
 strip-ansi-escapes = "0.2"

@@ -174,26 +174,30 @@ export function readNum(input: Record<string, unknown>, k: string): number {
   return typeof v === 'number' ? v : Number(v);
 }
 
-/** Map the platform-named view the agent ships (`github` /
- *  `jira` / `sentry`) to Forgehold's internal `View` key
- *  (`githubTab` / `jiraTab` / `sentryTab` — the `Tab` suffix
- *  disambiguates from the workbench column kind of the same
- *  name). Unrecognised names return `null`; pass-through values
- *  (`workbench` / `rules` / `connections` / `settings`) come back
- *  unchanged.
+/** Map the platform-named view the agent ships (`github` / `jira` /
+ *  `sentry` / `claude` / `cursor` / `editor` / `canvas` / `terminal`)
+ *  to Woom's internal `…App` `View` key. Pass-through values (`rules` /
+ *  `connections` / `settings`) come back unchanged. Unrecognised names
+ *  return `null` so the dispatcher can no-op cleanly.
  *
  *  The return type uses the literal strings directly to avoid a
  *  cyclic import on the `View` alias from `view.svelte.ts`. */
 export type AgentInternalView =
-  | 'workbench' | 'githubTab' | 'jiraTab' | 'sentryTab'
+  | 'githubApp' | 'jiraApp' | 'sentryApp'
+  | 'claudeApp' | 'cursorApp'
+  | 'editorApp' | 'canvasApp' | 'terminalApp'
   | 'rules' | 'connections' | 'settings';
 
 export function mapAgentViewToInternal(v: string): AgentInternalView | null {
   switch (v) {
-    case 'github':       return 'githubTab';
-    case 'jira':         return 'jiraTab';
-    case 'sentry':       return 'sentryTab';
-    case 'workbench':    return 'workbench';
+    case 'github':       return 'githubApp';
+    case 'jira':         return 'jiraApp';
+    case 'sentry':       return 'sentryApp';
+    case 'claude':       return 'claudeApp';
+    case 'cursor':       return 'cursorApp';
+    case 'editor':       return 'editorApp';
+    case 'canvas':       return 'canvasApp';
+    case 'terminal':     return 'terminalApp';
     case 'rules':        return 'rules';
     case 'connections':  return 'connections';
     case 'settings':     return 'settings';
