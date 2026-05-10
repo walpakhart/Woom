@@ -72,6 +72,7 @@
       } else {
         if (!p.activeCanvasId) continue;
         if (s.linkedCanvasId !== p.activeCanvasId) continue;
+        if (s.agentKind !== 'claude') continue;
       }
       /* Floating sessions (no agentInstanceId yet) fall back to the
          singleton app id for their kind so the row can still render
@@ -112,7 +113,11 @@
       return tb.localeCompare(ta);
     };
     for (const s of [...sessionsState.list].sort(sortByActivity)) {
-      if (s.agentKind !== 'claude' && s.agentKind !== 'cursor') continue;
+      if (linkKind === 'canvas') {
+        if (s.agentKind !== 'claude') continue;
+      } else {
+        if (s.agentKind !== 'claude' && s.agentKind !== 'cursor') continue;
+      }
       const linkedHere =
         linkKind === 'editor'
           ? s.linkedToEditor && s.linkedToEditorInstanceId === p.instanceId
@@ -206,35 +211,16 @@
       <span class="ic-sub mono">{linkedAgents.length} linked · {hostLabel}</span>
     </span>
     {#if p.onLinkSession && pickableSessions.length > 0}
-      <div class="ic-link-wrap">
-        <button
-          class="ic-link-add"
-          class:has-links={linkedAgents.length > 0}
-          onclick={() => (showLinkPicker = !showLinkPicker)}
-          title="Link a Claude or Cursor chat to {hostLabel}"
-          aria-label="Link a chat"
-          aria-expanded={showLinkPicker}
-        >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M9 17H7A5 5 0 1 1 7 7h2M15 7h2a5 5 0 1 1 0 10h-2M8 12h8"/></svg>
-        </button>
-        {#if showLinkPicker}
-          <div class="ic-link-menu" role="menu">
-            <div class="ic-link-menu-head">Link a chat to {hostLabel}</div>
-            {#each pickableSessions as ps (ps.sessionId)}
-              <button
-                class="ic-link-menu-item"
-                role="menuitem"
-                onclick={() => pickLink(ps.sessionId)}
-              >
-                <span class="ic-link-menu-kind" data-agent={ps.kind}>
-                  {ps.kind === 'claude' ? 'Claude' : 'Cursor'}
-                </span>
-                <span class="ic-link-menu-name">{ps.title}</span>
-              </button>
-            {/each}
-          </div>
-        {/if}
-      </div>
+      <button
+        class="ic-link-add"
+        class:has-links={linkedAgents.length > 0}
+        onclick={() => (showLinkPicker = !showLinkPicker)}
+        title="Link a Claude or Cursor chat to {hostLabel}"
+        aria-label="Link a chat"
+        aria-expanded={showLinkPicker}
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M9 17H7A5 5 0 1 1 7 7h2M15 7h2a5 5 0 1 1 0 10h-2M8 12h8"/></svg>
+      </button>
     {/if}
     <button class="ic-x" title="Hide" onclick={p.onClose}>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M18 6 6 18M6 6l12 12"/></svg>
@@ -242,6 +228,24 @@
   </header>
 
   <div class="ic-body">
+    {#if showLinkPicker && p.onLinkSession && pickableSessions.length > 0}
+      <div class="ic-picker">
+        <div class="ic-picker-head">
+          <span>Link a chat to {hostLabel}</span>
+          <button class="ic-picker-close" onclick={() => (showLinkPicker = false)} aria-label="Close picker">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M18 6 6 18M6 6l12 12"/></svg>
+          </button>
+        </div>
+        {#each pickableSessions as ps (ps.sessionId)}
+          <button class="ic-link-menu-item" onclick={() => pickLink(ps.sessionId)}>
+            <span class="ic-link-menu-kind" data-agent={ps.kind}>
+              {ps.kind === 'claude' ? 'Claude' : 'Cursor'}
+            </span>
+            <span class="ic-link-menu-name">{ps.title}</span>
+          </button>
+        {/each}
+      </div>
+    {/if}
     {#if linkedAgents.length === 0}
       <div class="ic-empty">
         <div class="ic-empty-icon">
@@ -409,12 +413,7 @@
   .ic-x:hover { color: var(--text-0); background: var(--bg-elev, var(--bg-2)); }
   .ic-x svg { width: 13px; height: 13px; }
 
-  /* Header-level "Link a chat" affordance — same shape as `.ic-x` so
-     the icon row stays visually balanced. Tints to the app accent on
-     hover so the action reads as the primary "add" beat for an empty
-     pane. The dropdown sits underneath as `.ic-link-menu`, anchored
-     to the wrapper so it follows the trigger. */
-  .ic-link-wrap { position: relative; display: inline-flex; }
+  /* Header-level "Link a chat" affordance — same shape as `.ic-x`. */
   .ic-link-add {
     width: 24px; height: 24px;
     display: grid; place-items: center;
@@ -429,28 +428,34 @@
   .ic-link-add[aria-expanded="true"] { color: var(--accent-bright); background: color-mix(in srgb, var(--accent) 14%, transparent); }
   .ic-link-add svg { width: 13px; height: 13px; }
 
-  .ic-link-menu {
-    position: absolute;
-    top: calc(100% + 6px); right: 0;
-    z-index: 60;
-    min-width: 220px;
-    max-width: 280px;
-    max-height: 280px;
-    overflow-y: auto;
-    padding: 4px;
-    background: var(--bg-2);
-    border: 1px solid var(--border-hi);
+  /* Inline link picker — rendered at the top of ic-body so it's never
+     clipped by the parent pane's overflow:hidden. Replaces the old
+     absolutely-positioned dropdown overlay. */
+  .ic-picker {
     border-radius: 9px;
-    box-shadow: 0 12px 30px -8px rgba(0, 0, 0, 0.55);
+    border: 1px solid var(--border-hi);
+    background: var(--bg-2);
+    overflow: hidden;
+    flex-shrink: 0;
   }
-  .ic-link-menu-head {
-    padding: 6px 10px;
-    font-size: 9.5px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
+  .ic-picker-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 6px 8px 6px 10px;
+    border-bottom: 1px solid var(--border);
+    font-size: 9.5px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.08em;
     color: var(--text-mute);
   }
+  .ic-picker-close {
+    width: 20px; height: 20px;
+    display: grid; place-items: center;
+    background: transparent; border: none;
+    color: var(--text-mute); cursor: pointer;
+    border-radius: 4px; flex-shrink: 0;
+    transition: color 120ms, background 120ms;
+  }
+  .ic-picker-close:hover { color: var(--text-0); background: var(--bg-3); }
+  .ic-picker-close svg { width: 11px; height: 11px; }
   .ic-link-menu-item {
     display: flex; align-items: center; gap: 8px;
     width: 100%;
@@ -460,7 +465,6 @@
     text-align: left;
     color: var(--text-0);
     font-size: 12px;
-    border-radius: 6px;
     cursor: pointer;
   }
   .ic-link-menu-item:hover { background: var(--bg-3); }
