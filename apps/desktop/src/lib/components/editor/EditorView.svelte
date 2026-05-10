@@ -150,11 +150,6 @@
   let searching = $state(false);
   let searchTimer: ReturnType<typeof setTimeout> | null = null;
 
-  const SKIP_DIRS = new Set([
-    'node_modules', '.git', 'dist', '.svelte-kit', 'target', '.next',
-    '__pycache__', '.turbo', 'build', 'out', '.cache', 'coverage'
-  ]);
-
   async function searchFiles(
     root: string,
     query: string
@@ -170,7 +165,7 @@
       } catch { continue; }
       for (const e of entries) {
         if (e.is_dir) {
-          if (!SKIP_DIRS.has(e.name)) queue.push(e.path);
+          queue.push(e.path);
         } else {
           if (e.name.toLowerCase().includes(q)) {
             const rel = e.path.startsWith(root + '/') ? e.path.slice(root.length + 1) : e.path;
