@@ -125,6 +125,21 @@
     if (!p.isClickNotDrag(e)) return;
     openSentryFocus(it.id);
   }
+
+  const SENTRY_ID_RE = /^[A-Z][A-Z0-9]+-\d+$/i;
+
+  function handleSearchKeydown(e: KeyboardEvent) {
+    if (e.key !== 'Enter') return;
+    const q = query.trim();
+    if (SENTRY_ID_RE.test(q)) {
+      const found = items.find((it) => it.short_id.toLowerCase() === q.toLowerCase());
+      if (found) {
+        openSentryFocus(found.id);
+        query = '';
+        e.preventDefault();
+      }
+    }
+  }
 </script>
 
 <aside class="sl app-pane">
@@ -142,7 +157,7 @@
   <div class="sl-filters">
     <label class="sl-search">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
-      <input type="text" placeholder="Search title, short-id, project…" bind:value={query} spellcheck="false" />
+      <input type="text" placeholder="Search title, short-id, project…" bind:value={query} spellcheck="false" onkeydown={handleSearchKeydown} />
       {#if query}
         <button class="sl-search-clear" onclick={() => (query = '')} aria-label="Clear search">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>

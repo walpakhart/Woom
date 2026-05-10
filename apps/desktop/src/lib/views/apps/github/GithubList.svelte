@@ -374,6 +374,23 @@
     p.onSelect(it.id);
   }
 
+  function handleSearchKeydown(e: KeyboardEvent) {
+    if (e.key !== 'Enter') return;
+    const q = query.trim();
+    if (/^#?\d+$/.test(q)) {
+      const num = parseInt(q.replace('#', ''));
+      const found = items.find((it) => it.number === num);
+      if (found) {
+        p.onSelect(found.id);
+      } else {
+        // not in inbox — open GitHub search in browser
+        p.onOpenBrowser(`https://github.com/pulls?q=${encodeURIComponent(q)}`);
+      }
+      query = '';
+      e.preventDefault();
+    }
+  }
+
   function stateLabel(it: InboxItem): string {
     if (it.merged) return 'merged';
     if (it.draft) return 'draft';
@@ -422,6 +439,7 @@
         placeholder={wantsRemoteSearch ? 'Searching all of GitHub…' : 'Search title, #number, @author, repo…'}
         bind:value={query}
         spellcheck="false"
+        onkeydown={handleSearchKeydown}
       />
       {#if query}
         <button class="gl-search-clear" onclick={() => (query = '')} aria-label="Clear search">

@@ -8,10 +8,15 @@
     inboxState,
     jiraItemsFor,
     jiraItemsLoadingFor,
-    jiraItemsErrorFor
+    jiraItemsErrorFor,
+    updateJiraFilters,
+    jiraFiltersFor,
+    loadJiraSprints,
+    loadJiraBoards
   } from '$lib/state/inbox.svelte';
   import { relativeTime, jiraStatusClass, type JiraItem, type JiraStatus } from '$lib/data';
   import Dropdown from '$lib/components/ui/Dropdown.svelte';
+  import { onMount } from 'svelte';
 
   interface Props {
     instanceId: string;
@@ -55,6 +60,51 @@
   let assigneeFilter = $state<string | null>(null);
 
   const me = $derived(p.jiraStatus.kind === 'connected' ? p.jiraStatus.user.account_id : null);
+
+  const currentFilters = $derived(jiraFiltersFor(p.instanceId));
+  const selectedSprintId = $derived(
+    currentFilters?.sprintIds?.length ? String(currentFilters.sprintIds[0]) : '__all__'
+  );
+
+  const sprintOptions = $derived.by(() => {
+    const opts = inboxState.jiraSprintOptions ?? [];
+    const out: { value: string; label: string; hint?: string }[] = [
+      { value: '__all__', label: 'All sprints' }
+    ];
+    for (const s of opts) {
+      const hint = s.state === 'active' ? 'Active' : s.state === 'future' ? 'Future' : undefined;
+      out.push({ value: String(s.id), label: s.name, hint });
+    }
+    return out;
+  });
+
+  function selectSprint(v: string) {
+    if (v === '__all__') {
+      updateJiraFilters(p.instanceId, { sprintIds: [] });
+    } else {
+      updateJiraFilters(p.instanceId, { sprintIds: [parseInt(v)] });
+    }
+  }
+
+  onMount(async () => {
+    if (p.jiraStatus.kind !== 'connected') return;
+    const projectKey = currentFilters?.projectKey ?? null;
+    await loadJiraBoards(projectKey).catch(() => {});
+    const board = inboxState.jiraBoardOptions?.[0];
+    if (board) await loadJiraSprints(board.id).catch(() => {});
+  });
+
+  const JIRA_KEY_RE = /^[A-Z][A-Z0-9]+-\d+$/;
+
+  function handleSearchKeydown(e: KeyboardEvent) {
+    if (e.key !== 'Enter') return;
+    const q = query.trim().toUpperCase();
+    if (JIRA_KEY_RE.test(q)) {
+      inboxState.jiraFocusKey = q;
+      query = '';
+      e.preventDefault();
+    }
+  }
 
   /** Unique projects (key prefix before the dash) seen in the items. */
   const projectOptions = $derived.by(() => {
@@ -147,7 +197,8 @@
     roleFilter !== null ||
     statusFilter !== null ||
     projectFilter !== null ||
-    assigneeFilter !== null
+    assigneeFilter !== null ||
+    selectedSprintId !== '__all__'
   );
 
   function clearFilters() {
@@ -156,6 +207,7 @@
     statusFilter = null;
     projectFilter = null;
     assigneeFilter = null;
+    updateJiraFilters(p.instanceId, { sprintIds: [] });
   }
 
   function clickItem(it: JiraItem, e: MouseEvent) {
@@ -200,7 +252,7 @@
   <div class="jl-filters">
     <label class="jl-search">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
-      <input type="text" placeholder="Search summary, KEY-123, assignee…" bind:value={query} spellcheck="false" />
+      <input type="text" placeholder="Search summary, KEY-123, assignee…" bind:value={query} spellcheck="false" onkeydown={handleSearchKeydown} />
       {#if query}
         <button class="jl-search-clear" onclick={() => (query = '')} aria-label="Clear search">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
@@ -249,6 +301,17 @@
           onChange={(v) => (assigneeFilter = v === '__all__' ? null : v)}
           placeholder="Assignee"
           ariaLabel="Filter by assignee"
+          variant="chip"
+          compact
+        />
+      </span>
+      <span class="jl-dd">
+        <Dropdown
+          value={selectedSprintId}
+          options={sprintOptions}
+          onChange={selectSprint}
+          placeholder="Sprint"
+          ariaLabel="Filter by sprint"
           variant="chip"
           compact
         />

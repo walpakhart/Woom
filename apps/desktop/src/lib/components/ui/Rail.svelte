@@ -269,7 +269,7 @@
   >
     <!-- Same rationale as Claude above — Anysphere's mark is a faceted
          3D hex with subtle gradients, baked into the brand PNG. -->
-    <img class="rail-brand-img" src="/brand-cursor.png" alt="" aria-hidden="true" draggable="false" />
+    <img class="rail-brand-img rail-brand-img--cursor" src="/brand-cursor.png" alt="" aria-hidden="true" draggable="false" />
   </button>
 
   <div class="rail-divider"></div>
@@ -478,6 +478,15 @@
   }
   :global(.rail-btn:hover .rail-brand-img),
   :global(.rail-btn.active .rail-brand-img) {
+    filter: none;
+  }
+  /* Cursor's white-on-transparent icon is too bright at the default
+     opacity — dial it down further so it reads as clearly inactive. */
+  :global(.rail-brand-img--cursor) {
+    filter: grayscale(1) opacity(0.35);
+  }
+  :global(.rail-btn:hover .rail-brand-img--cursor),
+  :global(.rail-btn.active .rail-brand-img--cursor) {
     filter: none;
   }
 
