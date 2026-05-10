@@ -3,10 +3,6 @@
 // by ~150 LOC. Errors land back on the action card via `updateAction(...,
 // status: 'error')` — no global toast — so the chat row stays the visible
 // transcript of what happened.
-//
-// `appendToTranscript` is supplied by the caller because rendering bash
-// output inline in the assistant turn touches DOM-scroll state that lives
-// in the component layer.
 
 import { invoke } from '@tauri-apps/api/core';
 import {
@@ -130,7 +126,6 @@ export async function executeCommit(
 export async function executeBash(
   sessionId: string,
   actionId: string,
-  appendToTranscript: (sessionId: string, delta: string) => void,
   onResolved?: ActionResolvedCallback
 ): Promise<void> {
   const sess = sessionsState.list.find((x) => x.id === sessionId);
@@ -157,18 +152,7 @@ export async function executeBash(
       exitCode: res.code
     });
     const output = combined || '(no output)';
-    const exitNote = res.ok ? '' : ` _(exit ${res.code})_`;
-    appendToTranscript(
-      sessionId,
-      `\n\n\`$ ${truncInline(action.command, 400)}\`${exitNote}\n\n\`\`\`\n${truncInline(output, 4000)}\n\`\`\`\n\n`
-    );
     const summary = `bash \`${truncInline(action.command, 200)}\` exited ${res.code}.\nOutput:\n${truncInline(output, 2000)}`;
-    // The bash output already streams into the assistant transcript
-    // above (`appendToTranscript`), so the agent sees it on its own
-    // turn-end. We still emit a system-message marker so the agent
-    // can spot the exit code when scanning the transcript on later
-    // turns — without it the inline output is just text and the
-    // agent has to infer success from the absence of "exited 1".
     recordActionOutcome(sessionId, 'bash', res.ok, summary, action.waitId);
     onResolved?.(sessionId, action, { ok: res.ok, summary });
     if (res.ok) {
@@ -274,11 +258,10 @@ export async function executePr(
 export function dispatchAction(
   sessionId: string,
   action: ClaudeAction,
-  appendToTranscript: (sessionId: string, delta: string) => void,
   onResolved?: ActionResolvedCallback
 ): void {
   if (action.kind === 'commit') void executeCommit(sessionId, action.id, onResolved);
   else if (action.kind === 'pr') void executePr(sessionId, action.id, onResolved);
   else if (action.kind === 'switch_cwd') void executeSwitchCwd(sessionId, action.id, onResolved);
-  else if (action.kind === 'bash') void executeBash(sessionId, action.id, appendToTranscript, onResolved);
+  else if (action.kind === 'bash') void executeBash(sessionId, action.id, onResolved);
 }

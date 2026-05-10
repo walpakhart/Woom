@@ -335,63 +335,71 @@ export function handleStreamEvent(
     switch (name) {
       case 'mcp__github__propose_commit': {
         const message = String(input.message ?? '');
-        if (hasMatchingPending('commit', (a) => a.kind === 'commit' && a.message === message)) {
-          continue;
+        if (!hasMatchingPending('commit', (a) => a.kind === 'commit' && a.message === message)) {
+          addAction(sessionId, {
+            id,
+            kind: 'commit',
+            message,
+            body: typeof input.body === 'string' ? input.body : '',
+            push: input.push !== false,
+            note: typeof input.note === 'string' ? input.note : '',
+            status: 'pending'
+          });
         }
-        addAction(sessionId, {
-          id,
-          kind: 'commit',
-          message,
-          body: typeof input.body === 'string' ? input.body : '',
-          push: input.push !== false,
-          note: typeof input.note === 'string' ? input.note : '',
-          status: 'pending'
-        });
+        const commitHint = formatToolUse(name, input);
+        if (commitHint) merged.onTraceDelta?.(sessionId, commitHint);
         continue;
       }
       case 'mcp__github__propose_pr': {
         const title = String(input.title ?? '');
-        if (hasMatchingPending('pr', (a) => a.kind === 'pr' && a.title === title)) {
-          continue;
+        if (!hasMatchingPending('pr', (a) => a.kind === 'pr' && a.title === title)) {
+          addAction(sessionId, {
+            id,
+            kind: 'pr',
+            title,
+            body: typeof input.body === 'string' ? input.body : '',
+            base: typeof input.base === 'string' ? input.base : '',
+            draft: input.draft === true,
+            note: typeof input.note === 'string' ? input.note : '',
+            status: 'pending'
+          });
         }
-        addAction(sessionId, {
-          id,
-          kind: 'pr',
-          title,
-          body: typeof input.body === 'string' ? input.body : '',
-          base: typeof input.base === 'string' ? input.base : '',
-          draft: input.draft === true,
-          note: typeof input.note === 'string' ? input.note : '',
-          status: 'pending'
-        });
+        const prHint = formatToolUse(name, input);
+        if (prHint) merged.onTraceDelta?.(sessionId, prHint);
         continue;
       }
-      case 'mcp__github__propose_switch_cwd': {
+      case 'mcp__github__propose_switch_cwd':
+      case 'mcp__app__propose_switch_cwd': {
         const path = String(input.path ?? '');
-        if (hasMatchingPending('switch_cwd', (a) => a.kind === 'switch_cwd' && a.path === path)) {
-          continue;
+        if (!hasMatchingPending('switch_cwd', (a) => a.kind === 'switch_cwd' && a.path === path)) {
+          addAction(sessionId, {
+            id,
+            kind: 'switch_cwd',
+            path,
+            reason: typeof input.reason === 'string' ? input.reason : '',
+            status: 'pending'
+          });
         }
-        addAction(sessionId, {
-          id,
-          kind: 'switch_cwd',
-          path,
-          reason: typeof input.reason === 'string' ? input.reason : '',
-          status: 'pending'
-        });
+        const switchHint = formatToolUse(name, input);
+        if (switchHint) merged.onTraceDelta?.(sessionId, switchHint);
         continue;
       }
-      case 'mcp__github__propose_bash': {
+      case 'mcp__github__propose_bash':
+      case 'mcp__app__propose_bash': {
         const command = String(input.command ?? '');
-        if (hasMatchingPending('bash', (a) => a.kind === 'bash' && a.command === command)) {
-          continue;
+        if (!hasMatchingPending('bash', (a) => a.kind === 'bash' && a.command === command)) {
+          addAction(sessionId, {
+            id,
+            kind: 'bash',
+            command,
+            reason: typeof input.reason === 'string' ? input.reason : '',
+            status: 'pending'
+          });
         }
-        addAction(sessionId, {
-          id,
-          kind: 'bash',
-          command,
-          reason: typeof input.reason === 'string' ? input.reason : '',
-          status: 'pending'
-        });
+        // Always emit a trace segment so attachOutputToLastTrace has
+        // somewhere to attach the tool_result output after the command runs.
+        const bashHint = formatToolUse(name, input);
+        if (bashHint) merged.onTraceDelta?.(sessionId, bashHint);
         continue;
       }
       default: {

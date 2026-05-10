@@ -51,7 +51,6 @@ function serializeSession(s: ClaudeSession): object {
     agentKind: s.agentKind,
     cursorModel: s.cursorModel,
     claudeModel: s.claudeModel,
-    claudeToolProfile: s.claudeToolProfile,
     lastContextSize: s.lastContextSize,
     linkedToEditor: s.linkedToEditor,
     linkedToEditorInstanceId: s.linkedToEditorInstanceId,
@@ -270,8 +269,6 @@ function hydrateSession(s: ClaudeSession): ClaudeSession {
     agentKind: ((s as { agentKind?: 'claude' | 'cursor' }).agentKind ?? 'claude'),
     cursorModel: (s as { cursorModel?: string | null }).cursorModel ?? null,
     claudeModel: (s as { claudeModel?: string | null }).claudeModel ?? null,
-    claudeToolProfile:
-      (s as { claudeToolProfile?: ClaudeSession['claudeToolProfile'] }).claudeToolProfile ?? null,
     lastContextSize: (s as { lastContextSize?: number }).lastContextSize ?? 0,
     linkedToEditor: Boolean((s as { linkedToEditor?: boolean }).linkedToEditor),
     linkedToEditorInstanceId:
@@ -530,12 +527,6 @@ export function newClaudeSession(
       // need Opus reasoning. Users opt in to Opus per session via the
       // model chip when they actually need it.
       claudeModel: agentKind === 'claude' ? 'claude-sonnet-4-6' : null,
-      // Default new Claude sessions to 'coding' profile (App nav +
-      // Memory only). Saves ~10-15k tokens of MCP schemas on every
-      // turn vs wiring all 60+ tools. User flips to 'github' /
-      // 'jira' / 'sentry' / 'triage' / 'all' via the profile chip
-      // when needed.
-      claudeToolProfile: agentKind === 'claude' ? 'coding' : null,
       lastContextSize: 0,
       linkedToEditor: !!opts.linkedToEditor,
       linkedToEditorInstanceId: opts.linkedToEditorInstanceId ?? null,

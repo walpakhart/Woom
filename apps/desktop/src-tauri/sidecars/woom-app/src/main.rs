@@ -27,6 +27,7 @@ use rmcp::{
     schemars, tool, tool_handler, tool_router,
     transport::stdio,
 };
+use anyhow::Context;
 use serde::Deserialize;
 
 mod terminal_bridge_client;
@@ -1083,6 +1084,24 @@ impl FilterBits {
             self.0.join(", ")
         }
     }
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct ProposeBashParams {
+    /// The exact shell command you want to run (single line, will be run via `sh -c`).
+    command: String,
+    /// Short free-form explanation for the user of why this command is needed.
+    #[serde(default)]
+    reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct ProposeSwitchCwdParams {
+    /// Absolute local path to switch the Claude session's working directory to.
+    path: String,
+    /// A short free-form note for the user explaining why you want to switch.
+    #[serde(default)]
+    reason: Option<String>,
 }
 
 #[tool_router]
@@ -2203,6 +2222,44 @@ impl App {
             resp.total_bytes, resp.text
         ))]))
     }
+
+    #[tool(
+        description = "Propose a state-changing shell command (`git switch/merge/push/pull/reset/rebase`, `rm`, `mv`, `npm install`, migrations, deploys, etc.). Surfaces an editable approval card in Woom and BLOCKS until the user approves (command runs) or dismisses. The tool's response is the actual stdout/stderr + exit code — read it and continue this same turn. Read-only commands (git status, ls, cat, grep) use the regular Bash tool, not this one."
+    )]
+    async fn propose_bash(
+        &self,
+        Parameters(ProposeBashParams { command, reason }): Parameters<ProposeBashParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let params = serde_json::json!({
+            "command": command,
+            "reason": reason,
+        });
+        let fallback = format!(
+            "Bash command queued.\ncommand: {}\nreason: {}",
+            command,
+            reason.as_deref().unwrap_or("(none)"),
+        );
+        run_or_fallback("bash", params, fallback).await
+    }
+
+    #[tool(
+        description = "Propose switching the current session's working directory. Surfaces an approval card in Woom and BLOCKS until the user approves (cwd switches) or dismisses. The tool's response is the actual outcome — react and continue in this same turn."
+    )]
+    async fn propose_switch_cwd(
+        &self,
+        Parameters(ProposeSwitchCwdParams { path, reason }): Parameters<ProposeSwitchCwdParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let params = serde_json::json!({
+            "path": path,
+            "reason": reason,
+        });
+        let fallback = format!(
+            "cwd switch proposal queued.\npath: {}\nreason: {}",
+            path,
+            reason.as_deref().unwrap_or("(none)"),
+        );
+        run_or_fallback("switch_cwd", params, fallback).await
+    }
 }
 
 /// Map a `BridgeError` to the MCP tool error shape. We surface the
@@ -2307,6 +2364,73 @@ impl ServerHandler for App {
                 .to_string(),
         );
         info
+    }
+}
+
+/// Send an action card request to Woom over the action-IPC Unix socket
+/// and BLOCK until the user resolves the card.
+async fn ipc_request_card(
+    kind: &str,
+    params: serde_json::Value,
+) -> anyhow::Result<(bool, String)> {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use tokio::net::UnixStream;
+
+    let socket = std::env::var("WOOM_IPC_SOCKET")
+        .context("WOOM_IPC_SOCKET not set")?;
+    if socket.trim().is_empty() {
+        anyhow::bail!("WOOM_IPC_SOCKET is empty");
+    }
+    let session_id = std::env::var("WOOM_SESSION_ID")
+        .context("WOOM_SESSION_ID not set")?;
+    let wait_id = uuid::Uuid::new_v4().to_string();
+
+    let req = serde_json::json!({
+        "session_id": session_id,
+        "wait_id": wait_id,
+        "kind": kind,
+        "params": params,
+    });
+    let mut body = serde_json::to_string(&req)?;
+    body.push('\n');
+
+    let stream = UnixStream::connect(&socket)
+        .await
+        .with_context(|| format!("connect to action-IPC socket at {}", socket))?;
+    let (read_half, mut write_half) = stream.into_split();
+    write_half.write_all(body.as_bytes()).await?;
+    write_half.flush().await?;
+    let mut reader = BufReader::new(read_half);
+    let mut response_line = String::new();
+    let _ = reader.read_line(&mut response_line).await?;
+    let resp: serde_json::Value = serde_json::from_str(response_line.trim())
+        .with_context(|| format!("parse IPC response: {:?}", response_line))?;
+    let ok = resp.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
+    let summary = resp
+        .get("summary")
+        .and_then(|v| v.as_str())
+        .unwrap_or("(no summary returned)")
+        .to_string();
+    Ok((ok, summary))
+}
+
+/// Turn the IPC outcome (or fallback on IPC unavailability) into an MCP
+/// CallToolResult. Failures are surfaced in the success text so the agent
+/// sees and reasons about every outcome rather than getting an opaque error.
+async fn run_or_fallback(
+    kind: &str,
+    params: serde_json::Value,
+    fallback_summary: String,
+) -> Result<CallToolResult, ErrorData> {
+    match ipc_request_card(kind, params).await {
+        Ok((_ok, summary)) => Ok(CallToolResult::success(vec![Content::text(summary)])),
+        Err(e) => {
+            let msg = format!(
+                "{}\n\n(Action IPC unavailable: {}. The card was not registered with Woom's UI.)",
+                fallback_summary, e
+            );
+            Ok(CallToolResult::success(vec![Content::text(msg)]))
+        }
     }
 }
 

@@ -1408,11 +1408,6 @@ async fn claude_ask(
     // picks its default (Opus on Max). Frontend defaults new sessions to
     // `claude-sonnet-4-6` so the typical case doesn't burn the 5h quota.
     #[allow(non_snake_case)] claudeModel: Option<String>,
-    // Subset of MCP tools to wire — 'coding' / 'triage' / 'pr-review' /
-    // 'all'. None or unrecognised → 'all' (legacy behavior). Saves
-    // 10-15k tokens of MCP schemas in startup overhead by skipping
-    // sidecar servers we don't need this session.
-    #[allow(non_snake_case)] claudeToolProfile: Option<String>,
     // Per-turn dynamic context describing the agent's UI surroundings —
     // active workbench, sibling instances + their names + cwds, and which
     // instance the calling session is bound to. Built fresh on the
@@ -1444,7 +1439,6 @@ async fn claude_ask(
         rules.as_deref(),
         cursorModel.as_deref(),
         claudeModel.as_deref(),
-        claudeToolProfile.as_deref(),
         appContext.as_deref(),
         Some(ipc_socket.as_path()),
         &images,
@@ -1477,7 +1471,6 @@ async fn claude_prewarm(
     rules: Option<String>,
     #[allow(non_snake_case)] agentKind: Option<AgentKind>,
     #[allow(non_snake_case)] claudeModel: Option<String>,
-    #[allow(non_snake_case)] claudeToolProfile: Option<String>,
     #[allow(non_snake_case)] appContext: Option<String>,
 ) -> Result<(), String> {
     // Cursor CLI takes its prompt as a positional arg, so we have to
@@ -1497,7 +1490,6 @@ async fn claude_prewarm(
         resume,
         rules.as_deref(),
         claudeModel.as_deref(),
-        claudeToolProfile.as_deref(),
         appContext.as_deref(),
         Some(ipc_socket.as_path()),
     )

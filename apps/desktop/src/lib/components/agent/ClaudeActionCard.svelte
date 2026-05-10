@@ -312,10 +312,8 @@
     border-radius: 12px;
     padding: 12px 14px 12px 16px;
     display: flex; flex-direction: column; gap: 10px;
-    transition: border-color 200ms, background 200ms, box-shadow 200ms;
-    box-shadow:
-      0 0 0 1px color-mix(in srgb, var(--cac-tone) 6%, transparent),
-      0 12px 28px rgba(0, 0, 0, 0.32);
+    transition: border-color 200ms, background 200ms;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
     overflow: hidden;
   }
   .cac::before {
@@ -331,7 +329,7 @@
   .cac--commit { --cac-tone: var(--src-sentry);  --cac-glow: rgba(232, 130, 100, 0.32); }
   .cac--pr     { --cac-tone: var(--accent);      --cac-glow: var(--accent-glow); }
   .cac--switch { --cac-tone: var(--src-jira);    --cac-glow: rgba(79, 142, 255, 0.30); }
-  .cac--bash   { --cac-tone: var(--src-github);  --cac-glow: rgba(181, 132, 255, 0.30); }
+  .cac--bash   { --cac-tone: var(--app-tone, var(--accent)); --cac-glow: var(--accent-glow); }
   .cac-input--cmd { background: var(--bg-0); }
   .cac--done   { opacity: 0.72; --cac-glow: rgba(0, 0, 0, 0); }
   .cac--error  { --cac-tone: var(--error); --cac-glow: rgba(232, 130, 100, 0.40); }

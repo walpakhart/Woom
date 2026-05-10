@@ -823,7 +823,7 @@
     font-size: 10px; color: var(--text-mute);
   }
 
-  .action-wrap { margin-left: 92px; }
+  .action-wrap { width: 100%; }
 
   .ct-empty, .ct-welcome {
     margin: auto;

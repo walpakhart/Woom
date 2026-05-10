@@ -227,7 +227,7 @@ export type ClaudeSession = {
    *  current input here, clears the visible composer, and the queue
    *  drains FIFO when the turn finishes. Optional / undefined =
    *  empty queue. */
-  pendingQueue?: string[];
+  pendingQueue?: { text: string; mentions: Mention[] }[];
   cwd: string | null;
   worktreePath: string | null;
   worktreeBranch: string | null;
@@ -242,28 +242,6 @@ export type ClaudeSession = {
       5h quota fastest). New sessions default to `claude-sonnet-4-6`; users
       opt in to Opus per-session via the model chip. */
   claudeModel: string | null;
-  /** Which subset of MCP tools to expose to Claude this session. Each MCP
-      tool schema costs ~150-300 tokens of system-prompt overhead, and we
-      ship 60+ tools across Jira/GitHub/Sentry/Memory/App. Most chats only
-      need a slice — restricting to a profile cuts startup token cost by
-      40-60% and reduces process count (sidecars are spawned only for the
-      servers in the profile).
-        - 'coding' (new-session default): App nav + Memory only.
-        - 'github' / 'jira' / 'sentry': single-source focus — that source
-           full-access plus Memory + App nav. Other sources skipped.
-        - 'triage': Read-only across all three sources (Jira + GitHub +
-           Sentry) + Memory + App nav. For "what's the state of X" chats
-           that don't edit anything.
-        - 'all' (legacy / null backfill): every tool wired, like before
-           profiles existed. */
-  claudeToolProfile:
-    | 'all'
-    | 'coding'
-    | 'github'
-    | 'jira'
-    | 'sentry'
-    | 'triage'
-    | null;
   /** Effective context size at the end of the most recent turn (input +
       cache_read + cache_creation from the last assistant API call).
       Drives the context-window % indicator chip. 0 = no turn yet. */

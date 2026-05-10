@@ -90,6 +90,22 @@ export function formatToolUse(name: string, input: Record<string, unknown>): str
     const fp = s('notebook_path') || s('file_path');
     return fp ? `_notebook edit_ ${mdInlineCode(toolPathLabel(fp))}` : `_notebook edit_`;
   }
+  if (name === 'mcp__app__propose_bash' || name === 'mcp__github__propose_bash') {
+    const cmd = s('command');
+    return cmd ? mdInlineCode(`$ ${truncInline(cmd, 400)}`) : `_propose bash…_`;
+  }
+  if (name === 'mcp__app__propose_switch_cwd') {
+    const path = s('path');
+    return path ? `_switch cwd_ ${mdInlineCode(truncInline(path, 160))}` : `_switch cwd…_`;
+  }
+  if (name === 'mcp__github__propose_commit') {
+    const msg = s('message') || s('subject');
+    return msg ? `_commit_ ${mdInlineCode(truncInline(msg, 160))}` : `_propose commit…_`;
+  }
+  if (name === 'mcp__github__propose_pr') {
+    const title = s('title');
+    return title ? `_open pr_ ${mdInlineCode(truncInline(title, 160))}` : `_propose pr…_`;
+  }
   if (name.startsWith('mcp__')) {
     // e.g. mcp__jira__get_issue → jira.get_issue
     const parts = name.split('__').slice(1);

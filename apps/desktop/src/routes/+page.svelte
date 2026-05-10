@@ -1438,7 +1438,7 @@
     const s = sessionsState.list.find((x) => x.id === sessionId);
     if (!s) return;
     if (s.sending) {
-      const next = [...(s.pendingQueue ?? []), trimmed];
+      const next = [...(s.pendingQueue ?? []), { text: trimmed, mentions: [] }];
       updateSession(sessionId, { pendingQueue: next });
       return;
     }
@@ -2045,6 +2045,11 @@
    *  don't strand pre-compact decisions just because the CLI lost
    *  its store. */
 
+  // Saved drafts while queue drains. Keyed by session id.
+  // Set on first drain, cleared when the queue empties so the user's
+  // in-progress text survives the queue firing.
+  const queueSavedDrafts = new Map<string, { text: string; mentions: Mention[] }>();
+
   async function sendClaudeMessage() {
     const s = activeSession;
     if (!s) return;
@@ -2059,9 +2064,10 @@
        stay attached for now and the next free moment uses them. */
     if (s.sending) {
       const draft = s.input.trim();
-      if (!draft) return;
-      const nextQueue = [...(s.pendingQueue ?? []), draft];
-      updateSession(s.id, { input: '', pendingQueue: nextQueue });
+      if (!draft && s.mentions.length === 0) return;
+      const entry = { text: draft, mentions: [...s.mentions] };
+      const nextQueue = [...(s.pendingQueue ?? []), entry];
+      updateSession(s.id, { input: '', mentions: [], pendingQueue: nextQueue });
       return;
     }
     // Allow send with empty text as long as there's at least one attachment —
@@ -2178,7 +2184,6 @@
     const agentKind = sess?.agentKind ?? 'claude';
     const cursorModel = agentKind === 'cursor' ? (sess?.cursorModel ?? null) : null;
     const claudeModel = agentKind === 'claude' ? (sess?.claudeModel ?? null) : null;
-    const claudeToolProfile = agentKind === 'claude' ? (sess?.claudeToolProfile ?? null) : null;
     const appContext = buildAgentAppContext(id);
     // Image vision blocks are a Claude-only path (cursor-agent has no
     // equivalent input-format flag). For Cursor we already wove the
@@ -2229,7 +2234,6 @@
         agentKind,
         cursorModel,
         claudeModel,
-        claudeToolProfile,
         appContext,
         imagePaths,
         onAssistantDelta: appendAssistantDelta,
@@ -2410,8 +2414,16 @@
       const sessAfterDrain = sessionsState.list.find((x) => x.id === id);
       const queue = sessAfterDrain?.pendingQueue ?? [];
       if (queue.length > 0) {
-        const [nextDraft, ...rest] = queue;
-        updateSession(id, { pendingQueue: rest, input: nextDraft });
+        const [nextEntry, ...rest] = queue;
+        // Save the user's current draft once (on first drain) so we can
+        // restore it after the queue is fully consumed.
+        if (!queueSavedDrafts.has(id)) {
+          const cur = sessAfterDrain!;
+          if (cur.input.trim() || cur.mentions.length > 0) {
+            queueSavedDrafts.set(id, { text: cur.input, mentions: [...cur.mentions] });
+          }
+        }
+        updateSession(id, { pendingQueue: rest, input: nextEntry.text, mentions: nextEntry.mentions });
         sessionsState.activeClaudeId = id;
         sessionsState.activeIds[sessAfterDrain!.agentKind] = id;
         /* queueMicrotask: let Svelte settle the input/pendingQueue
@@ -2420,6 +2432,16 @@
         queueMicrotask(() => {
           void sendClaudeMessage();
         });
+      } else {
+        // Queue empty — restore whatever the user had typed before the
+        // queue started firing.
+        const saved = queueSavedDrafts.get(id);
+        if (saved) {
+          queueSavedDrafts.delete(id);
+          if (saved.text.trim() || saved.mentions.length > 0) {
+            updateSession(id, { input: saved.text, mentions: saved.mentions });
+          }
+        }
       }
     }
   }
@@ -3422,7 +3444,7 @@
   // (e.g. propose_pr after the commit lands) without the user having
   // to manually type "now make the PR".
   function executeAction(sessionId: string, action: ClaudeAction) {
-    dispatchAction(sessionId, action, appendAssistantDelta, onActionResolved);
+    dispatchAction(sessionId, action, onActionResolved);
   }
 
   /** Drop an action card AND tell the sidecar's IPC waiter that the
@@ -3548,7 +3570,6 @@
     const agentKind = sess.agentKind;
     const cursorModel = agentKind === 'cursor' ? sess.cursorModel : null;
     const claudeModel = agentKind === 'claude' ? sess.claudeModel : null;
-    const claudeToolProfile = agentKind === 'claude' ? sess.claudeToolProfile : null;
     const appContext = buildAgentAppContext(sessionId);
 
     try {
@@ -3562,7 +3583,6 @@
         agentKind,
         cursorModel,
         claudeModel,
-        claudeToolProfile,
         appContext,
         onAssistantDelta: appendAssistantDelta,
         onAppNavigation: handleAppNavigation

@@ -155,24 +155,6 @@ struct ProposeCommitParams {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct ProposeBashParams {
-    /// The exact shell command you want to run (single line, will be run via `sh -c`).
-    command: String,
-    /// Short free-form explanation for the user of why this command is needed.
-    #[serde(default)]
-    reason: Option<String>,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct ProposeSwitchCwdParams {
-    /// Absolute local path to switch the Claude session's working directory to.
-    path: String,
-    /// A short free-form note for the user explaining why you want to switch.
-    #[serde(default)]
-    reason: Option<String>,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct SearchParams {
     /// GitHub search syntax forwarded verbatim to `/search/issues`. Examples:
     /// `is:pr is:merged DEVOPS-414 org:Efficiently-Dev`,
@@ -509,44 +491,6 @@ impl Gh {
     }
 
     #[tool(
-        description = "Propose a state-changing shell command (`git switch/merge/push/pull/reset/rebase`, `rm`, `mv`, `npm install`, migrations, deploys, etc.). Surfaces an editable approval card in Woom and BLOCKS until the user approves (command runs) or dismisses. The tool's response is the actual stdout/stderr + exit code — read it and continue this same turn. Read-only commands (git status, ls, cat, grep) use the regular Bash tool, not this one."
-    )]
-    async fn propose_bash(
-        &self,
-        Parameters(ProposeBashParams { command, reason }): Parameters<ProposeBashParams>,
-    ) -> Result<CallToolResult, ErrorData> {
-        let params = serde_json::json!({
-            "command": command,
-            "reason": reason,
-        });
-        let fallback = format!(
-            "Bash command queued.\ncommand: {}\nreason: {}",
-            command,
-            reason.as_deref().unwrap_or("(none)"),
-        );
-        run_or_fallback("bash", params, fallback).await
-    }
-
-    #[tool(
-        description = "Propose switching the current session's working directory. Surfaces an approval card in Woom and BLOCKS until the user approves (cwd switches) or dismisses. The tool's response is the actual outcome — react and continue in this same turn."
-    )]
-    async fn propose_switch_cwd(
-        &self,
-        Parameters(ProposeSwitchCwdParams { path, reason }): Parameters<ProposeSwitchCwdParams>,
-    ) -> Result<CallToolResult, ErrorData> {
-        let params = serde_json::json!({
-            "path": path,
-            "reason": reason,
-        });
-        let fallback = format!(
-            "cwd switch proposal queued.\npath: {}\nreason: {}",
-            path,
-            reason.as_deref().unwrap_or("(none)"),
-        );
-        run_or_fallback("switch_cwd", params, fallback).await
-    }
-
-    #[tool(
         description = "Search GitHub pull requests across repos / orgs. Returns id, number, repo, title, state, author, draft flag, dates, url. Pass full GitHub search syntax (e.g. `is:pr is:merged DEVOPS-414`). One call covers all matches across orgs/repos — see the search-discipline block in your system context for canonical patterns."
     )]
     async fn search_prs(
@@ -833,9 +777,9 @@ impl ServerHandler for Gh {
             "Access GitHub and propose local actions on behalf of the user.\n\n\
              READ: get_pr, get_pr_diff, get_pr_files, get_pr_comments, list_tree, get_file, list_commits, list_releases, list_workflow_runs, get_readme, list_check_runs.\n\n\
              WRITE (executes immediately — user has already given consent by asking): add_comment, submit_review, merge_pr, edit_pr (title/body), request_reviewers, remove_reviewers, add_labels, remove_labels, add_assignees, remove_assignees, set_pr_draft, set_pr_state (open/closed), rerun_workflow, cancel_workflow.\n\n\
-             PROPOSE (queues an approval card in Woom UI, does nothing itself — use when the user asked you to commit/open-pr/switch-repo/run-a-command): propose_commit, propose_pr, propose_switch_cwd, propose_bash.\n\n\
+             PROPOSE (queues an approval card in Woom UI, does nothing itself — use when the user asked you to commit/open-pr): propose_commit, propose_pr.\n\n\
              PR-EDIT GUIDE: rename PR → edit_pr; rewrite description → edit_pr; close/reopen → set_pr_state; convert to draft / mark ready → set_pr_draft; add CODEOWNERS / specific reviewers → request_reviewers. The agent should NOT push the user back to the GitHub UI for these — they're all wired here.\n\n\
-             RULE: for any LOCAL command that modifies state (git switch/merge/push/pull/reset/rebase, rm, mv, npm install, migrations, deploys, etc.) call propose_bash instead of the regular Bash tool. Read-only commands (git status, ls, cat, grep, find, rg) can use Bash directly. propose_* calls are SYNCHRONOUS — they BLOCK until the user resolves the card and the action runs. The tool's response IS the actual outcome (commit hash, bash output, PR url, error stderr). React to the response in the SAME TURN — chain follow-up propose_* calls or finish, the agent's turn is fully under your control."
+             propose_* calls are SYNCHRONOUS — they BLOCK until the user resolves the card and the action runs. The tool's response IS the actual outcome (commit hash, PR url, error stderr). React to the response in the SAME TURN — chain follow-up propose_* calls or finish, the agent's turn is fully under your control."
                 .to_string(),
         );
         info

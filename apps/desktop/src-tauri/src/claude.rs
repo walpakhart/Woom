@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
 
-use crate::claude_mcp::{build_mcp_config, TempFile, ToolProfile};
+use crate::claude_mcp::{build_mcp_config, TempFile};
 
 
 /// Session id → pid of the running `claude` process. Lets us kill it later.
@@ -37,7 +37,6 @@ struct SpawnSig {
     resume: bool,
     rules_hash: u64,
     app_context_hash: u64,
-    tool_profile: Option<String>,
 }
 
 fn hash_str(s: Option<&str>) -> u64 {
@@ -274,7 +273,6 @@ pub struct AskArgs<'a> {
     pub resume: bool,
     pub rules: Option<&'a str>,
     pub model: Option<&'a str>,
-    pub tool_profile: Option<&'a str>,
     pub app_context: Option<&'a str>,
     /// Path to the Tauri-side action-IPC Unix socket (passed via env
     /// to MCP sidecars so their `propose_*` tools can BLOCK on user
@@ -291,7 +289,6 @@ fn build_spawn_sig(args: &AskArgs<'_>) -> SpawnSig {
         resume: args.resume,
         rules_hash: hash_str(args.rules),
         app_context_hash: hash_str(args.app_context),
-        tool_profile: args.tool_profile.map(str::to_string),
     }
 }
 
@@ -358,7 +355,6 @@ async fn spawn_claude_armed(args: &AskArgs<'_>) -> Result<ArmedCli, ClaudeRunErr
 
     let mcp = build_mcp_config(
         args.session_id,
-        ToolProfile::from_str(args.tool_profile),
         args.action_ipc_socket,
     );
     let mcp_guard = mcp.as_ref().map(|(p, _)| TempFile(p.clone()));
@@ -630,14 +626,12 @@ pub async fn ask(
     rules: Option<&str>,
     // Forwarded as `--model <id>`. None → no flag, CLI picks default.
     model: Option<&str>,
-    // Tool profile name: 'coding' / 'triage' / 'pr-review' / 'all'.
-    tool_profile: Option<&str>,
     app_context: Option<&str>,
     action_ipc_socket: Option<&Path>,
     image_paths: &[String],
 ) -> Result<String, ClaudeRunError> {
     let args = AskArgs {
-        session_id, cwd, claude_uuid, resume, rules, model, tool_profile, app_context,
+        session_id, cwd, claude_uuid, resume, rules, model, app_context,
         action_ipc_socket,
     };
     let target_sig = build_spawn_sig(&args);
@@ -934,7 +928,6 @@ pub async fn prewarm(
     resume: bool,
     rules: Option<&str>,
     model: Option<&str>,
-    tool_profile: Option<&str>,
     app_context: Option<&str>,
     action_ipc_socket: Option<&Path>,
 ) -> Result<(), ClaudeRunError> {
@@ -957,7 +950,7 @@ pub async fn prewarm(
     };
 
     let args = AskArgs {
-        session_id, cwd, claude_uuid, resume, rules, model, tool_profile, app_context,
+        session_id, cwd, claude_uuid, resume, rules, model, app_context,
         action_ipc_socket,
     };
     let target_sig = build_spawn_sig(&args);
@@ -1352,8 +1345,8 @@ async fn run_claude_oneshot(
     Ok(result)
 }
 
-// MCP-config plumbing (ToolProfile, build_mcp_config, per-server
-// builders, sidecar discovery, TempFile guard) lives in `claude_mcp.rs`
+// MCP-config plumbing (build_mcp_config, per-server builders, sidecar
+// discovery, TempFile guard) lives in `claude_mcp.rs`
 // — claude.rs just imports and uses them via `build_mcp_config(...)`
 // up top.
 

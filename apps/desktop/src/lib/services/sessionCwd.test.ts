@@ -31,7 +31,6 @@ function fakeSession(messages: ClaudeSession['messages']): ClaudeSession {
     agentKind: 'claude',
     cursorModel: null,
     claudeModel: null,
-    claudeToolProfile: null,
     lastContextSize: 0,
     linkedToEditor: false,
     linkedToEditorInstanceId: null,

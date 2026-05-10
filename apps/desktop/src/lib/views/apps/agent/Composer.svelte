@@ -122,6 +122,40 @@
     await p.onPasteImages(p.kind, blobs);
   }
 
+  /* ─── Queue panel ──────────────────────────────────────────────── */
+
+  let queueOpen = $state(false);
+
+  function toggleQueue() {
+    queueOpen = !queueOpen;
+  }
+
+  function removeFromQueue(index: number) {
+    if (!sess) return;
+    const next = (sess.pendingQueue ?? []).filter((_, i) => i !== index);
+    updateSession(sess.id, { pendingQueue: next });
+    if (next.length === 0) queueOpen = false;
+  }
+
+  function clearQueue() {
+    if (!sess) return;
+    updateSession(sess.id, { pendingQueue: [] });
+    queueOpen = false;
+  }
+
+  let queueWrapEl = $state<HTMLDivElement | null>(null);
+
+  $effect(() => {
+    if (!queueOpen) return;
+    function onDown(e: MouseEvent) {
+      if (queueWrapEl && !queueWrapEl.contains(e.target as Node)) {
+        queueOpen = false;
+      }
+    }
+    window.addEventListener('mousedown', onDown);
+    return () => window.removeEventListener('mousedown', onDown);
+  });
+
   /* ─── Mention picker state + helpers ──────────────────────────── */
 
   /** Position rect for the picker — null when closed. */
@@ -615,6 +649,55 @@
             {/if}
           </span>
 
+          {#if (sess.pendingQueue?.length ?? 0) > 0}
+            <div class="cmp-queue-wrap" bind:this={queueWrapEl}>
+              <button
+                class="cmp-queue-indicator"
+                class:cmp-queue-indicator--open={queueOpen}
+                onclick={toggleQueue}
+                title="Show queued messages"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M3 6h18M3 12h18M3 18h12"/></svg>
+                {sess.pendingQueue?.length}
+              </button>
+              {#if queueOpen}
+                <div class="cmp-queue-panel">
+                  <div class="cmp-queue-panel-head">
+                    <span>Queued messages</span>
+                    <button class="cmp-queue-clear" onclick={clearQueue}>Clear all</button>
+                  </div>
+                  {#each sess.pendingQueue ?? [] as msg, i (i)}
+                    <div class="cmp-queue-item">
+                      <span class="cmp-queue-num">{i + 1}</span>
+                      <div class="cmp-queue-text-wrap">
+                        {#if msg.mentions.some(m => m.attached)}
+                          <span class="cmp-queue-attachments">
+                            {#each msg.mentions.filter(m => m.attached) as att}
+                              <span class="cmp-queue-att-chip" title={att.body ?? att.title}>
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
+                                {att.title}
+                              </span>
+                            {/each}
+                          </span>
+                        {/if}
+                        {#if msg.text}
+                          <span class="cmp-queue-text">{msg.text}</span>
+                        {/if}
+                      </div>
+                      <button
+                        class="cmp-queue-del"
+                        onclick={() => removeFromQueue(i)}
+                        aria-label="Remove"
+                      >
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M6 18L18 6"/></svg>
+                      </button>
+                    </div>
+                  {/each}
+                </div>
+              {/if}
+            </div>
+          {/if}
+
           {#if sess.sending}
             <button class="cmp-stop" onclick={p.onStop} title="Stop the running turn">
               <svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
@@ -626,16 +709,10 @@
               disabled={!sess.input?.trim()}
               title="Queue this message — fires automatically when the current turn finishes"
             >
-              {(sess.pendingQueue?.length ?? 0) > 0 ? `Queue · ${(sess.pendingQueue?.length ?? 0) + 1}` : 'Queue'}
+              Queue
               <span class="cmp-send-kbd">⏎</span>
             </button>
           {:else}
-            {#if (sess.pendingQueue?.length ?? 0) > 0}
-              <span class="cmp-queue-indicator" title="Messages waiting to be sent after the current turn finishes">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M3 6h18M3 12h18M3 18h12"/></svg>
-                {sess.pendingQueue?.length}
-              </span>
-            {/if}
             <button class="cmp-send" onclick={doSend} disabled={!sess.input?.trim()}>
               Send
               <span class="cmp-send-kbd">⏎</span>
@@ -973,10 +1050,10 @@
       color-mix(in srgb, var(--accent) 22%, var(--bg-3)));
   }
 
-  /* Queue indicator — small chip with a stack glyph + count, shown
-     between the model picker and Send when there are messages parked
-     for after the current turn. Helps the user remember they have
-     things lined up. */
+  /* Queue indicator button + floating panel */
+  .cmp-queue-wrap {
+    position: relative;
+  }
   .cmp-queue-indicator {
     display: inline-flex; align-items: center; gap: 4px;
     padding: 4px 8px;
@@ -985,7 +1062,91 @@
     border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent);
     color: var(--accent-bright);
     font-size: 11px; font-weight: 600;
+    cursor: pointer;
+    transition: background 120ms, border-color 120ms;
     user-select: none;
   }
+  .cmp-queue-indicator:hover,
+  .cmp-queue-indicator--open {
+    background: color-mix(in srgb, var(--accent) 22%, transparent);
+    border-color: color-mix(in srgb, var(--accent) 50%, transparent);
+  }
   .cmp-queue-indicator svg { width: 11px; height: 11px; }
+
+  .cmp-queue-panel {
+    position: absolute;
+    bottom: calc(100% + 8px);
+    right: 0;
+    width: 320px;
+    background: var(--bg-1);
+    border: 1px solid var(--border-hi);
+    border-radius: 10px;
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.36), 0 0 0 1px rgba(0,0,0,0.12);
+    overflow: hidden;
+    z-index: 200;
+  }
+  .cmp-queue-panel-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 9px 12px 7px;
+    border-bottom: 1px solid var(--border);
+    font-size: 11px; font-weight: 600; color: var(--text-2);
+    text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  .cmp-queue-clear {
+    font-size: 11px; color: var(--text-2); font-weight: 500;
+    padding: 2px 6px; border-radius: 4px;
+  }
+  .cmp-queue-clear:hover { background: var(--bg-3); color: var(--error); }
+
+  .cmp-queue-item {
+    display: flex; align-items: flex-start; gap: 8px;
+    padding: 8px 10px 8px 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  .cmp-queue-item:last-child { border-bottom: none; }
+  .cmp-queue-item:hover { background: var(--bg-2); }
+  .cmp-queue-num {
+    flex: 0 0 auto;
+    width: 16px; height: 16px; margin-top: 1px;
+    border-radius: 50%;
+    background: color-mix(in srgb, var(--accent) 18%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+    color: var(--accent-bright);
+    font-size: 10px; font-weight: 700;
+    display: flex; align-items: center; justify-content: center;
+    line-height: 1;
+  }
+  .cmp-queue-text-wrap {
+    flex: 1; min-width: 0;
+    display: flex; flex-direction: column; gap: 4px;
+  }
+  .cmp-queue-attachments {
+    display: flex; flex-wrap: wrap; gap: 4px;
+  }
+  .cmp-queue-att-chip {
+    display: inline-flex; align-items: center; gap: 3px;
+    padding: 2px 6px; border-radius: 4px;
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+    color: var(--accent-bright);
+    font-size: 10.5px; font-weight: 500;
+    max-width: 160px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .cmp-queue-att-chip svg { width: 10px; height: 10px; flex-shrink: 0; }
+  .cmp-queue-text {
+    font-size: 12.5px; color: var(--text-1); line-height: 1.45;
+    white-space: pre-wrap; word-break: break-word;
+    display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .cmp-queue-del {
+    flex: 0 0 auto; margin-top: 1px;
+    width: 18px; height: 18px; border-radius: 4px;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--text-mute);
+    transition: background 100ms, color 100ms;
+  }
+  .cmp-queue-del:hover { background: rgba(232, 130, 100, 0.14); color: var(--error); }
+  .cmp-queue-del svg { width: 11px; height: 11px; }
 </style>

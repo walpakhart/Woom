@@ -1,8 +1,6 @@
 //! MCP-config plumbing for the Claude CLI adapter. Owns:
-//!   - `ToolProfile`: which subset of MCP tools to expose this session
-//!   - `build_mcp_config`: writes the temp `--mcp-config` JSON, picks
-//!     the `--allowedTools` list, and skips spawning sidecars whose
-//!     entire tool surface was filtered out by the profile.
+//!   - `build_mcp_config`: writes the temp `--mcp-config` JSON and the
+//!     `--allowedTools` list for all available sidecars.
 //!   - per-server builders that pull creds from Keychain and locate
 //!     the bundled sidecar binaries.
 //!
@@ -35,159 +33,16 @@ impl Drop for TempFile {
     }
 }
 
-/// Which subset of MCP tools to expose for a given chat session. Each
-/// MCP tool schema costs ~150-300 tokens of system-prompt overhead, so
-/// trimming the wired set is the cheapest startup-cost win we have.
-/// `from_str` is intentionally lenient — unknown / null falls back to
-/// `All` (legacy behavior, every tool wired).
-///
-/// Six profiles cover the recurring chat shapes:
-///  - Coding: just code (no external integrations)
-///  - GitHub / Jira / Sentry: single-source focus — that integration
-///    full-access plus base navigation
-///  - Triage: read-only cross-tool — "what's the state of X" without edits
-///  - All: legacy fallback when nothing's been picked
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ToolProfile {
-    All,
-    Coding,
-    Github,
-    Jira,
-    Sentry,
-    Triage,
-}
-
-impl ToolProfile {
-    pub(crate) fn from_str(s: Option<&str>) -> Self {
-        match s.map(str::trim) {
-            Some("coding") => Self::Coding,
-            Some("github") => Self::Github,
-            Some("jira") => Self::Jira,
-            Some("sentry") => Self::Sentry,
-            Some("triage") => Self::Triage,
-            _ => Self::All,
-        }
-    }
-
-    /// Decide whether `tool` (full mcp__server__name) is in this profile.
-    /// Built-in tools (Edit/Read/Bash/Grep/etc) are unaffected — Claude
-    /// always exposes them; we only filter MCP-side schemas.
-    pub(crate) fn allows(self, tool: &str) -> bool {
-        // Memory + base App nav are always in. Memory persists across
-        // chats so it's universally useful; App nav has no token cost
-        // beyond the base set we always want (open detail panes,
-        // switch views, list instances).
-        // Canvas tools are also profile-agnostic — they only do
-        // anything when the session is linked to a canvas; non-linked
-        // sessions never call them. Putting them outside the profile
-        // gates means a `triage` agent linked to a canvas can still
-        // draw on it without us inflating Triage's allow-list.
-        let base = tool.starts_with("mcp__memory__")
-            || tool.starts_with("mcp__app__canvas_")
-            || matches!(tool,
-                "mcp__app__list_instances"
-                | "mcp__app__switch_view"
-                | "mcp__app__open_connect_modal"
-            );
-        if base {
-            return true;
-        }
-        match self {
-            Self::All => true,
-            Self::Coding => {
-                // Code-focused: full App-nav (so the agent can spawn
-                // editor columns / switch cwds), nothing external.
-                tool.starts_with("mcp__app__")
-            }
-            Self::Github => {
-                // GitHub full-access + the App-nav surface that opens
-                // PRs / repos / pins the GH column. PR review and PR
-                // authoring both live here.
-                tool.starts_with("mcp__github__")
-                    || matches!(tool,
-                        "mcp__app__open_github_pr"
-                        | "mcp__app__open_github_issue"
-                        | "mcp__app__open_github_repo"
-                        | "mcp__app__set_github_column"
-                    )
-            }
-            Self::Jira => {
-                tool.starts_with("mcp__jira__")
-                    || matches!(tool,
-                        "mcp__app__open_jira_issue"
-                        | "mcp__app__open_jira_tab"
-                        | "mcp__app__set_jira_column"
-                    )
-            }
-            Self::Sentry => {
-                tool.starts_with("mcp__sentry__")
-                    || matches!(tool,
-                        "mcp__app__open_sentry_issue"
-                        | "mcp__app__open_sentry_event"
-                        | "mcp__app__open_sentry_tab"
-                        | "mcp__app__set_sentry_column"
-                    )
-            }
-            Self::Triage => {
-                // Read-only cross-tool. No write paths (no merge_pr,
-                // no transition_issue, no add_comment, no propose_*,
-                // no update_issue) — triage is "show me", not edit.
-                matches!(tool,
-                    "mcp__jira__get_issue"
-                    | "mcp__jira__search"
-                    | "mcp__jira__list_projects"
-                    | "mcp__jira__list_assignable_users"
-                    | "mcp__jira__list_sprints"
-                    | "mcp__github__get_pr"
-                    | "mcp__github__get_pr_diff"
-                    | "mcp__github__get_pr_files"
-                    | "mcp__github__get_pr_comments"
-                    | "mcp__github__list_tree"
-                    | "mcp__github__get_file"
-                    | "mcp__github__list_commits"
-                    | "mcp__github__list_releases"
-                    | "mcp__github__list_workflow_runs"
-                    | "mcp__github__get_readme"
-                    | "mcp__github__search_prs"
-                    | "mcp__github__search_issues"
-                    | "mcp__github__list_repos"
-                    | "mcp__sentry__get_issue"
-                    | "mcp__sentry__search_issues"
-                    | "mcp__sentry__get_event"
-                    | "mcp__sentry__get_issue_tags"
-                    | "mcp__sentry__list_events"
-                    | "mcp__sentry__list_projects"
-                    | "mcp__sentry__list_releases"
-                    | "mcp__app__open_github_pr"
-                    | "mcp__app__open_github_issue"
-                    | "mcp__app__open_jira_issue"
-                    | "mcp__app__open_sentry_issue"
-                    | "mcp__app__open_sentry_event"
-                    | "mcp__app__open_github_repo"
-                    | "mcp__app__open_jira_tab"
-                    | "mcp__app__open_sentry_tab"
-                )
-            }
-        }
-    }
-}
-
 /// Build an MCP config file for this session by pulling creds from Keychain
 /// and wiring up available sidecars. Returns the temp config path and the
 /// list of tool names to allow (one entry per tool, explicit — wildcards are
 /// not universally supported by `claude -p --allowedTools`).
-///
-/// `profile` filters the wired set after the per-server blocks below have
-/// pushed everything they could connect to. Servers whose every tool got
-/// filtered out are dropped from the config so we don't spawn sidecars for
-/// nothing.
 ///
 /// Returns `None` when no sidecars can be configured (e.g. Jira is not
 /// connected or the sidecar binary isn't next to the main exe); in that case
 /// we run `claude` without MCP, preserving the old behavior.
 pub(crate) fn build_mcp_config(
     session_id: &str,
-    profile: ToolProfile,
     ipc_socket: Option<&Path>,
 ) -> Option<(PathBuf, Vec<String>)> {
     let mut servers = serde_json::Map::new();
@@ -229,8 +84,6 @@ pub(crate) fn build_mcp_config(
         allowed.push("mcp__github__merge_pr".into());
         allowed.push("mcp__github__propose_commit".into());
         allowed.push("mcp__github__propose_pr".into());
-        allowed.push("mcp__github__propose_switch_cwd".into());
-        allowed.push("mcp__github__propose_bash".into());
     }
 
     if let Some(mem) = build_memory_server() {
@@ -260,7 +113,10 @@ pub(crate) fn build_mcp_config(
     // the frontend's stream parser to drive the UI (open detail panes,
     // switch views, add editor instances, surface connect modals).
     // Always wired — no creds needed.
-    if let Some(app) = build_app_server() {
+    // IPC socket + session id are forwarded so propose_bash /
+    // propose_switch_cwd can block on user approval the same way
+    // propose_commit / propose_pr do in woom-github.
+    if let Some(app) = build_app_server(session_id, &ipc_str) {
         servers.insert("app".into(), app);
         allowed.push("mcp__app__open_github_pr".into());
         allowed.push("mcp__app__open_github_issue".into());
@@ -307,19 +163,8 @@ pub(crate) fn build_mcp_config(
         allowed.push("mcp__app__canvas_distribute".into());
         allowed.push("mcp__app__canvas_set_viewport".into());
         allowed.push("mcp__app__canvas_upload_image".into());
-    }
-
-    // Apply profile filter. Keep app-side & memory entries that profile
-    // allows; drop tools outside the profile so they don't bloat the
-    // system prompt.
-    allowed.retain(|t| profile.allows(t));
-    // Drop sidecars whose every tool was filtered out — no point
-    // spawning a process Claude can't call into.
-    for srv in ["jira", "github", "memory", "sentry", "app"] {
-        let prefix = format!("mcp__{}__", srv);
-        if !allowed.iter().any(|t| t.starts_with(&prefix)) {
-            servers.remove(srv);
-        }
+        allowed.push("mcp__app__propose_bash".into());
+        allowed.push("mcp__app__propose_switch_cwd".into());
     }
 
     if servers.is_empty() {
@@ -405,10 +250,17 @@ fn build_memory_server() -> Option<serde_json::Value> {
 /// tools (open detail panes, switch views, add editor columns). Tool
 /// calls are intercepted by the frontend's stream parser; the sidecar
 /// is intentionally thin (just registers the schemas).
-fn build_app_server() -> Option<serde_json::Value> {
+/// `session_id` and `ipc_socket` are forwarded so propose_bash /
+/// propose_switch_cwd can reach the Tauri action-IPC socket and block
+/// on user approval.
+fn build_app_server(session_id: &str, ipc_socket: &str) -> Option<serde_json::Value> {
     let sidecar = find_sidecar("woom-app")?;
     Some(serde_json::json!({
         "command": sidecar.to_string_lossy(),
+        "env": {
+            "WOOM_IPC_SOCKET": ipc_socket,
+            "WOOM_SESSION_ID": session_id,
+        }
     }))
 }
 
