@@ -550,6 +550,18 @@
     return p.startsWith(repoPath + '/') ? p.slice(repoPath.length + 1) : p;
   }
 
+  /** Tab display name: just the basename, with the immediate parent
+   *  folder prepended when two open tabs share the same filename.
+   *  Avoids showing the full resolved pnpm/symlink path in the tab
+   *  bar when the tree shows the logical short path. */
+  function tabDisplayName(p: string): string {
+    const parts = p.split('/');
+    const name = parts.at(-1) ?? p;
+    const hasDupe = tabs.some((t) => t !== p && (t.split('/').at(-1) ?? '') === name);
+    if (hasDupe && parts.length >= 2) return `${parts.at(-2)}/${name}`;
+    return name;
+  }
+
   async function onTabMiddleClick(path: string, ev: MouseEvent) {
     if (ev.button === 1) {
       ev.preventDefault();
@@ -810,7 +822,7 @@
                     onclick={() => void switchTab(path)}
                     onauxclick={(e) => void onTabMiddleClick(path, e)}
                   >
-                    <span class="ev-tab-name mono">{relToRepo(path)}</span>
+                    <span class="ev-tab-name mono">{tabDisplayName(path)}</span>
                   </button>
                   <button class="ev-tab-x" onclick={(e) => void closeTab(path, e)} title={dirtyByPath[path] ? 'Close (unsaved)' : 'Close'}>
                     {#if dirtyByPath[path]}
