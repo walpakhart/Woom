@@ -290,6 +290,7 @@
           <h3 class="cv-library-section">Active</h3>
           <div class="cv-library-grid">
             {#each activeOnes as entry (entry.id)}
+              {@const svgPreview = makeSvgPreview(entry.id)}
               <div
                 class="cv-tile"
                 class:cv-tile--current={entry.id === activeCanvasId}
@@ -298,7 +299,6 @@
                 onclick={() => handleOpen(entry.id)}
                 onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleOpen(entry.id); } }}
               >
-                {@const svgPreview = makeSvgPreview(entry.id)}
                 <div
                   class="cv-tile-preview"
                   style={svgPreview ? 'background: var(--bg-0)' : `background: ${previewGradient(entry)}`}
@@ -375,6 +375,7 @@
           <h3 class="cv-library-section cv-library-section--muted">Archived</h3>
           <div class="cv-library-grid">
             {#each archivedOnes as entry (entry.id)}
+              {@const svgPreview = makeSvgPreview(entry.id)}
               <div
                 class="cv-tile cv-tile--archived"
                 role="button"
@@ -382,7 +383,6 @@
                 onclick={() => handleOpen(entry.id)}
                 onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleOpen(entry.id); } }}
               >
-                {@const svgPreview = makeSvgPreview(entry.id)}
                 <div
                   class="cv-tile-preview"
                   style={svgPreview ? 'background: var(--bg-0)' : `background: ${previewGradient(entry)}`}
