@@ -626,7 +626,7 @@
     text-transform: capitalize;
   }
   .type.type--bug { color: #D9B86E; border-color: rgba(217, 184, 110, 0.22); background: rgba(217, 184, 110, 0.06); }
-  .type.type--story { color: var(--src-canvas-2); border-color: rgba(168, 222, 200, 0.22); background: rgba(168, 222, 200, 0.06); }
+  .type.type--story { color: #A8DEC8; border-color: rgba(168, 222, 200, 0.22); background: rgba(168, 222, 200, 0.06); }
   .type.type--epic { color: #C9A0E0; border-color: rgba(181, 132, 255, 0.22); background: rgba(181, 132, 255, 0.06); }
   .type.type--task { color: var(--src-jira-2); border-color: rgba(117, 168, 255, 0.22); background: rgba(117, 168, 255, 0.06); }
 

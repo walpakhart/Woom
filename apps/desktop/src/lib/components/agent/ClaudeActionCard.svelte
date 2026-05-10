@@ -326,10 +326,10 @@
     box-shadow: 0 0 12px var(--cac-glow);
     z-index: 1;
   }
-  .cac--commit { --cac-tone: var(--src-sentry);  --cac-glow: rgba(232, 130, 100, 0.32); }
-  .cac--pr     { --cac-tone: var(--accent);      --cac-glow: var(--accent-glow); }
-  .cac--switch { --cac-tone: var(--src-jira);    --cac-glow: rgba(79, 142, 255, 0.30); }
-  .cac--bash   { --cac-tone: var(--app-tone, var(--accent)); --cac-glow: var(--accent-glow); }
+  .cac--commit,
+  .cac--pr,
+  .cac--switch,
+  .cac--bash   { --cac-tone: var(--app-tone, var(--accent)); --cac-glow: var(--app-glow, var(--accent-glow)); }
   .cac-input--cmd { background: var(--bg-0); }
   .cac--done   { opacity: 0.72; --cac-glow: rgba(0, 0, 0, 0); }
   .cac--error  { --cac-tone: var(--error); --cac-glow: rgba(232, 130, 100, 0.40); }
