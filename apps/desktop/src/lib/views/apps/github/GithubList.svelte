@@ -188,13 +188,11 @@
       /* Scoped to a single repo — no involvement filter needed. */
       parts.push(`repo:${repoFilter}`);
     } else if (text || isAllOpen) {
-      /* Searching or "All open PRs": scope to repos the user has access
-         to via user: qualifiers (one per unique org/owner in the list).
-         Falls back to involves:@me if repos haven't loaded yet so the
-         first keystroke still works before loadAvailableRepos finishes. */
-      const owners = [...new Set(availableRepos.map((r) => r.owner))];
-      if (owners.length > 0) {
-        owners.forEach((o) => parts.push(`user:${o}`));
+      /* Searching or "All open PRs": scope to the exact repos loaded
+         via github_list_repos (the dropdown list) — no unrelated public
+         repos. Falls back to involves:@me until the list loads. */
+      if (availableRepos.length > 0) {
+        availableRepos.forEach((r) => parts.push(`repo:${r.owner}/${r.name}`));
       } else {
         parts.push('involves:@me');
       }
