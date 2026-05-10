@@ -440,10 +440,11 @@
     ].filter((g) => g.items.length > 0);
   }
 
-  // Thinking-time label for the typing indicator
-  let thinkingStartedAt = $state<number | null>(null);
-  let thinkingTick = $state(0);
-  let thinkingTimer: ReturnType<typeof setInterval> | null = null;
+  // Thinking-time label for the typing indicator — per-kind so Claude and
+  // Cursor timers don't interfere with each other.
+  let thinkingStartedAt = $state<Record<'claude' | 'cursor', number | null>>({ claude: null, cursor: null });
+  let thinkingTick = $state<Record<'claude' | 'cursor', number>>({ claude: 0, cursor: 0 });
+  const thinkingTimers: Record<'claude' | 'cursor', ReturnType<typeof setInterval> | null> = { claude: null, cursor: null };
 
   // Auto-create initial chat in the Claude app singleton when Claude
   // connects for the first time and the user has no sessions yet. App
@@ -1950,21 +1951,21 @@
     }
   }
 
-  function startThinkingTimer() {
-    thinkingStartedAt = Date.now();
-    thinkingTick = 0;
-    if (thinkingTimer) clearInterval(thinkingTimer);
-    thinkingTimer = setInterval(() => {
-      thinkingTick += 1;
+  function startThinkingTimer(kind: 'claude' | 'cursor') {
+    thinkingStartedAt[kind] = Date.now();
+    thinkingTick[kind] = 0;
+    if (thinkingTimers[kind]) clearInterval(thinkingTimers[kind]!);
+    thinkingTimers[kind] = setInterval(() => {
+      thinkingTick[kind] += 1;
     }, 1000);
   }
 
-  function stopThinkingTimer() {
-    if (thinkingTimer) {
-      clearInterval(thinkingTimer);
-      thinkingTimer = null;
+  function stopThinkingTimer(kind: 'claude' | 'cursor') {
+    if (thinkingTimers[kind]) {
+      clearInterval(thinkingTimers[kind]!);
+      thinkingTimers[kind] = null;
     }
-    thinkingStartedAt = null;
+    thinkingStartedAt[kind] = null;
   }
 
   // Thin wrapper around `runCompactSessionService` so the AgentApp
@@ -2082,6 +2083,7 @@
      * with `/` falls through to the normal path. */
     if (await handleSlashCommand(text, s)) return;
     const id = s.id;
+    const kind = (s.agentKind ?? 'claude') as 'claude' | 'cursor';
     // Snapshot the mentions BEFORE clearing so we can still bake them into
     // the prompt below + stamp the image refs onto the user-message bubble
     // so the transcript still shows what was sent after the strip clears.
@@ -2120,7 +2122,7 @@
       content: '',
       at: new Date().toISOString()
     });
-    startThinkingTimer();
+    startThinkingTimer(kind);
     const runStartedAt = Date.now();
     void scrollChatBottom();
 
@@ -2336,7 +2338,7 @@
           // restart appends to a fresh one.
           replaceLastAssistant(id, '');
           updateSession(id, { sending: false, input: text, mentions: mentionsSnapshotPre });
-          stopThinkingTimer();
+          stopThinkingTimer(kind);
           await sendClaudeMessage();
           return;
         }
@@ -2368,7 +2370,7 @@
         });
       }
     }
-    stopThinkingTimer();
+    stopThinkingTimer(kind);
     // Flush any action-card outcomes that landed mid-turn into the
     // chat transcript NOW that the assistant message is no longer
     // streaming. Mid-stream flushing would shift the last-message
@@ -2401,7 +2403,7 @@
       // avoid an extra reactive tick when nothing's wrong.
       const stillSending = sessionsState.list.find((s) => s.id === id)?.sending;
       if (stillSending) {
-        stopThinkingTimer();
+        stopThinkingTimer(kind);
         updateSession(id, { sending: false });
       }
       /* Drain the per-session queue. If the user typed more messages
@@ -3553,13 +3555,14 @@
       return;
     }
     const prompt = formatActionResultsForPrompt(drained);
+    const kind = (sess.agentKind ?? 'claude') as 'claude' | 'cursor';
     updateSession(sessionId, { sending: true });
     appendSessionMessage(sessionId, {
       role: 'assistant',
       content: '',
       at: new Date().toISOString()
     });
-    startThinkingTimer();
+    startThinkingTimer(kind);
     const runStartedAt = Date.now();
     void scrollChatBottom();
 
@@ -3639,7 +3642,7 @@
         }
       }
     }
-    stopThinkingTimer();
+    stopThinkingTimer(kind);
     // Same flush hook as sendClaudeMessage's: any action-card outcomes
     // that landed during this continuation (e.g. the agent proposed a
     // PR and the user approved before this turn finished) get their
@@ -3660,8 +3663,9 @@
 
   // ---- Agent execution ----
 
-  async function stopActiveAgent() {
-    const s = activeSession;
+  async function stopAgentForKind(kind: 'claude' | 'cursor') {
+    const activeId = sessionsState.activeIds[kind];
+    const s = activeId ? sessionsState.list.find((x) => x.id === activeId) : null;
     if (!s) return;
     try {
       await stopAgentRequest(s.id);
@@ -4642,8 +4646,8 @@
           kind="claude"
           instanceId={APP_INSTANCE_IDS.claude}
           {now}
-          {thinkingStartedAt}
-          {thinkingTick}
+          thinkingStartedAt={thinkingStartedAt.claude}
+          thinkingTick={thinkingTick.claude}
           {worktreeBusy}
           {editorRepoPath}
           onPickCwd={pickCwd}
@@ -4664,7 +4668,7 @@
           onExecuteAction={executeAction}
           onOpenPrInWoom={openPrUrlInWoom}
           onSend={() => void sendClaudeMessage()}
-          onStop={() => void stopActiveAgent()}
+          onStop={() => void stopAgentForKind('claude')}
           onPasteImages={(k, blobs) => pasteImagesIntoColumn(APP_INSTANCE_IDS.claude, k, blobs)}
           onDragOver={(e) => onAgentDragOver(APP_INSTANCE_IDS.claude, 'claude', e)}
           onDrop={(e) => onAgentDrop(APP_INSTANCE_IDS.claude, 'claude', e)}
@@ -4681,8 +4685,8 @@
           kind="cursor"
           instanceId={APP_INSTANCE_IDS.cursor}
           {now}
-          {thinkingStartedAt}
-          {thinkingTick}
+          thinkingStartedAt={thinkingStartedAt.cursor}
+          thinkingTick={thinkingTick.cursor}
           {worktreeBusy}
           {editorRepoPath}
           onPickCwd={pickCwd}
@@ -4703,7 +4707,7 @@
           onExecuteAction={executeAction}
           onOpenPrInWoom={openPrUrlInWoom}
           onSend={() => void sendClaudeMessage()}
-          onStop={() => void stopActiveAgent()}
+          onStop={() => void stopAgentForKind('cursor')}
           onPasteImages={(k, blobs) => pasteImagesIntoColumn(APP_INSTANCE_IDS.cursor, k, blobs)}
           onDragOver={(e) => onAgentDragOver(APP_INSTANCE_IDS.cursor, 'cursor', e)}
           onDrop={(e) => onAgentDrop(APP_INSTANCE_IDS.cursor, 'cursor', e)}
