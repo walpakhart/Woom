@@ -146,15 +146,22 @@
 
   // ---- File-name search ---------------------------------------------------
   let searchQuery = $state('');
+  let searchInclude = $state('');
+  let searchExclude = $state('');
+  let showSearchFilters = $state(false);
   let searchResults = $state<{ path: string; name: string; rel: string }[]>([]);
   let searching = $state(false);
   let searchTimer: ReturnType<typeof setTimeout> | null = null;
 
   async function searchFiles(
     root: string,
-    query: string
+    query: string,
+    include: string,
+    exclude: string
   ): Promise<{ path: string; name: string; rel: string }[]> {
     const q = query.toLowerCase();
+    const incl = include.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+    const excl = exclude.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
     const results: { path: string; name: string; rel: string }[] = [];
     const queue: string[] = [root];
     while (queue.length > 0 && results.length < 80) {
@@ -165,10 +172,14 @@
       } catch { continue; }
       for (const e of entries) {
         if (e.is_dir) {
-          queue.push(e.path);
+          const skip = excl.some((p) => e.name.toLowerCase().includes(p));
+          if (!skip) queue.push(e.path);
         } else {
+          const rel = e.path.startsWith(root + '/') ? e.path.slice(root.length + 1) : e.path;
+          const relLow = rel.toLowerCase();
+          if (excl.some((p) => relLow.includes(p))) continue;
+          if (incl.length > 0 && !incl.some((p) => relLow.includes(p))) continue;
           if (e.name.toLowerCase().includes(q)) {
-            const rel = e.path.startsWith(root + '/') ? e.path.slice(root.length + 1) : e.path;
             results.push({ path: e.path, name: e.name, rel });
             if (results.length >= 80) break;
           }
@@ -180,12 +191,14 @@
 
   $effect(() => {
     const q = searchQuery.trim();
+    const inc = searchInclude;
+    const exc = searchExclude;
     if (searchTimer) { clearTimeout(searchTimer); searchTimer = null; }
     if (q.length < 2) { searchResults = []; searching = false; return; }
     searching = true;
     searchTimer = setTimeout(async () => {
       if (!repoPath) { searching = false; return; }
-      searchResults = await searchFiles(repoPath, q);
+      searchResults = await searchFiles(repoPath, q, inc, exc);
       searching = false;
     }, 280);
   });
@@ -675,7 +688,38 @@
                     type="search"
                     bind:value={searchQuery}
                   />
+                  <button
+                    class="ev-search-filter-toggle"
+                    class:ev-search-filter-toggle--active={showSearchFilters}
+                    title={showSearchFilters ? 'Hide filters' : 'Show include / exclude filters'}
+                    onclick={() => (showSearchFilters = !showSearchFilters)}
+                    aria-label="Toggle filters"
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M22 3H2l8 9.46V19l4 2v-8.54L22 3z"/></svg>
+                  </button>
                 </div>
+                {#if showSearchFilters}
+                  <div class="ev-search-filters">
+                    <label class="ev-filter-row">
+                      <span class="ev-filter-label mono">include</span>
+                      <input
+                        class="ev-filter-input mono"
+                        placeholder="src/lib, *.ts, …"
+                        bind:value={searchInclude}
+                        title="Comma-separated substrings — only match files whose path contains one of these"
+                      />
+                    </label>
+                    <label class="ev-filter-row">
+                      <span class="ev-filter-label mono">exclude</span>
+                      <input
+                        class="ev-filter-input mono"
+                        placeholder="node_modules, dist, …"
+                        bind:value={searchExclude}
+                        title="Comma-separated substrings — skip dirs/files whose path contains one of these"
+                      />
+                    </label>
+                  </div>
+                {/if}
                 {#if searchQuery.trim().length < 2}
                   <div class="ev-sidebar-empty">
                     <p class="ev-sidebar-empty-h serif">Find files</p>
@@ -1147,7 +1191,58 @@
     color: var(--accent-bright);
   }
 
-  .ev-search-bar { flex-shrink: 0; }
+  .ev-search-bar {
+    flex-shrink: 0;
+    display: flex; gap: 6px; align-items: center;
+  }
+  .ev-search-bar .ev-search-input { flex: 1; }
+  .ev-search-filter-toggle {
+    flex-shrink: 0;
+    width: 28px; height: 28px;
+    display: grid; place-items: center;
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-mute);
+    cursor: pointer;
+    transition: color 120ms, border-color 120ms, background 120ms;
+  }
+  .ev-search-filter-toggle:hover { color: var(--text-0); border-color: var(--border-hi); }
+  .ev-search-filter-toggle--active {
+    color: var(--accent-bright);
+    background: var(--accent-soft);
+    border-color: var(--border-accent-2);
+  }
+  .ev-search-filter-toggle svg { width: 13px; height: 13px; }
+
+  .ev-search-filters {
+    flex-shrink: 0;
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .ev-filter-row {
+    display: flex; align-items: center; gap: 8px;
+  }
+  .ev-filter-label {
+    font-size: 10px; font-weight: 600;
+    letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--text-mute);
+    width: 46px; flex-shrink: 0; text-align: right;
+  }
+  .ev-filter-input {
+    flex: 1;
+    padding: 5px 8px;
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-0);
+    font-size: 11.5px;
+    transition: border-color 140ms;
+  }
+  .ev-filter-input:focus {
+    outline: none;
+    border-color: var(--border-accent);
+  }
+  .ev-filter-input::placeholder { color: var(--text-mute); }
   .ev-search-results {
     flex: 1; min-height: 0;
     display: flex; flex-direction: column; gap: 2px;
