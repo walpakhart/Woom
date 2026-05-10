@@ -143,6 +143,15 @@
    *  the GitPanel hook below; stays empty until the first
    *  `git_status` invoke succeeds. */
   let gitBranch = $state<string>('');
+  let tabbarEl = $state<HTMLDivElement | null>(null);
+
+  // Scroll the active tab into view whenever activePath changes.
+  $effect(() => {
+    activePath;
+    if (!tabbarEl) return;
+    const active = tabbarEl.querySelector<HTMLElement>('.ev-tab-wrap.active');
+    active?.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'instant' });
+  });
 
   // ---- File-name search ---------------------------------------------------
   let searchQuery = $state('');
@@ -774,7 +783,7 @@
       {/snippet}
       {#snippet end()}
         <main class="ev-main">
-          <div class="ev-tabbar">
+          <div class="ev-tabbar" bind:this={tabbarEl}>
             {#if diffTarget}
               <div class="ev-tab-wrap active" title={diffTarget.path}>
                 <button class="ev-tab-btn" onclick={closeDiff}>
