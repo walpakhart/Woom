@@ -166,10 +166,12 @@
     for (let i = 0; i < segments.length - 1; i++) {
       cur = `${cur}/${segments[i]}`;
       const idx = items.findIndex((it) => it.path === cur && it.is_dir);
-      // If a parent isn't in the tree yet, the previous toggle didn't
-      // produce it (might be hidden by a virtualised list later, or
-      // a race with rootPath reload). Bail rather than loop forever.
-      if (idx < 0) return;
+      // Parent not in tree — either a race with rootPath reload, or the
+      // file is reachable via a symlink that fs_list_dir already resolved
+      // (pnpm: tree shows node_modules/pkg/ but item paths are .pnpm/...).
+      // Stop expanding but still try to scroll to the target if it's
+      // already visible in the current items list.
+      if (idx < 0) break;
       if (!items[idx].expanded) {
         await toggle(idx);
       }
