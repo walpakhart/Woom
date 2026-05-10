@@ -31,7 +31,6 @@
 
   interface Props {
     view: View;
-    inboxCount: number;
     anythingConnected: boolean;
     statusLoading: boolean;
     /** Boot retry/backoff loop is mid-attempt for any source. Renders
@@ -54,7 +53,6 @@
 
   let {
     view = $bindable(),
-    inboxCount,
     anythingConnected,
     statusLoading,
     anyRetrying = false,
@@ -191,7 +189,7 @@
     aria-label="Home"
     data-tooltip="Home · ⌘0"
   >
-    <img src="/woom-logo.svg" alt="Woom" />
+    <img src="/woom-mark-transparent.png" alt="Woom" />
   </button>
 
   <!-- Source solos -->
@@ -204,9 +202,6 @@
     aria-label="Jira"
   >
     <svg viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true">{@html SVG_JIRA}</svg>
-    {#if inboxCount > 0}
-      <span class="rail-badge">{inboxCount > 99 ? '99+' : inboxCount}</span>
-    {/if}
   </button>
 
   <button
@@ -528,21 +523,6 @@
   :global(.rail-btn.rail-dropping > svg) {
     transform: scale(1.05);
     filter: drop-shadow(0 0 8px var(--rail-glow));
-  }
-
-  /* Inbox-count badge */
-  .rail-badge {
-    position: absolute;
-    top: 2px; right: 2px;
-    min-width: 14px; height: 14px;
-    padding: 0 3px;
-    border-radius: 8px;
-    background: var(--accent);
-    color: var(--accent-fg);
-    font-family: 'Inter Tight', system-ui, sans-serif;
-    font-size: 9.5px; font-weight: 700;
-    display: inline-flex; align-items: center; justify-content: center;
-    box-shadow: 0 0 0 2px var(--bg-1), 0 0 10px var(--accent-glow);
   }
 
   /* Retry / disconnect dot */

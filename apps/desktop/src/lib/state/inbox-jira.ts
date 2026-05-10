@@ -168,24 +168,71 @@ export async function refreshAllJiraInboxes(opts: { silent?: boolean } = {}) {
 
 const jiraFilterDebounces: Map<string, ReturnType<typeof setTimeout>> = new Map();
 
+/** Lazily ensure a slot exists for `instanceId`, returning the *live*
+ *  state object (not a copy). Both filter-mutation paths below need
+ *  the live reference so they can patch fields IN PLACE — spreading
+ *  into a fresh object would replace the slot reference and force
+ *  every $derived consuming `jiraFiltersFor(...)` to re-emit on every
+ *  keystroke (we hit that bug in the wild: per-keystroke
+ *  `loadJiraBoards` API calls froze the app for hundreds of ms). */
+function ensureFiltersSlot(instanceId: string): JiraFilters {
+  let slot = inboxState.jiraFiltersByInstance[instanceId];
+  if (!slot) {
+    /* DEFAULT_JIRA_FILTERS is shared by every fresh instance — we
+       MUST clone it so a per-instance mutation doesn't leak globally. */
+    slot = { ...DEFAULT_JIRA_FILTERS };
+    inboxState.jiraFiltersByInstance[instanceId] = slot;
+  }
+  return slot;
+}
+
+/** Apply a patch to the slot in place, only writing fields whose
+ *  value actually changed. Svelte 5's deep proxy emits reactivity at
+ *  the field level, so callers that depend on a specific field
+ *  (`f.projectKey`) only re-run when THAT field's value differs —
+ *  consumers reading other fields stay quiet. Returns true if any
+ *  field was actually written, so callers can skip side effects on
+ *  no-op patches. */
+function applyFiltersPatch(slot: JiraFilters, patch: Partial<JiraFilters>): boolean {
+  let changed = false;
+  /* Cast through unknown rather than directly to a Record — the
+     compiler is right that JiraFilters isn't string-indexable, but
+     the keys here are guaranteed to come from `keyof JiraFilters`,
+     so the runtime write is sound. The unknown bounce silences
+     `Conversion ... may be a mistake` without resorting to `any`. */
+  const bag = slot as unknown as Record<string, unknown>;
+  for (const k of Object.keys(patch) as (keyof JiraFilters)[]) {
+    const next = patch[k];
+    if (next === undefined) continue;
+    /* Reference-equality is enough for our scalar fields (strings,
+       numbers, null). The arrays in JiraFilters (boardIds /
+       sprintIds) get reassigned on filter updates rather than
+       mutated in place, so a fresh array passed in WILL register as
+       changed even if its contents match — that's fine for our
+       triggers (refreshJiraInbox respects the debounce anyway). */
+    if (bag[k as string] !== next) {
+      bag[k as string] = next as unknown;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 /** Persist UI-only filter state (query, role, status, project, assignee)
  *  without triggering a server-side refresh — these fields are not in
  *  the JQL and should not cause a round-trip on every keystroke. */
 export function persistJiraUiFilters(instanceId: string, patch: Partial<JiraFilters>) {
-  inboxState.jiraFiltersByInstance[instanceId] = {
-    ...jiraFiltersFor(instanceId),
-    ...patch
-  };
-  persistJiraFilters();
+  const slot = ensureFiltersSlot(instanceId);
+  if (applyFiltersPatch(slot, patch)) {
+    persistJiraFilters();
+  }
 }
 
 /** Patch one column's Jira filter state, persist all instances, and
  *  re-run that column's search (debounced 300 ms). */
 export function updateJiraFilters(instanceId: string, patch: Partial<JiraFilters>) {
-  inboxState.jiraFiltersByInstance[instanceId] = {
-    ...jiraFiltersFor(instanceId),
-    ...patch
-  };
+  const slot = ensureFiltersSlot(instanceId);
+  if (!applyFiltersPatch(slot, patch)) return;
   persistJiraFilters();
   const t = jiraFilterDebounces.get(instanceId);
   if (t) clearTimeout(t);

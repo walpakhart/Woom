@@ -53,13 +53,42 @@
       sessionsState.scrollEls[`solo:${sessId}`] = chatEl;
     }
   });
+  /* Auto-scroll on new content, but only when the user is already
+     anchored near the bottom — otherwise we'd yank them away from
+     scrolled-up history every time the agent streams a chunk.
+     Streaming triggers this effect on every char delta, so we
+     coalesce all writes into ONE rAF per frame; without that, with
+     50+ messages mounted, each `scrollTop = scrollHeight` forced a
+     full-page layout, pegging the main thread for hundreds of ms
+     per second. */
+  let scrollPending = false;
+  /* Threshold matches "within one bubble of the bottom" — generous
+     enough that natural scroll-bounce keeps you stuck-to-bottom,
+     tight enough that "I scrolled up to re-read" actually wins. */
+  const STICK_PX = 80;
+  let stickToBottom = true;
+
+  function onChatScroll() {
+    if (!chatEl) return;
+    const distanceFromBottom = chatEl.scrollHeight - chatEl.scrollTop - chatEl.clientHeight;
+    stickToBottom = distanceFromBottom < STICK_PX;
+  }
+
   $effect(() => {
     if (!chatEl || !sess) return;
+    /* Track the cheap signals — message count + last content length.
+       Streaming bumps content.length per chunk; we still only do one
+       scroll write per frame thanks to the rAF guard below. */
     void sess.messages.length;
     void sess.actions.length;
     void (sess.messages[sess.messages.length - 1]?.content?.length ?? 0);
-    queueMicrotask(() => {
-      if (chatEl) chatEl.scrollTop = chatEl.scrollHeight;
+    if (!stickToBottom) return;
+    if (scrollPending) return;
+    scrollPending = true;
+    requestAnimationFrame(() => {
+      scrollPending = false;
+      if (!chatEl || !stickToBottom) return;
+      chatEl.scrollTop = chatEl.scrollHeight;
     });
   });
 
@@ -205,7 +234,7 @@
     <p class="ct-empty-p">Pick a session from the sidebar or create a new one.</p>
   </div>
 {:else}
-  <div class="ct" bind:this={chatEl}>
+  <div class="ct" bind:this={chatEl} onscroll={onChatScroll}>
     {#if sess.messages.length === 0 && sess.actions.length === 0}
       <div class="ct-welcome">
         <p class="ct-welcome-h serif">Ask {p.kind === 'claude' ? 'Claude' : 'Cursor'} anything</p>

@@ -82,12 +82,19 @@
   let open = $state(false);
   /** Index of the "focused" option for keyboard navigation. -1 = nothing. */
   let activeIndex = $state(-1);
-  /** Right-align the panel if the trigger is too close to the viewport edge. */
-  let alignRight = $state(false);
-  /** Open upward if there's not enough space below. */
-  let alignUp = $state(false);
   let triggerEl: HTMLButtonElement | null = $state(null);
   let panelEl: HTMLDivElement | null = $state(null);
+  /** Fixed-position coords for the panel — recomputed from the trigger
+   *  rect on open / scroll / resize. Using `position: fixed` (instead
+   *  of `absolute`) lets the panel escape ancestors with
+   *  `overflow: hidden` (e.g. `.app-pane` chrome on the Jira/GitHub/
+   *  Sentry columns), which would otherwise clip the right edge of
+   *  long option labels like "DevOps Sprint 17". */
+  let panelCoords = $state<{
+    left: number;
+    top: number;
+    minWidth: number;
+  } | null>(null);
   /** Accumulated type-to-search buffer, cleared 650 ms after the last key. */
   let typeahead = $state('');
   let typeaheadTimer: ReturnType<typeof setTimeout> | null = null;
@@ -123,12 +130,18 @@
 
   function openPanel() {
     open = true;
-    /* Pre-set alignUp from `forceUp` so the panel renders in the right
-       direction on the first frame — auto-detection in `computeAlignment`
-       still runs after RAF and may flip if reality disagrees. */
-    if (forceUp) alignUp = true;
-    // Reset keyboard cursor to the currently-selected option so ArrowDown
-    // from the closed state lands somewhere useful.
+    /* Seed coords from the trigger rect so the panel renders in the
+       right place on the first frame; `computeAlignment` re-runs
+       after RAF once the panel has measured itself and may flip
+       up/down or shift left if reality disagrees. */
+    if (triggerEl) {
+      const r = triggerEl.getBoundingClientRect();
+      panelCoords = {
+        left: r.left,
+        top: forceUp ? r.top : r.bottom + 4,
+        minWidth: r.width
+      };
+    }
     const idx = options.findIndex((o) => o.value === value);
     activeIndex = idx;
     requestAnimationFrame(computeAlignment);
@@ -138,6 +151,7 @@
   function close() {
     open = false;
     activeIndex = -1;
+    panelCoords = null;
     typeahead = '';
     if (typeaheadTimer) {
       clearTimeout(typeaheadTimer);
@@ -163,12 +177,37 @@
     const tRect = triggerEl.getBoundingClientRect();
     const pRect = panelEl.getBoundingClientRect();
     const margin = 12;
-    alignRight = tRect.left + pRect.width > window.innerWidth - margin;
-    alignUp =
+    /* Right-align (shift left) when the panel would spill past the
+       viewport's right edge. `position: fixed` reads coords against
+       the viewport, so a simple max-bound on `left` is all we need. */
+    let left = tRect.left;
+    if (left + pRect.width > window.innerWidth - margin) {
+      left = Math.max(margin, window.innerWidth - margin - pRect.width);
+    }
+    const flipUp =
       forceUp ||
       (tRect.bottom + pRect.height + margin > window.innerHeight &&
         tRect.top > pRect.height + margin);
+    panelCoords = {
+      left,
+      top: flipUp ? tRect.top - pRect.height - 4 : tRect.bottom + 4,
+      minWidth: tRect.width
+    };
   }
+
+  /* Re-anchor on scroll / resize so the panel stays glued to the
+     trigger when the user scrolls a parent container with the dropdown
+     open. Uses capture-phase scroll to catch nested scrollers. */
+  $effect(() => {
+    if (!open) return;
+    const onScrollResize = () => computeAlignment();
+    window.addEventListener('scroll', onScrollResize, true);
+    window.addEventListener('resize', onScrollResize);
+    return () => {
+      window.removeEventListener('scroll', onScrollResize, true);
+      window.removeEventListener('resize', onScrollResize);
+    };
+  });
 
   function onDocClick(e: MouseEvent) {
     if (!open) return;
@@ -306,14 +345,15 @@
     </svg>
   </button>
 
-  {#if open}
+  {#if open && panelCoords}
     <div
       class="dd-panel"
-      class:dd-panel--right={alignRight}
-      class:dd-panel--up={alignUp}
       bind:this={panelEl}
       role="listbox"
       tabindex="-1"
+      style:left="{panelCoords.left}px"
+      style:top="{panelCoords.top}px"
+      style:min-width="{panelCoords.minWidth}px"
       transition:slide={{ duration: 140, easing: cubicOut, axis: 'y' }}
     >
       <div class="dd-panel-inner" in:fade={{ duration: 120 }}>
@@ -436,10 +476,10 @@
   .dd--open .dd-caret { transform: rotate(180deg); }
 
   .dd-panel {
-    position: absolute;
-    top: calc(100% + 4px);
-    left: 0;
-    min-width: 100%;
+    /* Fixed positioning escapes any ancestor `overflow: hidden` —
+       e.g. `.app-pane` chrome on the inbox columns — so long option
+       labels render in full instead of being clipped at the pane edge. */
+    position: fixed;
     max-width: 380px;
     z-index: 220;
     background: color-mix(in srgb, var(--bg-2) 97%, transparent);
@@ -449,11 +489,6 @@
     border-radius: 8px;
     box-shadow: var(--shadow-2), inset 0 1px 0 rgba(255, 255, 255, 0.03);
     overflow: hidden;
-  }
-  .dd-panel--right { left: auto; right: 0; }
-  .dd-panel--up {
-    top: auto;
-    bottom: calc(100% + 4px);
   }
   .dd-panel-inner {
     max-height: 280px;

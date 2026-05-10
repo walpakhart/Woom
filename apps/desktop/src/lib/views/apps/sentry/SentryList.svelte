@@ -11,6 +11,8 @@
   } from '$lib/state/inbox.svelte';
   import { relativeTime, sentryLevelClass, type SentryIssue, type SentryStatus } from '$lib/data';
   import Dropdown from '$lib/components/ui/Dropdown.svelte';
+  import ListSearchPicker from '$lib/views/apps/_shared/ListSearchPicker.svelte';
+  import { invoke } from '@tauri-apps/api/core';
 
   interface Props {
     instanceId: string;
@@ -126,32 +128,90 @@
     openSentryFocus(it.id);
   }
 
-  const SENTRY_ID_RE = /^[A-Z][A-Z0-9]+-\d+$/i;
+  /* ─── Search picker (server-side) ───────────────────────────────
+     Hits `sentry_list_issues` directly with the user's query each
+     keystroke (debounced 250ms), ignoring the inline list's level /
+     status / project chips. The picker is a quick-jump to any issue,
+     not a filtered slice of what's currently in the column. */
+  let searchEl = $state<HTMLLabelElement | null>(null);
+  let pickerEl = $state<{ handleKey: (e: KeyboardEvent) => boolean } | null>(null);
+  let pickerOpen = $state(false);
 
-  const hotOpenIssue = $derived.by(() => {
+  let pickerRemoteItems = $state<SentryIssue[] | null>(null);
+  let pickerLastQuery = '';
+  let pickerSearchTimer: ReturnType<typeof setTimeout> | null = null;
+
+  $effect(() => {
     const q = query.trim();
-    if (!SENTRY_ID_RE.test(q)) return null;
-    return items.find((it) => it.short_id.toLowerCase() === q.toLowerCase()) ?? null;
-  });
-
-  const hotOpenShortId = $derived.by(() => {
-    const q = query.trim();
-    return SENTRY_ID_RE.test(q) ? q.toUpperCase() : null;
-  });
-
-  function handleSearchKeydown(e: KeyboardEvent) {
-    if (e.key !== 'Enter') return;
-    if (hotOpenIssue) {
-      openSentryFocus(hotOpenIssue.id);
-      query = '';
-      e.preventDefault();
+    if (pickerSearchTimer) {
+      clearTimeout(pickerSearchTimer);
+      pickerSearchTimer = null;
     }
+    if (!q) {
+      pickerRemoteItems = null;
+      pickerLastQuery = '';
+      return;
+    }
+    if (q === pickerLastQuery && pickerRemoteItems !== null) return;
+    pickerSearchTimer = setTimeout(async () => {
+      pickerLastQuery = q;
+      try {
+        const res = await invoke<SentryIssue[]>('sentry_list_issues', {
+          query: q,
+          limit: 25
+        });
+        if (pickerLastQuery !== q) return;
+        pickerRemoteItems = res;
+      } catch {
+        if (pickerLastQuery !== q) return;
+        pickerRemoteItems = [];
+      }
+    }, 250);
+  });
+
+  const pickerRows = $derived.by(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return [] as { id: string; title: string; sub: string }[];
+    const remote = pickerRemoteItems ?? [];
+    const ranked = remote.map((it) => {
+      const shortL = it.short_id.toLowerCase();
+      const titleL = it.title.toLowerCase();
+      const projectL = it.project_slug.toLowerCase();
+      let rank = 5;
+      if (shortL === q) rank = 0;
+      else if (shortL.startsWith(q)) rank = 1;
+      else if (titleL.includes(q)) rank = 2;
+      else if (shortL.includes(q)) rank = 3;
+      else if (projectL.includes(q)) rank = 4;
+      return {
+        id: String(it.id),
+        title: it.title,
+        sub: `${it.short_id} · ${it.project_slug}`,
+        rank
+      };
+    });
+    ranked.sort((a, b) => a.rank - b.rank);
+    return ranked.slice(0, 8).map(({ id, title, sub }) => ({ id, title, sub }));
+  });
+
+  function openPicker() {
+    if (query.trim().length > 0) pickerOpen = true;
+  }
+  function closePicker() {
+    pickerOpen = false;
+  }
+  $effect(() => {
+    pickerOpen = query.trim().length > 0;
+  });
+
+  function pickIssue(id: string) {
+    openSentryFocus(id);
+    query = '';
+    pickerOpen = false;
   }
 
-  function doHotOpen() {
-    if (!hotOpenIssue) return;
-    openSentryFocus(hotOpenIssue.id);
-    query = '';
+  function handleSearchKeydown(e: KeyboardEvent) {
+    if (pickerEl && pickerEl.handleKey(e)) return;
   }
 </script>
 
@@ -168,25 +228,31 @@
   </header>
 
   <div class="sl-filters">
-    <label class="sl-search">
+    <label class="sl-search" bind:this={searchEl}>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
-      <input type="text" placeholder="Search title, short-id, project…" bind:value={query} spellcheck="false" onkeydown={handleSearchKeydown} />
+      <input
+        type="text"
+        placeholder="Search title, short-id, project…"
+        bind:value={query}
+        spellcheck="false"
+        onkeydown={handleSearchKeydown}
+        onfocus={openPicker}
+      />
       {#if query}
         <button class="sl-search-clear" onclick={() => (query = '')} aria-label="Clear search">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
         </button>
       {/if}
     </label>
-    {#if hotOpenShortId}
-      <button class="sl-hot-hint" onclick={doHotOpen} title="Open {hotOpenShortId} (Enter)" disabled={!hotOpenIssue}>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
-        {#if hotOpenIssue}
-          {hotOpenIssue.short_id} · {hotOpenIssue.title}
-        {:else}
-          {hotOpenShortId} — not in inbox
-        {/if}
-      </button>
-    {/if}
+    <ListSearchPicker
+      bind:this={pickerEl}
+      anchor={searchEl}
+      open={pickerOpen}
+      rows={pickerRows}
+      source="sentry"
+      onPick={pickIssue}
+      onClose={closePicker}
+    />
     <div class="sl-chips">
       <button class="sl-toggle" class:active={levelFilter === 'fatal'} onclick={() => toggleLevel('fatal')}>
         <span class="sl-toggle-dot"></span>
@@ -390,26 +456,6 @@
   }
   .sl-search-clear:hover { color: var(--text-0); background: var(--bg-3); }
   .sl-search-clear svg { width: 10px; height: 10px; }
-
-  .sl-hot-hint {
-    display: inline-flex; align-items: center; gap: 6px;
-    padding: 3px 10px;
-    border-radius: 6px;
-    background: color-mix(in srgb, var(--accent) 10%, var(--bg-2));
-    border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
-    color: var(--accent-bright);
-    font-size: 11.5px; font-weight: 500;
-    cursor: pointer;
-    max-width: 100%;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    transition: background 120ms, border-color 120ms;
-  }
-  .sl-hot-hint:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--accent) 18%, var(--bg-2));
-    border-color: color-mix(in srgb, var(--accent) 50%, transparent);
-  }
-  .sl-hot-hint:disabled { opacity: 0.5; cursor: default; }
-  .sl-hot-hint svg { width: 11px; height: 11px; flex-shrink: 0; }
 
   .sl-chips { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
   .sl-divider {

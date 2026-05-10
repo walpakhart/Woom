@@ -1,9 +1,9 @@
 <script lang="ts">
-  /* Woom sigil — renders the curated `woom-logo.svg` (the brand mark
-     the designer hands over) so every place that used to draw the
-     hand-coded approximation now shows the real W. The asset already
-     ships transparent, so callers get a free standalone glyph that
-     drops onto whatever backdrop hosts it.
+  /* Woom sigil — renders the brand mark (transparent PNG generated
+     from the macOS installer icon). The earlier traced SVG looked
+     jagged at small sizes; the rasterised mark stays sharp because
+     it ships at 512×512 with the same gradient the installer uses,
+     just minus the dark card backdrop.
 
      Two knobs, kept compatible with the prior inline-SVG version so
      consumers (Welcome, +page empty-state, …) didn't need updating:
@@ -20,7 +20,7 @@
 <img
   class="sigil"
   class:glow
-  src="/woom-logo.svg"
+  src="/woom-mark-transparent.png"
   alt="Woom"
   width={size}
   height={size}

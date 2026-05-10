@@ -17,6 +17,8 @@
   } from '$lib/state/inbox.svelte';
   import { relativeTime, jiraStatusClass, type JiraItem, type JiraStatus } from '$lib/data';
   import Dropdown from '$lib/components/ui/Dropdown.svelte';
+  import ListSearchPicker from '$lib/views/apps/_shared/ListSearchPicker.svelte';
+  import { invoke } from '@tauri-apps/api/core';
 
   interface Props {
     instanceId: string;
@@ -102,7 +104,13 @@
     });
   });
 
-  // Reload boards+sprints whenever the project filter changes
+  /* Reload boards+sprints whenever the project filter changes. The
+     persist effect above mutates filter fields IN PLACE (via
+     `persistJiraUiFilters`'s field-level diff), so `currentFilters`
+     keeps the same proxy reference across keystrokes and Svelte 5's
+     deep tracking only re-runs this effect when `projectKey` itself
+     differs. No manual dedupe guard needed — that was the symptom of
+     the prior reassign-on-every-keystroke bug. */
   $effect(() => {
     if (p.jiraStatus.kind !== 'connected') return;
     const key = projectFilter ?? currentFilters.projectKey ?? null;
@@ -114,25 +122,106 @@
 
   const JIRA_KEY_RE = /^[A-Z][A-Z0-9]+-\d+$/;
 
-  function handleSearchKeydown(e: KeyboardEvent) {
-    if (e.key !== 'Enter') return;
-    const q = query.trim().toUpperCase();
-    if (JIRA_KEY_RE.test(q)) {
-      inboxState.jiraFocusKey = q;
-      query = '';
-      e.preventDefault();
-    }
+  /* ─── Search picker (server-side) ───────────────────────────────
+     The picker fires a JQL search on every keystroke (debounced 250ms)
+     and shows top-8 results. It DELIBERATELY ignores the inline list's
+     filter chips (Mine / Open / project / sprint) — the picker is a
+     quick-jump to *any* ticket in the workspace, not a narrowed view of
+     what's currently visible. The previous local-only filter caused
+     "ticket exists but picker doesn't find it" when the ticket was
+     outside the active filter scope. */
+  let searchEl = $state<HTMLLabelElement | null>(null);
+  let pickerEl = $state<{ handleKey: (e: KeyboardEvent) => boolean } | null>(null);
+  let pickerOpen = $state(false);
+
+  let pickerRemoteItems = $state<JiraItem[] | null>(null);
+  let pickerLastQuery = '';
+  let pickerSearchTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function jqlEscapeLiteral(s: string): string {
+    return s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
   }
 
-  const hotOpenKey = $derived.by(() => {
-    const q = query.trim().toUpperCase();
-    return JIRA_KEY_RE.test(q) ? q : null;
+  $effect(() => {
+    const q = query.trim();
+    if (pickerSearchTimer) {
+      clearTimeout(pickerSearchTimer);
+      pickerSearchTimer = null;
+    }
+    if (!q) {
+      pickerRemoteItems = null;
+      pickerLastQuery = '';
+      return;
+    }
+    if (q === pickerLastQuery && pickerRemoteItems !== null) return;
+    pickerSearchTimer = setTimeout(async () => {
+      pickerLastQuery = q;
+      const upper = q.toUpperCase();
+      const isKey = JIRA_KEY_RE.test(upper);
+      const esc = jqlEscapeLiteral(q);
+      const jql = isKey
+        ? `key = "${upper}"`
+        : `summary ~ "${esc}" ORDER BY updated DESC`;
+      try {
+        const res = await invoke<JiraItem[]>('jira_search', { jql });
+        if (pickerLastQuery !== q) return;
+        pickerRemoteItems = res;
+      } catch {
+        if (pickerLastQuery !== q) return;
+        pickerRemoteItems = [];
+      }
+    }, 250);
   });
 
-  function doHotOpen() {
-    if (!hotOpenKey) return;
-    inboxState.jiraFocusKey = hotOpenKey;
+  const pickerRows = $derived.by(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return [] as { id: string; title: string; sub: string }[];
+    const remote = pickerRemoteItems ?? [];
+    const exactKey = q.toUpperCase();
+    const ranked = remote.map((it) => {
+      const keyL = it.key.toLowerCase();
+      let rank = 5;
+      if (it.key === exactKey) rank = 0;
+      else if (keyL.startsWith(q)) rank = 1;
+      else if (it.summary.toLowerCase().includes(q)) rank = 2;
+      else if (keyL.includes(q)) rank = 3;
+      return { id: it.key, title: it.summary || it.key, sub: it.key, rank };
+    });
+    ranked.sort((a, b) => a.rank - b.rank);
+    return ranked.slice(0, 8).map(({ id, title, sub }) => ({ id, title, sub }));
+  });
+
+  function openPicker() {
+    if (query.trim().length > 0) pickerOpen = true;
+  }
+  function closePicker() {
+    pickerOpen = false;
+  }
+  $effect(() => {
+    /* Auto-open while there's a query; hide when emptied. */
+    pickerOpen = query.trim().length > 0;
+  });
+
+  function pickJira(key: string) {
+    inboxState.jiraFocusKey = key;
     query = '';
+    pickerOpen = false;
+  }
+
+  function handleSearchKeydown(e: KeyboardEvent) {
+    /* Picker grabs ↑↓ Enter Esc when it has rows. */
+    if (pickerEl && pickerEl.handleKey(e)) return;
+    /* Fallback: Enter on a typed `KEY-123` jumps directly even when
+       the local list doesn't contain it (the user may have typed an
+       issue from outside the current filter / project). */
+    if (e.key === 'Enter') {
+      const q = query.trim().toUpperCase();
+      if (JIRA_KEY_RE.test(q)) {
+        inboxState.jiraFocusKey = q;
+        query = '';
+        e.preventDefault();
+      }
+    }
   }
 
   /** Unique projects (key prefix before the dash) seen in the items. */
@@ -279,21 +368,31 @@
   </header>
 
   <div class="jl-filters">
-    <label class="jl-search">
+    <label class="jl-search" bind:this={searchEl}>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
-      <input type="text" placeholder="Search summary, KEY-123, assignee…" bind:value={query} spellcheck="false" onkeydown={handleSearchKeydown} />
+      <input
+        type="text"
+        placeholder="Search summary, KEY-123, assignee…"
+        bind:value={query}
+        spellcheck="false"
+        onkeydown={handleSearchKeydown}
+        onfocus={openPicker}
+      />
       {#if query}
         <button class="jl-search-clear" onclick={() => (query = '')} aria-label="Clear search">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
         </button>
       {/if}
     </label>
-    {#if hotOpenKey}
-      <button class="jl-hot-hint" onclick={doHotOpen} title="Open {hotOpenKey} (Enter)">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
-        Open {hotOpenKey}
-      </button>
-    {/if}
+    <ListSearchPicker
+      bind:this={pickerEl}
+      anchor={searchEl}
+      open={pickerOpen}
+      rows={pickerRows}
+      source="jira"
+      onPick={pickJira}
+      onClose={closePicker}
+    />
     <div class="jl-chips">
       <button class="jl-toggle" class:active={roleFilter === 'mine'} disabled={!me} onclick={() => toggleRole('mine')} title="Assigned to me">
         <span class="jl-toggle-dot"></span>
@@ -537,24 +636,6 @@
   }
   .jl-search-clear:hover { color: var(--text-0); background: var(--bg-3); }
   .jl-search-clear svg { width: 10px; height: 10px; }
-
-  .jl-hot-hint {
-    display: inline-flex; align-items: center; gap: 6px;
-    padding: 3px 10px;
-    border-radius: 6px;
-    background: color-mix(in srgb, var(--accent) 10%, var(--bg-2));
-    border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
-    color: var(--accent-bright);
-    font-size: 11.5px; font-weight: 500;
-    cursor: pointer;
-    transition: background 120ms, border-color 120ms;
-    width: max-content;
-  }
-  .jl-hot-hint:hover {
-    background: color-mix(in srgb, var(--accent) 18%, var(--bg-2));
-    border-color: color-mix(in srgb, var(--accent) 50%, transparent);
-  }
-  .jl-hot-hint svg { width: 11px; height: 11px; flex-shrink: 0; }
 
   .jl-chips { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
   .jl-divider {

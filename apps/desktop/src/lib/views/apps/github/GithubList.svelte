@@ -7,10 +7,12 @@
     inboxState,
     githubItemsFor,
     githubLoadingFor,
-    githubErrorFor
+    githubErrorFor,
+    openFocusItem
   } from '$lib/state/inbox.svelte';
   import { relativeTime, type InboxItem, type ConnectionStatus, type Repository } from '$lib/data';
   import Dropdown from '$lib/components/ui/Dropdown.svelte';
+  import ListSearchPicker from '$lib/views/apps/_shared/ListSearchPicker.svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { onMount } from 'svelte';
 
@@ -386,48 +388,139 @@
     p.onSelect(it.id);
   }
 
+  /* ─── Search picker (server-side) ───────────────────────────────
+     Independent of the main inline search: fires its OWN GitHub
+     search on every keystroke (debounced 250ms) with a minimal
+     query — ignores chip filters (Mine / Reviewer / Open / Draft /
+     Author) so the picker can quick-jump to any PR the user has
+     access to, even if the chip filters would currently hide it. */
+  let searchEl = $state<HTMLLabelElement | null>(null);
+  let pickerEl = $state<{ handleKey: (e: KeyboardEvent) => boolean } | null>(null);
+  let pickerOpen = $state(false);
+
+  let pickerRemoteItems = $state<InboxItem[] | null>(null);
+  let pickerLastQuery = '';
+  let pickerSearchTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** Picker-only query: text + repo scope + is:pr is:open. No
+   *  involves:@me, no role/state/author chips — picker is a global
+   *  quick-jump, not a filtered view. */
+  function buildPickerQuery(text: string): string {
+    const parts: string[] = [text, 'is:pr', 'is:open', 'sort:updated-desc'];
+    if (availableRepos.length > 0) {
+      availableRepos.forEach((r) => parts.push(`repo:${r.owner}/${r.name}`));
+    } else {
+      parts.push('involves:@me');
+    }
+    return parts.join(' ');
+  }
+
+  $effect(() => {
+    const q = query.trim();
+    if (pickerSearchTimer) {
+      clearTimeout(pickerSearchTimer);
+      pickerSearchTimer = null;
+    }
+    if (!q) {
+      pickerRemoteItems = null;
+      pickerLastQuery = '';
+      return;
+    }
+    if (q === pickerLastQuery && pickerRemoteItems !== null) return;
+    pickerSearchTimer = setTimeout(async () => {
+      pickerLastQuery = q;
+      try {
+        const composed = buildPickerQuery(q);
+        const res = await invoke<InboxItem[]>('github_search_inbox', { query: composed });
+        if (pickerLastQuery !== q) return;
+        pickerRemoteItems = res;
+      } catch {
+        if (pickerLastQuery !== q) return;
+        pickerRemoteItems = [];
+      }
+    }, 250);
+  });
+
+  const pickerRows = $derived.by(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return [] as { id: string; title: string; sub: string }[];
+    const numMatch = q.replace(/^#/, '');
+    const remote = pickerRemoteItems ?? [];
+    const ranked = remote.map((it) => {
+      const num = String(it.number);
+      const titleL = it.title.toLowerCase();
+      const repoL = it.repo ? `${it.repo.owner}/${it.repo.name}`.toLowerCase() : '';
+      let rank = 6;
+      if (num === numMatch) rank = 0;
+      else if (titleL.includes(q)) rank = 2;
+      else if (num.includes(numMatch) && /^\d+$/.test(numMatch)) rank = 3;
+      else if (repoL.includes(q)) rank = 4;
+      else if (it.author?.login?.toLowerCase().includes(q)) rank = 5;
+      return {
+        id: String(it.id),
+        title: it.title,
+        sub: `#${it.number}${it.repo ? ` · ${it.repo.name}` : ''}`,
+        rank
+      };
+    });
+    ranked.sort((a, b) => a.rank - b.rank);
+    return ranked.slice(0, 8).map(({ id, title, sub }) => ({ id, title, sub }));
+  });
+
+  function openPicker() {
+    if (query.trim().length > 0) pickerOpen = true;
+  }
+  function closePicker() {
+    pickerOpen = false;
+  }
+  $effect(() => {
+    pickerOpen = query.trim().length > 0;
+  });
+
+  function pickPr(id: string) {
+    const numId = parseInt(id);
+    /* Prefer the remote-search hit so picking works even when the PR
+       isn't in the local inbox (different repo / not involving the
+       user). Fall back to the parent's selectInboxItem path for
+       items already in the local list. */
+    const remote = pickerRemoteItems?.find((it) => String(it.id) === id);
+    if (remote) openFocusItem(remote);
+    else p.onSelect(numId);
+    query = '';
+    pickerOpen = false;
+  }
+
+  /** Open the typed `#NNN` directly when the picker is empty (PR
+   *  isn't in any visible repo). Builds a scoped GitHub search URL
+   *  limited to the user's known repos so the browser jump lands
+   *  somewhere relevant. */
+  function openByNumberInBrowser(num: number) {
+    const knownRepos = availableRepos.length > 0
+      ? availableRepos.map((r) => `${r.owner}/${r.name}`)
+      : [...new Map(
+          items.filter((it) => it.repo).map((it) => [`${it.repo!.owner}/${it.repo!.name}`, `${it.repo!.owner}/${it.repo!.name}`])
+        ).values()];
+    const repoScope = knownRepos.slice(0, 12).map((r) => `repo:${r}`).join(' ');
+    const q = repoScope
+      ? `is:pr is:open #${num} ${repoScope}`
+      : `is:pr is:open #${num} involves:@me`;
+    p.onOpenBrowser(`https://github.com/search?q=${encodeURIComponent(q)}&type=pullrequests`);
+  }
+
   function handleSearchKeydown(e: KeyboardEvent) {
+    if (pickerEl && pickerEl.handleKey(e)) return;
     if (e.key !== 'Enter') return;
     const q = query.trim();
     if (/^#?\d+$/.test(q)) {
-      doHotOpen();
+      const num = parseInt(q.replace('#', ''));
+      const hit = items.find((it) => it.number === num)
+        ?? searchResults?.find((it) => it.number === num)
+        ?? null;
+      if (hit) p.onSelect(hit.id);
+      else openByNumberInBrowser(num);
+      query = '';
       e.preventDefault();
     }
-  }
-
-  const hotOpenNum = $derived.by(() => {
-    const q = query.trim();
-    if (!/^#?\d+$/.test(q)) return null;
-    return parseInt(q.replace('#', ''));
-  });
-
-  // Check both local inbox items and remote search results
-  const hotOpenItem = $derived(
-    hotOpenNum !== null
-      ? (items.find((it) => it.number === hotOpenNum) ??
-         searchResults?.find((it) => it.number === hotOpenNum) ??
-         null)
-      : null
-  );
-
-  function doHotOpen() {
-    if (hotOpenNum === null) return;
-    if (hotOpenItem) {
-      p.onSelect(hotOpenItem.id);
-    } else {
-      // Build a scoped URL limited to repos in the dropdown list
-      const knownRepos = availableRepos.length > 0
-        ? availableRepos.map((r) => `${r.owner}/${r.name}`)
-        : [...new Map(
-            items.filter((it) => it.repo).map((it) => [`${it.repo!.owner}/${it.repo!.name}`, `${it.repo!.owner}/${it.repo!.name}`])
-          ).values()];
-      const repoScope = knownRepos.slice(0, 12).map((r) => `repo:${r}`).join(' ');
-      const q = repoScope
-        ? `is:pr is:open #${hotOpenNum} ${repoScope}`
-        : `is:pr is:open #${hotOpenNum} involves:@me`;
-      p.onOpenBrowser(`https://github.com/search?q=${encodeURIComponent(q)}&type=pullrequests`);
-    }
-    query = '';
   }
 
   function stateLabel(it: InboxItem): string {
@@ -467,7 +560,7 @@
        (click again to unset → "all"); the dropdowns share a `__all__`
        sentinel for the "no filter" option. -->
   <div class="gl-filters">
-    <label class="gl-search" class:gl-search--remote={wantsRemoteSearch}>
+    <label class="gl-search" class:gl-search--remote={wantsRemoteSearch} bind:this={searchEl}>
       {#if searching}
         <span class="gl-search-spin" aria-hidden="true"></span>
       {:else}
@@ -479,6 +572,7 @@
         bind:value={query}
         spellcheck="false"
         onkeydown={handleSearchKeydown}
+        onfocus={openPicker}
       />
       {#if query}
         <button class="gl-search-clear" onclick={() => (query = '')} aria-label="Clear search">
@@ -486,16 +580,15 @@
         </button>
       {/if}
     </label>
-    {#if hotOpenNum !== null}
-      <button class="gl-hot-hint" onclick={doHotOpen} title="Open #{hotOpenNum} (Enter)">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
-        {#if hotOpenItem}
-          #{hotOpenItem.number} · {hotOpenItem.title}
-        {:else}
-          Open #{hotOpenNum} on GitHub
-        {/if}
-      </button>
-    {/if}
+    <ListSearchPicker
+      bind:this={pickerEl}
+      anchor={searchEl}
+      open={pickerOpen}
+      rows={pickerRows}
+      source="github"
+      onPick={pickPr}
+      onClose={closePicker}
+    />
 
     <div class="gl-chips">
       <button
@@ -800,25 +893,6 @@
   }
   .gl-search-clear:hover { color: var(--text-0); background: var(--bg-3); }
   .gl-search-clear svg { width: 10px; height: 10px; }
-
-  .gl-hot-hint {
-    display: inline-flex; align-items: center; gap: 6px;
-    padding: 3px 10px;
-    border-radius: 6px;
-    background: color-mix(in srgb, var(--accent) 10%, var(--bg-2));
-    border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
-    color: var(--accent-bright);
-    font-size: 11.5px; font-weight: 500;
-    cursor: pointer;
-    max-width: 100%;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    transition: background 120ms, border-color 120ms;
-  }
-  .gl-hot-hint:hover {
-    background: color-mix(in srgb, var(--accent) 18%, var(--bg-2));
-    border-color: color-mix(in srgb, var(--accent) 50%, transparent);
-  }
-  .gl-hot-hint svg { width: 11px; height: 11px; flex-shrink: 0; }
 
   .gl-chips {
     display: flex; gap: 6px; flex-wrap: wrap; align-items: center;

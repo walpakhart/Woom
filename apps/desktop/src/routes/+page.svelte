@@ -4501,7 +4501,6 @@
 <div id="app" class:is-dragging={dragState.payload !== null}>
   <Rail
     bind:view
-    inboxCount={Object.values(inboxState.itemsByInstance).reduce((sum, list) => sum + list.length, 0)}
     {anythingConnected}
     {statusLoading}
     {anyRetrying}
