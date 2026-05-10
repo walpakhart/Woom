@@ -638,6 +638,7 @@
     position: relative; z-index: 1;
     flex: 1;
     overflow-y: auto;
+    scrollbar-width: none;
     padding: 56px 64px 96px;
     display: flex; flex-direction: column; gap: 28px;
     max-width: 1200px;
