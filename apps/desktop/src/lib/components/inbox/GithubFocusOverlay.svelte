@@ -667,7 +667,7 @@
   .chip-state { padding: 2px 9px; border-radius: 5px; font-size: 10.5px; font-weight: 500; }
 
   .focus-title {
-    font-family: 'Instrument Serif', 'New York', Georgia, serif;
+    font-family: 'Geist', 'Inter', -apple-system, system-ui, sans-serif;
     font-size: 30px;
     line-height: 1.18;
     letter-spacing: -0.02em;
@@ -795,7 +795,7 @@
   .body-empty {
     padding: 14px 16px; background: var(--bg-1);
     border: 1px dashed var(--border-neutral-hi); border-radius: 10px;
-    color: var(--text-mute); font-style: italic; font-size: 12.5px; margin-bottom: 16px;
+    color: var(--text-mute);  font-size: 12.5px; margin-bottom: 16px;
   }
   .timeline-item {
     background: var(--bg-2); border: 1px solid var(--border);
@@ -865,7 +865,7 @@
 
   .review-empty {
     font-size: 12.5px; color: var(--text-mute);
-    font-style: italic;
+    
   }
   .review-inline-link {
     margin-top: 10px;

@@ -8,7 +8,7 @@
   // CSS-transform scaling.
   //
   // Pointer interaction (select / translate / resize) lives on the parent
-  // CanvasColumn — this file is purely visual. It exposes:
+  // CanvasSurface — this file is purely visual. It exposes:
   //   - `data-shape-id` so hit-testing can climb back to the shape model.
   //   - A `selected` prop so the surrounding selection ring renders.
   //   - A `dim` prop the marquee tool sets while dragging the marquee
@@ -738,7 +738,7 @@
           {#if pChatCard.stale}<span class="cv-card-stale-tag">snapshot</span>{/if}
         </div>
         <!-- Excerpt rendered as plain text wrapped paragraph; full
-             markdown render is reserved for the source AgentColumn so
+             markdown render is reserved for the source AgentApp so
              the card stays compact. -->
         <div class="cv-card-chat-body">{pChatCard.excerpt}</div>
       </div>
@@ -932,7 +932,7 @@
   .cv-sticky :global(p) { margin: 0 0 6px; }
   .cv-sticky :global(p:last-child) { margin-bottom: 0; }
   .cv-sticky :global(strong) { color: var(--text-0); }
-  .cv-sticky :global(em) { color: var(--text-0); font-style: italic; }
+  .cv-sticky :global(em) { color: var(--text-0);  }
   .cv-sticky :global(a) { color: var(--accent-bright, var(--accent)); }
   .cv-sticky :global(code) {
     font-family: -ui-monospace, 'JetBrains Mono', 'Geist Mono', monospace;

@@ -1,6 +1,6 @@
 <script lang="ts">
   /* AgentApp — full-screen workspace для Claude / Cursor.
-     ПОЛНОСТЬЮ standalone, без AgentColumn.
+     ПОЛНОСТЬЮ standalone, без AgentApp.
 
      Layout (3 pane):
        [SessionsSidebar 280] [chat (flex)] [WorktreeSide 320]
@@ -12,7 +12,7 @@
        Composer    — textarea + chips + send
 
      Все они читают sessionsState напрямую. Никакого dependence on
-     AgentColumn — это полноценное независимое UI. */
+     AgentApp — это полноценное независимое UI. */
   import SessionsSidebar from './agent/SessionsSidebar.svelte';
   import WorktreeSide from './agent/WorktreeSide.svelte';
   import ChatHeader from './agent/ChatHeader.svelte';
@@ -42,6 +42,12 @@
     onClearCwd: () => void;
     onToggleEditorLink: () => void;
     onLinkToEditorInstance: (editorInstanceId: string) => void;
+    /** Drop the active session's terminal link. Forwarded into
+     *  WorktreeBar so the cwd-bar chip × can untap a session from a
+     *  terminal without bouncing to the terminal app. */
+    onToggleTerminalLink?: () => void;
+    /** Bind the active session to a specific terminal instance. */
+    onLinkToTerminalInstance?: (terminalInstanceId: string) => void;
     onCreateWorktree: () => void;
     onOpenWorktreeDiff: () => void;
     onOpenWorktreeInEditor: () => void;
@@ -71,12 +77,14 @@
   }
   let p: Props = $props();
 
-  const tone = $derived(
-    p.kind === 'claude' ? 'var(--src-claude)' : 'var(--src-cursor)'
-  );
-  const glow = $derived(
-    p.kind === 'claude' ? 'rgba(232,155,125,0.42)' : 'rgba(220,220,220,0.30)'
-  );
+  /* App-shell ambient tone. Both agent apps now ride the main brand
+     accent (mint/sage) so the entire workspace feels cohesive under
+     the new W-mark palette. Per-source identification (Claude warm
+     peach, Cursor grey) is preserved in the inbox chips + rail icons
+     where the user needs to triage which agent is which — the chat
+     SHELL itself is brand-uniform. */
+  const tone = $derived('var(--accent)');
+  const glow = $derived('var(--accent-glow)');
 </script>
 
 <section
@@ -121,6 +129,8 @@
               onClearCwd={p.onClearCwd}
               onToggleEditorLink={p.onToggleEditorLink}
               onLinkToEditorInstance={p.onLinkToEditorInstance}
+              onToggleTerminalLink={p.onToggleTerminalLink}
+              onLinkToTerminalInstance={p.onLinkToTerminalInstance}
               onCreateWorktree={p.onCreateWorktree}
               onOpenWorktreeDiff={p.onOpenWorktreeDiff}
               onRemoveWorktree={p.onRemoveWorktree}

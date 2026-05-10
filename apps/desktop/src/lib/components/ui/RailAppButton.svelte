@@ -44,6 +44,11 @@
 
   let menuOpen = $state(false);
   let pressTimer: ReturnType<typeof setTimeout> | null = null;
+  let dragHoverTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Refs used by the outside-click handler so we only suppress the
+   *  close when the click landed on THIS instance's button or menu —
+   *  not on another rail button that happens to share the same class. */
+  let rootEl: HTMLDivElement | null = $state(null);
   /** Block the synthetic click that fires after a long-press release —
    *  otherwise opening the menu would also navigate to the kind. */
   let suppressClick = $state(false);
@@ -62,6 +67,26 @@
       pressTimer = null;
     }
   }
+
+  /** Drag-hover expand. Hovering a payload over the rail button for
+   *  ~450 ms opens the instance popover, so the user can pick which
+   *  Editor / Canvas / Terminal instance to drop into. Without this
+   *  the only way to target a non-default instance is to first
+   *  switch to it manually. Cancelled on dragleave / drop. */
+  function onDragEnterBtn(e: DragEvent) {
+    if (!e.dataTransfer) return;
+    if (dragHoverTimer) clearTimeout(dragHoverTimer);
+    dragHoverTimer = setTimeout(() => {
+      menuOpen = true;
+      dragHoverTimer = null;
+    }, 450);
+  }
+  function onDragLeaveBtn() {
+    if (dragHoverTimer) {
+      clearTimeout(dragHoverTimer);
+      dragHoverTimer = null;
+    }
+  }
   function onClick() {
     if (suppressClick) {
       suppressClick = false;
@@ -76,10 +101,14 @@
   }
   function onWindowClick(e: MouseEvent) {
     if (!menuOpen) return;
-    /* Don't close while clicks land inside the popover. */
-    const t = e.target as HTMLElement;
-    if (t.closest('.rab-menu')) return;
-    if (t.closest('.rab-btn')) return;
+    /* Close on any click that lands OUTSIDE this specific component's
+       root. Earlier we exempted any `.rab-btn` (so clicking another
+       app's rail button left this menu open) — that's wrong: clicking
+       anywhere away from the active popover should dismiss it. The
+       button's own onClick handler short-circuits via `suppressClick`
+       when needed, so toggling on the same button still works. */
+    const t = e.target as Node | null;
+    if (rootEl && t && rootEl.contains(t)) return;
     menuOpen = false;
   }
   function onKey(e: KeyboardEvent) {
@@ -107,7 +136,7 @@
 
 <svelte:window onclick={onWindowClick} onkeydown={onKey} />
 
-<div class="rab" class:menu-open={menuOpen}>
+<div class="rab" class:menu-open={menuOpen} bind:this={rootEl}>
   <button
     class="rail-btn rab-btn"
     class:active={p.active}
@@ -119,15 +148,15 @@
     onpointerleave={cancelPress}
     oncontextmenu={onContextMenu}
     onclick={onClick}
+    ondragenter={onDragEnterBtn}
+    ondragleave={onDragLeaveBtn}
   >
     {@render p.icon()}
-    {#if instances.length > 1}
-      <!-- Numeric count pill at the bottom-right — same shape as the
-           Jira inbox badge but in this kind's brand tone, so the
-           rail's two badge dialects (inbox count vs. instance count)
-           stay visually consistent. -->
-      <span class="rab-count mono" aria-hidden="true">{instances.length}</span>
-    {/if}
+    <!-- The instance count pill used to live here, but the number was
+         visually noisy on the rail and the count is already discoverable
+         via long-press on the icon (which opens the instance popover).
+         Keep the popover dot indicator below as the sole "this kind has
+         extras" affordance. -->
   </button>
 
   {#if menuOpen}
@@ -182,25 +211,6 @@
      stack-indicator on multi-instance kinds. */
   .rab-btn { position: relative; }
 
-  /* Numeric instance-count pill, brand-toned per kind. Mirrors the
-     Jira inbox badge geometry so the rail has one clean visual
-     vocabulary (corner-pill = "there's more than one of these"). */
-  .rab-count {
-    position: absolute;
-    top: -3px; right: -3px;
-    min-width: 14px; height: 14px;
-    padding: 0 4px;
-    border-radius: 7px;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 9px; font-weight: 700;
-    line-height: 1;
-    color: #1F1410;
-    background: var(--rail-tone, var(--accent));
-    box-shadow:
-      0 0 0 2px rgba(34, 28, 23, 0.92),
-      0 0 8px var(--rail-glow, var(--accent-glow));
-    display: inline-flex; align-items: center; justify-content: center;
-  }
 
   /* Popover anchored to the right of the rail button. The rail is
      dark, so the popover lives on a slightly lighter glass surface
@@ -210,7 +220,7 @@
     left: calc(100% + 8px);
     top: -4px;
     min-width: 220px; max-width: 280px;
-    background: rgba(34, 28, 23, 0.96);
+    background: rgba(20, 24, 26, 0.96);
     border: 1px solid var(--border-hi);
     border-radius: 11px;
     box-shadow: var(--shadow-3);
@@ -233,8 +243,8 @@
   }
   .rab-menu-h {
     flex: 1;
-    font-family: 'Instrument Serif', 'New York', Georgia, serif;
-    font-size: 16px; font-weight: 400;
+    font-family: 'Geist', 'Inter', -apple-system, system-ui, sans-serif;
+    font-size: 16px; font-weight: 600;
     color: var(--text-0);
     letter-spacing: -0.01em;
   }

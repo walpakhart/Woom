@@ -380,7 +380,7 @@
     border-radius: 6px; color: var(--text-1); font-size: 13px;
     cursor: default;
   }
-  .cac-readonly--mute { color: var(--text-mute); font-style: italic; }
+  .cac-readonly--mute { color: var(--text-mute);  }
   .cac-readonly--err { color: var(--error, #F0A38A); }
   .cac-textarea { resize: vertical; line-height: 1.5; min-height: 54px; }
   .cac-check { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--text-1); cursor: pointer; }

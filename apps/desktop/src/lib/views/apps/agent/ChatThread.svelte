@@ -403,11 +403,10 @@
   .msg-byline--assistant {
     color: var(--app-tone, var(--src-claude));
     text-transform: lowercase;
-    letter-spacing: -0.005em;
-    font-style: italic;
-    font-family: 'Instrument Serif', 'New York', Georgia, serif;
-    font-size: 14px;
-    font-weight: 400;
+    letter-spacing: -0.01em;
+    font-family: 'Geist', 'Inter', -apple-system, system-ui, sans-serif;
+    font-size: 13px;
+    font-weight: 600;
   }
 
   .msg-body { min-width: 0; position: relative; }
@@ -494,7 +493,7 @@
     font-size: 11.5px;
     color: var(--text-mute);
     text-align: center;
-    font-style: italic;
+    
     padding: 4px 12px;
   }
 
@@ -657,7 +656,7 @@
   }
   .trace-line :global(em) {
     color: var(--text-2);
-    font-style: italic;
+    
   }
 
   /* Edit card — collapsible file pill. Header: tag + path + +/- stats +
@@ -802,7 +801,7 @@
     padding: 6px 0;
     font-size: 12px;
     color: var(--text-mute);
-    font-style: italic;
+    
   }
   .dot-row { display: inline-flex; gap: 4px; }
   .dot-row .dot {
@@ -833,8 +832,8 @@
     max-width: 480px;
   }
   .ct-empty-h, .ct-welcome-h {
-    font-family: 'Instrument Serif', 'New York', Georgia, serif;
-    font-size: 26px; font-weight: 400; letter-spacing: -0.015em;
+    font-family: 'Geist', 'Inter', -apple-system, system-ui, sans-serif;
+    font-size: 26px; font-weight: 600; letter-spacing: -0.015em;
     color: var(--text-0);
     margin: 0 0 10px;
   }

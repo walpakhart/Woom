@@ -92,7 +92,7 @@ export function formatCostUsd(usd: number): string {
 }
 
 /** What share of the context window did this turn fill? Used by the
- *  ring indicator in AgentColumn's header. Returns 0..1, clamped.
+ *  ring indicator in AgentApp's header. Returns 0..1, clamped.
  *
  *  Pass `agentKind` so we use the correct surface-specific cap (Cursor
  *  sessions are 200k regardless of model — see `contextWindowFor`).

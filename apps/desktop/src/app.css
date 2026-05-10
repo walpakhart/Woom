@@ -3,81 +3,89 @@
 @import url('./lib/views/apps/_shared/app.css');
 
 :root {
-  /* Woom palette — Claude design language (v6 redesign).
-     Anthropic noir surfaces (warm slate, never pure black) + clay coral
-     accent + faded-white text. Editorial: Instrument Serif used for
-     hero titles where editorial pause matters. Per-source brand
-     colours are first-class CSS vars now (--src-*) so the Rail and
-     headers share a single source of truth. */
+  /* Woom palette — sage/mint brand language (v8 logo refresh).
+     Pivots from the prior warm-clay system to the new W-mark's
+     cool sage+mint duotone. Surfaces are near-black with a faint
+     teal undertone (no longer warm-brown), text is a cool off-white,
+     and the accent ramps from light mint → sage → deep teal. Source
+     brand colours stay distinct so Jira/GitHub/Sentry/Claude/Cursor
+     all keep their own identity against the cool app surface. */
 
-  /* Surfaces — warm noir, progressively lifted. */
-  --bg-0: #1A1410;
-  --bg-1: #221C17;
-  --bg-2: #2A231C;
-  --bg-3: #342B22;
-  --bg-4: #3F352A;
-  --bg-glass: rgba(34, 28, 23, 0.66);
-  --bg-elev: rgba(245, 240, 234, 0.045);
+  /* Surfaces — cool noir, progressively lifted. */
+  --bg-0: #0E1112;
+  --bg-1: #14181A;
+  --bg-2: #1B2125;
+  --bg-3: #232A2F;
+  --bg-4: #2C353C;
+  --bg-glass: rgba(20, 24, 26, 0.70);
+  --bg-elev: rgba(235, 240, 238, 0.045);
 
-  /* Borders — faded-white at low opacities + clay-tinted accent borders. */
-  --border:        rgba(245, 240, 234, 0.07);
-  --border-hi:     rgba(245, 240, 234, 0.13);
-  --border-hi2:    rgba(245, 240, 234, 0.22);
-  --border-accent: rgba(204, 120, 92, 0.42);
-  --border-accent-2: rgba(204, 120, 92, 0.22);
-  --border-neutral: rgba(245, 240, 234, 0.06);
-  --border-neutral-hi: rgba(245, 240, 234, 0.14);
+  /* Borders — cool off-white at low opacities + mint-tinted accent borders. */
+  --border:        rgba(235, 240, 238, 0.07);
+  --border-hi:     rgba(235, 240, 238, 0.13);
+  --border-hi2:    rgba(235, 240, 238, 0.22);
+  --border-accent: rgba(166, 212, 194, 0.42);
+  --border-accent-2: rgba(166, 212, 194, 0.22);
+  --border-neutral: rgba(235, 240, 238, 0.06);
+  --border-neutral-hi: rgba(235, 240, 238, 0.14);
 
-  /* Text — Claude faded-white stack. */
-  --text-0: #F5F0EA;
-  --text-1: #D9CFC0;
-  --text-2: #A39687;
-  --text-mute: #6B5F50;
+  /* Text — cool off-white stack with hint of green warmth. */
+  --text-0: #EBEFEC;
+  --text-1: #C5CDC9;
+  --text-2: #8C9692;
+  --text-mute: #5C6663;
 
-  /* Clay accent — Anthropic primary. */
-  --accent: #CC785C;
-  --accent-bright: #E89B7D;
-  --accent-deep: #9C5A41;
-  --accent-soft: rgba(204, 120, 92, 0.10);
-  --accent-glow: rgba(204, 120, 92, 0.42);
-  --accent-fg: #1F1410;
+  /* Sage / mint accent — the brand's W-mark gradient.
+     `accent` = mid-sage (closest to the darker logo stroke)
+     `accent-bright` = light mint (matches the lighter stroke + glow)
+     `accent-deep` = pressed/active deep teal-sage
+     `accent-fg` = very dark green-black for chip-text contrast. */
+  --accent: #8FB5A4;
+  --accent-bright: #B0DCC8;
+  --accent-deep: #5C8678;
+  --accent-soft: rgba(176, 220, 200, 0.10);
+  --accent-glow: rgba(176, 220, 200, 0.42);
+  --accent-fg: #0E1B16;
 
   /* Legacy `--blue*` aliases — older callsites still reference them.
-     Repointed to clay tones so palette stays unified without touching
+     Repointed to mint tones so palette stays unified without touching
      every site. */
-  --blue: #E89B7D;
-  --blue-bright: #F2B89E;
-  --blue-deep: #9C5A41;
+  --blue: #B0DCC8;
+  --blue-bright: #C8E8DA;
+  --blue-deep: #5C8678;
 
   /* Per-source brand colours — first-class. Used by Rail glow,
      column stripes, conn-icon variants. Saturated enough to triage
-     a column at a glance, calm enough to live next to the clay accent. */
+     a column at a glance, calm enough to live next to the sage accent.
+     Editor + Claude stay warm so they read as warm partners on the
+     cool app surface; Canvas shifts toward cool aqua so it doesn't
+     bleed into the new accent green. */
   --src-jira:    #4F8EFF;
   --src-jira-2:  #75A8FF;
   --src-github:  #B584FF;
   --src-github-2:#D5B7FF;
-  --src-sentry:  #E88264;
-  --src-sentry-2:#F0A38A;
+  --src-sentry:  #6E509B;
+  --src-sentry-2:#9D85D6;
   --src-claude:  #E89B7D;
   --src-claude-2:#F2B89E;
   --src-cursor:  #DDDDDD;
-  --src-canvas:  #7DC9B0;
-  --src-canvas-2:#A8DEC8;
+  --src-canvas:  #7DC2D5;
+  --src-canvas-2:#A8DAE8;
   --src-editor:  #CC785C;
-  --src-term:    #F5F0EA;
+  --src-term:    #E5EAE8;
 
-  /* Vivid-but-warm IDE syntax palette. Used by the editor + diff hunks. */
+  /* Vivid IDE syntax palette. Used by the editor + diff hunks. */
   --tk-key:    #B98AD9;
-  --tk-fn:     #E89B7D;
+  --tk-fn:     #B0DCC8;
   --tk-str:    #A8D9B8;
   --tk-num:    #88C2DD;
   --tk-type:   #D9B86E;
-  --tk-prop:   #CC9F8A;
-  --tk-cmt:    #6B5F50;
-  --tk-punc:   #A39687;
+  --tk-prop:   #88B5A4;
+  --tk-cmt:    #5C6663;
+  --tk-punc:   #8C9692;
   --tk-tag:    #D98AA9;
   --tk-attr:   #B98AD9;
-  --tk-ghost:  rgba(232, 155, 125, 0.62);
+  --tk-ghost:  rgba(176, 220, 200, 0.55);
 
   /* Diff. */
   --diff-add: rgba(168, 217, 184, 0.10);
@@ -90,10 +98,10 @@
   --warning: #D9B86E;
   --error:   #E88264;
   --info:    #88C2DD;
-  --running: #CC785C;
+  --running: #B0DCC8;
 
-  /* Modal & popover backdrop — warm noir glass. */
-  --backdrop: rgba(10, 7, 6, 0.74);
+  /* Modal & popover backdrop — cool noir glass. */
+  --backdrop: rgba(6, 8, 9, 0.74);
 
   /* Radii. */
   --r-card: 12px;
@@ -102,119 +110,81 @@
   --r-chip: 6px;
   --r-btn:  8px;
 
-  /* Elevation shadows. Near-black on warm noir reads as natural depth;
-     Light theme overrides below with a brown halo for cream surfaces. */
+  /* Elevation shadows. Near-black on cool noir reads as natural depth;
+     Light theme overrides below with a sage halo for cream surfaces. */
   --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.32), 0 2px 6px rgba(0, 0, 0, 0.22);
   --shadow-2: 0 8px 24px rgba(0, 0, 0, 0.42), 0 1px 0 rgba(255, 255, 255, 0.025) inset;
   --shadow-3: 0 24px 64px rgba(0, 0, 0, 0.58), 0 1px 0 rgba(255, 255, 255, 0.04) inset;
-  --shadow-glow-clay: 0 0 0 1px rgba(204, 120, 92, 0.12), 0 12px 32px rgba(204, 120, 92, 0.24);
+  --shadow-glow-clay: 0 0 0 1px rgba(176, 220, 200, 0.12), 0 12px 32px rgba(176, 220, 200, 0.24);
 }
 
 /* ---- Light theme ----
- * Tint (cream) surfaces + Shade (chocolate) text & accent. Picked off
- * the Light/Dark mode swatch in the brand reference. Only colour
- * variables are overridden — every layout / spacing / radius rule
- * stays shared, so swap-on-the-fly is paint-only.
+ * Tint (off-white with sage hint) surfaces + Shade (deep teal-green)
+ * text & accent. Picked from the new W-mark's logo: light mint surfaces
+ * pair with deep sage text. Only colour variables are overridden —
+ * every layout / spacing / radius rule stays shared, so swap-on-the-fly
+ * is paint-only.
  */
 :root[data-theme='light'] {
-  --bg-0: #FAEEE0;
-  --bg-1: #F2E2CD;
-  --bg-2: #E8D2B5;
-  --bg-3: #D9BE99;
+  --bg-0: #F1F5F2;
+  --bg-1: #E5EDE7;
+  --bg-2: #D5E2D8;
+  --bg-3: #BFD3C6;
 
-  --border: rgba(78, 40, 18, 0.14);
-  --border-hi: rgba(78, 40, 18, 0.32);
-  --border-hi2: rgba(78, 40, 18, 0.50);
-  --border-neutral: rgba(78, 40, 18, 0.10);
-  --border-neutral-hi: rgba(78, 40, 18, 0.20);
+  --border: rgba(20, 38, 30, 0.14);
+  --border-hi: rgba(20, 38, 30, 0.32);
+  --border-hi2: rgba(20, 38, 30, 0.50);
+  --border-neutral: rgba(20, 38, 30, 0.10);
+  --border-neutral-hi: rgba(20, 38, 30, 0.20);
 
-  --text-0: #2A1208;
-  --text-1: #4E2812;
-  --text-2: #7A4E2E;
-  --text-mute: #A38566;
+  --text-0: #0E1B16;
+  --text-1: #234A3C;
+  --text-2: #4A6B5E;
+  --text-mute: #7A938A;
 
-  --accent: #4E2812;
-  --accent-bright: #2A1208;
-  --accent-soft: rgba(78, 40, 18, 0.10);
-  --accent-glow: rgba(78, 40, 18, 0.22);
+  --accent: #2E5A4A;
+  --accent-bright: #0E1B16;
+  --accent-soft: rgba(46, 90, 74, 0.10);
+  --accent-glow: rgba(46, 90, 74, 0.22);
 
-  --blue: #4E2812;
-  --blue-bright: #2A1208;
-  --blue-deep: #C29873;
+  --blue: #2E5A4A;
+  --blue-bright: #0E1B16;
+  --blue-deep: #98B8A8;
 
-  --success: #4F7A57;
+  --success: #4F7A5F;
   --warning: #8E5A1A;
   --error: #A33A22;
 
-  /* Light: accent is Shade chocolate, so accent-fg must be Tint cream
-     for AA contrast. Backdrop is a soft brown haze — pulls the modal
-     forward without going milk-white. */
-  --accent-fg: #FAEEE0;
-  --backdrop: rgba(78, 40, 18, 0.32);
+  /* Light: accent is deep sage, so accent-fg must be light mint for
+     AA contrast. Backdrop is a soft sage haze — pulls modals forward
+     without washing out cream. */
+  --accent-fg: #F1F5F2;
+  --backdrop: rgba(20, 38, 30, 0.32);
 
-  /* Brown shadows for the cream surface — black would punch a
+  /* Sage shadows for the cream surface — black would punch a
      visible halo. Slightly stronger opacity than the dark themes
-     because brown-on-cream needs more density to read as depth. */
-  --shadow-1: 0 1px 2px rgba(78, 40, 18, 0.10), 0 2px 6px rgba(78, 40, 18, 0.10);
-  --shadow-2: 0 2px 4px rgba(78, 40, 18, 0.14), 0 8px 22px rgba(78, 40, 18, 0.12);
-  --shadow-3: 0 4px 10px rgba(78, 40, 18, 0.18), 0 22px 50px rgba(78, 40, 18, 0.18);
+     because sage-on-mint needs more density to read as depth. */
+  --shadow-1: 0 1px 2px rgba(20, 38, 30, 0.10), 0 2px 6px rgba(20, 38, 30, 0.10);
+  --shadow-2: 0 2px 4px rgba(20, 38, 30, 0.14), 0 8px 22px rgba(20, 38, 30, 0.12);
+  --shadow-3: 0 4px 10px rgba(20, 38, 30, 0.18), 0 22px 50px rgba(20, 38, 30, 0.18);
 }
 
-/* ---- Dark theme ----
- * Inverse of Light: Shade chocolate surfaces + Tint cream text and
- * accent. Same brown family as Light so source-brand colours
- * (Jira blue / GitHub violet / Sentry coral) keep reading clearly.
- */
-:root[data-theme='dark'] {
-  --bg-0: #1A0E07;
-  --bg-1: #261611;
-  --bg-2: #34201A;
-  --bg-3: #4A2E22;
-
-  --border: rgba(250, 238, 224, 0.10);
-  --border-hi: rgba(250, 238, 224, 0.20);
-  --border-hi2: rgba(250, 238, 224, 0.34);
-  --border-neutral: rgba(250, 238, 224, 0.06);
-  --border-neutral-hi: rgba(250, 238, 224, 0.14);
-
-  --text-0: #FAEEE0;
-  --text-1: #DCC8AE;
-  --text-2: #A88E73;
-  --text-mute: #756050;
-
-  --accent: #FAEEE0;
-  --accent-bright: #FFFFFF;
-  --accent-soft: rgba(250, 238, 224, 0.10);
-  --accent-glow: rgba(250, 238, 224, 0.24);
-
-  --blue: #FAEEE0;
-  --blue-bright: #FFFFFF;
-  --blue-deep: #B8997B;
-
-  --success: #8FCAA0;
-  --warning: #E5B574;
-  --error: #E48C70;
-
-  /* Dark: accent is Tint cream, so accent-fg is Shade chocolate.
-     Backdrop is true black-ish (much darker than the chocolate
-     surface) so modals still feel "above the page". */
-  --accent-fg: #1A0E07;
-  --backdrop: rgba(0, 0, 0, 0.74);
-
-  /* Dark theme uses the same near-black shadow recipe as Iconic —
-     surfaces are dark-on-darker so black halos are invisible /
-     work as natural depth cues. */
-  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.30), 0 2px 6px rgba(0, 0, 0, 0.26);
-  --shadow-2: 0 2px 4px rgba(0, 0, 0, 0.34), 0 8px 22px rgba(0, 0, 0, 0.40);
-  --shadow-3: 0 4px 10px rgba(0, 0, 0, 0.38), 0 22px 50px rgba(0, 0, 0, 0.50);
-}
+/* (The previous separate `:root[data-theme='dark']` block has been
+   retired — Iconic is already the dark variant under the new W-mark
+   palette so a separate "dark" was redundant. Persisted `'dark'`
+   theme values from older builds migrate to `iconic` at boot, see
+   theme.svelte.ts.) */
 
 * { box-sizing: border-box; }
 
 html, body {
   margin: 0;
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
-  font-feature-settings: 'cv11', 'ss01', 'ss03';
+  /* Primary UI typeface: Geist — modern geometric sans-serif designed
+     for developer tools (Vercel). Inter is the fallback when Geist
+     isn't available (offline / restricted networks); both are loaded
+     via app.html's Google Fonts link. System sans is the final fallback. */
+  font-family: 'Geist', 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  font-feature-settings: 'ss01', 'ss03', 'cv11';
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   background: var(--bg-0);
@@ -227,8 +197,21 @@ html, body {
 }
 
 .mono {
-  font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', monospace;
-  font-feature-settings: 'zero';
+  /* Geist Mono pairs cleanly with Geist for technical content;
+     JetBrains Mono is the fallback chain. */
+  font-family: 'Geist Mono', 'JetBrains Mono', ui-monospace, 'SF Mono', monospace;
+  font-feature-settings: 'zero', 'ss01';
+}
+
+/* Display / editorial headings (welcome, app-empty, ct-empty, etc.).
+   Switched from Instrument Serif (warm editorial pause) to Geist Bold
+   for a more modern, professional, developer-tools-native feel that
+   matches the new W-mark. The `.serif` class name is kept so existing
+   markup doesn't need to be touched. */
+.serif {
+  font-family: 'Geist', 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  font-weight: 700;
+  letter-spacing: -0.025em;
 }
 
 h1, h2, h3 { margin: 0; letter-spacing: -0.02em; font-weight: 600; }
@@ -285,7 +268,7 @@ kbd {
    Shared styles consumed by multiple workbench/child components.
    Child components' own scoped CSS takes precedence where it exists;
    these rules fill in the gaps and keep the styling consistent across
-   GithubColumn, JiraColumn, AgentColumn, EditorColumn, Modals, etc.
+   GitHub app, JiraColumn, AgentColumn, EditorColumn, Modals, etc.
    ============================================================ */
 
 /* Workbench columns — v6 floating cards.
@@ -324,7 +307,7 @@ kbd {
 }
 .wb-column[data-kind="github"]   { --col-tone: var(--src-github);  --col-glow: rgba(181, 132, 255, 0.32); }
 .wb-column[data-kind="jira"]     { --col-tone: var(--src-jira);    --col-glow: rgba(79, 142, 255, 0.32); }
-.wb-column[data-kind="sentry"]   { --col-tone: var(--src-sentry);  --col-glow: rgba(232, 130, 100, 0.32); }
+.wb-column[data-kind="sentry"]   { --col-tone: var(--src-sentry);  --col-glow: rgba(110, 80, 155, 0.32); }
 .wb-column[data-kind="claude"]   { --col-tone: var(--src-claude);  --col-glow: rgba(232, 155, 125, 0.32); }
 .wb-column[data-kind="cursor"]   { --col-tone: var(--src-cursor);  --col-glow: rgba(220, 220, 220, 0.20); }
 .wb-column[data-kind="canvas"]   { --col-tone: var(--src-canvas);  --col-glow: rgba(125, 201, 176, 0.30); }
@@ -704,7 +687,7 @@ kbd {
 .focus-branches { font-size: 11.5px; color: var(--text-2); background: var(--bg-1); padding: 2px 8px; border-radius: 5px; border: 1px solid var(--border-neutral); }
 
 .focus-title {
-  font-family: 'Instrument Serif', 'New York', Georgia, serif;
+  font-family: 'Geist', 'Inter', -apple-system, system-ui, sans-serif;
   font-size: 30px; line-height: 1.18; letter-spacing: -0.02em;
   font-weight: 400;
   margin-bottom: 16px; max-width: 720px;
@@ -715,7 +698,7 @@ kbd {
    detail-pane page titles. Inter stays for dense UI; serif lives only
    on the moments that benefit from a slower, editorial pace. */
 .serif {
-  font-family: 'Instrument Serif', 'New York', Georgia, serif;
+  font-family: 'Geist', 'Inter', -apple-system, system-ui, sans-serif;
   font-weight: 400;
   letter-spacing: -0.015em;
 }
@@ -831,7 +814,7 @@ kbd {
 .body-empty {
   padding: 14px 16px; background: var(--bg-1);
   border: 1px dashed var(--border-neutral-hi); border-radius: 10px;
-  color: var(--text-mute); font-style: italic; font-size: 12.5px; margin-bottom: 16px;
+  color: var(--text-mute);  font-size: 12.5px; margin-bottom: 16px;
 }
 .timeline-item {
   background: var(--bg-1); border: 1px solid var(--border-neutral);
@@ -857,7 +840,7 @@ kbd {
 .review-item.rev--approved { border-left: 3px solid var(--accent); }
 .review-item.rev--changes { border-left: 3px solid #F0A38A; }
 
-.review-empty { font-size: 12.5px; color: var(--text-mute); font-style: italic; }
+.review-empty { font-size: 12.5px; color: var(--text-mute);  }
 .review-inline-link {
   margin-top: 10px;
   display: inline-flex; align-items: center; gap: 6px;
@@ -1017,15 +1000,15 @@ kbd {
   color: var(--accent-fg);
   background: linear-gradient(180deg, var(--accent-bright), var(--accent));
   box-shadow:
-    0 6px 18px rgba(204, 120, 92, 0.30),
-    inset 0 1px 0 rgba(255, 230, 200, 0.32);
+    0 6px 18px var(--accent-glow),
+    inset 0 1px 0 rgba(255, 255, 255, 0.20);
   font-weight: 600;
 }
 .btn--primary:hover:not(:disabled) {
   transform: translateY(-1px);
   box-shadow:
-    0 8px 22px rgba(204, 120, 92, 0.38),
-    inset 0 1px 0 rgba(255, 230, 200, 0.36);
+    0 8px 22px var(--accent-glow),
+    inset 0 1px 0 rgba(255, 255, 255, 0.24);
 }
 .btn--danger {
   color: #ffe4e4;
@@ -1199,7 +1182,7 @@ kbd {
   background: var(--warning);
 }
 .repo-info-notgit { color: var(--text-2); border-style: dashed; }
-.repo-info-noremote { color: var(--text-2); font-style: italic; }
+.repo-info-noremote { color: var(--text-2);  }
 .repo-info-remote { color: var(--text-2); font-size: 10.5px; margin-left: 2px; opacity: 0.8; }
 
 .wt-chip {
@@ -1520,7 +1503,7 @@ img.chat-avatar { padding: 0; }
 .chat-msg--user .chat-msg-body { color: var(--text-0); }
 .chat-msg--system .chat-msg-body {
   color: var(--text-2);
-  font-style: italic;
+  
   font-size: 12px;
 }
 
@@ -1782,8 +1765,8 @@ img.chat-avatar { padding: 0; }
   flex-shrink: 0;
 }
 .modal-title {
-  font-family: 'Instrument Serif', 'New York', Georgia, serif;
-  font-size: 22px; font-weight: 400;
+  font-family: 'Geist', 'Inter', -apple-system, system-ui, sans-serif;
+  font-size: 22px; font-weight: 600;
   letter-spacing: -0.015em; line-height: 1.2;
   color: var(--text-0);
 }

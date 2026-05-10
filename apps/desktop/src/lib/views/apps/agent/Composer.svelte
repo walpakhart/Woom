@@ -347,10 +347,28 @@
     { value: 'claude-sonnet-4-6', label: 'Sonnet 4.6' },
     { value: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5' }
   ];
+  /* Curated subset of Cursor's model catalogue (the CLI exposes ~100
+     SKUs via `cursor-agent --list-models`, including every effort
+     tier and "fast" variant). We surface the headline picks across
+     vendors so the dropdown stays scannable; advanced effort tiers
+     stay reachable through the CLI directly. Keep ids EXACTLY as
+     `--list-models` reports — cursor-agent rejects the run with
+     "model does not exist" if we pass an alias it doesn't know. */
   const cursorModels = [
-    { value: 'sonnet-4-6', label: 'Sonnet 4.6' },
-    { value: 'opus-4-7', label: 'Opus 4.7' },
-    { value: 'gpt-5.1', label: 'GPT 5.1' }
+    { value: 'auto', label: 'Auto' },
+    { value: 'composer-2', label: 'Composer 2' },
+    { value: 'claude-4.6-sonnet-medium', label: 'Sonnet 4.6' },
+    { value: 'claude-4.6-sonnet-medium-thinking', label: 'Sonnet 4.6 Thinking' },
+    { value: 'claude-opus-4-7-medium', label: 'Opus 4.7' },
+    { value: 'claude-opus-4-7-high', label: 'Opus 4.7 High' },
+    { value: 'claude-opus-4-7-thinking-medium', label: 'Opus 4.7 Thinking' },
+    { value: 'gpt-5.5-medium', label: 'GPT 5.5' },
+    { value: 'gpt-5.5-high', label: 'GPT 5.5 High' },
+    { value: 'gpt-5.4-medium', label: 'GPT 5.4' },
+    { value: 'gpt-5.3-codex', label: 'Codex 5.3' },
+    { value: 'gpt-5.1', label: 'GPT 5.1' },
+    { value: 'gemini-3.1-pro', label: 'Gemini 3.1 Pro' },
+    { value: 'grok-4.3', label: 'Grok 4.3' }
   ];
   const claudeEffort = [
     { value: 'auto', label: 'Effort · auto' },
@@ -641,15 +659,22 @@
 <style>
   .cmp {
     flex: 0 0 auto;
-    padding: 12px 22px 18px;
+    padding: 14px 22px;
     background: linear-gradient(0deg, var(--bg-2) 30%, var(--bg-1));
     border-top: 1px solid var(--border);
+    /* Centre the pill horizontally + vertically inside the footer
+       container so the composer sits as a balanced bar instead of
+       slumping toward the left edge under wide layouts. */
+    display: flex; align-items: center; justify-content: center;
   }
   .cmp-shell {
+    width: 100%;
     background: var(--bg-1);
     border: 1px solid var(--border-hi);
     border-radius: 12px;
-    padding: 8px 12px 8px 14px;
+    /* Symmetric horizontal padding so the @-icons on the left and
+       the Send button on the right have the same breathing room. */
+    padding: 8px 12px;
     box-shadow: 0 0 0 0 var(--accent-glow);
     transition: box-shadow 200ms, border-color 200ms;
   }
@@ -911,8 +936,8 @@
     font-size: 10px;
     padding: 1px 5px;
     border-radius: 4px;
-    background: rgba(26, 20, 16, 0.30);
-    border: 1px solid rgba(26, 20, 16, 0.40);
+    background: rgba(14, 17, 18, 0.30);
+    border: 1px solid rgba(14, 17, 18, 0.40);
     color: var(--accent-fg);
   }
 

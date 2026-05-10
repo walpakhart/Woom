@@ -306,12 +306,12 @@
   }
   .connections-header { padding: 8px 0 28px; max-width: 880px; margin: 0 auto; }
   .view-title {
-    font-family: 'Instrument Serif', 'New York', Georgia, serif;
-    font-size: 38px; font-weight: 400;
+    font-family: 'Geist', 'Inter', -apple-system, system-ui, sans-serif;
+    font-size: 38px; font-weight: 600;
     letter-spacing: -0.02em;
     color: var(--text-0);
     margin: 0 0 6px;
-    font-style: italic;
+    
   }
   .view-sub {
     font-size: 14px; color: var(--text-2);
@@ -401,7 +401,7 @@
   .conn-desc { font-size: 12.5px; color: var(--text-1); line-height: 1.5; min-height: 36px; }
   .conn-footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: auto; }
   .conn-type { font-size: 10.5px; color: var(--text-mute); }
-  .conn-soon { font-size: 10.5px; color: var(--text-mute); font-style: italic; }
+  .conn-soon { font-size: 10.5px; color: var(--text-mute);  }
   .conn-btn { padding: 6px 14px; border-radius: 6px; font-size: 11.5px; font-weight: 500; transition: all 140ms; background: none; border: none; cursor: pointer; }
   .conn-btn--connect {
     color: var(--accent-fg);

@@ -63,7 +63,7 @@
     display: flex; flex-direction: column; align-items: center;
     gap: 4px;
     padding: 8px 0 10px;
-    background: var(--bg-glass, rgba(34, 28, 23, 0.66));
+    background: var(--bg-glass, rgba(20, 24, 26, 0.66));
     border-right: 1px solid var(--border);
     backdrop-filter: blur(14px);
     -webkit-backdrop-filter: blur(14px);

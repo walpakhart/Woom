@@ -1,30 +1,162 @@
 <script lang="ts">
-  /* TerminalApp — full-screen workspace для терминала.
-     Layout: [TerminalSurface (flex)] [side quick-commands (300)]
+  /* TerminalApp — full-screen workspace for the terminal.
+     Layout: [TerminalSurface (flex)] [InlineClaude side pane (300)]
 
-     Right side — quick commands rail. На MVP статичный список pinned
-     команд + "Hand to Claude" CTA. История + drop-в-Claude — следующий
-     milestone. */
+     The right pane is the SAME `<InlineClaude>` component the editor
+     uses, parameterised with `linkKind="terminal"` so it filters by
+     `linkedTerminalInstanceId` and surfaces a "+ Link…" picker so the
+     user can attach a Claude / Cursor chat without leaving the
+     terminal app. Once linked, that chat's row in the pane behaves
+     identically to the editor's: click → expand mini-composer; the
+     Apply popover (below) pipes selected terminal text straight in.
+
+     Selection-bridge: TerminalSurface streams xterm selection state up
+     here via `onSelectionChange`. When something is highlighted AND at
+     least one agent is linked, a floating "Apply to <agent>" popover
+     anchors to the end of the selection. Clicking it pins the captured
+     text as a `@terminal/<label>:<hash>` mention into the target
+     session's composer (via `applyTerminalSelectionToAgent`) and
+     auto-expands the inline-agents row so the user can tack on a
+     question. Same UX as the editor's "Apply to" bar — just sourced
+     from a shell selection instead of a CodeMirror range. */
 
   import TerminalSurface from './terminal/TerminalSurface.svelte';
+  import InlineClaude from './editor/InlineClaude.svelte';
   import Splitter from '$lib/components/ui/Splitter.svelte';
-  import { layoutState } from '$lib/state/layout.svelte';
+  import { layoutState, kindForInstanceId, APP_INSTANCE_IDS } from '$lib/state/layout.svelte';
+  import { sessionsState } from '$lib/state/sessions.svelte';
+  import { applyTerminalSelectionToAgent } from '$lib/services/applyToAgent';
+  import { clearTerminalScrollback } from '$lib/state/terminals.svelte';
 
   interface Props {
     instanceId: string;
     cwd?: string | null;
     onOpenClaude: () => void;
+    onOpenCursor: () => void;
+    /** Quick-send to a specific session — same shape as EditorApp's
+     *  prop, threaded through +page.svelte's `quickSendToSession`.
+     *  Fires immediately if idle, queues if a turn is in flight. */
+    onQuickSend?: (sessionId: string, text: string) => void;
+    /** Activate a session AND switch the top-level view to its agent
+     *  app — per-row "Open" affordance on each inline-agents card. */
+    onOpenSession?: (sessionId: string, agentInstanceId: string) => void;
+    /** Bind a chat session to this terminal (sets
+     *  `linkedTerminalInstanceId`). Surfaced as a picker in the
+     *  InlineClaude header so the user doesn't have to bounce out to
+     *  the agent app's cwd bar to set up the link. */
+    onLinkSession?: (sessionId: string) => void;
+    /** Drop the link from a specific session. Wired to the × button
+     *  on each inline-agents card. */
+    onUnlinkSession?: (sessionId: string) => void;
   }
   let p: Props = $props();
 
   let sideOpen = $state(true);
 
   /** Curated mark of the active Terminal instance — surfaces in the
-   *  side panel head so users always see which Hopper / Hokusai
-   *  terminal they're inside. */
+   *  @-mention's title when the user applies a selection, so the agent
+   *  reads which terminal the output came from. */
   const instanceLabel = $derived(
     layoutState.instances.terminal.find((i) => i.id === p.instanceId)?.name ?? 'Terminal'
   );
+
+  /** Sessions linked TO this terminal — used here ONLY to feed the
+   *  floating Apply popover's button list. The InlineClaude pane
+   *  derives its own copy from the same fields, so we don't pass this
+   *  in. Kept local to keep the Apply pipeline self-contained. */
+  const linkedAgents = $derived.by(() => {
+    const out: { sessionId: string; agentInstanceId: string; kind: 'claude' | 'cursor'; title: string }[] = [];
+    for (const s of sessionsState.list) {
+      if (s.linkedTerminalInstanceId !== p.instanceId) continue;
+      const agentInstanceId =
+        s.agentInstanceId
+        ?? (s.agentKind === 'claude' || s.agentKind === 'cursor'
+          ? APP_INSTANCE_IDS[s.agentKind]
+          : null);
+      if (!agentInstanceId) continue;
+      const kind = kindForInstanceId(agentInstanceId);
+      if (kind !== 'claude' && kind !== 'cursor') continue;
+      out.push({ sessionId: s.id, agentInstanceId, kind, title: s.title });
+    }
+    return out;
+  });
+
+  /** Live xterm selection — `null` when nothing is highlighted. The
+   *  popover renders iff this is non-null AND `linkedAgents` is
+   *  non-empty. Cleared by:
+   *    • the user picking "Apply to <agent>" (`clearSelRef.fn`)
+   *    • the user collapsing the selection in xterm (callback fires
+   *      with null)
+   *    • re-mounting the surface (the ref's `fn` resets to null in
+   *      onDestroy, so a stale ref can't fire on a new instance). */
+  let xtermSelection = $state<{
+    text: string;
+    anchor: { x: number; y: number };
+  } | null>(null);
+
+  /** Imperative handle into TerminalSurface — set on mount, used
+   *  after a successful Apply to clear xterm's native highlight so
+   *  the popover doesn't linger over a phantom selection. */
+  let clearSelRef = $state<{ fn: (() => void) | null }>({ fn: null });
+
+  /* Same shape as EditorView's `applyButtons` — collapse to "Claude"
+     when there's exactly one of a kind, prefix per-session names when
+     two+ Claudes/Cursors are linked. Keeps the popover scannable. */
+  type ApplyBtn = {
+    sessionId: string;
+    agentInstanceId: string;
+    label: string;
+    kind: 'claude' | 'cursor';
+  };
+  const applyButtons = $derived.by<ApplyBtn[]>(() => {
+    if (linkedAgents.length === 0) return [];
+    const byKind: Record<'claude' | 'cursor', typeof linkedAgents> = { claude: [], cursor: [] };
+    for (const a of linkedAgents) byKind[a.kind].push(a);
+    const out: ApplyBtn[] = [];
+    for (const k of ['claude', 'cursor'] as const) {
+      const group = byKind[k];
+      if (group.length === 0) continue;
+      const kindLabel = k === 'claude' ? 'Claude' : 'Cursor';
+      if (group.length === 1) {
+        out.push({
+          sessionId: group[0].sessionId,
+          agentInstanceId: group[0].agentInstanceId,
+          kind: k,
+          label: kindLabel
+        });
+      } else {
+        for (const a of group) {
+          out.push({
+            sessionId: a.sessionId,
+            agentInstanceId: a.agentInstanceId,
+            kind: k,
+            label: `${kindLabel} · ${a.title}`
+          });
+        }
+      }
+    }
+    return out;
+  });
+
+  function handleApplyTo(btn: ApplyBtn) {
+    if (!xtermSelection) return;
+    applyTerminalSelectionToAgent({
+      sessionId: btn.sessionId,
+      agentInstanceId: btn.agentInstanceId,
+      terminalLabel: instanceLabel,
+      content: xtermSelection.text
+    });
+    xtermSelection = null;
+    clearSelRef.fn?.();
+  }
+
+  /** Wipe the captured scrollback + reset the live xterm. The shell
+   *  process keeps running — same session, fresh screen. State-level
+   *  call also clears any cached error banner so the surface comes
+   *  back to a pristine "you can type now" state. */
+  function clearScreen() {
+    clearTerminalScrollback(p.instanceId);
+  }
 </script>
 
 <section
@@ -42,65 +174,118 @@
     >
       {#snippet start()}
         <section class="app-pane st-main">
-          <TerminalSurface instanceId={p.instanceId} cwd={p.cwd ?? null} />
+          <TerminalSurface
+            instanceId={p.instanceId}
+            cwd={p.cwd ?? null}
+            onSelectionChange={(s) => (xtermSelection = s)}
+            clearSelectionRef={clearSelRef}
+          />
+          <!-- Clear-screen affordance — sits in the top-right corner
+               of the terminal surface, only fully opaque on hover so
+               it doesn't compete with the shell prompt at rest.
+               Wipes the captured scrollback + xterm view; the PTY
+               keeps running so the user comes back to the same
+               session with a fresh screen. -->
+          <button
+            class="st-clear"
+            onclick={clearScreen}
+            title="Clear terminal (keeps the shell session running)"
+            aria-label="Clear terminal"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M3 6h18"/>
+              <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+              <path d="M19 6 18 20a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+            </svg>
+          </button>
+          {#if xtermSelection && applyButtons.length > 0}
+            <div
+              class="st-apply-pop"
+              style:left="{xtermSelection.anchor.x}px"
+              style:top="{xtermSelection.anchor.y}px"
+              role="toolbar"
+              aria-label="Apply terminal selection to agent"
+            >
+              {#each applyButtons as btn (btn.sessionId)}
+                <button
+                  class="st-apply-pop-btn"
+                  class:claude={btn.kind === 'claude'}
+                  class:cursor={btn.kind === 'cursor'}
+                  onmousedown={(e) => e.preventDefault()}
+                  onclick={() => handleApplyTo(btn)}
+                  title={`Pin selection to ${btn.label}'s composer`}
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M5 12h12M13 6l6 6-6 6"/>
+                  </svg>
+                  <span>Apply to {btn.label}</span>
+                </button>
+              {/each}
+            </div>
+          {/if}
         </section>
       {/snippet}
       {#snippet end()}
         <aside class="app-pane st-side">
-          <header class="app-pane-head">
-            <span class="app-pane-head-h">{instanceLabel}</span>
-            <span class="st-kind-tag mono">Terminal</span>
-            <button class="app-iconbtn" title="Hide" onclick={() => (sideOpen = false)}>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M18 6 6 18M6 6l12 12"/></svg>
-            </button>
-          </header>
-      <div class="st-side-body">
-        <div class="st-group mono">Pinned</div>
-        <button class="qc-row">
-          <span class="qc-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><polyline points="9 11 12 14 22 4"/></svg></span>
-          <span class="qc-body">
-            <span class="qc-name mono">pnpm test --filter=desktop</span>
-            <span class="qc-desc">run vitest suite</span>
-          </span>
-        </button>
-        <button class="qc-row">
-          <span class="qc-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span>
-          <span class="qc-body">
-            <span class="qc-name mono">pnpm typecheck</span>
-            <span class="qc-desc">tsc --noEmit</span>
-          </span>
-        </button>
-        <button class="qc-row">
-          <span class="qc-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9"/><polyline points="12 6 12 12 16 14"/></svg></span>
-          <span class="qc-body">
-            <span class="qc-name mono">scripts/build-dmg.sh</span>
-            <span class="qc-desc">notarized universal dmg</span>
-          </span>
-        </button>
-        <button class="qc-row">
-          <span class="qc-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="M6 8.5V14a4 4 0 0 0 4 4h6"/></svg></span>
-          <span class="qc-body">
-            <span class="qc-name mono">git status -sb</span>
-            <span class="qc-desc">short branch status</span>
-          </span>
-        </button>
-
-        <div class="st-group mono">Hand to Claude</div>
-        <button class="qc-row qc-row--accent" onclick={p.onOpenClaude}>
-          <span class="qc-icon qc-icon--claude"><svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M12 2 L14.5 9.5 L22 12 L14.5 14.5 L12 22 L9.5 14.5 L2 12 L9.5 9.5 Z"/></svg></span>
-          <span class="qc-body">
-            <span class="qc-name">Open Claude</span>
-            <span class="qc-desc">switch to a focused agent workspace</span>
-          </span>
-        </button>
-          </div>
+          <InlineClaude
+            instanceId={p.instanceId}
+            linkKind="terminal"
+            onClose={() => (sideOpen = false)}
+            onOpenClaude={p.onOpenClaude}
+            onQuickSend={p.onQuickSend ?? (() => {})}
+            onOpenSession={p.onOpenSession ?? (() => {})}
+            onLinkSession={p.onLinkSession}
+            onUnlinkSession={p.onUnlinkSession}
+          />
         </aside>
       {/snippet}
     </Splitter>
   {:else}
     <section class="app-pane st-main st-main--full">
-      <TerminalSurface instanceId={p.instanceId} cwd={p.cwd ?? null} />
-      <button class="st-show-side" title="Show quick commands" onclick={() => (sideOpen = true)}>
+      <TerminalSurface
+        instanceId={p.instanceId}
+        cwd={p.cwd ?? null}
+        onSelectionChange={(s) => (xtermSelection = s)}
+        clearSelectionRef={clearSelRef}
+      />
+      <button
+        class="st-clear"
+        onclick={clearScreen}
+        title="Clear terminal (keeps the shell session running)"
+        aria-label="Clear terminal"
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M3 6h18"/>
+          <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+          <path d="M19 6 18 20a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+        </svg>
+      </button>
+      {#if xtermSelection && applyButtons.length > 0}
+        <div
+          class="st-apply-pop"
+          style:left="{xtermSelection.anchor.x}px"
+          style:top="{xtermSelection.anchor.y}px"
+          role="toolbar"
+          aria-label="Apply terminal selection to agent"
+        >
+          {#each applyButtons as btn (btn.sessionId)}
+            <button
+              class="st-apply-pop-btn"
+              class:claude={btn.kind === 'claude'}
+              class:cursor={btn.kind === 'cursor'}
+              onmousedown={(e) => e.preventDefault()}
+              onclick={() => handleApplyTo(btn)}
+              title={`Pin selection to ${btn.label}'s composer`}
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M5 12h12M13 6l6 6-6 6"/>
+              </svg>
+              <span>Apply to {btn.label}</span>
+            </button>
+          {/each}
+        </div>
+      {/if}
+      <button class="st-show-side" title="Show inline agents" onclick={() => (sideOpen = true)}>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M14 6l-6 6 6 6"/></svg>
       </button>
     </section>
@@ -121,16 +306,19 @@
     width: 100%;
     min-width: 0;
   }
+  /* The shared InlineClaude pane uses 280px by default; let it stretch
+     to whatever the splitter assigns instead of locking to its own. */
+  .st-shell :global(.ic) { width: 100%; flex: 1; }
 
   .st-main {
     display: flex;
     overflow: hidden;
-    background: #1a1610;
+    background: var(--bg-0);
     position: relative;
   }
   .st-main--full { height: 100%; }
   .st-main :global(.terminal-surface) {
-    background: #1a1610 !important;
+    background: var(--bg-0) !important;
     flex: 1 1 auto;
   }
   .st-show-side {
@@ -139,7 +327,7 @@
     width: 26px; height: 26px;
     display: grid; place-items: center;
     border-radius: 6px;
-    background: rgba(34,28,23,0.85);
+    background: rgba(20,24,26,0.85);
     border: 1px solid var(--border);
     color: var(--text-2);
     cursor: pointer;
@@ -148,72 +336,75 @@
   .st-show-side:hover { color: var(--text-0); border-color: var(--border-hi); }
   .st-show-side svg { width: 13px; height: 13px; }
 
-  /* Mono kind tag next to the editorial instance name. */
-  .st-kind-tag {
-    font-size: 9.5px; font-weight: 700;
-    letter-spacing: 0.10em;
-    text-transform: uppercase;
-    padding: 2px 7px;
-    border-radius: 4px;
-    background: color-mix(in srgb, var(--src-term) 10%, var(--bg-3));
-    color: var(--text-1);
-    border: 1px solid color-mix(in srgb, var(--src-term) 18%, transparent);
-  }
-
-  .st-side-body {
-    flex: 1;
-    overflow-y: auto;
-    padding: 8px;
-  }
-  .st-group {
-    padding: 14px 8px 6px;
-    font-size: 9.5px; font-weight: 700;
-    letter-spacing: 0.10em;
-    text-transform: uppercase;
-    color: var(--text-mute);
-  }
-
-  .qc-row {
-    display: flex; align-items: center; gap: 10px;
-    padding: 9px 11px;
-    border-radius: 9px;
+  /* Clear-screen pill — sits one slot below the show-side toggle so
+     the two affordances stack neatly when both are visible. Faded by
+     default, fades up on parent hover so it doesn't compete with the
+     shell prompt at rest. */
+  .st-clear {
+    position: absolute;
+    top: 14px; right: 14px;
+    width: 26px; height: 26px;
+    display: grid; place-items: center;
+    border-radius: 6px;
+    background: rgba(20, 24, 26, 0.7);
+    border: 1px solid var(--border);
+    color: var(--text-2);
     cursor: pointer;
-    width: 100%;
-    text-align: left;
+    backdrop-filter: blur(8px);
+    opacity: 0;
+    transition: opacity 160ms, color 140ms, border-color 140ms, background 140ms;
+    z-index: 5;
+  }
+  .st-main:hover .st-clear,
+  .st-clear:focus-visible {
+    opacity: 0.85;
+  }
+  .st-clear:hover {
+    opacity: 1;
+    color: var(--accent-bright);
+    border-color: color-mix(in srgb, var(--accent) 38%, var(--border));
+    background: rgba(20, 24, 26, 0.92);
+  }
+  .st-clear svg { width: 13px; height: 13px; }
+  /* When the side panel is hidden, the show-side toggle takes the
+     top-right slot; nudge clear down one row so they don't overlap. */
+  .st-main--full .st-clear { right: 50px; }
+
+  /* Floating "Apply to <agent>" popover — same look + layering as
+     EditorView's `.ev-apply-pop`. Anchored to the end of the
+     selection via fixed-position viewport coordinates from
+     TerminalSurface's xterm-cell metrics; brand-color edge per agent
+     kind so the user reads the routing without parsing the label. */
+  .st-apply-pop {
+    position: fixed;
+    z-index: 1000;
+    transform: translate(8px, 6px);
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px;
+    background: var(--bg-2);
+    border: 1px solid var(--border-hi);
+    border-radius: 7px;
+    box-shadow: 0 6px 20px -6px rgba(0, 0, 0, 0.55), 0 1px 0 0 rgba(0, 0, 0, 0.1);
+    white-space: nowrap;
+  }
+  .st-apply-pop-btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 10px;
+    border-radius: 5px;
     background: transparent;
     border: 1px solid transparent;
-    transition: background 120ms, border-color 120ms;
-    margin-bottom: 2px;
+    color: var(--text-0);
+    font-size: 12px; font-weight: 500;
+    cursor: pointer;
+    transition: background 100ms, border-color 100ms, color 100ms;
   }
-  .qc-row:hover { background: var(--bg-2); border-color: var(--border); }
-  .qc-row--accent {
-    background: color-mix(in srgb, var(--accent) 4%, transparent);
-    border-color: var(--border-accent-2);
+  .st-apply-pop-btn:hover {
+    background: var(--accent-soft);
+    border-color: var(--accent);
   }
-  .qc-row--accent:hover {
-    background: color-mix(in srgb, var(--accent) 8%, transparent);
-    border-color: var(--border-accent);
-  }
-  .qc-icon {
-    width: 28px; height: 28px;
-    display: grid; place-items: center;
-    border-radius: 7px;
-    background: var(--bg-3); color: var(--accent-bright);
-    flex-shrink: 0;
-    box-shadow: inset 0 0 0 1px var(--border);
-  }
-  .qc-icon--claude {
-    background: var(--accent-soft); color: var(--src-claude);
-    box-shadow: inset 0 0 0 1px var(--border-accent-2);
-  }
-  .qc-icon svg { width: 14px; height: 14px; }
-  .qc-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-  .qc-name {
-    font-size: 11.5px; color: var(--text-0); font-weight: 500;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  }
-  .qc-desc {
-    font-size: 10.5px; color: var(--text-mute);
-    line-height: 1.35;
-  }
+  .st-apply-pop-btn svg { width: 12px; height: 12px; opacity: 0.85; }
+  .st-apply-pop-btn.claude { border-left: 2px solid var(--src-claude); padding-left: 8px; }
+  .st-apply-pop-btn.cursor { border-left: 2px solid var(--src-cursor); padding-left: 8px; }
 </style>

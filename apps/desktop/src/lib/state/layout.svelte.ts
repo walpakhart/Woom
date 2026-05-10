@@ -25,9 +25,9 @@ import { pickInstanceName, nameToSlug } from './instanceNames';
 
 export type AppKind = PanelKind;
 
-/** Stable default instance ids — used everywhere a "column instance id"
- *  used to be needed (`inboxState.itemsByInstance`, `canvasState.byInstance`,
- *  session.columnInstanceId, etc.). Identity per kind, never changes;
+/** Stable default instance ids — used everywhere an app-instance id
+ *  is needed (`inboxState.itemsByInstance`, `canvasState.byInstance`,
+ *  session.agentInstanceId, etc.). Identity per kind, never changes;
  *  spawned secondary instances get ids like `editor:vermeer`. */
 export const APP_INSTANCE_IDS: Record<AppKind, string> = {
   github: 'github-solo',

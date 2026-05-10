@@ -404,7 +404,7 @@ export function persistSentryTabFilters() {
 
 export const inboxState = $state<{
   // ---- GitHub inbox — per-column-instance ----
-  // Each GithubColumn keeps its own filter / item / loading / error slot.
+  // Each GitHub app keeps its own filter / item / loading / error slot.
   // Persisted as one Record under
   // `woom:github-col-filters-by-instance:v1`.
   itemsByInstance: Record<string, InboxItem[]>;
@@ -436,7 +436,7 @@ export const inboxState = $state<{
   expandedFiles: Set<string>;
 
   // ---- Jira inbox — per-column-instance ----
-  // Two JiraColumn instances on the same solo (or across solos)
+  // Two Jira app instances on the same solo (or across solos)
   // each get their own filter / item / loading / error slot, keyed by
   // PanelInstance.id, so changing a board on column A doesn't reload
   // column B. Filters persist as one Record under
@@ -474,7 +474,7 @@ export const inboxState = $state<{
   jiraFocusKey: string | null;
 
   // ---- Sentry inbox — per-column-instance ----
-  // Same per-instance shape as Jira: each SentryColumn keeps its own
+  // Same per-instance shape as Jira: each Sentry app keeps its own
   // filter and item slots so two Sentry columns on the same solo can
   // browse different projects / levels / environments simultaneously.
   sentryItemsByInstance: Record<string, SentryIssue[]>;

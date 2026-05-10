@@ -1,6 +1,12 @@
 <script lang="ts">
-  import Sigil from '$lib/components/ui/Sigil.svelte';
   import RailAppButton from '$lib/components/ui/RailAppButton.svelte';
+  /* Reuse the brand SVGs that ConnectionsView renders so the rail's
+     vocabulary matches Connections — same Octocat for GitHub, same
+     Atlassian Jira mark, same Sentry crown. Claude / Cursor still
+     use the curated PNGs (`/brand-claude.png` / `/brand-cursor.png`)
+     because their official marks are rich gradients that don't
+     distill cleanly to a single mono <path>. */
+  import { SVG_GITHUB, SVG_JIRA, SVG_SENTRY } from '$lib/data';
   import type {
     ClaudeStatus,
     ConnectionStatus,
@@ -10,6 +16,7 @@
   } from '$lib/data';
 
   type View =
+    | 'home'
     | 'jiraApp'
     | 'githubApp'
     | 'sentryApp'
@@ -172,7 +179,20 @@
 </script>
 
 <aside class="rail">
-  <div class="rail-sigil"><Sigil size={30} /></div>
+  <!-- v8 brand mark = "go home" affordance. Click takes the user to
+       the dashboard view (HomeApp.svelte) so the W is the always-
+       reachable anchor of the workspace, mirroring how the system
+       menu / dock icon traditionally navigates back to the app's
+       summary page. -->
+  <button
+    class="rail-sigil"
+    class:active={view === 'home'}
+    onclick={() => (view = 'home')}
+    aria-label="Home"
+    data-tooltip="Home · ⌘0"
+  >
+    <img src="/woom-logo.svg" alt="Woom" />
+  </button>
 
   <!-- Source solos -->
   <button
@@ -183,7 +203,7 @@
     onclick={() => (view = 'jiraApp')}
     aria-label="Jira"
   >
-    <svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M11.53 2L11.53 11.5Q11.53 13 13 13H22V11.5Q22 2 11.53 2ZM5 7.5V17Q5 18.5 6.5 18.5H15.5V17Q15.5 7.5 5 7.5Z"/></svg>
+    <svg viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true">{@html SVG_JIRA}</svg>
     {#if inboxCount > 0}
       <span class="rail-badge">{inboxCount > 99 ? '99+' : inboxCount}</span>
     {/if}
@@ -197,18 +217,18 @@
     onclick={() => (view = 'githubApp')}
     aria-label="GitHub"
   >
-    <svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M12 2a10 10 0 0 0-3.16 19.49c.5.09.68-.21.68-.48v-1.7c-2.78.6-3.36-1.34-3.36-1.34-.46-1.16-1.13-1.47-1.13-1.47-.92-.63.07-.62.07-.62 1.02.07 1.55 1.05 1.55 1.05.91 1.55 2.38 1.1 2.96.84.09-.66.36-1.1.65-1.36-2.22-.25-4.55-1.11-4.55-4.94 0-1.09.39-1.99 1.03-2.69-.1-.25-.45-1.27.1-2.65 0 0 .84-.27 2.75 1.02a9.5 9.5 0 0 1 5 0c1.91-1.29 2.75-1.02 2.75-1.02.55 1.38.2 2.4.1 2.65.64.7 1.03 1.6 1.03 2.69 0 3.84-2.34 4.69-4.57 4.94.36.31.69.93.69 1.87v2.78c0 .27.18.58.69.48A10 10 0 0 0 12 2"/></svg>
+    <svg viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true">{@html SVG_GITHUB}</svg>
   </button>
 
   <button
     class="rail-btn"
     class:active={view === 'sentryApp'}
-    style="--rail-tone: var(--src-sentry); --rail-glow: rgba(232,130,100,0.40);"
+    style="--rail-tone: var(--src-sentry); --rail-glow: rgba(110, 80, 155, 0.42);"
     data-tooltip="Sentry · ⌘3"
     onclick={() => (view = 'sentryApp')}
     aria-label="Sentry"
   >
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4 21 20H3z"/><path d="M12 9v5"/><circle cx="12" cy="17.5" r="0.6" fill="currentColor"/></svg>
+    <svg viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true">{@html SVG_SENTRY}</svg>
   </button>
 
   <div class="rail-divider"></div>
@@ -227,7 +247,11 @@
     ondrop={(e) => railDrop('claude', e)}
     aria-label="Claude"
   >
-    <svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M12 2 14.5 9.5 22 12 14.5 14.5 12 22 9.5 14.5 2 12 9.5 9.5z"/></svg>
+    <!-- Use the curated brand PNG (the same asset Connections renders
+         in its agent card) instead of redrawing the sunburst inline.
+         The PNG ships with the right gradients and clay petals; the
+         rail just scales it down to a 19px square. -->
+    <img class="rail-brand-img" src="/brand-claude.png" alt="" aria-hidden="true" draggable="false" />
   </button>
 
   <button
@@ -243,7 +267,9 @@
     ondrop={(e) => railDrop('cursor', e)}
     aria-label="Cursor"
   >
-    <svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M3 3l8 18 2-8 8-2z"/></svg>
+    <!-- Same rationale as Claude above — Anysphere's mark is a faceted
+         3D hex with subtle gradients, baked into the brand PNG. -->
+    <img class="rail-brand-img" src="/brand-cursor.png" alt="" aria-hidden="true" draggable="false" />
   </button>
 
   <div class="rail-divider"></div>
@@ -271,7 +297,7 @@
     tooltip="Canvas · ⌘7"
     active={view === 'canvasApp'}
     tone="var(--src-canvas)"
-    glow="rgba(125,201,176,0.40)"
+    glow="rgba(125,194,213,0.40)"
     onActivate={() => (view = 'canvasApp')}
   >
     {#snippet icon()}
@@ -285,7 +311,7 @@
     tooltip="Terminal · ⌘8"
     active={view === 'terminalApp'}
     tone="var(--src-term)"
-    glow="rgba(245,240,234,0.30)"
+    glow="rgba(229,234,232,0.30)"
     onActivate={() => (view = 'terminalApp')}
   >
     {#snippet icon()}
@@ -357,17 +383,51 @@
     display: flex; flex-direction: column; align-items: center;
     padding: 14px 0 18px;
     gap: 6px;
-    background: rgba(34, 28, 23, 0.92);
+    background: rgba(20, 24, 26, 0.92);
     border-right: 1px solid var(--border-neutral);
     backdrop-filter: blur(12px);
     position: relative;
     z-index: 5;
   }
 
+  /* Brand mark = home button in the same 44×44 footprint as the
+     rail-btns below. The SVG viewBox is tight to the W bbox
+     (655×268, ≈2.4:1) so rendering at a fixed height = the W's
+     true proportions; locking height to 18px (similar to the 19px
+     svg icons) plus width: auto gives a natural ~44×18 W shape
+     instead of a stretched square. Active-glow uses the same
+     accent ring all rail-btns share when their view is selected. */
   .rail-sigil {
+    position: relative;
     display: grid; place-items: center;
-    width: 38px; height: 38px;
-    margin-bottom: 8px;
+    width: 44px; height: 44px;
+    margin-bottom: 6px;
+    border-radius: 11px;
+    border: 0;
+    background: transparent;
+    cursor: pointer;
+    overflow: hidden;
+    transition: background 140ms;
+  }
+  .rail-sigil:hover {
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
+  }
+  .rail-sigil.active {
+    background: color-mix(in srgb, var(--accent) 16%, transparent);
+    box-shadow:
+      inset 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent),
+      0 0 12px var(--accent-glow);
+  }
+  .rail-sigil img {
+    /* 13px tall ≈ matches the visual weight of the 19px square nav
+       icons below, since the W is a low-aspect glyph (244 tall vs
+       655 wide in its tight viewBox) and would dominate the rail
+       column at parity with their box heights. */
+    height: 13px;
+    width: auto;
+    max-width: 100%;
+    display: block;
+    filter: drop-shadow(0 1px 0 rgba(0, 0, 0, 0.35));
   }
 
   .rail-divider {
@@ -392,6 +452,34 @@
     --rail-glow: var(--accent-glow);
   }
   :global(.rail-btn svg) { width: 19px; height: 19px; }
+  /* Brand PNGs (Claude / Cursor) — match the inline SVG footprint and
+     keep their ratio. `display: block` plus `pointer-events: none`
+     prevents the image from intercepting clicks meant for the rail
+     button.
+
+     `currentColor` doesn't tint a raster image, so we lean on CSS
+     filters to mirror how the SVG siblings respond to active /
+     hover state: dimmed + desaturated when their view isn't
+     selected, full-colour on hover or when active. Mirrors the
+     `--text-mute → --rail-tone` swap the SVG buttons get. */
+  :global(.rail-brand-img) {
+    width: 22px; height: 22px;
+    object-fit: contain;
+    display: block;
+    pointer-events: none;
+    -webkit-user-drag: none;
+    /* Match how SVG rail-btns read when inactive (`var(--text-mute)`)
+       without losing the glyph to the dark surface: full grayscale
+       so the colour vocabulary stays consistent, but only mild
+       opacity reduction so the muted gray icon still reads — too low
+       and the orange Claude burst flattens to nothing on `--bg-1`. */
+    filter: grayscale(1) opacity(0.78);
+    transition: filter 160ms;
+  }
+  :global(.rail-btn:hover .rail-brand-img),
+  :global(.rail-btn.active .rail-brand-img) {
+    filter: none;
+  }
 
   :global(.rail-btn:hover) {
     color: var(--rail-tone);

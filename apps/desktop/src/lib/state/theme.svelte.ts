@@ -1,22 +1,25 @@
 /* App-wide colour theme.
  *
- * Three palettes:
- *   iconic — original molten-gold-on-graphite (the brand look).
- *   light  — Tint background + Shade accents (cream + chocolate).
- *   dark   — Shade background + Tint accents (the inverse).
+ * Two palettes:
+ *   iconic — sage/mint on cool noir (the brand look, default dark).
+ *   light  — sage/mint on cream-mint (the brand look, light variant).
  *
  * Implementation is just a `data-theme` attribute on `<html>` plus
  * matching `:root[data-theme="…"]` blocks in app.css that override
  * the existing colour custom-properties. Components don't need to
  * know which theme is active — they keep reading `var(--bg-0)` /
  * `var(--accent)` / etc.
- */
+ *
+ * The previous separate "dark" theme has been retired — `iconic` is
+ * already the dark variant under the new W-mark palette, so a
+ * separate "dark" was redundant. Persisted `'dark'` values from
+ * older builds are migrated to `iconic` at boot. */
 
 const KEY = 'woom:theme:v1';
 
-export type ThemeName = 'iconic' | 'light' | 'dark';
+export type ThemeName = 'iconic' | 'light';
 
-const VALID: ThemeName[] = ['iconic', 'light', 'dark'];
+const VALID: ThemeName[] = ['iconic', 'light'];
 
 export const themeState = $state<{ name: ThemeName }>({
   name: readPersistedTheme()
@@ -26,6 +29,12 @@ function readPersistedTheme(): ThemeName {
   try {
     const raw = localStorage.getItem(KEY);
     if (raw && (VALID as string[]).includes(raw)) return raw as ThemeName;
+    /* Migrate old 'dark' → 'iconic' (Iconic IS the dark theme under
+       the new palette; keeping a separate 'dark' was redundant). */
+    if (raw === 'dark') {
+      try { localStorage.setItem(KEY, 'iconic'); } catch { /* ignore */ }
+      return 'iconic';
+    }
   } catch {
     /* SSR / privacy mode */
   }

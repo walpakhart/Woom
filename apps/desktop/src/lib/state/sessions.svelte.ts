@@ -1,6 +1,6 @@
-// Claude + Cursor chat session state. Owns the session list, per-column
-// active-session pointers, the cross-column "currently focused" pointer,
-// per-column scroll containers, and user-authored rules. Persists sessions
+// Claude + Cursor chat session state. Owns the session list, per-app-instance
+// active-session pointers, the cross-instance "currently focused" pointer,
+// per-instance scroll containers, and user-authored rules. Persists sessions
 // to disk (~/Library/Application Support/Woom/sessions/) via Tauri
 // fs commands; rules stay in localStorage (small + frequently mutated).
 
@@ -57,7 +57,7 @@ function serializeSession(s: ClaudeSession): object {
     linkedToEditorInstanceId: s.linkedToEditorInstanceId,
     linkedCanvasId: s.linkedCanvasId,
     linkedTerminalInstanceId: s.linkedTerminalInstanceId,
-    columnInstanceId: s.columnInstanceId,
+    agentInstanceId: s.agentInstanceId,
     cwdSwitchRecap: s.cwdSwitchRecap,
     cwdUuids: s.cwdUuids,
     awaitingApproval: s.awaitingApproval,
@@ -177,30 +177,30 @@ const __initial = loadStoredSessions();
 const __legacy = __initial.sessions.find((s) => s.id === __initial.activeId);
 
 /** Reactive singleton. Imported by +page.svelte and any chat-aware
- *  component. Per-column-instance active pointers live in `activeByInstance`
- *  now; legacy `activeIds` (per-kind) is kept as a fallback for floating
- *  sessions that haven't been pinned to a column yet. */
+ *  component. Per-app-instance active pointers live in `activeByInstance`;
+ *  legacy `activeIds` (per-kind) is kept as a fallback for floating
+ *  sessions that haven't been bound to an instance yet. */
 export const sessionsState = $state<{
   list: ClaudeSession[];
   // Per-agent-kind active session — fallback pointer for floating sessions
-  // (columnInstanceId === null). Usually shadowed by per-instance pointers.
+  // (agentInstanceId === null). Usually shadowed by per-instance pointers.
   activeIds: Record<'claude' | 'cursor', string | null>;
-  // Per-column-instance active session. Key = PanelInstance.id. Each chat
-  // column owns one entry; two Claude columns can focus different sessions
-  // at the same time without stepping on each other.
+  // Per-app-instance active session. Key = PanelInstance.id. Each agent
+  // app instance owns one entry; two Claude instances can focus different
+  // sessions at the same time without stepping on each other.
   activeByInstance: Record<string, string | null>;
-  // Cross-column focus — whatever the user last clicked. Used by legacy
-  // single-column code paths (sendClaudeMessage, pickCwd, createWorktree, …)
+  // Cross-instance focus — whatever the user last clicked. Used by legacy
+  // single-instance code paths (sendClaudeMessage, pickCwd, createWorktree, …)
   // that take no agent-kind argument.
   activeClaudeId: string | null;
-  // Per-column-instance scroll containers. Each chat column registers its own
+  // Per-app-instance scroll containers. Each agent app registers its own
   // scroll element; we scroll each independently when its active session
   // streams.
   scrollEls: Record<string, HTMLDivElement | null>;
   // User-authored rules/preferences appended to Claude's system prompt on
   // every turn via `--append-system-prompt`. Edited in the Rules view.
   userRules: string;
-  // Per-column-instance editor state (repoPath shown in that Editor column,
+  // Per-app-instance editor state (repoPath shown in that Editor instance,
   // plus a transient `pendingOpenFile` that any source — diff card, MCP
   // tool, future "go to file" UI — can set to ask EditorView to focus a
   // specific file. Keyed by PanelInstance.id.
@@ -280,8 +280,15 @@ function hydrateSession(s: ClaudeSession): ClaudeSession {
       (s as { linkedCanvasId?: string | null }).linkedCanvasId ?? null,
     linkedTerminalInstanceId:
       (s as { linkedTerminalInstanceId?: string | null }).linkedTerminalInstanceId ?? null,
-    columnInstanceId:
-      (s as { columnInstanceId?: string | null }).columnInstanceId ?? null,
+    /* Read both the new (`agentInstanceId`) and legacy (`columnInstanceId`)
+       fields so sessions saved before the v8 column-rename rehydrate
+       cleanly. The legacy fallback can be dropped after a migration
+       window — every save path now writes the new key, so a single
+       reopen rewrites the file. */
+    agentInstanceId:
+      (s as { agentInstanceId?: string | null }).agentInstanceId
+      ?? (s as { columnInstanceId?: string | null }).columnInstanceId
+      ?? null,
     cwdSwitchRecap:
       (s as { cwdSwitchRecap?: string | null }).cwdSwitchRecap ?? null,
     cwdUuids:
@@ -418,7 +425,7 @@ export function persistRulesEffect() {
   });
 }
 
-/** Persist `sessionsState.editorInstanceState` so each editor column
+/** Persist `sessionsState.editorInstanceState` so each editor instance
  *  remembers its open folder across reloads. Without this, the
  *  agent-driven `set_editor_repo_path` (and the manual user-side path
  *  picker) would visually revert on every restart even though sessions
@@ -450,8 +457,8 @@ export function persistEditorInstanceStateEffect() {
  *  signal so subsequent identical clicks still re-trigger).
  *
  *  Idempotent if the slot is missing — we lazily create it (matches the
- *  pattern EditorColumn uses on mount). The caller is responsible for
- *  ensuring `instanceId` actually points to an editor column; if it
+ *  pattern EditorView uses on mount). The caller is responsible for
+ *  ensuring `instanceId` actually points to an editor instance; if it
  *  doesn't, the signal sits in state forever. In practice the diff card
  *  resolves a real instanceId via `findInstanceAnywhere` before
  *  calling. */
@@ -499,14 +506,14 @@ export function newClaudeSession(
     cwd?: string | null;
     linkedToEditor?: boolean;
     linkedToEditorInstanceId?: string | null;
-    columnInstanceId?: string | null;
+    agentInstanceId?: string | null;
   } = {}
 ): string {
   const id = genId();
   const agentKind = opts.agentKind ?? 'claude';
   const n = sessionsState.list.filter((s) => s.agentKind === agentKind).length + 1;
   const title = opts.title ?? `Chat ${n}`;
-  const columnInstanceId = opts.columnInstanceId ?? null;
+  const agentInstanceId = opts.agentInstanceId ?? null;
   sessionsState.list = [
     {
       id, title, mentions: [], messages: [], input: '', sending: false,
@@ -534,7 +541,7 @@ export function newClaudeSession(
       linkedToEditorInstanceId: opts.linkedToEditorInstanceId ?? null,
       linkedCanvasId: null,
       linkedTerminalInstanceId: null,
-      columnInstanceId,
+      agentInstanceId,
       cwdSwitchRecap: null,
       cwdUuids: {},
       awaitingApproval: false,
@@ -544,8 +551,8 @@ export function newClaudeSession(
   ];
   sessionsState.activeClaudeId = id;
   sessionsState.activeIds[agentKind] = id;
-  if (columnInstanceId) {
-    sessionsState.activeByInstance[columnInstanceId] = id;
+  if (agentInstanceId) {
+    sessionsState.activeByInstance[agentInstanceId] = id;
   }
   return id;
 }
@@ -555,7 +562,7 @@ export function deleteClaudeSession(id: string) {
   const rest = sessionsState.list.filter((s) => s.id !== id);
   sessionsState.list = rest;
   const kind = doomed?.agentKind ?? 'claude';
-  // Every per-column pointer that was on this session jumps to the next
+  // Every per-instance pointer that was on this session jumps to the next
   // visible session of the same kind (or null if none remain).
   const fallback = rest.find((s) => s.agentKind === kind)?.id ?? null;
   for (const k of Object.keys(sessionsState.activeByInstance)) {
@@ -569,13 +576,13 @@ export function deleteClaudeSession(id: string) {
       fallback ?? sessionsState.activeIds[kind === 'claude' ? 'cursor' : 'claude'];
   }
   // Auto-create a fresh Claude chat if the user emptied the list — keeps
-  // the chat column from sitting on a permanent empty state.
+  // the chat surface from sitting on a permanent empty state.
   if (rest.filter((s) => s.agentKind === 'claude').length === 0) {
     newClaudeSession({ agentKind: 'claude' });
   }
 }
 
-/** Clean up per-column pointers when a column instance is removed. The
+/** Clean up per-instance pointers when an app instance is removed. The
  *  session list is global per-kind so nothing in `list` needs touching —
  *  only the per-instance bookkeeping. */
 export function orphanSessionsForInstance(instanceId: string) {
@@ -583,20 +590,20 @@ export function orphanSessionsForInstance(instanceId: string) {
   delete sessionsState.scrollEls[instanceId];
 }
 
-/** Set the active session pointer for one specific column instance. The
+/** Set the active session pointer for one specific app instance. The
  *  session list is global per-kind, so this only affects which chat is
- *  shown when the user looks at this column — it doesn't move the chat
- *  out of any other column. */
-export function setActiveSessionInColumn(columnId: string, sessionId: string) {
-  sessionsState.activeByInstance[columnId] = sessionId;
+ *  shown when the user looks at this instance — it doesn't move the
+ *  chat out of any other instance. */
+export function setActiveSessionInInstance(instanceId: string, sessionId: string) {
+  sessionsState.activeByInstance[instanceId] = sessionId;
   const sess = sessionsState.list.find((s) => s.id === sessionId);
   if (sess) {
     sessionsState.activeIds[sess.agentKind] = sessionId;
     sessionsState.activeClaudeId = sessionId;
     // Track "last shown in" for telemetry/UX-niceties only — does NOT
-    // affect what's visible in other columns.
-    if (sess.columnInstanceId !== columnId) {
-      updateSession(sessionId, { columnInstanceId: columnId });
+    // affect what's visible in other instances.
+    if (sess.agentInstanceId !== instanceId) {
+      updateSession(sessionId, { agentInstanceId: instanceId });
     }
   }
 }
@@ -667,6 +674,84 @@ export function attachLineRangeMention(
   return token;
 }
 
+/** Attach a captured terminal-selection block to the session's composer.
+ *  Used by the terminal's "Apply to <agent>" floating chip — same role
+ *  as `attachLineRangeMention` for the editor, but the @-token resolves
+ *  to a chunk of literal shell output rather than a file range.
+ *
+ *  Token shape:
+ *    `terminal/<safe-label>:<short-hash>`
+ *    e.g. `terminal/Hopper:8f3a` — the slash makes the prefix unmistakable
+ *    in chat, and `<short-hash>` derives from the captured text so two
+ *    different selections from the same terminal land as two distinct
+ *    chips instead of clobbering each other.
+ *
+ *  Storage:
+ *    • `source: 'terminal'`, `body: <selected text>`, `title: <label> · "<preview…>"`.
+ *    • The prompt-builder in +page.svelte's send path already has a
+ *      generic non-`file` branch (`@<externalId> — <title>\n\n<body>`),
+ *      so the agent sees the actual selected bytes inline without a
+ *      "Referenced file" prefix that would make no sense for a paste.
+ *
+ *  Returns the token (without `@`) so the caller can chain a toast.
+ *  Returns null if the session doesn't exist or the selection is empty. */
+export function attachTerminalSelectionMention(
+  sessionId: string,
+  terminalLabel: string,
+  content: string
+): string | null {
+  const s = sessionsState.list.find((x) => x.id === sessionId);
+  if (!s) return null;
+  const trimmed = content.replace(/\r\n/g, '\n').trim();
+  if (!trimmed) return null;
+
+  /* Slugify the human-friendly label ("Hopper", "Build watcher") into
+     something safe for an @-token (no spaces, parsed as one word by
+     the textarea's `@[^\s]+` highlight regex). */
+  const safeLabel =
+    terminalLabel
+      .replace(/[^A-Za-z0-9_-]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 40) || 'terminal';
+
+  /* Tiny FNV-1a-ish hash over the trimmed body — not for security, just
+     to give two different selections distinct externalIds so re-applying
+     a different range doesn't collapse onto the previous chip. */
+  let h = 2166136261;
+  for (let i = 0; i < trimmed.length; i++) {
+    h ^= trimmed.charCodeAt(i);
+    h = (h * 16777619) >>> 0;
+  }
+  const shortHash = h.toString(16).padStart(8, '0').slice(0, 6);
+  const token = `terminal/${safeLabel}:${shortHash}`;
+
+  /* Compact preview for the chip title — first non-empty line, trimmed
+     to ~28 chars. Keeps the @-pill scannable without dumping full
+     output into a tooltip. */
+  const firstLine = trimmed.split('\n').find((l) => l.trim().length > 0) ?? trimmed;
+  const preview = firstLine.length > 28 ? firstLine.slice(0, 27) + '…' : firstLine;
+
+  const existing = new Set(s.mentions.map((m) => m.externalId));
+  let nextInput = s.input;
+  let nextMentions = s.mentions;
+  if (!existing.has(token)) {
+    const sep = nextInput && !nextInput.endsWith(' ') ? ' ' : '';
+    nextInput = nextInput + sep + '@' + token + ' ';
+    nextMentions = [
+      ...s.mentions,
+      {
+        source: 'terminal',
+        externalId: token,
+        title: `${terminalLabel} · "${preview}"`,
+        body: trimmed,
+        isDir: false
+      }
+    ];
+  }
+  updateSession(sessionId, { input: nextInput, mentions: nextMentions });
+  return token;
+}
+
 /** Drop file/Jira/etc. mentions whose `@<externalId>` is no longer
  *  present in `s.input`. Called from the textarea's `oninput` so
  *  that backspacing the `@token` actually unattaches the file —
@@ -721,12 +806,12 @@ export function pruneMentionsByInput(sessionId: string, input: string) {
 }
 
 /** Attach an array of absolute filesystem paths as file-mentions to the given
-    session. Called from the composer's + button (AgentColumn) and from the
-    OS drag-drop listener (+page.svelte). Skips paths already referenced.
+    session. Called from the composer's + button and from the OS drag-drop
+    listener (+page.svelte). Skips paths already referenced.
 
     Two attachment shapes depending on the file kind:
       • Image (png/jpg/…): mention only — no `@token` in input. Renders as a
-        thumbnail chip strip above the composer (see AgentColumn). Path can
+        thumbnail chip strip above the composer (see Composer). Path can
         contain spaces without breaking the inline @-parser.
       • Anything else: mention + `@token` in input. Token is the cwd-relative
         path when inside cwd, otherwise just the basename. */
@@ -761,7 +846,7 @@ export function attachPathsToSession(sessionId: string, paths: string[]): number
 }
 
 /** Route a click on a session tab through the per-kind pointer, the
-    per-column-instance pointer (if bound), and the cross-column "currently
+    per-app-instance pointer (if bound), and the cross-instance "currently
     focused" pointer. Legacy code paths that read the active session
     (sendClaudeMessage, pickCwd, worktree ops, …) keep working because
     `activeClaudeId` still points at whatever was last clicked. */
@@ -770,37 +855,31 @@ export function focusSession(id: string) {
   if (!sess) return;
   sessionsState.activeIds[sess.agentKind] = id;
   sessionsState.activeClaudeId = id;
-  if (sess.columnInstanceId) {
-    sessionsState.activeByInstance[sess.columnInstanceId] = id;
+  if (sess.agentInstanceId) {
+    sessionsState.activeByInstance[sess.agentInstanceId] = id;
   }
 }
 
-/** Sessions that should render in a given column instance. As of 2026-04-25
- *  the chat list is **global per agent-kind** — every Claude column sees
- *  every Claude chat, every Cursor column sees every Cursor chat. The
- *  column is just a viewing window with its own "currently open" pointer.
- *  `columnInstanceId` on a session is now informational ("last shown here").
- *
- *  `_isFirstOfKind` is kept for prop-shape compatibility with the column
- *  components but is unused — left in so we don't have to ripple a prop
- *  removal through three files for a refactor that's already this large. */
+/** Sessions that should render in a given app instance. The chat list is
+ *  **global per agent-kind** — every Claude instance sees every Claude
+ *  chat, every Cursor instance sees every Cursor chat. The instance is
+ *  just a viewing window with its own "currently open" pointer;
+ *  `agentInstanceId` on a session is informational ("last shown here"). */
 export function sessionsForInstance(
   _instanceId: string,
-  kind: 'claude' | 'cursor',
-  _isFirstOfKind: boolean
+  kind: 'claude' | 'cursor'
 ): ClaudeSession[] {
   return sessionsState.list.filter((s) => s.agentKind === kind);
 }
 
-/** Return the session active in a given column instance. Each column owns
- *  its own active pointer so two columns can show different chats; the
+/** Return the session active in a given app instance. Each instance owns
+ *  its own active pointer so two instances can show different chats; the
  *  list itself is shared. Falls back to the most-recent session of the
- *  same kind when the column hasn't picked one yet (fresh column = shows
- *  newest chat instead of an empty pane). */
+ *  same kind when the instance hasn't picked one yet (fresh instance =
+ *  shows newest chat instead of an empty pane). */
 export function activeSessionInInstance(
   instanceId: string,
-  kind: 'claude' | 'cursor',
-  _isFirstOfKind: boolean
+  kind: 'claude' | 'cursor'
 ): ClaudeSession | null {
   const visible = sessionsState.list.filter((s) => s.agentKind === kind);
   const pinned = sessionsState.activeByInstance[instanceId];
@@ -824,7 +903,7 @@ export function appendSessionMessage(id: string, msg: ClaudeMessage) {
 // reach two consumers:
 //
 //   1. UI: an action-result chip in the chat transcript, parseable by
-//      `parseActionResult` in AgentColumn. This MUST NOT happen while
+//      `parseActionResult` in the chat surface. This MUST NOT happen while
 //      a turn is streaming — `appendSessionMessage` would shift the
 //      "last message" position and silently drop subsequent assistant
 //      deltas, cutting off the agent's reply mid-sentence.
@@ -990,9 +1069,9 @@ export function appendToLastAssistant(sessionId: string, delta: string) {
 
 /** Mirror of `appendToLastAssistant` for `thinking` content blocks.
     Concatenates onto the last assistant message's `thinking` field
-    (lazily initialised). The pill in AgentColumn collapses these into
-    a "Thinking ✓" button the user can expand to inspect after the
-    final answer lands. */
+    (lazily initialised). The pill in the chat surface collapses these
+    into a "Thinking ✓" button the user can expand to inspect after
+    the final answer lands. */
 export function appendToLastThinking(sessionId: string, delta: string) {
   sessionsState.list = sessionsState.list.map((s) => {
     if (s.id !== sessionId) return s;

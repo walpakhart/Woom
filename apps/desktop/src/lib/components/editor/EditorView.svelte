@@ -410,7 +410,7 @@
     }
   }
 
-  /** Add `path` as a tab and activate it. Exported so EditorColumn
+  /** Add `path` as a tab and activate it. Exported so EditorView
    *  can drive the editor from outside in response to
    *  `editorInstanceState.pendingOpenFile` signals (the diff card's
    *  clickable file path, future "go to file" UIs). Idempotent —
@@ -833,9 +833,9 @@
     overflow: hidden;
   }
   .ev-instance-label {
-    font-family: 'Instrument Serif', 'New York', Georgia, serif;
+    font-family: 'Geist', 'Inter', -apple-system, system-ui, sans-serif;
     font-size: 11px;
-    font-style: italic;
+    
     line-height: 1;
     letter-spacing: 0.02em;
     color: var(--src-editor);
@@ -844,8 +844,8 @@
   /* v7 — repo name reads as a small editorial heading. */
   .ev-root-name {
     min-width: 0;
-    font-family: 'Instrument Serif', 'New York', Georgia, serif;
-    font-size: 18px; font-weight: 400;
+    font-family: 'Geist', 'Inter', -apple-system, system-ui, sans-serif;
+    font-size: 18px; font-weight: 600;
     letter-spacing: -0.01em;
     color: var(--text-0);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -1053,8 +1053,8 @@
   }
   .ev-sidebar-empty-icon svg { width: 20px; height: 20px; }
   .ev-sidebar-empty-h {
-    font-family: 'Instrument Serif', 'New York', Georgia, serif;
-    font-size: 18px; font-weight: 400; letter-spacing: -0.01em;
+    font-family: 'Geist', 'Inter', -apple-system, system-ui, sans-serif;
+    font-size: 18px; font-weight: 600; letter-spacing: -0.01em;
     color: var(--text-0);
     margin: 0 0 8px;
   }
@@ -1096,7 +1096,7 @@
   .ev-tabbar::-webkit-scrollbar { height: 0; }
   .ev-tab-empty {
     padding: 6px 10px;
-    font-size: 12px; color: var(--text-mute); font-style: italic;
+    font-size: 12px; color: var(--text-mute); 
     white-space: nowrap;
   }
   .ev-tab-wrap {

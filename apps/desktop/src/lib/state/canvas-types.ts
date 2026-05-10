@@ -170,7 +170,7 @@ export type CanvasEphemeral = {
    *  `historyIndex` onward. */
   historyIndex: number;
   /** Shape id the agent's `canvas_focus` tool wants the viewport to
-   *  center on. The CanvasColumn watches this via `$effect`,
+   *  center on. The CanvasSurface watches this via `$effect`,
    *  animates the camera, and clears the field. Null = no pending
    *  focus. `ts` lets the column distinguish back-to-back focus
    *  calls onto the same shape (which would otherwise look like a

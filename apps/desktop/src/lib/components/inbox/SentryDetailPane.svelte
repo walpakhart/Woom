@@ -537,7 +537,7 @@
     display: flex; flex-direction: column; gap: 18px;
   }
   .sdp-title {
-    font-family: 'Instrument Serif', 'New York', Georgia, serif;
+    font-family: 'Geist', 'Inter', -apple-system, system-ui, sans-serif;
     font-size: 30px; line-height: 1.18; font-weight: 400;
     color: var(--text-0); letter-spacing: -0.02em;
     margin: 0;

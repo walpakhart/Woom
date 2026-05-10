@@ -8,18 +8,19 @@
   import {
     sessionsState,
     focusSession,
-    setActiveSessionInColumn,
+    setActiveSessionInInstance,
     newClaudeSession,
     deleteClaudeSession
   } from '$lib/state/sessions.svelte';
   import { relativeTime } from '$lib/data';
+  import BrandIcon from '$lib/components/ui/BrandIcon.svelte';
 
   type Kind = 'claude' | 'cursor';
 
   interface Props {
     kind: Kind;
-    /** Column instance the active session is bound to (worktree
-     *  ownership, MCP routing). App view receives this from +page.svelte. */
+    /** App instance the active session is bound to (worktree ownership,
+     *  MCP routing). App view receives this from +page.svelte. */
     instanceId: string;
     now: number;
   }
@@ -67,12 +68,12 @@
   const label = $derived(kind === 'claude' ? 'Claude' : 'Cursor');
 
   function pickSession(sessId: string) {
-    setActiveSessionInColumn(instanceId, sessId);
+    setActiveSessionInInstance(instanceId, sessId);
     focusSession(sessId);
   }
 
   function createNew() {
-    newClaudeSession({ agentKind: kind, columnInstanceId: instanceId });
+    newClaudeSession({ agentKind: kind, agentInstanceId: instanceId });
   }
 
   function deleteSession(sessId: string, sessTitle: string, e: MouseEvent) {
@@ -107,6 +108,9 @@
 
 <aside class="ssb app-pane">
   <div class="ssb-head">
+    <span class="ssb-logo" data-agent={kind} aria-hidden="true">
+      <BrandIcon kind={kind} size={16} />
+    </span>
     <h2 class="ssb-h">{label}</h2>
     <button class="ssb-headbtn" onclick={createNew} title="New chat (⌘N)">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
@@ -194,9 +198,33 @@
     flex-shrink: 0;
     gap: 8px;
   }
+  /* Agent logo chip — Claude burst or Cursor hex in the agent's
+     ACTUAL brand color (coral for Claude, neutral grey for Cursor),
+     not the app shell's accent. Brand identity stays per-source even
+     when the surrounding app paints in mint/sage. */
+  .ssb-logo {
+    width: 26px; height: 26px;
+    display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 7px;
+    flex-shrink: 0;
+    line-height: 0;
+  }
+  .ssb-logo[data-agent="claude"] {
+    color: var(--src-claude);
+    background: color-mix(in srgb, var(--src-claude) 12%, var(--bg-2));
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--src-claude) 28%, transparent);
+  }
+  .ssb-logo[data-agent="cursor"] {
+    color: var(--src-cursor);
+    background: color-mix(in srgb, var(--src-cursor) 12%, var(--bg-2));
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--src-cursor) 28%, transparent);
+  }
+  /* BrandIcon renders the SVG / IMG with its own width/height
+     attributes, so we just keep the centering rhythm and let the
+     glyph honour its intrinsic size. */
   .ssb-h {
-    font-family: 'Instrument Serif', 'New York', Georgia, serif;
-    font-size: 18px; font-weight: 400;
+    font-family: 'Geist', 'Inter', -apple-system, system-ui, sans-serif;
+    font-size: 18px; font-weight: 600;
     flex: 1;
     letter-spacing: -0.01em;
     color: var(--text-0);
@@ -355,8 +383,8 @@
     padding: 30px 18px;
   }
   .ssb-empty-h {
-    font-family: 'Instrument Serif', 'New York', Georgia, serif;
-    font-size: 20px; font-weight: 400; letter-spacing: -0.01em;
+    font-family: 'Geist', 'Inter', -apple-system, system-ui, sans-serif;
+    font-size: 20px; font-weight: 600; letter-spacing: -0.01em;
     color: var(--text-0);
     margin: 0 0 8px;
   }

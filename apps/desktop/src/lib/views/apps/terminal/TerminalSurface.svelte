@@ -1,16 +1,28 @@
 <script lang="ts">
   /*
-   * TerminalColumn — solo app hosting an xterm.js terminal
-   * bound to a real PTY-backed shell on the Rust side.
+   * TerminalSurface — xterm.js view onto a long-lived PTY-backed shell.
    *
-   * Lifecycle:
-   *   onMount   → invoke `terminal_spawn` → got id → subscribe to
-   *               `terminal:output:<id>` → mount xterm into the DOM
-   *   onDestroy → invoke `terminal_kill` (drops the PTY + child shell)
+   * The PTY lifecycle is owned by `$lib/state/terminals.svelte.ts` so
+   * the shell survives view switches: when the user clicks Claude in
+   * the rail and comes back, the same shell is still running and we
+   * just replay captured output into a fresh xterm instance. We do
+   * NOT call `terminal_kill` on unmount — only on explicit user
+   * action ("close terminal") or via `restartTerminalSession`.
+   *
+   * Output flow:
+   *   • `ensureTerminalSession` returns the existing session (or
+   *     spawns one) and registers a long-lived listener on
+   *     `terminal:output:<ptyId>` that pushes every chunk into
+   *     `session.chunks`.
+   *   • On mount we replay `session.chunks` into the new xterm so the
+   *     screen state matches what the user saw before.
+   *   • While mounted, we subscribe to the terminals-state pub/sub so
+   *     new chunks land in xterm in real time alongside being
+   *     persisted.
    *
    * Resize: a ResizeObserver on the host element calls `fit.fit()`
-   * whenever the column resizes, then forwards new (cols, rows) to
-   * `terminal_resize` so the kernel's TIOCSWINSZ matches.
+   * whenever the surface resizes, then forwards new (cols, rows) via
+   * `resizeTerminal` so the kernel's TIOCSWINSZ matches.
    *
    * Phase-2 MCP write: when a Claude / Cursor agent calls
    * `terminal.write(id, data)` via MCP, the bytes go through the same
@@ -18,20 +30,44 @@
    * appear live without any extra plumbing.
    */
   import { onMount, onDestroy } from 'svelte';
-  import { invoke } from '@tauri-apps/api/core';
-  import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import { Terminal } from '@xterm/xterm';
   import { FitAddon } from '@xterm/addon-fit';
   import { WebLinksAddon } from '@xterm/addon-web-links';
   import '@xterm/xterm/css/xterm.css';
   import { sessionsState } from '$lib/state/sessions.svelte';
+  import {
+    ensureTerminalSession,
+    restartTerminalSession,
+    subscribeTerminalOutput,
+    subscribeTerminalExit,
+    subscribeTerminalError,
+    subscribeTerminalClear,
+    writeToTerminal,
+    resizeTerminal
+  } from '$lib/state/terminals.svelte';
 
   interface Props {
     instanceId: string;
     /** Optional initial cwd. Falls back to $HOME inside the shell. */
     cwd?: string | null;
+    /** Mirror xterm's selection state up to the parent (TerminalApp)
+     *  so it can render the floating "Apply to <agent>" popover. The
+     *  payload is `null` when nothing is selected; when set, `text`
+     *  carries the captured chunk and `anchor` carries viewport-fixed
+     *  pixel coords for the popover (right edge of the last selected
+     *  cell, mirrored from xterm's selection geometry). Parent reads
+     *  it as transient state — drop it on `onClearSelection` to
+     *  dismiss the popover after Apply. */
+    onSelectionChange?: (
+      payload: { text: string; anchor: { x: number; y: number } } | null
+    ) => void;
+    /** Imperatively clear the xterm selection from the parent. Used
+     *  after the user picks an "Apply to" target so the floating chip
+     *  hides itself. Optional — TerminalSurface tracks selection
+     *  internally and parent doesn't need it for read-only flows. */
+    clearSelectionRef?: { fn: (() => void) | null };
   }
-  let { instanceId, cwd = null }: Props = $props();
+  let { instanceId, cwd = null, onSelectionChange, clearSelectionRef }: Props = $props();
 
   /**
    * Sessions that link THIS terminal (`linkedTerminalInstanceId === instanceId`).
@@ -42,7 +78,7 @@
    * also link an editor, the editor's repoPath wins as the spawn cwd
    * (over the explicit `cwd` prop). Lets the user "make a chat-bound
    * terminal that follows the chat's project" with one click in the
-   * AgentColumn.
+   * AgentApp.
    */
   const linkedSessions = $derived.by(() => {
     const out: { sessionId: string; title: string; kind: 'claude' | 'cursor' }[] = [];
@@ -72,14 +108,15 @@
   let host = $state<HTMLDivElement | null>(null);
   let term: Terminal | null = null;
   let fit: FitAddon | null = null;
-  let sessionId = $state<string | null>(null);
-  let unlistenOutput: UnlistenFn | null = null;
-  let unlistenExit: UnlistenFn | null = null;
-  let unlistenError: UnlistenFn | null = null;
+  let unsubOutput: (() => void) | null = null;
+  let unsubExit: (() => void) | null = null;
+  let unsubError: (() => void) | null = null;
+  let unsubClear: (() => void) | null = null;
   let resizeObserver: ResizeObserver | null = null;
   let busy = $state(true);
   let error = $state<string | null>(null);
   let exited = $state(false);
+
 
   /**
    * Convert a base64-encoded chunk from the PTY into bytes and
@@ -110,27 +147,23 @@
    * shell may have already exited.
    */
   function fitAndPush() {
-    if (!fit || !term || !sessionId) return;
+    if (!fit || !term) return;
     try {
       fit.fit();
     } catch {
       return;
     }
-    const cols = term.cols;
-    const rows = term.rows;
-    void invoke('terminal_resize', { id: sessionId, cols, rows }).catch(() => {});
+    void resizeTerminal(instanceId, term.cols, term.rows);
   }
 
   onMount(() => {
     if (!host) return;
 
-    /* Pull surface + text + accent from the live theme so the column
-     * matches the inbox/canvas columns visually — Github/Jira sit on
-     * `.wb-column.inbox` (= --bg-1) and Canvas's head + surface are
-     * also --bg-1, so that's the "default chrome" of the solo.
-     * Header, host padding, and the xterm canvas all settle on
-     * `--bg-1` so the terminal reads as part of that family instead
-     * of the deeper `--bg-0` used by Editor/Agent/Sentry. */
+    /* Pull surface + text + accent from the live theme so the
+     * terminal blends with the rest of the app — Header, host padding,
+     * and the xterm canvas all settle on `--bg-1` so the terminal
+     * reads as part of the chrome family instead of the deeper
+     * `--bg-0` used by Editor / Agent / Sentry. */
     const css = getComputedStyle(document.documentElement);
     const v = (name: string, fallback: string) =>
       (css.getPropertyValue(name) || fallback).trim() || fallback;
@@ -146,7 +179,7 @@
       scrollback: 5000,
       allowProposedApi: true,
       convertEol: false,
-      // Use the live theme's surface + foreground so the column
+      // Use the live theme's surface + foreground so the terminal
       // doesn't look like an embed of a different app. Per-source
       // palette below stays a fixed warm/blue mix that reads well
       // on every theme — those are content colours from `ls`,
@@ -156,23 +189,24 @@
         foreground: text0,
         cursor: accentBright,
         cursorAccent: bg1,
-        selectionBackground: 'rgba(204, 120, 92, 0.32)',
-        black: '#1A1410',
+        /* Selection halo — sage tint matching the new app accent. */
+        selectionBackground: 'rgba(176, 220, 200, 0.32)',
+        black: '#0E1112',
         red: '#D4664A',
         green: '#6FAE88',
         yellow: '#D99540',
         blue: '#6FA9F2',
         magenta: '#B289F2',
         cyan: '#7FD9D9',
-        white: '#C8C0AE',
-        brightBlack: '#5E5648',
+        white: '#C8CDC9',
+        brightBlack: '#5C6663',
         brightRed: '#E48C70',
         brightGreen: '#8FCAA0',
         brightYellow: '#E5B574',
         brightBlue: '#92BFFF',
         brightMagenta: '#CBA9FF',
         brightCyan: '#A1ECEC',
-        brightWhite: '#FAEEE0'
+        brightWhite: '#EBEFEC'
       }
     });
     fit = new FitAddon();
@@ -182,37 +216,121 @@
 
     // Forward keystrokes to the PTY. Multi-byte input (paste, dead
     // keys, IME) all goes through `onData` as a single string, which
-    // we re-encode to base64 before invoke.
+    // we re-encode to base64 before the invoke.
     term.onData((data) => {
-      if (!sessionId) return;
-      void invoke('terminal_write', { id: sessionId, data: toB64(data) }).catch(() => {});
+      void writeToTerminal(instanceId, toB64(data));
     });
 
-    // Spawn the PTY + wire the output stream.
+    /* Selection → "Apply to <agent>" hook. Xterm fires
+       `onSelectionChange` whenever the user drags-or shift-clicks; we
+       reflect the captured text (and a fixed-position anchor at the
+       right end of the last selected cell) up to the parent so it can
+       render a floating chip without TerminalSurface needing to know
+       about sessions. The popover's lifetime mirrors the selection's
+       — clearing the selection (Esc, click, scroll-out-then-clear)
+       hides the chip via the same callback firing with `null`. */
+    term.onSelectionChange(() => {
+      if (!term || !host || !onSelectionChange) return;
+      const text = term.getSelection();
+      if (!text) {
+        onSelectionChange(null);
+        return;
+      }
+      /* Anchor coords: viewport-relative pixel position at the right
+         edge of the last selected cell, computed from the host's
+         bounding box + xterm's current cell metrics. We don't reach
+         into xterm internals — `term.cols` / `term.rows` plus the
+         host's clientWidth/Height give us a good-enough estimate
+         (xterm centres the canvas inside the host with small padding,
+         which we ignore; the popover has a `transform: translate`
+         offset to nudge it clear of the cell anyway). The popover is
+         `position: fixed` so we add the host's viewport rect. */
+      const rect = host.getBoundingClientRect();
+      let anchor: { x: number; y: number };
+      const sel = term.getSelectionPosition?.();
+      if (sel && term.cols > 0 && term.rows > 0) {
+        const cellW = rect.width / term.cols;
+        const cellH = rect.height / term.rows;
+        anchor = {
+          x: rect.left + (sel.end.x + 1) * cellW,
+          y: rect.top + (sel.end.y + 1) * cellH
+        };
+      } else {
+        /* Fallback when xterm doesn't have a selection rect (rare —
+           usually means the selection is entirely off-screen). Park
+           the chip at bottom-right of the viewport so it stays
+           reachable. */
+        anchor = { x: rect.right - 12, y: rect.bottom - 12 };
+      }
+      onSelectionChange({ text, anchor });
+    });
+
+    /* Imperative escape hatch for the parent: e.g. after the user
+       picks "Apply to Claude · Mona-Lisa", clear xterm's native
+       selection so the popover's dismissal isn't shadowed by xterm
+       still showing the highlight rectangle. We expose it as a ref
+       object instead of a callback prop because Svelte 5 doesn't
+       have a clean two-way handle pattern; the ref's `fn` field is
+       set on mount and consumed on demand by the parent. */
+    if (clearSelectionRef) {
+      clearSelectionRef.fn = () => {
+        term?.clearSelection();
+        onSelectionChange?.(null);
+      };
+    }
+
+    // Attach to a long-lived PTY-backed session: returns the existing
+    // one if this instance was rendered before, spawns a new one
+    // otherwise. Either way, the session's accumulated `chunks` are
+    // immediately replayed into the fresh xterm so the screen state
+    // matches what the user saw before navigating away.
     (async () => {
       try {
-        // A first fit BEFORE spawn lets us pass the actual terminal
-        // size to portable-pty so the shell starts with the right
-        // $COLUMNS / $LINES — otherwise we get a 80x24 default that
-        // wraps awkwardly until the first resize event lands.
         try { fit.fit(); } catch {}
         const cols = term.cols;
         const rows = term.rows;
-        const result = await invoke<{ id: string }>('terminal_spawn', {
-          opts: { cwd: autoLinkedCwd ?? cwd, cols, rows, name: null }
-        });
-        sessionId = result.id;
+        const sess = await ensureTerminalSession(instanceId, autoLinkedCwd ?? cwd, cols, rows);
 
-        unlistenOutput = await listen<string>(`terminal:output:${sessionId}`, (e) => {
-          writeChunk(e.payload);
-        });
-        unlistenExit = await listen<null>(`terminal:exit:${sessionId}`, () => {
+        /* Replay every captured chunk in order. Xterm processes ANSI
+           and writes to its scrollback buffer synchronously, so this
+           is fast even for long histories — the user sees the prior
+           session re-render in one frame. */
+        for (const chunkB64 of sess.chunks) writeChunk(chunkB64);
+        if (sess.exited) {
+          exited = true;
+          term?.write('\r\n\x1b[2m[shell exited]\x1b[0m\r\n');
+        }
+        if (sess.error) error = sess.error;
+
+        /* Subscribe to NEW output for live streaming. Replay above
+           caught up history; this handles everything that arrives
+           from the PTY going forward. The subscription auto-detaches
+           on unmount via the unsub fns in onDestroy. */
+        unsubOutput = subscribeTerminalOutput(instanceId, (b64) => writeChunk(b64));
+        unsubExit = subscribeTerminalExit(instanceId, () => {
           exited = true;
           term?.write('\r\n\x1b[2m[shell exited]\x1b[0m\r\n');
         });
-        unlistenError = await listen<string>(`terminal:error:${sessionId}`, (e) => {
-          error = e.payload;
+        unsubError = subscribeTerminalError(instanceId, (msg) => {
+          error = msg;
         });
+        /* Wipe-on-clear: when something else fires
+           `clearTerminalScrollback(instanceId)` (e.g. the Clear button
+           in TerminalApp's header), reset our xterm so the visible
+           buffer empties alongside the cached chunks. */
+        unsubClear = subscribeTerminalClear(instanceId, () => {
+          term?.reset();
+          exited = false;
+          error = null;
+        });
+
+        /* The ResizeObserver attached below will fire its initial
+           callback as soon as the host's first layout settles and
+           push the current dims via `fitAndPush` → `resizeTerminal`.
+           That call no-ops when the geometry already matches the
+           PTY's last-known dims (tracked inside terminalsState), so
+           we don't accidentally SIGWINCH the shell on a clean
+           remount and trigger prompt-redraw clear sequences. */
         busy = false;
       } catch (e) {
         error = typeof e === 'string' ? e : String(e);
@@ -223,19 +341,24 @@
     // Resize observer pushes new dimensions to the PTY — debounced
     // by browser frame timing already (ResizeObserver fires once
     // per layout). Using one observer over rAF avoids a jittery
-    // resize during column drag.
+    // resize during splitter drag.
     resizeObserver = new ResizeObserver(() => fitAndPush());
     resizeObserver.observe(host);
   });
 
   onDestroy(() => {
     resizeObserver?.disconnect();
-    unlistenOutput?.();
-    unlistenExit?.();
-    unlistenError?.();
-    if (sessionId) {
-      void invoke('terminal_kill', { id: sessionId }).catch(() => {});
-    }
+    /* Drop our subscriptions so we don't write into a torn-down xterm,
+       BUT do NOT kill the PTY — the global terminals-state keeps it
+       alive so the next mount of this instance can replay output. The
+       only paths that kill a PTY are explicit user actions: rail
+       "Remove instance" or the surface's restart() below. */
+    unsubOutput?.();
+    unsubExit?.();
+    unsubError?.();
+    unsubClear?.();
+    unsubOutput = unsubExit = unsubError = unsubClear = null;
+    if (clearSelectionRef) clearSelectionRef.fn = null;
     term?.dispose();
     term = null;
     fit = null;
@@ -244,13 +367,10 @@
   /**
    * Soft-restart: kill the current PTY, spawn a fresh one. Useful
    * when the user wants a clean shell after a crashed process or
-   * after editing $PATH and wanting it picked up.
+   * after editing $PATH and wanting it picked up. Also drops the
+   * captured scrollback so the new shell starts on an empty screen.
    */
   async function restart() {
-    if (sessionId) {
-      try { await invoke('terminal_kill', { id: sessionId }); } catch {}
-    }
-    sessionId = null;
     error = null;
     exited = false;
     busy = true;
@@ -258,23 +378,20 @@
     try {
       const cols = term?.cols ?? 120;
       const rows = term?.rows ?? 32;
-      const result = await invoke<{ id: string }>('terminal_spawn', {
-        opts: { cwd, cols, rows }
-      });
-      sessionId = result.id;
-      unlistenOutput?.(); unlistenExit?.(); unlistenError?.();
-      unlistenOutput = await listen<string>(`terminal:output:${sessionId}`, (e) => writeChunk(e.payload));
-      unlistenExit = await listen<null>(`terminal:exit:${sessionId}`, () => {
-        exited = true;
-        term?.write('\r\n\x1b[2m[shell exited]\x1b[0m\r\n');
-      });
-      unlistenError = await listen<string>(`terminal:error:${sessionId}`, (e) => { error = e.payload; });
+      await restartTerminalSession(instanceId, cwd, cols, rows);
+      /* Subscribers stay attached because they're keyed by instanceId,
+         not PTY id — `restartTerminalSession` rewires the listeners
+         under the same instance key. Same xterm, fresh PTY. */
       busy = false;
     } catch (e) {
       error = typeof e === 'string' ? e : String(e);
       busy = false;
     }
   }
+  /* Suppress lint noise for `restart` — it's intentionally retained
+     as a future-affordance hook that the rail / cwd-bar will wire in
+     a follow-up; not exposing it via UI yet keeps the surface focused. */
+  void restart;
 </script>
 
 <section
@@ -304,7 +421,7 @@
     min-height: 0;
     padding: 8px 4px 4px 8px;
     /* Inherit `--bg-0` from `.terminal-col` so header + body share
-       the same surface as every other column kind in the solo. */
+       the same surface as every other app kind in the solo. */
     overflow: hidden;
   }
   /* xterm.js draws into a sized child div — make it fill the host. */

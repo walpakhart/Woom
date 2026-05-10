@@ -70,7 +70,7 @@ export function buildJiraJql(
   }
   // Sprint clause is per-board; only meaningful with exactly one board
   // selected. Multi-board scope drops it (UI hides the sprint dropdown
-  // in that case too — see JiraColumn.svelte). Multi-sprint within
+  // in that case too — see Jira app.svelte). Multi-sprint within
   // one board fans out: numeric ids → `sprint IN (...)`, plus an
   // OR for backlog if it's in the mix.
   if (filters.boardIds.length <= 1 && filters.sprintIds.length > 0) {

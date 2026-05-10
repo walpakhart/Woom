@@ -414,7 +414,7 @@
   /* Gitignored files/dirs — dimmed + italic so they read as "outside git"
      at a glance (mirrors VS Code / IntelliJ). `.selected` still wins, so
      opening an ignored file still shows the accent highlight. */
-  .tree-row.ignored { color: var(--text-mute); font-style: italic; opacity: 0.65; }
+  .tree-row.ignored { color: var(--text-mute);  opacity: 0.65; }
   .tree-row.ignored:hover { color: var(--text-2); opacity: 0.85; }
   .tree-row.ignored.dir { color: var(--text-mute); font-weight: 400; }
   .tree-chevron {

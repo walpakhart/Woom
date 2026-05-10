@@ -3,15 +3,15 @@
      Layout (mockup v6):
        [activity 44] [editor (flex)] [inline-claude 280]
 
-     Center editor использует существующий <EditorView> — это
-     low-level CodeMirror-обёртка (file tree + tabs + code), а НЕ
-     EditorColumn (column-обёртка). Reuse 900 строк CodeMirror
-     integration. Новые: ActivityBar / InlineClaude — собственные
-     standalone-компоненты в lib/views/apps/editor/. */
+     Center editor reuses the existing <EditorView> — a low-level
+     CodeMirror wrapper (file tree + tabs + code) — for ~900 lines of
+     editor plumbing. New peers: ActivityBar / InlineClaude as
+     standalone components under lib/views/apps/editor/. */
 
   import EditorView from '$lib/components/editor/EditorView.svelte';
   import ActivityBar from './editor/ActivityBar.svelte';
   import InlineClaude from './editor/InlineClaude.svelte';
+  import Splitter from '$lib/components/ui/Splitter.svelte';
   import { sessionsState } from '$lib/state/sessions.svelte';
   import { kindForInstanceId, APP_INSTANCE_IDS, layoutState } from '$lib/state/layout.svelte';
   import { untrack } from 'svelte';
@@ -25,7 +25,7 @@
      *  picker. `sessionId` is optional — when present the parent
      *  activates that specific session before linking; when absent
      *  the parent links whatever's currently active in the agent
-     *  column (or spawns a new chat if the column is empty). */
+     *  app (or spawns a new chat if the agent has no sessions yet). */
     onLinkToAgent: (agentInstanceId: string, sessionId?: string) => void;
     onOpenClaude: () => void;
     /** Switches the top-level view to Settings (driven by +page.svelte
@@ -68,8 +68,8 @@
     activityTab = t;
   }
 
-  /** RepoPath для EditorView. Та же логика что и в EditorColumn — на
-   *  mount читаем из per-instance state slot, на change пишем обратно. */
+  /** RepoPath for EditorView — read from the per-instance state slot
+   *  on mount, written back on change. */
   let repoPath = $state(
     untrack(() => sessionsState.editorInstanceState[p.instanceId]?.repoPath ?? '')
   );
@@ -120,10 +120,10 @@
     for (const s of sessionsState.list) {
       if (!s.linkedToEditor) continue;
       if (s.linkedToEditorInstanceId !== p.instanceId) continue;
-      if (!s.columnInstanceId) continue;
-      const kind = kindForInstanceId(s.columnInstanceId);
+      if (!s.agentInstanceId) continue;
+      const kind = kindForInstanceId(s.agentInstanceId);
       if (kind !== 'claude' && kind !== 'cursor') continue;
-      out.push({ sessionId: s.id, agentInstanceId: s.columnInstanceId, kind, name: s.title });
+      out.push({ sessionId: s.id, agentInstanceId: s.agentInstanceId, kind, name: s.title });
     }
     return out;
   });
@@ -146,7 +146,8 @@
 
 <section
   class="app-shell se-shell"
-  style="--app-tone: var(--src-editor); --app-glow: rgba(204,120,92,0.42); grid-template-columns: {claudeSideOpen ? '44px 1fr 320px' : '44px 1fr'};"
+  class:se-shell--with-side={claudeSideOpen}
+  style="--app-tone: var(--src-editor); --app-glow: rgba(204,120,92,0.42);"
 >
   <div class="app-pane se-activity">
     <ActivityBar
@@ -159,36 +160,92 @@
     />
   </div>
 
-  <section class="app-pane se-center">
-    <div class="se-editor-area">
-      <EditorView
-        bind:repoPath
-        {agentInstances}
-        {linkedAgents}
-        {sidebarTab}
-        {instanceLabel}
-        instanceId={p.instanceId}
-        onLinkToAgent={p.onLinkToAgent}
-        onUnlinkAgent={unlinkSession}
-      />
-    </div>
-  </section>
-
   {#if claudeSideOpen}
-    <aside class="app-pane se-inline">
-      <InlineClaude
-        instanceId={p.instanceId}
-        onLinkToAgent={p.onLinkToAgent}
-        onClose={() => (claudeSideOpen = false)}
-        onOpenClaude={p.onOpenClaude}
-        onQuickSend={p.onQuickSend}
-        onOpenSession={p.onOpenSession}
-      />
-    </aside>
+    <!-- Splitter between the editor center and the InlineClaude pane.
+         User-resizable; width persists per-instance under
+         `editor-inline:<instanceId>` so each Vermeer / Rothko keeps
+         its own preferred reading layout across reloads. -->
+    <Splitter
+      direction="horizontal"
+      fixedSide="end"
+      persistKey="editor-inline:{p.instanceId}"
+      initial={320}
+      min={240}
+      max={560}
+    >
+      {#snippet start()}
+        <section class="app-pane se-center">
+          <div class="se-editor-area">
+            <EditorView
+              bind:repoPath
+              {agentInstances}
+              {linkedAgents}
+              {sidebarTab}
+              {instanceLabel}
+              instanceId={p.instanceId}
+              onLinkToAgent={p.onLinkToAgent}
+              onUnlinkAgent={unlinkSession}
+            />
+          </div>
+        </section>
+      {/snippet}
+      {#snippet end()}
+        <aside class="app-pane se-inline">
+          <InlineClaude
+            instanceId={p.instanceId}
+            linkKind="editor"
+            onClose={() => (claudeSideOpen = false)}
+            onOpenClaude={p.onOpenClaude}
+            onQuickSend={p.onQuickSend}
+            onOpenSession={p.onOpenSession}
+          />
+        </aside>
+      {/snippet}
+    </Splitter>
+  {:else}
+    <section class="app-pane se-center">
+      <div class="se-editor-area">
+        <EditorView
+          bind:repoPath
+          {agentInstances}
+          {linkedAgents}
+          {sidebarTab}
+          {instanceLabel}
+          instanceId={p.instanceId}
+          onLinkToAgent={p.onLinkToAgent}
+          onUnlinkAgent={unlinkSession}
+        />
+      </div>
+    </section>
   {/if}
 </section>
 
 <style>
+  /* Two grid layouts: with the InlineClaude pane open we put the
+     Splitter (which carries center + inline) in the second column;
+     without it the center occupies the rest. Both keep the activity
+     bar at 44px so the rail's vertical rhythm is consistent. */
+  .se-shell {
+    grid-template-columns: 44px 1fr;
+  }
+  .se-shell--with-side {
+    grid-template-columns: 44px minmax(0, 1fr);
+  }
+  /* Splitter snippets render bare into the panes — let them stretch
+     to fill the available pixels in each side of the splitter. */
+  .se-shell :global(.s-start),
+  .se-shell :global(.s-end) {
+    height: 100%;
+    display: flex;
+    min-width: 0;
+  }
+  .se-shell :global(.s-start) > :global(*),
+  .se-shell :global(.s-end) > :global(*) {
+    flex: 1 1 auto;
+    width: 100%;
+    min-width: 0;
+  }
+
   /* Activity pane — narrow 44px column. The pane chrome (border + shadow)
      comes from `.app-pane`; this rule just lets ActivityBar fill it. */
   .se-activity {
@@ -198,12 +255,17 @@
     width: 100%; height: 100%;
   }
 
-  /* Center pane — editor area fills the column. */
+  /* Center pane — editor area fills the column. Without `flex: 1`
+     on `.se-editor-area`, it auto-sized to EditorView's content
+     height (file tree + open buffer) and left a black gap below
+     the status bar all the way to the window's bottom. */
   .se-center {
     display: flex; flex-direction: column;
     min-height: 0;
+    height: 100%;
   }
   .se-editor-area {
+    flex: 1;
     display: flex;
     min-height: 0; min-width: 0;
     overflow: hidden;

@@ -23,7 +23,8 @@
 
 import {
   attachLineRangeMention,
-  setActiveSessionInColumn,
+  attachTerminalSelectionMention,
+  setActiveSessionInInstance,
   sessionsState
 } from '$lib/state/sessions.svelte';
 
@@ -54,7 +55,7 @@ export function applyRangeToAgent(args: ApplyRangeArgs): ApplyRangeResult {
     args.endLine
   );
   if (!token) return { ok: false, token: null };
-  setActiveSessionInColumn(args.agentInstanceId, args.sessionId);
+  setActiveSessionInInstance(args.agentInstanceId, args.sessionId);
   /* Tell the InlineClaude pane to auto-expand the row for this
      session. Both composers (the agent app's main one and the inline
      mini one) read from the same `sess.input`, so the freshly-pinned
@@ -62,6 +63,38 @@ export function applyRangeToAgent(args: ApplyRangeArgs): ApplyRangeResult {
      the expand signal just makes the inline row visible-by-default
      so the user doesn't have to click to find it. Consumed (cleared
      back to null) by InlineClaude's effect. */
+  sessionsState.requestInlineExpandFor = args.sessionId;
+  return { ok: true, token };
+}
+
+export interface ApplyTerminalArgs {
+  sessionId: string;
+  agentInstanceId: string;
+  /** Human-friendly terminal name (e.g. "Hopper") — surfaces in the
+   *  resulting `@token` so the agent (and the user) can tell which
+   *  terminal the paste came from. */
+  terminalLabel: string;
+  /** Captured selection text, exactly as `xterm.getSelection()` returned
+   *  it. Trimmed and whitespace-normalised inside the helper. */
+  content: string;
+}
+
+/** Terminal twin of `applyRangeToAgent`: pins the captured shell output
+ *  as a `@terminal/<label>:<hash>` mention onto the target session's
+ *  composer, makes that session active in its column, and signals the
+ *  inline-agents pane to auto-expand the row. The agent's prompt
+ *  receives the literal selection bytes inline (the prompt-builder's
+ *  non-`file` branch renders `@<id> — <title>\n\n<body>`), so it can
+ *  reason about an error message, log line, or command output the user
+ *  highlighted without needing a tool call. */
+export function applyTerminalSelectionToAgent(args: ApplyTerminalArgs): ApplyRangeResult {
+  const token = attachTerminalSelectionMention(
+    args.sessionId,
+    args.terminalLabel,
+    args.content
+  );
+  if (!token) return { ok: false, token: null };
+  setActiveSessionInInstance(args.agentInstanceId, args.sessionId);
   sessionsState.requestInlineExpandFor = args.sessionId;
   return { ok: true, token };
 }

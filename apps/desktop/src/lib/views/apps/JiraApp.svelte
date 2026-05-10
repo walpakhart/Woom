@@ -1,13 +1,16 @@
 <script lang="ts">
-  /* JiraApp — full-screen workspace для Jira.
-     Layout: [JiraList 380] [JiraDetailPane (flex)]
-     - List: standalone, читает inbox state, click → setает focusKey
-     - Detail: используем существующий JiraDetailPane (он уже
-       standalone-компонент с богатой logic'ой comments/transitions/
-       worklogs — переписывать заново нет смысла). CSS-override в
-       app.css делает .slide-over (его обёртка) inline-friendly. */
+  /* JiraApp — full-screen workspace for Jira.
+     Layout: [JiraList (resizable)] [JiraDetailPane (flex)]
+     - List: standalone, reads inbox state, click → sets focusKey.
+     - Detail: existing JiraDetailPane (already a standalone component
+       with the comments/transitions/worklogs logic — reused as-is).
+     - Splitter: width persists per-instance under
+       `woom:splitter:jira-list:<instanceId>` so the user's preferred
+       reading width sticks across reloads. */
   import JiraList from './jira/JiraList.svelte';
   import JiraDetailPane from '$lib/components/inbox/JiraDetailPane.svelte';
+  import Splitter from '$lib/components/ui/Splitter.svelte';
+  import BrandIcon from '$lib/components/ui/BrandIcon.svelte';
   import { inboxState } from '$lib/state/inbox.svelte';
   import type { JiraStatus, JiraItem } from '$lib/data';
 
@@ -30,78 +33,103 @@
 </script>
 
 <section
-  class="app-shell"
-  style="--app-tone: var(--src-jira); --app-glow: rgba(79,142,255,0.40); grid-template-columns: 380px 1fr;"
+  class="app-shell sj-shell"
+  style="--app-tone: var(--src-jira); --app-glow: rgba(79,142,255,0.40);"
 >
-  <JiraList
-    instanceId={p.instanceId}
-    jiraStatus={p.jiraStatus}
-    now={p.now}
-    onRefresh={p.onRefresh}
-    onOpenCreateIssue={p.onOpenCreateIssue}
-    onOpenBrowser={p.onOpenBrowser}
-    onDragStart={p.onDragStart}
-    onDragEnd={p.onDragEnd}
-    onCardMouseDown={p.onCardMouseDown}
-    isClickNotDrag={p.isClickNotDrag}
-    onSendToClaude={p.onSendToClaude}
-    onSendToCursor={p.onSendToCursor}
-  />
-
-  <section class="sj-detail app-pane">
-    {#if inboxState.jiraFocusKey}
-      {@const focusKey = inboxState.jiraFocusKey}
-      <JiraDetailPane
-        issueKey={focusKey}
+  <Splitter
+    direction="horizontal"
+    fixedSide="start"
+    persistKey="jira-list:{p.instanceId}"
+    initial={380}
+    min={280}
+    max={640}
+  >
+    {#snippet start()}
+      <JiraList
+        instanceId={p.instanceId}
+        jiraStatus={p.jiraStatus}
         now={p.now}
-        onClose={() => (inboxState.jiraFocusKey = null)}
-        onStatusChange={() => void p.refreshAllJiraInboxes({ silent: true })}
-        onSendToClaude={() => {
-          /* Resolve the focused ticket out of the Jira-per-instance
-             inbox slice — `inboxState.focusItem` only tracks GitHub
-             focus, and Jira tickets live in their own map keyed by
-             instance id. Fallback to a global flatten so cross-
-             instance focus still works. */
-          const items = inboxState.jiraItemsByInstance[p.instanceId] ?? [];
-          const it = items.find((x) => x.key === focusKey)
-            ?? (Object.values(inboxState.jiraItemsByInstance)
-                .flat()
-                .find((x) => x.key === focusKey) as JiraItem | undefined);
-          if (it) p.onSendToClaude(it);
-        }}
-        onSendToCursor={() => {
-          const items = inboxState.jiraItemsByInstance[p.instanceId] ?? [];
-          const it = items.find((x) => x.key === focusKey)
-            ?? (Object.values(inboxState.jiraItemsByInstance)
-                .flat()
-                .find((x) => x.key === focusKey) as JiraItem | undefined);
-          if (it) p.onSendToCursor(it);
-        }}
+        onRefresh={p.onRefresh}
+        onOpenCreateIssue={p.onOpenCreateIssue}
+        onOpenBrowser={p.onOpenBrowser}
+        onDragStart={p.onDragStart}
+        onDragEnd={p.onDragEnd}
+        onCardMouseDown={p.onCardMouseDown}
+        isClickNotDrag={p.isClickNotDrag}
+        onSendToClaude={p.onSendToClaude}
+        onSendToCursor={p.onSendToCursor}
       />
-    {:else}
-      <div class="app-empty">
-        <div class="app-empty-icon">
-          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M11.53 2L11.53 11.5Q11.53 13 13 13H22V11.5Q22 2 11.53 2ZM5 7.5V17Q5 18.5 6.5 18.5H15.5V17Q15.5 7.5 5 7.5Z"/></svg>
-        </div>
-        <h2 class="app-empty-h">Pick a ticket</h2>
-        <p class="app-empty-p">
-          Click an item on the left to read it inline. Drop it onto a Claude
-          session to hand it to the agent — the Jira workspace stays in sync.
-        </p>
-      </div>
-    {/if}
-  </section>
+    {/snippet}
+    {#snippet end()}
+      <section class="sj-detail app-pane">
+        {#if inboxState.jiraFocusKey}
+          {@const focusKey = inboxState.jiraFocusKey}
+          <JiraDetailPane
+            issueKey={focusKey}
+            now={p.now}
+            onClose={() => (inboxState.jiraFocusKey = null)}
+            onStatusChange={() => void p.refreshAllJiraInboxes({ silent: true })}
+            onSendToClaude={() => {
+              const items = inboxState.jiraItemsByInstance[p.instanceId] ?? [];
+              const it = items.find((x) => x.key === focusKey)
+                ?? (Object.values(inboxState.jiraItemsByInstance)
+                    .flat()
+                    .find((x) => x.key === focusKey) as JiraItem | undefined);
+              if (it) p.onSendToClaude(it);
+            }}
+            onSendToCursor={() => {
+              const items = inboxState.jiraItemsByInstance[p.instanceId] ?? [];
+              const it = items.find((x) => x.key === focusKey)
+                ?? (Object.values(inboxState.jiraItemsByInstance)
+                    .flat()
+                    .find((x) => x.key === focusKey) as JiraItem | undefined);
+              if (it) p.onSendToCursor(it);
+            }}
+          />
+        {:else}
+          <div class="app-empty">
+            <div class="app-empty-icon">
+              <BrandIcon kind="jira" size={28} />
+            </div>
+            <h2 class="app-empty-h">Pick a ticket</h2>
+            <p class="app-empty-p">
+              Click an item on the left to read it inline. Drop it onto a Claude
+              session to hand it to the agent — the Jira workspace stays in sync.
+            </p>
+          </div>
+        {/if}
+      </section>
+    {/snippet}
+  </Splitter>
 </section>
 
 <style>
+  /* Splitter snippets render bare into the splitter panes — give them
+     space to fill via `:global` so we don't need to wrap each in a
+     stretch container. The shell itself sits on the standard
+     `.app-shell` chrome (set by app.css), so all we add here is the
+     pane fillers + the unchanged JiraDetailPane override. */
+  .sj-shell :global(.s-start),
+  .sj-shell :global(.s-end) {
+    height: 100%;
+    display: flex;
+    min-width: 0;
+  }
+  .sj-shell :global(.s-start) > :global(*),
+  .sj-shell :global(.s-end) > :global(*) {
+    flex: 1 1 auto;
+    width: 100%;
+    min-width: 0;
+  }
+
   .sj-detail {
     flex: 1;
     min-width: 0;
     display: flex; flex-direction: column;
   }
-  /* JiraDetailPane не использует .slide-over wrap (он только внутри
-     модального overlay в +page.svelte). Здесь рендерится сразу как
-     корневой .jdp элемент — растягиваем его на весь pane. */
+  /* JiraDetailPane is normally rendered inside the `.slide-over` modal
+     overlay in +page.svelte. Here it renders as the bare `.jdp` root —
+     stretch it to fill the pane. */
   .sj-detail :global(.jdp) {
     flex: 1; min-height: 0;
     display: flex; flex-direction: column;

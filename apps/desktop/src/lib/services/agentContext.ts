@@ -110,7 +110,7 @@ export function buildAgentAppContext(callingSessionId: string): string {
   // live here exclusively. Keep the section delimiter so the agent
   // can visually parse where the current state begins.
   const calling = sessionsState.list.find((s) => s.id === callingSessionId);
-  const callingInstanceId = calling?.columnInstanceId ?? null;
+  const callingInstanceId = calling?.agentInstanceId ?? null;
 
   lines.push('');
   lines.push('---');

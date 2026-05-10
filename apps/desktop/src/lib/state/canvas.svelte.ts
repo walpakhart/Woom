@@ -132,7 +132,7 @@ export const canvasState = $state<{
    *  open, dropped on close. */
   ephemeral: Record<string, CanvasEphemeral>;
   /** Last persistCanvas() timestamp per canvas id. Drives the
-   *  auto-save indicator on CanvasColumn (M4 §2.10.1). UI flashes
+   *  auto-save indicator on CanvasSurface (M4 §2.10.1). UI flashes
    *  for ~1 s after the value bumps. */
   lastSavedAt: Record<string, number>;
 }>({
@@ -157,7 +157,7 @@ function ensureEphemeral(canvasId: string): CanvasEphemeral {
 
 /** Ask the column rendering this canvas to pan the camera onto a shape.
  *  Set by the `canvas_focus` MCP tool dispatcher; consumed by the
- *  CanvasColumn's $effect, which animates the camera and clears the
+ *  CanvasSurface's $effect, which animates the camera and clears the
  *  field. Safe to call when no column is currently rendering the
  *  canvas — the request just sits there until one mounts. */
 export function requestCanvasFocus(canvasId: string, shapeId: string) {

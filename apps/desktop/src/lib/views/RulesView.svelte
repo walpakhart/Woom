@@ -32,9 +32,9 @@
   }
   .rules-header { padding: 8px 0 28px; max-width: 880px; margin: 0 auto; width: 100%; }
   .view-title {
-    font-family: 'Instrument Serif', 'New York', Georgia, serif;
-    font-size: 38px; font-weight: 400;
-    font-style: italic;
+    font-family: 'Geist', 'Inter', -apple-system, system-ui, sans-serif;
+    font-size: 38px; font-weight: 600;
+    
     letter-spacing: -0.02em;
     color: var(--text-0);
     margin: 0 0 6px;

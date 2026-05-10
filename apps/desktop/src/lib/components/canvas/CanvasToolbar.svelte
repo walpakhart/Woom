@@ -5,7 +5,7 @@
   // canvas.svelte.ts; adding a new tool = update both.
   //
   // Keyboard shortcuts are listed in tooltips and handled by
-  // CanvasColumn's window keydown listener — this component just
+  // CanvasSurface's window keydown listener — this component just
   // surfaces them visually.
 
   import type { CanvasTool } from '$lib/state/canvas.svelte';

@@ -703,8 +703,8 @@
     margin: auto;
   }
   .jl-empty-h, .jl-error-h {
-    font-family: 'Instrument Serif', 'New York', Georgia, serif;
-    font-size: 22px; font-weight: 400; letter-spacing: -0.015em;
+    font-family: 'Geist', 'Inter', -apple-system, system-ui, sans-serif;
+    font-size: 22px; font-weight: 600; letter-spacing: -0.015em;
     color: var(--text-0);
     margin: 0 0 10px;
   }

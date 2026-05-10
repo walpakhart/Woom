@@ -5,6 +5,7 @@
      Apply to main / Discard), label "Linked apps" + linked-list rows. */
 
   import { sessionsState } from '$lib/state/sessions.svelte';
+  import BrandIcon from '$lib/components/ui/BrandIcon.svelte';
 
   type Kind = 'claude' | 'cursor';
 
@@ -158,10 +159,8 @@
       </div>
     {:else}
       <div class="wts-empty">
-        <div class="wts-empty-icon">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
-            <path d="M12 2 L14.5 9.5 L22 12 L14.5 14.5 L12 22 L9.5 14.5 L2 12 L9.5 9.5 Z" />
-          </svg>
+        <div class="wts-empty-icon" data-agent={p.kind}>
+          <BrandIcon kind={p.kind} size={26} />
         </div>
         <p class="wts-empty-h serif">Pick a session</p>
         <p class="wts-empty-p">Worktree, diff, and quick actions appear here once a session is active.</p>
@@ -317,21 +316,39 @@
     padding: 40px 20px;
     margin: auto;
   }
+  /* Pick-a-session icon — agent's brand color (coral for Claude,
+     neutral grey for Cursor) so the empty state advertises which
+     agent's worktree pane this is. */
   .wts-empty-icon {
     width: 56px; height: 56px;
     margin: 0 auto 20px;
-    display: grid; place-items: center;
+    display: inline-flex; align-items: center; justify-content: center;
     border-radius: 14px;
     background: color-mix(in srgb, var(--app-tone, var(--accent)) 10%, var(--bg-2));
     color: var(--app-tone, var(--accent));
     box-shadow:
       inset 0 0 0 1px color-mix(in srgb, var(--app-tone, var(--accent)) 24%, transparent),
       0 0 24px var(--app-glow);
+    line-height: 0;
   }
-  .wts-empty-icon svg { width: 26px; height: 26px; }
+  .wts-empty-icon[data-agent="claude"] {
+    color: var(--src-claude);
+    background: color-mix(in srgb, var(--src-claude) 12%, var(--bg-2));
+    box-shadow:
+      inset 0 0 0 1px color-mix(in srgb, var(--src-claude) 26%, transparent),
+      0 0 24px color-mix(in srgb, var(--src-claude) 32%, transparent);
+  }
+  .wts-empty-icon[data-agent="cursor"] {
+    color: var(--src-cursor);
+    background: color-mix(in srgb, var(--src-cursor) 12%, var(--bg-2));
+    box-shadow:
+      inset 0 0 0 1px color-mix(in srgb, var(--src-cursor) 26%, transparent),
+      0 0 24px color-mix(in srgb, var(--src-cursor) 30%, transparent);
+  }
+  .wts-empty-icon svg { width: 28px; height: 28px; display: block; }
   .wts-empty-h {
-    font-family: 'Instrument Serif', 'New York', Georgia, serif;
-    font-size: 22px; font-weight: 400; letter-spacing: -0.015em;
+    font-family: 'Geist', 'Inter', -apple-system, system-ui, sans-serif;
+    font-size: 22px; font-weight: 600; letter-spacing: -0.015em;
     color: var(--text-0);
     margin: 0 0 10px;
   }

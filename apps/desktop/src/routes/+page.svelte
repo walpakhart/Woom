@@ -23,6 +23,8 @@
   import EditorApp from '$lib/views/apps/EditorApp.svelte';
   import CanvasApp from '$lib/views/apps/CanvasApp.svelte';
   import TerminalApp from '$lib/views/apps/TerminalApp.svelte';
+  import HomeApp from '$lib/views/apps/HomeApp.svelte';
+  import BrandIcon from '$lib/components/ui/BrandIcon.svelte';
   import CommandPalette from '$lib/components/ui/CommandPalette.svelte';
   import ModalsRoot from '$lib/components/modals/ModalsRoot.svelte';
   import {
@@ -101,7 +103,7 @@
     truncateSessionAt,
     setSessionInput,
     attachPathsToSession,
-    setActiveSessionInColumn,
+    setActiveSessionInInstance,
     orphanSessionsForInstance,
     genId,
     genUuid
@@ -211,6 +213,7 @@
   import { basename, formatToolUse, isImagePath, truncInline } from '$lib/format';
 
   type View =
+    | 'home'
     | 'jiraApp'
     | 'githubApp'
     | 'sentryApp'
@@ -292,7 +295,7 @@
   // via `bind:this` so cross-cutting actions (e.g. merging a PR) can refresh
   // the repo items list.
   // Legacy GithubTab repositories binding — kept as null since the
-  // tab view is gone (GithubColumn does both inbox + focus now).
+  // tab view is gone (GitHub app does both inbox + focus now).
   // Removing this would also remove the optional-chained refresh hook
   // below, so we keep the binding ref for backward compatibility.
   let repositoriesView: { refreshItems: () => void } | null = null;
@@ -447,7 +450,7 @@
   // singletons always exist so there's nothing to spawn.
   $effect(() => {
     if (connectedClaude && sessionsState.list.length === 0) {
-      newClaudeSession({ title: 'Chat 1', columnInstanceId: APP_INSTANCE_IDS.claude });
+      newClaudeSession({ title: 'Chat 1', agentInstanceId: APP_INSTANCE_IDS.claude });
     }
   });
 
@@ -1012,7 +1015,7 @@
         e.dataTransfer.setData('text/plain', payload.path);
         attachDragChip(e, payload.isDir ? 'dir' : 'file', payload.name);
       }
-      /* `chat-message` payloads are dragstart-handled inside AgentColumn
+      /* `chat-message` payloads are dragstart-handled inside AgentApp
          itself (which sets dragState directly). This `+page.svelte`
          path is for the inbox / file-tree drags; chat messages don't
          flow through `onDragStart` here. */
@@ -1162,14 +1165,14 @@
     // column, then any session bound here, then a fresh one of this kind.
     const activeId = sessionsState.activeByInstance[instanceId];
     let target = activeId ? sessionsState.list.find((s) => s.id === activeId) ?? null : null;
-    if (!target) target = sessionsState.list.find((s) => s.columnInstanceId === instanceId) ?? null;
+    if (!target) target = sessionsState.list.find((s) => s.agentInstanceId === instanceId) ?? null;
     if (!target) {
-      const id = newClaudeSession({ agentKind: kind, columnInstanceId: instanceId });
+      const id = newClaudeSession({ agentKind: kind, agentInstanceId: instanceId });
       target = sessionsState.list.find((s) => s.id === id) ?? null;
     }
     if (!target) return 0;
     const n = await attachBlobsToSession(target.id, blobs);
-    if (n > 0) setActiveSessionInColumn(instanceId, target.id);
+    if (n > 0) setActiveSessionInInstance(instanceId, target.id);
     return n;
   }
 
@@ -1198,16 +1201,16 @@
     const pickTarget = (): ClaudeSession | null => {
       const activeId = sessionsState.activeByInstance[instanceId];
       let t = activeId ? sessionsState.list.find((s) => s.id === activeId) ?? null : null;
-      if (!t) t = sessionsState.list.find((s) => s.columnInstanceId === instanceId) ?? null;
+      if (!t) t = sessionsState.list.find((s) => s.agentInstanceId === instanceId) ?? null;
       if (!t) {
         // Adopt a floating session of the same kind if one exists.
         t = sessionsState.list.find(
-          (s) => s.agentKind === kind && s.columnInstanceId === null
+          (s) => s.agentKind === kind && s.agentInstanceId === null
         ) ?? null;
-        if (t) updateSession(t.id, { columnInstanceId: instanceId });
+        if (t) updateSession(t.id, { agentInstanceId: instanceId });
       }
       if (!t) {
-        const id = newClaudeSession({ agentKind: kind, columnInstanceId: instanceId });
+        const id = newClaudeSession({ agentKind: kind, agentInstanceId: instanceId });
         t = sessionsState.list.find((s) => s.id === id) ?? null;
       }
       return t;
@@ -1253,7 +1256,7 @@
           // Auto-bind cwd to the repo that file lives in, if not already set.
           cwd: target.cwd ?? deriveCwd(path, isDir)
         });
-        setActiveSessionInColumn(instanceId, target.id);
+        setActiveSessionInInstance(instanceId, target.id);
       }
       clearAgentDragState();
       setDragPayload(null);
@@ -1284,7 +1287,7 @@
         const target = pickTarget();
         if (target) {
           const n = attachPathsToSession(target.id, paths);
-          if (n > 0) setActiveSessionInColumn(instanceId, target.id);
+          if (n > 0) setActiveSessionInInstance(instanceId, target.id);
         }
         clearAgentDragState();
         justDragged = true;
@@ -1304,7 +1307,7 @@
       const target = pickTarget();
       if (target) {
         void attachBlobsToSession(target.id, imageBlobs).then((n) => {
-          if (n > 0) setActiveSessionInColumn(instanceId, target.id);
+          if (n > 0) setActiveSessionInInstance(instanceId, target.id);
         });
       }
       clearAgentDragState();
@@ -1368,7 +1371,7 @@
         input: target.input + sep + `@${mention.externalId} `,
         mentions: [...target.mentions, mention]
       });
-      setActiveSessionInColumn(instanceId, target.id);
+      setActiveSessionInInstance(instanceId, target.id);
     }
 
     clearAgentDragState();
@@ -1466,15 +1469,15 @@
     const mention = mentionFromInboxPayload(payload);
     const activeId = sessionsState.activeByInstance[instanceId];
     let target = activeId ? sessionsState.list.find((s) => s.id === activeId) ?? null : null;
-    if (!target) target = sessionsState.list.find((s) => s.columnInstanceId === instanceId) ?? null;
+    if (!target) target = sessionsState.list.find((s) => s.agentInstanceId === instanceId) ?? null;
     if (!target) {
       target = sessionsState.list.find(
-        (s) => s.agentKind === kind && s.columnInstanceId === null
+        (s) => s.agentKind === kind && s.agentInstanceId === null
       ) ?? null;
-      if (target) updateSession(target.id, { columnInstanceId: instanceId });
+      if (target) updateSession(target.id, { agentInstanceId: instanceId });
     }
     if (!target) {
-      const id = newClaudeSession({ agentKind: kind, columnInstanceId: instanceId });
+      const id = newClaudeSession({ agentKind: kind, agentInstanceId: instanceId });
       target = sessionsState.list.find((s) => s.id === id) ?? null;
     }
     if (!target) return;
@@ -1489,7 +1492,7 @@
       input: tokenAlreadyInInput ? target.input : target.input + sep + `@${mention.externalId} `,
       mentions: [...dedup, mention]
     });
-    setActiveSessionInColumn(instanceId, target.id);
+    setActiveSessionInInstance(instanceId, target.id);
     view = kind === 'claude' ? 'claudeApp' : 'cursorApp';
   }
 
@@ -1594,11 +1597,59 @@
     }
   }
 
+  /** Bind the active session to a specific terminal instance from the
+   *  cwd-bar's "Link terminal…" picker. Thin wrapper around
+   *  `linkSessionToTerminal` that resolves the active session for the
+   *  caller (the picker only knows which terminal the user picked). */
+  function linkActiveSessionToTerminal(terminalInstanceId: string) {
+    if (!activeSession) return;
+    linkSessionToTerminal(terminalInstanceId, activeSession.id);
+  }
+
+  /** Drop the active session's terminal link. Wired to the cwd-bar's
+   *  terminal chip × so the user can untap a chat without bouncing
+   *  to the terminal app. */
+  function toggleSessionTerminalLink() {
+    if (!activeSession) return;
+    if (activeSession.linkedTerminalInstanceId) {
+      unlinkSessionFromTerminal(activeSession.id);
+    } else {
+      linkSessionToTerminal(layoutState.activeInstance.terminal, activeSession.id);
+    }
+  }
+
   /** Initiate a link from the Editor side. Always links the *currently
       active* session in the target agent column — never spawns a new chat.
       The chat's cwd just snaps to the editor's folder and the session
       becomes linked. If the column has no active session, we create one
       (empty column → there was nothing to link). */
+  /** Link a chat session to this terminal instance — mirror of
+   *  `linkEditorToAgent` but for the terminal side. After linking, the
+   *  session's MCP `terminal_run` / `terminal_write` default to this
+   *  terminal id, AND selecting text in this terminal will surface
+   *  an "Apply to <agent>" chip wired to the same session. We don't
+   *  touch cwd here — the terminal uses its session-derived
+   *  `autoLinkedCwd` only when the chat ALSO links an editor; if the
+   *  user just links a chat-to-terminal (no editor link), the
+   *  terminal keeps whatever cwd was already set. */
+  function linkSessionToTerminal(terminalInstanceId: string, sessionId: string) {
+    const sess = sessionsState.list.find((s) => s.id === sessionId);
+    if (!sess) return;
+    /* Floating sessions (agentInstanceId === null) need a canonical
+       agent-app id so the terminal's inline-agents pane can render
+       their card AND surface "Apply to <agent>" — both consumers
+       require a non-null id to resolve which app to route into. We
+       use the singleton app id for the session's kind, which matches
+       what `setActiveSessionInInstance` would set on first focus. */
+    const patch: Partial<typeof sess> = { linkedTerminalInstanceId: terminalInstanceId };
+    if (!sess.agentInstanceId) patch.agentInstanceId = APP_INSTANCE_IDS[sess.agentKind];
+    updateSession(sessionId, patch);
+  }
+
+  function unlinkSessionFromTerminal(sessionId: string) {
+    updateSession(sessionId, { linkedTerminalInstanceId: null });
+  }
+
   function linkEditorToAgent(
     editorInstanceId: string,
     agentInstanceId: string,
@@ -1616,12 +1667,12 @@
       ? sessionsState.list.find((s) => s.id === sessionId) ?? null
       : null;
     if (explicit) {
-      setActiveSessionInColumn(agentInstanceId, explicit.id);
+      setActiveSessionInInstance(agentInstanceId, explicit.id);
       updateSession(explicit.id, {
         cwd: editorPath,
         linkedToEditor: true,
         linkedToEditorInstanceId: editorInstanceId,
-        columnInstanceId: agentInstanceId
+        agentInstanceId: agentInstanceId
       });
       return;
     }
@@ -1634,7 +1685,7 @@
         cwd: editorPath,
         linkedToEditor: true,
         linkedToEditorInstanceId: editorInstanceId,
-        columnInstanceId: agentInstanceId
+        agentInstanceId: agentInstanceId
       });
     } else {
       newClaudeSession({
@@ -1642,7 +1693,7 @@
         cwd: editorPath,
         linkedToEditor: true,
         linkedToEditorInstanceId: editorInstanceId,
-        columnInstanceId: agentInstanceId
+        agentInstanceId: agentInstanceId
       });
     }
   }
@@ -1808,7 +1859,7 @@
 
   /** Spawn a fresh chat in the Claude/Cursor singleton. */
   function spawnAgentChat(kind: 'claude' | 'cursor') {
-    newClaudeSession({ agentKind: kind, columnInstanceId: APP_INSTANCE_IDS[kind] });
+    newClaudeSession({ agentKind: kind, agentInstanceId: APP_INSTANCE_IDS[kind] });
   }
 
   /** Keep every linked session's cwd in sync with the editor singleton's
@@ -1916,7 +1967,7 @@
     thinkingStartedAt = null;
   }
 
-  // Thin wrapper around `runCompactSessionService` so the AgentColumn
+  // Thin wrapper around `runCompactSessionService` so the AgentApp
   // prop binding (`onCompactSession={runCompactSession}`) keeps the
   // same shape while the body lives in `lib/services/agentCompact.ts`.
   // Threads through the two component-local pieces: `editorRepoPath`
@@ -1930,7 +1981,7 @@
 
   /* Session transcript export (M4 §2.2.8). Copies the rendered
    * Markdown / JSON to the clipboard — caller picks the format via
-   * the AgentColumn export-chip click handler. Toast confirms so
+   * the AgentApp export-chip click handler. Toast confirms so
    * the user knows the clipboard now holds something. */
   async function exportSession(sessionId: string, format: 'markdown' | 'json') {
     const session = sessionsState.list.find((s) => s.id === sessionId);
@@ -3283,14 +3334,14 @@
       case 'chat-message-card': {
         // Activate the session in the agent solo it lives on, then switch
         // the rail to that app. App singletons mean we can resolve the
-        // kind from the session's `columnInstanceId` directly.
+        // kind from the session's `agentInstanceId` directly.
         const sessionId = typeof p.sessionId === 'string' ? p.sessionId : '';
         if (!sessionId) return;
         const sess = sessionsState.list.find((s) => s.id === sessionId);
-        if (!sess?.columnInstanceId) return;
-        const kind = kindForInstanceId(sess.columnInstanceId);
+        if (!sess?.agentInstanceId) return;
+        const kind = kindForInstanceId(sess.agentInstanceId);
         if (kind !== 'claude' && kind !== 'cursor') return;
-        setActiveSessionInColumn(sess.columnInstanceId, sessionId);
+        setActiveSessionInInstance(sess.agentInstanceId, sessionId);
         view = kind === 'cursor' ? 'cursorApp' : 'claudeApp';
         return;
       }
@@ -4437,11 +4488,11 @@
     <!-- Themed empty card — shown when a solo view's source isn't
          connected yet. -->
 
-    {#snippet soloEmpty(label: string, tone: string, glow: string, blurb: string)}
+    {#snippet soloEmpty(label: string, tone: string, glow: string, blurb: string, kind: 'github' | 'jira' | 'sentry' | 'claude' | 'cursor')}
       <section class="full-center app-stub-shell" style="--app-tone: {tone}; --app-glow: {glow};">
         <div class="app-stub">
           <div class="app-stub-icon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 10h18"/></svg>
+            <BrandIcon {kind} size={36} />
           </div>
           <h2 class="app-stub-title">{label}</h2>
           <p class="app-stub-sub">{blurb}</p>
@@ -4452,9 +4503,25 @@
       </section>
     {/snippet}
 
-    {#if view === 'githubApp'}
+    {#if view === 'home'}
+      <HomeApp
+        {now}
+        onNavigate={(v) => (view = v)}
+        onOpenSession={(sessionId, agentInstanceId) => {
+          const sess = sessionsState.list.find((x) => x.id === sessionId);
+          if (!sess) return;
+          setActiveSessionInInstance(agentInstanceId, sessionId);
+          view = sess.agentKind === 'cursor' ? 'cursorApp' : 'claudeApp';
+        }}
+        onNewChat={(kind) => {
+          newClaudeSession({ agentKind: kind, agentInstanceId: APP_INSTANCE_IDS[kind] });
+          view = kind === 'cursor' ? 'cursorApp' : 'claudeApp';
+        }}
+      />
+
+    {:else if view === 'githubApp'}
       {#if !connectedGithub}
-        {@render soloEmpty('GitHub', 'var(--src-github)', 'rgba(181,132,255,0.40)', 'Connect GitHub first — paste a PAT in Connections to see PRs and issues.')}
+        {@render soloEmpty('GitHub', 'var(--src-github)', 'rgba(181,132,255,0.40)', 'Connect GitHub first — paste a PAT in Connections to see PRs and issues.', 'github')}
       {:else}
         <GithubApp
           instanceId={APP_INSTANCE_IDS.github}
@@ -4489,7 +4556,7 @@
 
     {:else if view === 'jiraApp'}
       {#if !connectedJira}
-        {@render soloEmpty('Jira', 'var(--src-jira)', 'rgba(79,142,255,0.40)', 'Connect Jira first — workspace URL + email + API token in Connections.')}
+        {@render soloEmpty('Jira', 'var(--src-jira)', 'rgba(79,142,255,0.40)', 'Connect Jira first — workspace URL + email + API token in Connections.', 'jira')}
       {:else}
         <JiraApp
           instanceId={APP_INSTANCE_IDS.jira}
@@ -4510,7 +4577,7 @@
 
     {:else if view === 'sentryApp'}
       {#if !connectedSentry}
-        {@render soloEmpty('Sentry', 'var(--src-sentry)', 'rgba(232,130,100,0.40)', 'Connect Sentry first — host + organization slug + API token in Connections.')}
+        {@render soloEmpty('Sentry', 'var(--src-sentry)', 'rgba(110,80,155,0.40)', 'Connect Sentry first — host + organization slug + API token in Connections.', 'sentry')}
       {:else}
         <SentryApp
           instanceId={APP_INSTANCE_IDS.sentry}
@@ -4549,7 +4616,7 @@
 
     {:else if view === 'claudeApp'}
       {#if !connectedClaude}
-        {@render soloEmpty('Claude', 'var(--src-claude)', 'rgba(232,155,125,0.42)', 'Connect Claude Code first — the agent needs a working CLI.')}
+        {@render soloEmpty('Claude', 'var(--src-claude)', 'rgba(232,155,125,0.42)', 'Connect Claude Code first — the agent needs a working CLI.', 'claude')}
       {:else}
         <AgentApp
           kind="claude"
@@ -4563,6 +4630,8 @@
           onClearCwd={clearCwd}
           onToggleEditorLink={toggleSessionEditorLink}
           onLinkToEditorInstance={linkActiveSessionToEditor}
+          onToggleTerminalLink={toggleSessionTerminalLink}
+          onLinkToTerminalInstance={linkActiveSessionToTerminal}
           onCreateWorktree={createWorktree}
           onOpenWorktreeDiff={openWorktreeDiff}
           onOpenWorktreeInEditor={openWorktreeInEditor}
@@ -4586,7 +4655,7 @@
 
     {:else if view === 'cursorApp'}
       {#if !connectedCursor}
-        {@render soloEmpty('Cursor', 'var(--src-cursor)', 'rgba(220,220,220,0.30)', 'Cursor CLI not detected. Install Cursor and re-check connections.')}
+        {@render soloEmpty('Cursor', 'var(--src-cursor)', 'rgba(220,220,220,0.30)', 'Cursor CLI not detected. Install Cursor and re-check connections.', 'cursor')}
       {:else}
         <AgentApp
           kind="cursor"
@@ -4600,6 +4669,8 @@
           onClearCwd={clearCwd}
           onToggleEditorLink={toggleSessionEditorLink}
           onLinkToEditorInstance={linkActiveSessionToEditor}
+          onToggleTerminalLink={toggleSessionTerminalLink}
+          onLinkToTerminalInstance={linkActiveSessionToTerminal}
           onCreateWorktree={createWorktree}
           onOpenWorktreeDiff={openWorktreeDiff}
           onOpenWorktreeInEditor={openWorktreeInEditor}
@@ -4636,7 +4707,7 @@
           onOpenSession={(sessionId, agentInstanceId) => {
             const sess = sessionsState.list.find((x) => x.id === sessionId);
             if (!sess) return;
-            setActiveSessionInColumn(agentInstanceId, sessionId);
+            setActiveSessionInInstance(agentInstanceId, sessionId);
             view = sess.agentKind === 'cursor' ? 'cursorApp' : 'claudeApp';
           }}
         />
@@ -4653,6 +4724,17 @@
           instanceId={layoutState.activeInstance.terminal}
           cwd={editorRepoPath || null}
           onOpenClaude={() => (view = 'claudeApp')}
+          onOpenCursor={() => (view = 'cursorApp')}
+          onQuickSend={quickSendToSession}
+          onOpenSession={(sessionId, agentInstanceId) => {
+            const sess = sessionsState.list.find((x) => x.id === sessionId);
+            if (!sess) return;
+            setActiveSessionInInstance(agentInstanceId, sessionId);
+            view = sess.agentKind === 'cursor' ? 'cursorApp' : 'claudeApp';
+          }}
+          onLinkSession={(sessionId) =>
+            linkSessionToTerminal(layoutState.activeInstance.terminal, sessionId)}
+          onUnlinkSession={unlinkSessionFromTerminal}
         />
       {/key}
 
@@ -4778,8 +4860,8 @@
   .full-center { flex: 1; display: flex; align-items: center; justify-content: center; padding: 40px; }
   .empty { display: flex; flex-direction: column; align-items: center; gap: 16px; text-align: center; max-width: 420px; }
   .empty-title {
-    font-family: 'Instrument Serif', 'New York', Georgia, serif;
-    font-size: 28px; font-weight: 400;
+    font-family: 'Geist', 'Inter', -apple-system, system-ui, sans-serif;
+    font-size: 28px; font-weight: 600;
     margin: 14px 0 0; color: var(--text-0);
     letter-spacing: -0.02em; line-height: 1.18;
   }
@@ -4817,10 +4899,10 @@
       inset 0 0 0 1px color-mix(in srgb, var(--app-tone, var(--accent)) 32%, transparent),
       0 0 28px var(--app-glow, var(--accent-glow));
   }
-  .app-stub-icon svg { width: 30px; height: 30px; }
+  /* BrandIcon sets its own width/height — no per-svg sizing needed. */
   .app-stub-title {
-    font-family: 'Instrument Serif', 'New York', Georgia, serif;
-    font-size: 30px; font-weight: 400; letter-spacing: -0.02em;
+    font-family: 'Geist', 'Inter', -apple-system, system-ui, sans-serif;
+    font-size: 30px; font-weight: 600; letter-spacing: -0.02em;
     color: var(--text-0);
     margin: 0 0 12px;
   }

@@ -58,7 +58,7 @@ export function exportSessionJson(session: ClaudeSession): string {
     claudeModel: session.claudeModel,
     cursorModel: session.cursorModel,
     claudeUuid: session.claudeUuid,
-    columnInstanceId: session.columnInstanceId,
+    agentInstanceId: session.agentInstanceId,
     linkedToEditor: session.linkedToEditor,
     linkedToEditorInstanceId: session.linkedToEditorInstanceId,
     linkedCanvasId: session.linkedCanvasId,

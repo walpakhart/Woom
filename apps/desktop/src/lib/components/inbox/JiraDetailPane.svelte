@@ -729,8 +729,8 @@
   }
   .jdp-summary:hover { background: var(--bg-1); }
   .jdp-summary-text {
-    font-family: 'Instrument Serif', 'New York', Georgia, serif;
-    font-size: 30px; font-weight: 400; color: var(--text-0);
+    font-family: 'Geist', 'Inter', -apple-system, system-ui, sans-serif;
+    font-size: 30px; font-weight: 600; color: var(--text-0);
     letter-spacing: -0.02em;
     line-height: 1.18; margin: 0;
   }
@@ -763,7 +763,7 @@
   }
   .jdp-meta-val { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-0); }
   .jdp-avatar { width: 20px; height: 20px; border-radius: 50%; }
-  .jdp-none { color: var(--text-mute); font-style: italic; font-size: 12.5px; }
+  .jdp-none { color: var(--text-mute);  font-size: 12.5px; }
   .jdp-labels { flex-wrap: wrap; }
   .jdp-label {
     font-size: 11px; padding: 2px 7px;
@@ -813,7 +813,7 @@
   .jdp-popover-item:hover { background: var(--bg-3); color: var(--text-0); }
   .jdp-popover-item.active { background: var(--accent-soft); color: var(--accent-bright); }
   .jdp-popover-sub { margin-left: auto; font-size: 10.5px; color: var(--text-mute); }
-  .jdp-popover-state { padding: 8px 10px; font-size: 11.5px; color: var(--text-2); font-style: italic; }
+  .jdp-popover-state { padding: 8px 10px; font-size: 11.5px; color: var(--text-2);  }
 
   .jdp-transition-row {
     position: relative;

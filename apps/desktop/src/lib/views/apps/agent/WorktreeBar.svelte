@@ -1,7 +1,7 @@
 <script lang="ts">
   /* WorktreeBar — узкая полоска под ChatHeader.
      cwd chip + clear button + editor-link chip / picker + worktree
-     menu. По сути это новая версия cwd-bar из AgentColumn, но
+     menu. По сути это новая версия cwd-bar из AgentApp, но
      самостоятельная. */
   import { sessionsState, focusSession } from '$lib/state/sessions.svelte';
   import { APP_INSTANCE_IDS, layoutState } from '$lib/state/layout.svelte';
@@ -16,6 +16,16 @@
     onClearCwd: () => void;
     onToggleEditorLink: () => void;
     onLinkToEditorInstance: (id: string) => void;
+    /** Drop the active session's terminal link (sets
+     *  `linkedTerminalInstanceId` to null). Same shape as
+     *  `onToggleEditorLink` for consistency — the bar handles the chip
+     *  click; the parent decides what "unlink" means semantically. */
+    onToggleTerminalLink?: () => void;
+    /** Bind the active session to a specific terminal instance.
+     *  Optional so callers that don't want to surface the link
+     *  affordance can omit it; when undefined, the bar simply hides
+     *  the picker. */
+    onLinkToTerminalInstance?: (id: string) => void;
     onCreateWorktree: () => void;
     onOpenWorktreeDiff: () => void;
     onRemoveWorktree: () => void;
@@ -41,6 +51,23 @@
     if (!sess?.linkedToEditor || !sess.linkedToEditorInstanceId) return null;
     const inst = layoutState.instances.editor.find(
       (i) => i.id === sess.linkedToEditorInstanceId
+    );
+    return inst ? { id: inst.id, name: inst.name } : null;
+  });
+
+  /** All terminal instances currently open — used for the "Link
+   *  terminal…" picker. Mirror of `editorInstances` above. */
+  const terminalInstances = $derived(
+    layoutState.instances.terminal.map((i) => ({ id: i.id, name: i.name }))
+  );
+
+  /** The terminal-link chip data (or null when the active session
+   *  isn't bound to a terminal). Match-by-id so spawned terminals
+   *  surface their curated name (Hopper / Hokusai / …). */
+  const linkedTerminal = $derived.by(() => {
+    if (!sess?.linkedTerminalInstanceId) return null;
+    const inst = layoutState.instances.terminal.find(
+      (i) => i.id === sess.linkedTerminalInstanceId
     );
     return inst ? { id: inst.id, name: inst.name } : null;
   });
@@ -102,6 +129,30 @@
           onChange={(id) => { focusLocal(); p.onLinkToEditorInstance(id); }}
           placeholder="Link editor…"
           ariaLabel="Link to editor"
+        />
+      </div>
+    {/if}
+
+    <!-- Terminal link — same chip / picker pair as the editor link
+         but bound to the session's `linkedTerminalInstanceId`. Wired
+         to `linkSessionToTerminal` / `unlinkSessionFromTerminal` in
+         +page.svelte. Hidden entirely when the parent doesn't pass
+         the `onLinkToTerminalInstance` prop, so views that don't want
+         the affordance (e.g. embed contexts) get the old layout. -->
+    {#if sess.linkedTerminalInstanceId && linkedTerminal && p.onToggleTerminalLink}
+      <button class="wb-link wb-link--term" onclick={() => { focusLocal(); p.onToggleTerminalLink?.(); }} title="Linked to Terminal — click to unlink">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+        <span>{linkedTerminal.name}</span>
+        <svg class="wb-link-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
+      </button>
+    {:else if p.onLinkToTerminalInstance && terminalInstances.length > 0}
+      <div class="wb-link-picker">
+        <Dropdown
+          value=""
+          options={terminalInstances.map((t) => ({ value: t.id, label: `Link to ${t.name}` }))}
+          onChange={(id) => { focusLocal(); p.onLinkToTerminalInstance?.(id); }}
+          placeholder="Link terminal…"
+          ariaLabel="Link to terminal"
         />
       </div>
     {/if}
@@ -181,6 +232,18 @@
   .wb-link svg { width: 11px; height: 11px; }
   .wb-link-x { opacity: 0; transition: opacity 120ms; }
   .wb-link:hover .wb-link-x { opacity: 0.7; }
+
+  /* Terminal-link variant — uses the terminal source token so the
+     chip reads as a different beat from the (mint) editor-link
+     chip when both are present. */
+  .wb-link--term {
+    background: color-mix(in srgb, var(--src-term) 10%, transparent);
+    border-color: color-mix(in srgb, var(--src-term) 28%, transparent);
+    color: var(--src-term);
+  }
+  .wb-link--term:hover {
+    background: color-mix(in srgb, var(--src-term) 18%, transparent);
+  }
 
   .wb-link-picker { font-size: 11px; }
 

@@ -19,11 +19,12 @@
   import { relativeTime } from '$lib/data';
 
   /* Theme picker. Each entry encodes a tiny preview swatch (bg, text,
-     accent) so the user can eyeball the palette without applying. */
+     accent) so the user can eyeball the palette without applying.
+     Two palettes only — Iconic IS the dark variant under the W-mark
+     palette, so a separate "Dark" was retired (it was redundant). */
   const THEMES: { name: ThemeName; label: string; sub: string; bg: string; fg: string; accent: string }[] = [
-    { name: 'iconic', label: 'Iconic', sub: 'Molten gold on graphite', bg: '#0C1117', fg: '#EDE5D1', accent: '#E8A33A' },
-    { name: 'light',  label: 'Light',  sub: 'Tint cream + Shade chocolate', bg: '#FAEEE0', fg: '#2A1208', accent: '#4E2812' },
-    { name: 'dark',   label: 'Dark',   sub: 'Shade chocolate + Tint cream', bg: '#1A0E07', fg: '#FAEEE0', accent: '#FAEEE0' }
+    { name: 'iconic', label: 'Iconic', sub: 'Sage + mint on cool noir', bg: '#0E1112', fg: '#EBEFEC', accent: '#B0DCC8' },
+    { name: 'light',  label: 'Light',  sub: 'Sage + mint on cream',     bg: '#F1F5F2', fg: '#0E1B16', accent: '#2E5A4A' }
   ];
 
   /** 14 days in seconds — matches the SPEC §worktrees retention rule. */
@@ -870,9 +871,9 @@
   }
   .settings-header { padding: 8px 0 28px; max-width: 880px; margin: 0 auto; width: 100%; }
   .view-title {
-    font-family: 'Instrument Serif', 'New York', Georgia, serif;
-    font-size: 38px; font-weight: 400;
-    font-style: italic;
+    font-family: 'Geist', 'Inter', -apple-system, system-ui, sans-serif;
+    font-size: 38px; font-weight: 600;
+    
     letter-spacing: -0.02em;
     color: var(--text-0);
     margin: 0 0 6px;

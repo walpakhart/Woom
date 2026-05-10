@@ -42,13 +42,13 @@ export interface AgentStreamHandlers {
   /** Called with `thinking` content blocks emitted by reasoning models
    *  (Claude `*-thinking-*`, Cursor reasoning models). The default
    *  handler routes these into the assistant message's `thinking`
-   *  field — AgentColumn collapses them into an expandable pill so
+   *  field — AgentApp collapses them into an expandable pill so
    *  the user can inspect the chain-of-thought after the answer
    *  lands. Without this they'd be silently dropped. */
   onThinkingDelta?: (sessionId: string, delta: string) => void;
   /** Called with one tool-use trace segment per call (already formatted
    *  via `formatToolUse`). The default handler appends to the message's
-   *  `trace` field; AgentColumn collapses the trace into a "✓ N steps"
+   *  `trace` field; AgentApp collapses the trace into a "✓ N steps"
    *  pill above the answer body so the chat doesn't drown in
    *  read/edit/bash hints. Routed separately from `onAssistantDelta`
    *  so the assistant's actual reply text stays clean. */

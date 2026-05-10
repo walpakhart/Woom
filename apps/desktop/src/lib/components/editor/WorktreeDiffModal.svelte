@@ -212,8 +212,8 @@
   .wdf-row--add .wdf-marker, .wdf-row--add .wdf-text { color: var(--success); }
   .wdf-row--del { background: rgba(232, 130, 100, 0.10); }
   .wdf-row--del .wdf-marker, .wdf-row--del .wdf-text { color: var(--error); }
-  .wdf-row--hunk { background: rgba(232, 130, 100, 0.08); color: var(--accent-bright); font-style: italic; }
-  .wdf-row--meta { color: var(--text-2); font-style: italic; }
+  .wdf-row--hunk { background: rgba(232, 130, 100, 0.08); color: var(--accent-bright);  }
+  .wdf-row--meta { color: var(--text-2);  }
   .wdf-row--ctx { color: var(--text-1); }
   .wdf-marker { width: 18px; text-align: center; user-select: none; font-weight: 600; flex-shrink: 0; }
   .wdf-text { flex: 1; padding-right: 18px; }

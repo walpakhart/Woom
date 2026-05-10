@@ -6,6 +6,7 @@
 // one usually wants to read the other.
 
 export type View =
+  | 'home'
   | 'jiraApp'
   | 'githubApp'
   | 'sentryApp'

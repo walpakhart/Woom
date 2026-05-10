@@ -89,7 +89,7 @@
 
   /** Sessions whose `linkedCanvasId === activeCanvasId`. Drives the
    *  "Linked: <session>" chip in the header (parity with the
-   *  TerminalColumn chip) so the user sees from the canvas side
+   *  TerminalSurface chip) so the user sees from the canvas side
    *  which agent has the canvas-tools wired in. */
   const linkedSessions = $derived.by(() => {
     if (!activeCanvasId) return [];

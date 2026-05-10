@@ -12,7 +12,7 @@ export type PanelKind = 'github' | 'jira' | 'sentry' | 'claude' | 'cursor' | 'ed
     parser appends events as they arrive, merging consecutive same-kind
     runs (a wall of `text` deltas collapses into one event; a sequence
     of tool_use calls between two text blocks groups into one `trace`
-    event with multiple segments). The chat column renders events in
+    event with multiple segments). The chat surface renders events in
     order — text → markdown bubble, trace → collapsed "✓ N steps" pill.
     Without this the prior architecture lost interleaving (all tool
     hints fell into one pill at the top + all text concatenated below). */
@@ -144,8 +144,11 @@ export type ClaudeMessage = {
 export type Mention = {
   /** Where the mention was sourced from. `chat` is added in v8 for
    *  "@-mention another chat session" — used by the inline mention
-   *  picker so users can hand a session's context to another agent. */
-  source: 'github' | 'jira' | 'sentry' | 'file' | 'chat';
+   *  picker so users can hand a session's context to another agent.
+   *  `terminal` is added in v8 for "select-text-in-terminal → Apply
+   *  to agent" — body holds the captured shell output so the agent
+   *  reads the literal bytes instead of trying to resolve a path. */
+  source: 'github' | 'jira' | 'sentry' | 'file' | 'chat' | 'terminal';
   externalId: string;
   title: string;
   body: string | null;
@@ -270,7 +273,7 @@ export type ClaudeSession = {
       target this canvas; a brief canvas summary is injected into the
       system prompt at every turn so the agent knows what's there. Null
       = no canvas link (default). The id is the **library** canvas id,
-      not a column-instance id — multiple Canvas columns can pin the
+      not an app-instance id — multiple Canvas instances can pin the
       same canvas; the agent talks to the underlying record. */
   linkedCanvasId: string | null;
   /** When true, the session's `cwd` tracks the Editor's open folder live —
@@ -281,7 +284,7 @@ export type ClaudeSession = {
   /** Which Editor instance this session is linked to. When null and
       `linkedToEditor` is true, falls back to the first editor in the
       active solo. Explicit id lets the user keep a stable target even
-      when multiple Editor columns are open. */
+      when multiple Editor instances are open. */
   linkedToEditorInstanceId: string | null;
   /** Which Terminal instance this session is bound to. When set, the
    *  agent's MCP `terminal_run` / `terminal_write` tools default to
@@ -291,9 +294,10 @@ export type ClaudeSession = {
    *  cwd on next spawn — see `linkSessionToTerminal` in
    *  `sessions.svelte.ts`. */
   linkedTerminalInstanceId: string | null;
-  /** Which column instance this session is attached to. Null means the session
-      "floats" and will reattach to the first matching-kind column it finds. */
-  columnInstanceId: string | null;
+  /** Which agent-app instance (Claude or Cursor) this session lives in.
+      Null means the session "floats" and will reattach to the first
+      matching-kind app instance it encounters. */
+  agentInstanceId: string | null;
   /** One-shot recap to inject into the system prompt on the NEXT turn. Set
       whenever cwd changes — Claude / cursor-agent scope conversations by
       project, so a cwd switch starts a fresh CLI conversation that doesn't
