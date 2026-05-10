@@ -1651,6 +1651,16 @@
     updateSession(sessionId, { linkedTerminalInstanceId: null });
   }
 
+  function linkActiveSessionToCanvas(canvasId: string) {
+    if (!activeSession) return;
+    updateSession(activeSession.id, { linkedCanvasId: canvasId });
+  }
+
+  function toggleSessionCanvasLink() {
+    if (!activeSession) return;
+    updateSession(activeSession.id, { linkedCanvasId: null });
+  }
+
   function linkEditorToAgent(
     editorInstanceId: string,
     agentInstanceId: string,
@@ -4656,6 +4666,8 @@
           onLinkToEditorInstance={linkActiveSessionToEditor}
           onToggleTerminalLink={toggleSessionTerminalLink}
           onLinkToTerminalInstance={linkActiveSessionToTerminal}
+          onToggleCanvasLink={toggleSessionCanvasLink}
+          onLinkToCanvas={linkActiveSessionToCanvas}
           onCreateWorktree={createWorktree}
           onOpenWorktreeDiff={openWorktreeDiff}
           onOpenWorktreeInEditor={openWorktreeInEditor}
@@ -4695,6 +4707,8 @@
           onLinkToEditorInstance={linkActiveSessionToEditor}
           onToggleTerminalLink={toggleSessionTerminalLink}
           onLinkToTerminalInstance={linkActiveSessionToTerminal}
+          onToggleCanvasLink={toggleSessionCanvasLink}
+          onLinkToCanvas={linkActiveSessionToCanvas}
           onCreateWorktree={createWorktree}
           onOpenWorktreeDiff={openWorktreeDiff}
           onOpenWorktreeInEditor={openWorktreeInEditor}

@@ -9,6 +9,7 @@
   import Splitter from '$lib/components/ui/Splitter.svelte';
   import { canvasState } from '$lib/state/canvas.svelte';
   import { layoutState } from '$lib/state/layout.svelte';
+  import { sessionsState } from '$lib/state/sessions.svelte';
   import type { Shape } from '$lib/state/canvas.svelte';
 
   interface Props {
@@ -37,6 +38,16 @@
   const instanceLabel = $derived(
     layoutState.instances.canvas.find((i) => i.id === p.instanceId)?.name ?? 'Canvas'
   );
+
+  const activeCanvasId = $derived(canvasState.byInstance[p.instanceId]?.activeId ?? null);
+
+  /** Agent sessions linked to the current canvas document. */
+  const linkedSessions = $derived.by(() => {
+    if (!activeCanvasId) return [];
+    return sessionsState.list
+      .filter((s) => s.linkedCanvasId === activeCanvasId)
+      .map((s) => ({ id: s.id, title: s.title || 'Untitled chat', kind: s.agentKind }));
+  });
 </script>
 
 <section
@@ -79,12 +90,23 @@
         </div>
 
         <div class="sc-section">
-          <div class="sc-group-label mono">Agents · canvas tools</div>
-          <p class="sc-empty-p">
-            Any Claude / Cursor session can drive this canvas via the
-            <span class="mono">canvas_*</span> MCP tools — drop a card or
-            shape from the agent's chat to spawn it here.
-          </p>
+          <div class="sc-group-label mono">Linked agents</div>
+          {#if linkedSessions.length === 0}
+            <p class="sc-empty-p">
+              No agents linked. Link a session from the agent's cwd bar to drive
+              this canvas with <span class="mono">canvas_*</span> MCP tools.
+            </p>
+          {:else}
+            <div class="sc-linked-list">
+              {#each linkedSessions as ls (ls.id)}
+                <div class="sc-linked-item">
+                  <span class="sc-linked-dot" class:sc-linked-dot--cursor={ls.kind === 'cursor'}></span>
+                  <span class="sc-linked-name">{ls.title}</span>
+                  <span class="sc-linked-kind mono">{ls.kind}</span>
+                </div>
+              {/each}
+            </div>
+          {/if}
         </div>
           </div>
         </aside>
@@ -195,5 +217,27 @@
     font-family: 'JetBrains Mono', monospace; font-size: 11px;
     padding: 1px 5px; background: var(--bg-2); border: 1px solid var(--border);
     border-radius: 4px; color: var(--src-canvas);
+  }
+
+  .sc-linked-list { display: flex; flex-direction: column; gap: 6px; }
+  .sc-linked-item {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 10px;
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--src-canvas) 6%, transparent);
+    border: 1px solid color-mix(in srgb, var(--src-canvas) 16%, transparent);
+  }
+  .sc-linked-dot {
+    width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
+    background: var(--src-claude);
+  }
+  .sc-linked-dot--cursor { background: var(--src-cursor); }
+  .sc-linked-name {
+    flex: 1; font-size: 12px; color: var(--text-0);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .sc-linked-kind {
+    font-size: 9.5px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.08em; color: var(--text-mute);
   }
 </style>

@@ -48,6 +48,10 @@
     onToggleTerminalLink?: () => void;
     /** Bind the active session to a specific terminal instance. */
     onLinkToTerminalInstance?: (terminalInstanceId: string) => void;
+    /** Unlink the active session from its canvas. */
+    onToggleCanvasLink?: () => void;
+    /** Link the active session to a canvas document by ID. */
+    onLinkToCanvas?: (canvasId: string) => void;
     onCreateWorktree: () => void;
     onOpenWorktreeDiff: () => void;
     onOpenWorktreeInEditor: () => void;
@@ -131,6 +135,8 @@
               onLinkToEditorInstance={p.onLinkToEditorInstance}
               onToggleTerminalLink={p.onToggleTerminalLink}
               onLinkToTerminalInstance={p.onLinkToTerminalInstance}
+              onToggleCanvasLink={p.onToggleCanvasLink}
+              onLinkToCanvas={p.onLinkToCanvas}
               onCreateWorktree={p.onCreateWorktree}
               onOpenWorktreeDiff={p.onOpenWorktreeDiff}
               onRemoveWorktree={p.onRemoveWorktree}

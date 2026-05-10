@@ -5,6 +5,7 @@
      самостоятельная. */
   import { sessionsState, focusSession } from '$lib/state/sessions.svelte';
   import { APP_INSTANCE_IDS, layoutState } from '$lib/state/layout.svelte';
+  import { canvasState } from '$lib/state/canvas.svelte';
   import Dropdown from '$lib/components/ui/Dropdown.svelte';
 
   type Kind = 'claude' | 'cursor';
@@ -30,6 +31,10 @@
     onOpenWorktreeDiff: () => void;
     onRemoveWorktree: () => void;
     worktreeBusy: 'creating' | 'removing' | null;
+    /** Unlink the active session from its canvas (sets linkedCanvasId = null). */
+    onToggleCanvasLink?: () => void;
+    /** Link the active session to a specific canvas document by ID. */
+    onLinkToCanvas?: (canvasId: string) => void;
   }
   let p: Props = $props();
 
@@ -82,6 +87,17 @@
     }
     return p;
   }
+
+  /** All active (non-archived) canvases for the picker. */
+  const canvases = $derived(
+    canvasState.index.filter((c) => !c.archivedAt)
+  );
+
+  /** The canvas this session is linked to, if any. */
+  const linkedCanvas = $derived.by(() => {
+    if (!sess?.linkedCanvasId) return null;
+    return canvasState.index.find((c) => c.id === sess!.linkedCanvasId) ?? null;
+  });
 
   function focusLocal() {
     if (sess) focusSession(sess.id);
@@ -153,6 +169,26 @@
           onChange={(id) => { focusLocal(); p.onLinkToTerminalInstance?.(id); }}
           placeholder="Link terminal…"
           ariaLabel="Link to terminal"
+        />
+      </div>
+    {/if}
+
+    <!-- Canvas link — chip when linked, picker dropdown when not.
+         Linking is per-canvas-document (linkedCanvasId), not per-instance. -->
+    {#if sess.linkedCanvasId && linkedCanvas && p.onToggleCanvasLink}
+      <button class="wb-link wb-link--canvas" onclick={() => { focusLocal(); p.onToggleCanvasLink?.(); }} title="Linked to Canvas — click to unlink">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8" cy="8" r="1.5" fill="currentColor"/><path d="M3 13h18M13 3v18"/></svg>
+        <span>{linkedCanvas.name}</span>
+        <svg class="wb-link-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
+      </button>
+    {:else if p.onLinkToCanvas && canvases.length > 0}
+      <div class="wb-link-picker">
+        <Dropdown
+          value=""
+          options={canvases.map((c) => ({ value: c.id, label: `Link to ${c.name}` }))}
+          onChange={(id) => { focusLocal(); p.onLinkToCanvas?.(id); }}
+          placeholder="Link canvas…"
+          ariaLabel="Link to canvas"
         />
       </div>
     {/if}
@@ -243,6 +279,15 @@
   }
   .wb-link--term:hover {
     background: color-mix(in srgb, var(--src-term) 18%, transparent);
+  }
+
+  .wb-link--canvas {
+    background: color-mix(in srgb, var(--src-canvas) 10%, transparent);
+    border-color: color-mix(in srgb, var(--src-canvas) 28%, transparent);
+    color: var(--src-canvas);
+  }
+  .wb-link--canvas:hover {
+    background: color-mix(in srgb, var(--src-canvas) 18%, transparent);
   }
 
   .wb-link-picker { font-size: 11px; }

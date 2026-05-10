@@ -25,8 +25,10 @@
     exportCanvasJson,
     importCanvasJson,
     openCanvasInInstance,
+    ensureCanvasLoaded,
     type CanvasIndexEntry
   } from '$lib/state/canvas.svelte';
+  import type { Shape } from '$lib/state/canvas.svelte';
   import { notify } from '$lib/state/toaster.svelte';
 
   interface Props {
@@ -180,18 +182,64 @@
     return () => window.removeEventListener('keydown', onKeyDown);
   }
 
-  /** Stylized "preview" — a small visual pattern based on the index
-   *  entry's properties (shape count, name hash). Real thumbnails are
-   *  deferred to the disk-asset migration. */
+  /** Stylized gradient fallback when no shapes are available. */
   function previewGradient(entry: CanvasIndexEntry): string {
-    /* Hash the canvas name to a stable hue so each tile is distinct
-       but consistent across renders. */
     let hash = 0;
     for (let i = 0; i < entry.name.length; i++) {
       hash = (hash * 31 + entry.name.charCodeAt(i)) | 0;
     }
     const hue = Math.abs(hash) % 360;
     return `linear-gradient(135deg, hsl(${hue}, 35%, 22%) 0%, hsl(${(hue + 40) % 360}, 30%, 14%) 100%)`;
+  }
+
+  /** Per-kind fill/stroke for the mini SVG preview. */
+  function shapeColor(kind: string): { fill: string; stroke: string } {
+    switch (kind) {
+      case 'rect':              return { fill: 'rgba(255,255,255,0.05)', stroke: '#9094a0' };
+      case 'ellipse':           return { fill: 'rgba(255,255,255,0.05)', stroke: '#9094a0' };
+      case 'sticky':            return { fill: 'rgba(232,130,100,0.18)', stroke: 'rgba(232,130,100,0.6)' };
+      case 'mermaid':
+      case 'dot':               return { fill: 'rgba(14,165,233,0.12)', stroke: 'rgba(14,165,233,0.6)' };
+      case 'code':              return { fill: 'rgba(168,85,247,0.12)', stroke: 'rgba(168,85,247,0.6)' };
+      case 'jira-card':         return { fill: 'rgba(38,132,255,0.12)', stroke: '#2684FF' };
+      case 'github-pr-card':
+      case 'github-issue-card': return { fill: 'rgba(181,132,255,0.12)', stroke: '#8B5CF6' };
+      case 'sentry-event-card': return { fill: 'rgba(232,130,100,0.12)', stroke: '#F88F74' };
+      default:                  return { fill: 'rgba(125,201,176,0.10)', stroke: 'rgba(125,201,176,0.45)' };
+    }
+  }
+
+  /** Render a compact SVG preview of the canvas shapes. Falls back to
+   *  null when the canvas can't be loaded or has no shapes. */
+  function makeSvgPreview(id: string): string | null {
+    const c = ensureCanvasLoaded(id);
+    if (!c || c.shapes.length === 0) return null;
+    const visible = c.shapes.filter((s) => !s.hidden).slice(0, 60);
+    if (visible.length === 0) return null;
+
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const s of visible) {
+      if (s.x < minX) minX = s.x;
+      if (s.y < minY) minY = s.y;
+      if (s.x + s.w > maxX) maxX = s.x + s.w;
+      if (s.y + s.h > maxY) maxY = s.y + s.h;
+    }
+    const PAD = Math.max((maxX - minX) * 0.08, 20);
+    const vx = minX - PAD;
+    const vy = minY - PAD;
+    const vw = maxX - minX + PAD * 2;
+    const vh = maxY - minY + PAD * 2;
+
+    const els = visible.map((s: Shape) => {
+      const { fill, stroke } = shapeColor(s.kind);
+      if (s.kind === 'ellipse') {
+        return `<ellipse cx="${s.x + s.w / 2}" cy="${s.y + s.h / 2}" rx="${s.w / 2}" ry="${s.h / 2}" fill="${fill}" stroke="${stroke}" stroke-width="1.5"/>`;
+      }
+      const r = s.kind === 'sticky' ? 6 : 3;
+      return `<rect x="${s.x}" y="${s.y}" width="${s.w}" height="${s.h}" rx="${r}" fill="${fill}" stroke="${stroke}" stroke-width="1.5"/>`;
+    }).join('');
+
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vx} ${vy} ${vw} ${vh}" width="100%" height="100%" preserveAspectRatio="xMidYMid meet">${els}</svg>`;
   }
 </script>
 
@@ -250,8 +298,16 @@
                 onclick={() => handleOpen(entry.id)}
                 onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleOpen(entry.id); } }}
               >
-                <div class="cv-tile-preview" style="background: {previewGradient(entry)}">
-                  <span class="cv-tile-shape-count mono">{entry.shapeCount} shapes</span>
+                {@const svgPreview = makeSvgPreview(entry.id)}
+                <div
+                  class="cv-tile-preview"
+                  style={svgPreview ? 'background: var(--bg-0)' : `background: ${previewGradient(entry)}`}
+                >
+                  {#if svgPreview}
+                    {@html svgPreview}
+                  {:else}
+                    <span class="cv-tile-shape-count mono">{entry.shapeCount} shapes</span>
+                  {/if}
                 </div>
                 <div class="cv-tile-info">
                   {#if editingId === entry.id}
@@ -326,8 +382,16 @@
                 onclick={() => handleOpen(entry.id)}
                 onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleOpen(entry.id); } }}
               >
-                <div class="cv-tile-preview" style="background: {previewGradient(entry)}">
-                  <span class="cv-tile-shape-count mono">{entry.shapeCount} shapes</span>
+                {@const svgPreview = makeSvgPreview(entry.id)}
+                <div
+                  class="cv-tile-preview"
+                  style={svgPreview ? 'background: var(--bg-0)' : `background: ${previewGradient(entry)}`}
+                >
+                  {#if svgPreview}
+                    {@html svgPreview}
+                  {:else}
+                    <span class="cv-tile-shape-count mono">{entry.shapeCount} shapes</span>
+                  {/if}
                 </div>
                 <div class="cv-tile-info">
                   <span class="cv-tile-name cv-tile-name--archived">{entry.name}</span>

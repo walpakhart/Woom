@@ -144,6 +144,57 @@
    *  `git_status` invoke succeeds. */
   let gitBranch = $state<string>('');
 
+  // ---- File-name search ---------------------------------------------------
+  let searchQuery = $state('');
+  let searchResults = $state<{ path: string; name: string; rel: string }[]>([]);
+  let searching = $state(false);
+  let searchTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const SKIP_DIRS = new Set([
+    'node_modules', '.git', 'dist', '.svelte-kit', 'target', '.next',
+    '__pycache__', '.turbo', 'build', 'out', '.cache', 'coverage'
+  ]);
+
+  async function searchFiles(
+    root: string,
+    query: string
+  ): Promise<{ path: string; name: string; rel: string }[]> {
+    const q = query.toLowerCase();
+    const results: { path: string; name: string; rel: string }[] = [];
+    const queue: string[] = [root];
+    while (queue.length > 0 && results.length < 80) {
+      const dir = queue.shift()!;
+      let entries: { name: string; path: string; is_dir: boolean }[] = [];
+      try {
+        entries = await invoke('fs_list_dir', { path: dir });
+      } catch { continue; }
+      for (const e of entries) {
+        if (e.is_dir) {
+          if (!SKIP_DIRS.has(e.name)) queue.push(e.path);
+        } else {
+          if (e.name.toLowerCase().includes(q)) {
+            const rel = e.path.startsWith(root + '/') ? e.path.slice(root.length + 1) : e.path;
+            results.push({ path: e.path, name: e.name, rel });
+            if (results.length >= 80) break;
+          }
+        }
+      }
+    }
+    return results;
+  }
+
+  $effect(() => {
+    const q = searchQuery.trim();
+    if (searchTimer) { clearTimeout(searchTimer); searchTimer = null; }
+    if (q.length < 2) { searchResults = []; searching = false; return; }
+    searching = true;
+    searchTimer = setTimeout(async () => {
+      if (!repoPath) { searching = false; return; }
+      searchResults = await searchFiles(repoPath, q);
+      searching = false;
+    }, 280);
+  });
+
   /** Map a file extension to a friendly language label for the status
    *  bar. Falls back to "Plain text" — keeping the bar honest about
    *  what CodeMirror can't syntax-highlight rather than guessing. */
@@ -622,11 +673,41 @@
               </Splitter>
             {:else if sidebarTab === 'search'}
               <div class="ev-sidebar-pane">
-                <input class="ev-search-input mono" placeholder="Search across files…" type="search" />
-                <div class="ev-sidebar-empty">
-                  <p class="ev-sidebar-empty-h serif">Search the workspace</p>
-                  <p class="ev-sidebar-empty-p">Type to grep all files in <span class="mono">{repoPath ? fileName(repoPath) : 'this repo'}</span>. Results stream as they arrive.</p>
+                <div class="ev-search-bar">
+                  <input
+                    class="ev-search-input mono"
+                    placeholder="Search files by name…"
+                    type="search"
+                    bind:value={searchQuery}
+                  />
                 </div>
+                {#if searchQuery.trim().length < 2}
+                  <div class="ev-sidebar-empty">
+                    <p class="ev-sidebar-empty-h serif">Find files</p>
+                    <p class="ev-sidebar-empty-p">Type 2+ characters to search filenames in <span class="mono">{repoPath ? fileName(repoPath) : 'this repo'}</span>.</p>
+                  </div>
+                {:else if searching}
+                  <div class="ev-sidebar-empty">
+                    <p class="ev-sidebar-empty-p">Searching…</p>
+                  </div>
+                {:else if searchResults.length === 0}
+                  <div class="ev-sidebar-empty">
+                    <p class="ev-sidebar-empty-p">No files found for <span class="mono">"{searchQuery}"</span></p>
+                  </div>
+                {:else}
+                  <div class="ev-search-results">
+                    {#each searchResults as r (r.path)}
+                      <button
+                        class="ev-search-result"
+                        onclick={() => openFile(r.path)}
+                        title={r.path}
+                      >
+                        <span class="ev-search-result-name mono">{r.name}</span>
+                        <span class="ev-search-result-dir mono">{r.rel.slice(0, r.rel.length - r.name.length - 1) || '/'}</span>
+                      </button>
+                    {/each}
+                  </div>
+                {/if}
               </div>
             {:else if sidebarTab === 'debug'}
               <div class="ev-sidebar-pane">
@@ -1069,6 +1150,38 @@
     background: var(--bg-2); border: 1px solid var(--border);
     border-radius: 4px;
     color: var(--accent-bright);
+  }
+
+  .ev-search-bar { flex-shrink: 0; }
+  .ev-search-results {
+    flex: 1; min-height: 0;
+    display: flex; flex-direction: column; gap: 2px;
+    overflow-y: auto;
+  }
+  .ev-search-result {
+    display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+    padding: 6px 10px;
+    border-radius: 6px;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    text-align: left;
+    transition: background 120ms;
+    width: 100%;
+  }
+  .ev-search-result:hover { background: var(--bg-2); }
+  .ev-search-result-name {
+    font-size: 12px;
+    color: var(--text-0);
+    font-weight: 500;
+  }
+  .ev-search-result-dir {
+    font-size: 10.5px;
+    color: var(--text-mute);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
   }
 
   .ev-main { flex: 1; display: flex; flex-direction: column; min-width: 0; height: 100%; min-height: 0; }
