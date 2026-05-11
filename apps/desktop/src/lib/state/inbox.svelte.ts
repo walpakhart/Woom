@@ -7,7 +7,7 @@
  *                               instance-removed cleanup hook
  *   - inbox-github.ts         → GitHub inbox + detail-shelf actions
  *   - inbox-jira.ts           → Jira inbox + JQL + assignee picker
- *   - inbox-sentry.ts         → Sentry inbox + tab mirror + slide-over
+ *   - inbox-sentry.ts         → Sentry inbox + tab mirror + detail pane
  *
  * Existing call-sites import from `$lib/state/inbox.svelte` — keep
  * that path working by re-exporting the public surface here. New

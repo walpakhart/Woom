@@ -7,10 +7,18 @@
 //! entries into `~/.cursor/mcp.json` whenever the user's connection state
 //! changes (connect/disconnect → keychain mutation → re-sync).
 //!
-//! Only entries we own (`woom:*` namespace) are touched — anything the
-//! user added by hand via `cursor-agent mcp add` survives. On the first sync
-//! a small `_woom_managed` array is written so we know which entries are
-//! ours and can remove stale ones cleanly.
+//! ## Ownership = prefix, not marker
+//!
+//! Anything in `mcpServers` whose key starts with one of `OWNED_PREFIXES`
+//! (`woom-`, plus the historical `forgehold-` from before the rename) is
+//! treated as ours: dropped on every sync, then re-added from current
+//! Keychain state. Entries the user added by hand via `cursor-agent mcp
+//! add` (any other name) survive. We also strip any marker keys we used
+//! to write (`_woom_managed`, `_forgehold_managed`) — they're advisory
+//! and re-emitted below, but the cleanup loop never reads them. This
+//! makes sync self-correcting: rename a sidecar / drop a server / ship a
+//! rebrand → next start of Woom converges the file to whatever the
+//! current code declares, no migration code required.
 //!
 //! Security note: the resulting `~/.cursor/mcp.json` contains plaintext
 //! tokens (the `env` block is not Keychain-resolved by cursor-agent). This
@@ -23,12 +31,34 @@ use std::path::PathBuf;
 
 use serde_json::{Map, Value};
 
+use crate::action_ipc;
 use crate::keychain;
 
-/// Marker key in `~/.cursor/mcp.json` listing the server names we own. Lets
-/// us blow away stale entries cleanly without touching ones the user added
-/// themselves.
-const MANAGED_KEY: &str = "_woom_managed";
+/// Sentinel `WOOM_SESSION_ID` written into `~/.cursor/mcp.json`. The
+/// file is global (single config across all Cursor sessions) so we
+/// can't bake a per-session id — instead we ship this constant and
+/// the frontend's action-IPC handler routes any card carrying it to
+/// the user's currently-focused Cursor session. Single-Cursor-session
+/// flows (the common case) get correct routing for free; parallel
+/// sessions all post to the focused one, which is the least-surprising
+/// fallback short of dynamic per-session config (cursor-agent has no
+/// `--mcp-config` flag — see `cursor.rs` module docs).
+const CURSOR_SENTINEL_SESSION_ID: &str = "cursor";
+
+/// Server-name prefixes that identify an entry as ours. Entries matching
+/// any of these are blown away on every sync and re-derived from current
+/// Keychain state. Add new prefixes here on a rebrand; never remove —
+/// historical prefixes stay forever so old installs converge cleanly the
+/// first time the new Woom runs.
+const OWNED_PREFIXES: &[&str] = &["woom-", "forgehold-"];
+
+/// Top-level marker keys we used to (or still) write into the file. Stripped
+/// on every sync and re-emitted below for the *current* set, so the file
+/// always has at most one of these. Cleanup logic doesn't read them — they
+/// exist purely so a human glancing at `~/.cursor/mcp.json` can see what
+/// Woom thinks it currently owns.
+const MARKER_KEY: &str = "_woom_managed";
+const LEGACY_MARKER_KEYS: &[&str] = &["_forgehold_managed"];
 
 const JIRA_KEYCHAIN_KEY: &str = "jira";
 const GITHUB_KEYCHAIN_KEY: &str = "github";
@@ -60,17 +90,12 @@ pub fn sync() -> Result<Vec<String>, String> {
         _ => Map::new(),
     };
 
-    // Drop entries we used to own, in case the user disconnected something
-    // since the last sync.
-    let previously_managed: Vec<String> = doc
-        .get(MANAGED_KEY)
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|x| x.as_str().map(|s| s.to_string()))
-                .collect()
-        })
-        .unwrap_or_default();
+    // Drop legacy + current marker keys. We re-emit the current one below;
+    // never read them for cleanup logic — ownership is by prefix (see below).
+    doc.remove(MARKER_KEY);
+    for k in LEGACY_MARKER_KEYS {
+        doc.remove(*k);
+    }
 
     let servers = doc
         .entry("mcpServers".to_string())
@@ -85,19 +110,24 @@ pub fn sync() -> Result<Vec<String>, String> {
         }
     };
 
-    for name in &previously_managed {
-        servers_obj.remove(name);
-    }
+    // Prefix sweep: anything matching an owned prefix is ours, drop it.
+    // Entries the user added by hand (any other name) stay untouched.
+    // This is what makes sync self-correcting across renames, removals,
+    // and rebrands — we don't trust a marker, we trust the namespace.
+    servers_obj.retain(|name, _| !OWNED_PREFIXES.iter().any(|p| name.starts_with(p)));
 
     // Re-build current entries from Keychain.
     let sidecar_dir = sidecar_dir_for_running_app();
+    let ipc_socket = action_ipc::current_socket_path()
+        .to_string_lossy()
+        .into_owned();
     let mut written: Vec<String> = Vec::new();
 
     if let Some(cfg) = build_jira_entry(&sidecar_dir) {
         servers_obj.insert(SIDECAR_JIRA.into(), cfg);
         written.push(SIDECAR_JIRA.into());
     }
-    if let Some(cfg) = build_github_entry(&sidecar_dir) {
+    if let Some(cfg) = build_github_entry(&sidecar_dir, &ipc_socket) {
         servers_obj.insert(SIDECAR_GITHUB.into(), cfg);
         written.push(SIDECAR_GITHUB.into());
     }
@@ -114,13 +144,13 @@ pub fn sync() -> Result<Vec<String>, String> {
     // that Claude already gets via `--mcp-config`. Without this, Cursor
     // saw the tools mentioned in the system preamble but couldn't
     // actually call them; here we give it parity.
-    if let Some(cfg) = build_app_entry(&sidecar_dir) {
+    if let Some(cfg) = build_app_entry(&sidecar_dir, &ipc_socket) {
         servers_obj.insert(SIDECAR_APP.into(), cfg);
         written.push(SIDECAR_APP.into());
     }
 
     doc.insert(
-        MANAGED_KEY.into(),
+        MARKER_KEY.into(),
         Value::Array(written.iter().cloned().map(Value::String).collect()),
     );
 
@@ -175,15 +205,24 @@ fn build_jira_entry(dir: &Option<PathBuf>) -> Option<Value> {
     }))
 }
 
-fn build_github_entry(dir: &Option<PathBuf>) -> Option<Value> {
+fn build_github_entry(dir: &Option<PathBuf>, ipc_socket: &str) -> Option<Value> {
     let token = keychain::get(GITHUB_KEYCHAIN_KEY).ok().flatten()?;
     if token.trim().is_empty() {
         return None;
     }
     let cmd = sidecar_path(dir, SIDECAR_GITHUB)?;
+    // IPC socket + session-id sentinel let `propose_commit` / `propose_pr`
+    // reach Woom's action-IPC and block on user approval — same shape
+    // `claude_mcp::build_github_server` writes for Claude. Without these
+    // the sidecar's `propose_*` tools error out with "WOOM_IPC_SOCKET not
+    // set" and the agent gets a non-blocking stub response.
     Some(serde_json::json!({
         "command": cmd,
-        "env": { "GITHUB_TOKEN": token }
+        "env": {
+            "GITHUB_TOKEN": token,
+            "WOOM_IPC_SOCKET": ipc_socket,
+            "WOOM_SESSION_ID": CURSOR_SENTINEL_SESSION_ID,
+        }
     }))
 }
 
@@ -235,10 +274,21 @@ fn build_memory_entry(dir: &Option<PathBuf>) -> Option<Value> {
 /// frontend's stream parser intercepts the `mcp__app__*` tool_use events
 /// and drives the Svelte state directly; the sidecar itself just
 /// publishes the schemas so cursor-agent surfaces them as callable.
-/// Always wired — no creds needed, mirrors `claude.rs::build_app_server`.
-fn build_app_entry(dir: &Option<PathBuf>) -> Option<Value> {
+/// Always wired — no creds needed, mirrors `claude_mcp::build_app_server`.
+///
+/// `WOOM_IPC_SOCKET` + `WOOM_SESSION_ID` mirror Claude's setup so the
+/// blocking `propose_bash` / `propose_switch_cwd` tools can reach the
+/// approval-card pipeline. The session id is a sentinel (`CURSOR_SENTINEL_SESSION_ID`)
+/// — the global mcp.json can't carry a per-session value, and the
+/// frontend's IPC handler routes any card carrying it to the currently-
+/// focused Cursor chat (see `routes/+page.svelte::handleActionRequest`).
+fn build_app_entry(dir: &Option<PathBuf>, ipc_socket: &str) -> Option<Value> {
     let cmd = sidecar_path(dir, SIDECAR_APP)?;
     Some(serde_json::json!({
         "command": cmd,
+        "env": {
+            "WOOM_IPC_SOCKET": ipc_socket,
+            "WOOM_SESSION_ID": CURSOR_SENTINEL_SESSION_ID,
+        }
     }))
 }

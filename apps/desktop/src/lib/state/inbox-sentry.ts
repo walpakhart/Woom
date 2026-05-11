@@ -1,4 +1,4 @@
-/* Sentry-side inbox actions: per-column refresh, slide-over focus,
+/* Sentry-side inbox actions: per-column refresh, detail-pane focus,
  * project / environment option caches, the dedicated SentryTab
  * mirror filters. Reads & writes `inboxState` from
  * `inbox-shared.svelte.ts`. */
@@ -186,9 +186,9 @@ export async function loadSentryEnvironments(projectSlug?: string) {
   }
 }
 
-// ---- Slide-over focus ------------------------------------------------
+// ---- Detail-pane focus -----------------------------------------------
 
-/** Open the Sentry slide-over on `id`, optionally on a specific event.
+/** Open the Sentry detail pane on `id`, optionally on a specific event.
  *  Always sets both `sentryFocusId` and `sentryFocusEventId` atomically
  *  so a stale event id from a previous open doesn't leak into the new
  *  one (which would otherwise 404 from `sentry_get_event_detail`). */

@@ -445,7 +445,7 @@
 </div>
 
 <style>
-  /* Same shape as `.jdp` (JiraDetailPane) — fills the parent `.slide-panel`,
+  /* Same shape as `.jdp` (JiraDetailPane) — fills the parent column,
      header bar with close on the left + action buttons on the right, body
      scrolls with consistent padding. Keeps both panes feeling the same. */
   .sdp { height: 100%; display: flex; flex-direction: column; min-height: 0; background: var(--bg-0); }

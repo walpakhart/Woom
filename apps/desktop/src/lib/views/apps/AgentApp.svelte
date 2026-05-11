@@ -81,18 +81,19 @@
   }
   let p: Props = $props();
 
-  /* App-shell ambient tone. Both agent apps now ride the main brand
-     accent (mint/sage) so the entire workspace feels cohesive under
-     the new W-mark palette. Per-source identification (Claude warm
-     peach, Cursor grey) is preserved in the inbox chips + rail icons
-     where the user needs to triage which agent is which — the chat
-     SHELL itself is brand-uniform. */
+  /* App-shell ambient tone. Each agent surface now carries its
+     own brand accent — Claude warm peach, Cursor moonlit silver —
+     instead of riding the unified mint. The `data-kind` attribute
+     hands off to per-shell `--accent-*` overrides in app.css so
+     focus rings, link chips, button glows, etc. all retint
+     downstream without per-component changes. */
   const tone = $derived('var(--accent)');
   const glow = $derived('var(--accent-glow)');
 </script>
 
 <section
   class="app-shell sa"
+  data-kind={p.kind}
   style="--app-tone: {tone}; --app-glow: {glow};"
 >
   <!-- Outer split: sessions sidebar (280, fixed) | chat + worktree (flex). -->

@@ -127,9 +127,7 @@
     min-width: 0;
     display: flex; flex-direction: column;
   }
-  /* JiraDetailPane is normally rendered inside the `.slide-over` modal
-     overlay in +page.svelte. Here it renders as the bare `.jdp` root —
-     stretch it to fill the pane. */
+  /* JiraDetailPane root = `.jdp` — stretch it to fill the pane. */
   .sj-detail :global(.jdp) {
     flex: 1; min-height: 0;
     display: flex; flex-direction: column;

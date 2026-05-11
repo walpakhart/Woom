@@ -297,6 +297,79 @@ kbd {
 .wb-column--editor { min-width: 420px; }
 .wb-column--editor .ev { height: 100%; }
 
+/* Per-app tonal accents.
+   Each full-screen `.app-shell` re-points the global `--accent-*`
+   tokens to its source's brand colour. Components downstream
+   (focus rings, button glows, link chips, hover stripes…) already
+   read `--accent-*`, so the tint propagates without site-by-site
+   patches.
+
+   The light-theme block earlier in this file rewrites `--accent`
+   for whole-document scope; these per-shell rules SHADOW it inside
+   each app surface only — the rest of the chrome (rail, modals,
+   toasts) stays on the unified mint accent. */
+.app-shell.sj-shell {
+  --accent: #4F8EFF;
+  --accent-bright: #75A8FF;
+  --accent-deep: #2E5FBF;
+  --accent-soft: rgba(79, 142, 255, 0.12);
+  --accent-glow: rgba(79, 142, 255, 0.42);
+  --accent-fg: #0D162E;
+}
+.app-shell.sg-shell {
+  --accent: #B584FF;
+  --accent-bright: #D5B7FF;
+  --accent-deep: #835EBF;
+  --accent-soft: rgba(181, 132, 255, 0.12);
+  --accent-glow: rgba(181, 132, 255, 0.42);
+  --accent-fg: #1B1530;
+}
+.app-shell.ssn-shell {
+  /* Sentry — the brand mark is a deep purple but the user reads
+     it best as purple-pink in chrome (more saturation than the
+     plum brand swatch alone). */
+  --accent: #B26199;
+  --accent-bright: #D38AC0;
+  --accent-deep: #7A3D6C;
+  --accent-soft: rgba(178, 97, 153, 0.12);
+  --accent-glow: rgba(178, 97, 153, 0.42);
+  --accent-fg: #1F0F19;
+}
+.app-shell.sa[data-kind="claude"] {
+  --accent: #E89B7D;
+  --accent-bright: #F2B89E;
+  --accent-deep: #B86E54;
+  --accent-soft: rgba(232, 155, 125, 0.12);
+  --accent-glow: rgba(232, 155, 125, 0.42);
+  --accent-fg: #1F1410;
+}
+.app-shell.sa[data-kind="cursor"] {
+  /* Cursor — moonlit silver. Slight cool tint so it reads as
+     "white" but doesn't blow out against the noir background. */
+  --accent: #C8CDD8;
+  --accent-bright: #E8ECF2;
+  --accent-deep: #8A93A0;
+  --accent-soft: rgba(220, 225, 235, 0.10);
+  --accent-glow: rgba(220, 225, 235, 0.32);
+  --accent-fg: #15171B;
+}
+.app-shell.se-shell {
+  --accent: #CC785C;
+  --accent-bright: #E89B7D;
+  --accent-deep: #8C4F3D;
+  --accent-soft: rgba(204, 120, 92, 0.12);
+  --accent-glow: rgba(204, 120, 92, 0.42);
+  --accent-fg: #1A0E08;
+}
+.app-shell.sc-shell {
+  --accent: #7DC2D5;
+  --accent-bright: #A8DAE8;
+  --accent-deep: #4D8A9E;
+  --accent-soft: rgba(125, 194, 213, 0.12);
+  --accent-glow: rgba(125, 194, 213, 0.42);
+  --accent-fg: #0A1A20;
+}
+
 /* Per-source brand stripe — 3px on the left edge, glows in the
    source's brand colour. Uses the column's existing `data-kind`
    attr so no component-side changes are needed. The stripe sits
@@ -2010,97 +2083,10 @@ img.chat-avatar { padding: 0; }
 .link-btn:hover { background: var(--bg-3); color: var(--accent-bright); border-color: var(--border-hi); }
 .link-btn svg { width: 12px; height: 12px; }
 
-/* Slide-over (focus detail panel) */
-.slide-over {
-  position: fixed; inset: 0;
-  background: var(--backdrop);
-  backdrop-filter: blur(8px);
-  z-index: 180;
-  display: flex; justify-content: flex-end;
-  animation: fadeIn 180ms ease-out;
-}
-.slide-panel {
-  width: min(1080px, 92vw);
-  height: 100%;
-  background: var(--bg-0);
-  border-left: 1px solid var(--border-neutral-hi);
-  box-shadow: -20px 0 60px rgba(0, 0, 0, 0.5);
-  display: flex; flex-direction: column;
-  overflow: hidden;
-  animation: slideInRight 240ms cubic-bezier(0.34, 1.56, 0.64, 1);
-  position: relative;
-}
-
-/* Inline mode for slide-over panels rendered INSIDE an `.app-shell`
-   (e.g. when used as a column-pane instead of a global modal). The
-   chrome — fixed positioning, backdrop, slide animation, border-
-   left, drop shadow — is stripped so the panel reads as a regular
-   pane. Components that have a dedicated inline prop (like
-   GithubFocusOverlay) opt out of `.slide-over` entirely; this rule
-   covers components that still emit `.slide-over` markup (e.g.
-   JiraDetailPane / SentryDetailPane wrappers in +page.svelte) when
-   they happen to land inside an app-shell. */
-.app-shell .slide-over {
-  position: static;
-  inset: auto;
-  background: transparent;
-  backdrop-filter: none;
-  z-index: auto;
-  animation: none;
-  display: flex;
-  flex: 1; min-height: 0;
-  justify-content: stretch;
-}
-.app-shell .slide-panel {
-  width: 100%;
-  height: auto;
-  border-left: none;
-  box-shadow: none;
-  animation: none;
-  flex: 1; min-height: 0;
-}
-.slide-close {
-  position: absolute;
-  top: 12px; right: 16px;
-  z-index: 5;
-  width: 32px; height: 32px;
-  border-radius: 8px;
-  background: var(--bg-2);
-  border: 1px solid var(--border-neutral-hi);
-  color: var(--text-1);
-  display: inline-flex; align-items: center; justify-content: center;
-  transition: all 120ms;
-}
-.slide-close:hover { background: var(--bg-3); color: var(--text-0); border-color: var(--border-hi2); }
-
-/* Top-right action chips inside a `.slide-panel`. Used for "Open on
-   GitHub" / "Open on Sentry" / "Open on Jira" so all three detail panes
-   put the external-handoff link in the exact same screen position. */
-.slide-corner-actions {
-  position: absolute;
-  top: 12px; right: 60px;
-  z-index: 5;
-  display: flex; gap: 6px;
-}
-.slide-corner-btn {
-  display: inline-flex; align-items: center; gap: 6px;
-  padding: 7px 12px; height: 32px; border-radius: 8px;
-  background: var(--bg-2); color: var(--text-1);
-  border: 1px solid var(--border-neutral-hi);
-  font-size: 12px; cursor: pointer;
-  transition: all 120ms;
-}
-.slide-corner-btn:hover { background: var(--bg-3); color: var(--text-0); border-color: var(--border-hi2); }
-.slide-corner-btn svg { width: 12px; height: 12px; }
-
 /* Shared animations */
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 @keyframes slideDown {
   from { opacity: 0; transform: translateY(-8px) scale(0.99); }
   to   { opacity: 1; transform: translateY(0) scale(1); }
-}
-@keyframes slideInRight {
-  from { transform: translateX(40px); opacity: 0; }
-  to   { transform: translateX(0); opacity: 1; }
 }
 

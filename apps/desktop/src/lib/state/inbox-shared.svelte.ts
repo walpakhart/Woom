@@ -88,12 +88,13 @@ export interface JiraFilters {
   search: string;
   /** Client-side UI filter state persisted so the list view survives
    *  unmount/remount. These fields are NOT used in JQL — they filter
-   *  the already-loaded items in JiraList. */
+   *  the already-loaded items in JiraList. Assignee is global (lives in
+   *  `inboxState.jiraAssignee` / `jiraAssigneeAny`) and drives JQL, so
+   *  it's not duplicated here. */
   uiQuery: string;
-  uiRoleFilter: 'mine' | 'reporter' | null;
+  uiRoleFilter: 'reporter' | null;
   uiStatusFilter: 'open' | 'inprogress' | 'done' | null;
   uiProjectFilter: string | null;
-  uiAssigneeFilter: string | null;
 }
 
 export interface SentryFiltersPersisted {
@@ -138,8 +139,7 @@ export const DEFAULT_JIRA_FILTERS: JiraFilters = {
   uiQuery: '',
   uiRoleFilter: null,
   uiStatusFilter: null,
-  uiProjectFilter: null,
-  uiAssigneeFilter: null
+  uiProjectFilter: null
 };
 
 export const DEFAULT_SENTRY_FILTERS: SentryFiltersPersisted = {
@@ -201,14 +201,14 @@ function normalizeJiraFilters(raw: unknown): JiraFilters {
     statusName,
     search: typeof parsed.search === 'string' ? parsed.search : '',
     uiQuery: typeof parsed.uiQuery === 'string' ? parsed.uiQuery : '',
-    uiRoleFilter:
-      uiRoleRaw === 'mine' || uiRoleRaw === 'reporter' ? uiRoleRaw : null,
+    // Legacy `'mine'` value (from before the Mine pill was removed) drops
+    // to `null` — the global assignee picker replaces it.
+    uiRoleFilter: uiRoleRaw === 'reporter' ? 'reporter' : null,
     uiStatusFilter:
       uiStatusRaw === 'open' || uiStatusRaw === 'inprogress' || uiStatusRaw === 'done'
         ? uiStatusRaw
         : null,
-    uiProjectFilter: typeof parsed.uiProjectFilter === 'string' ? parsed.uiProjectFilter : null,
-    uiAssigneeFilter: typeof parsed.uiAssigneeFilter === 'string' ? parsed.uiAssigneeFilter : null
+    uiProjectFilter: typeof parsed.uiProjectFilter === 'string' ? parsed.uiProjectFilter : null
   };
 }
 
@@ -357,8 +357,7 @@ function readJiraTabFilters(): JiraFilters {
       uiQuery: '',
       uiRoleFilter: null,
       uiStatusFilter: null,
-      uiProjectFilter: null,
-      uiAssigneeFilter: null
+      uiProjectFilter: null
     };
   } catch {
     return { ...DEFAULT_JIRA_FILTERS };
@@ -497,8 +496,8 @@ export const inboxState = $state<{
    *  can skip refetching when it already matches. `null` means "global". */
   jiraStatusOptionsProjectKey: string | null | undefined;
 
-  // Jira detail slide-over — independent from `focusItem` because the Jira
-  // column uses its own key-based slide-over (JiraDetailPane fetches by
+  // Jira detail focus — independent from `focusItem` because the Jira
+  // column uses its own key-based pane (JiraDetailPane fetches by
   // issue key, not by InboxItem shape).
   jiraFocusKey: string | null;
 

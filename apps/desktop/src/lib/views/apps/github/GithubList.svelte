@@ -57,7 +57,7 @@
    *  a toggle (click again to deselect → "all"); dropdowns use a
    *  null sentinel for "any". */
   let query = $state('');
-  let roleFilter = $state<'mine' | 'reviewer' | null>(null);
+  let roleFilter = $state<'reviewer' | null>(null);
   let stateFilter = $state<'open' | 'draft' | null>(null);
   /** `null` = inbox scope (involves:@me, the default). `'__all_open__'`
    *  = drop the involves filter, search every accessible repo.
@@ -207,7 +207,6 @@
       if (!hasNarrower) parts.push('involves:@me');
     }
 
-    if (roleFilter === 'mine' && me) parts.push(`author:${me}`);
     if (roleFilter === 'reviewer' && me) parts.push('review-requested:@me');
 
     if (stateFilter === 'open') parts.push('is:open', 'draft:false');
@@ -288,7 +287,7 @@
 
   /** Toggle helpers — clicking an already-active chip deselects it,
    *  reverting the filter to "all". Saves a separate "All" button. */
-  function toggleRole(v: 'mine' | 'reviewer') {
+  function toggleRole(v: 'reviewer') {
     roleFilter = roleFilter === v ? null : v;
   }
   function toggleState(v: 'open' | 'draft') {
@@ -318,9 +317,7 @@
           : false;
         if (!titleMatch && !numMatch && !authorMatch && !repoMatch) return false;
       }
-      if (roleFilter === 'mine') {
-        if (!me || it.author?.login !== me) return false;
-      } else if (roleFilter === 'reviewer') {
+      if (roleFilter === 'reviewer') {
         if (!it.is_pull_request) return false;
         if (!me || it.author?.login === me) return false;
         if (it.state !== 'open' || it.merged) return false;
@@ -591,16 +588,6 @@
     />
 
     <div class="gl-chips">
-      <button
-        class="gl-toggle"
-        class:active={roleFilter === 'mine'}
-        disabled={!me}
-        onclick={() => toggleRole('mine')}
-        title={me ? `Author = @${me}` : 'Connect GitHub to filter by author'}
-      >
-        <span class="gl-toggle-dot"></span>
-        Mine
-      </button>
       <button
         class="gl-toggle"
         class:active={roleFilter === 'reviewer'}

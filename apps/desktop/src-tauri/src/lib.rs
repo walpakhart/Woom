@@ -520,15 +520,12 @@ async fn token() -> Result<String, String> {
         .ok_or_else(|| "GitHub is not connected".to_string())
 }
 
-/// Build the IPC server state with a per-process socket path. We use
-/// `/tmp/woom-ipc-<pid>.sock` so multiple Woom instances on
-/// the same machine don't collide and a stale socket from a crashed
-/// previous run doesn't block startup (the server cleans it up on
-/// bind anyway, but per-pid isolation is cheap insurance).
+/// Build the IPC server state with a per-process socket path. The path
+/// formula lives in `action_ipc::current_socket_path` so the listener
+/// (here) and the env value pushed to `~/.cursor/mcp.json` (see
+/// `cursor_mcp::sync`) stay in lock-step.
 fn action_ipc_state() -> std::sync::Arc<action_ipc::ActionIpc> {
-    let pid = std::process::id();
-    let path = std::env::temp_dir().join(format!("woom-ipc-{}.sock", pid));
-    std::sync::Arc::new(action_ipc::ActionIpc::new(path))
+    std::sync::Arc::new(action_ipc::ActionIpc::new(action_ipc::current_socket_path()))
 }
 
 /// Resolve a pending approval-card wait. The frontend calls this

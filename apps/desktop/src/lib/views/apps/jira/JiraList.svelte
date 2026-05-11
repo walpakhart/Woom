@@ -13,7 +13,9 @@
     persistJiraUiFilters,
     jiraFiltersFor,
     loadJiraSprints,
-    loadJiraBoards
+    loadJiraBoards,
+    openUserPicker,
+    selectAssignee
   } from '$lib/state/inbox.svelte';
   import { relativeTime, jiraStatusClass, type JiraItem, type JiraStatus } from '$lib/data';
   import Dropdown from '$lib/components/ui/Dropdown.svelte';
@@ -61,12 +63,15 @@
   const _init = jiraFiltersFor(_instanceId);
 
   /** Search + filter state — initialised from persisted filters so the
-   *  view survives unmount/remount. Changes are synced back via $effect. */
+   *  view survives unmount/remount. Changes are synced back via $effect.
+   *  Assignee filter lives in global `inboxState.jiraAssignee` /
+   *  `jiraAssigneeAny` (drives the server-side JQL), not in this component. */
   let query = $state(_init.uiQuery ?? '');
-  let roleFilter = $state<'mine' | 'reporter' | null>(_init.uiRoleFilter ?? null);
+  let roleFilter = $state<'reporter' | null>(
+    _init.uiRoleFilter === 'reporter' ? 'reporter' : null
+  );
   let statusFilter = $state<'open' | 'inprogress' | 'done' | null>(_init.uiStatusFilter ?? null);
   let projectFilter = $state<string | null>(_init.uiProjectFilter ?? null);
-  let assigneeFilter = $state<string | null>(_init.uiAssigneeFilter ?? null);
 
   const me = $derived(p.jiraStatus.kind === 'connected' ? p.jiraStatus.user.account_id : null);
   const selectedSprintId = $derived(
@@ -99,8 +104,7 @@
       uiQuery: query,
       uiRoleFilter: roleFilter,
       uiStatusFilter: statusFilter,
-      uiProjectFilter: projectFilter,
-      uiAssigneeFilter: assigneeFilter
+      uiProjectFilter: projectFilter
     });
   });
 
@@ -235,27 +239,22 @@
     return [{ value: '__all__' as string, label: 'All projects' }, ...list.map((v) => ({ value: v, label: v }))];
   });
 
-  /** Unique assignees seen in the items. Current user pinned first. */
-  const assigneeOptions = $derived.by(() => {
-    const map = new Map<string, string>(); // account_id → display_name
-    for (const it of items) {
-      const a = it.assignee;
-      if (a?.account_id) map.set(a.account_id, a.display_name);
-    }
-    const out: { value: string; label: string; hint?: string }[] = [
-      { value: '__all__', label: 'Anyone' }
-    ];
-    if (me && map.has(me)) {
-      out.push({ value: me, label: map.get(me)!, hint: 'You' });
-    }
-    for (const [id, name] of Array.from(map.entries()).sort((a, b) => a[1].localeCompare(b[1]))) {
-      if (id === me) continue;
-      out.push({ value: id, label: name });
-    }
-    return out;
+  /** Assignee chip label — reads the GLOBAL Jira assignee filter, which
+   *  drives the JQL and a server refetch on change. `jiraAssigneeAny`
+   *  trumps `jiraAssignee` ("Anyone" wins); the fall-through "Me" matches
+   *  the modal's "Me (authenticated account)" row, which is the default
+   *  (`assignee = currentUser()`). */
+  const assigneeLabel = $derived.by(() => {
+    if (inboxState.jiraAssigneeAny) return 'Anyone';
+    if (inboxState.jiraAssignee) return inboxState.jiraAssignee.display_name;
+    return 'Me';
   });
 
-  function toggleRole(v: 'mine' | 'reporter') {
+  const assigneeActive = $derived(
+    inboxState.jiraAssigneeAny || inboxState.jiraAssignee !== null
+  );
+
+  function toggleRole(v: 'reporter') {
     roleFilter = roleFilter === v ? null : v;
   }
   function toggleStatus(v: 'open' | 'inprogress' | 'done') {
@@ -272,9 +271,7 @@
         const reporterMatch = it.reporter?.display_name?.toLowerCase().includes(q) ?? false;
         if (!titleMatch && !keyMatch && !assigneeMatch && !reporterMatch) return false;
       }
-      if (roleFilter === 'mine') {
-        if (!me || it.assignee?.account_id !== me) return false;
-      } else if (roleFilter === 'reporter') {
+      if (roleFilter === 'reporter') {
         if (!me || it.reporter?.account_id !== me) return false;
       }
       if (statusFilter === 'open' && it.status_category !== 'new') return false;
@@ -284,9 +281,6 @@
         const dash = it.key.indexOf('-');
         const proj = dash > 0 ? it.key.slice(0, dash) : '';
         if (proj !== projectFilter) return false;
-      }
-      if (assigneeFilter) {
-        if (it.assignee?.account_id !== assigneeFilter) return false;
       }
       return true;
     });
@@ -315,7 +309,7 @@
     roleFilter !== null ||
     statusFilter !== null ||
     projectFilter !== null ||
-    assigneeFilter !== null ||
+    assigneeActive ||
     selectedSprintId !== '__all__'
   );
 
@@ -324,8 +318,10 @@
     roleFilter = null;
     statusFilter = null;
     projectFilter = null;
-    assigneeFilter = null;
     updateJiraFilters(p.instanceId, { sprintIds: [] });
+    // Reset GLOBAL assignee to default ("Me") — same as picking "Me" in
+    // the user picker modal.
+    if (assigneeActive) void selectAssignee(null);
   }
 
   function clickItem(it: JiraItem, e: MouseEvent) {
@@ -394,10 +390,6 @@
       onClose={closePicker}
     />
     <div class="jl-chips">
-      <button class="jl-toggle" class:active={roleFilter === 'mine'} disabled={!me} onclick={() => toggleRole('mine')} title="Assigned to me">
-        <span class="jl-toggle-dot"></span>
-        Mine
-      </button>
       <button class="jl-toggle" class:active={roleFilter === 'reporter'} disabled={!me} onclick={() => toggleRole('reporter')} title="Reported by me">
         <span class="jl-toggle-dot"></span>
         Reporter
@@ -428,17 +420,16 @@
           compact
         />
       </span>
-      <span class="jl-dd">
-        <Dropdown
-          value={assigneeFilter ?? '__all__'}
-          options={assigneeOptions}
-          onChange={(v) => (assigneeFilter = v === '__all__' ? null : v)}
-          placeholder="Assignee"
-          ariaLabel="Filter by assignee"
-          variant="chip"
-          compact
-        />
-      </span>
+      <button
+        class="jl-toggle"
+        class:active={assigneeActive}
+        disabled={p.jiraStatus.kind !== 'connected'}
+        onclick={openUserPicker}
+        title="Filter by assignee"
+      >
+        <span class="jl-toggle-dot"></span>
+        {assigneeLabel}
+      </button>
       <span class="jl-dd">
         <Dropdown
           value={selectedSprintId}

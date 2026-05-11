@@ -39,12 +39,6 @@
      *  compile; the overlay hides each button when undefined. */
     onSendToClaude?: () => void;
     onSendToCursor?: () => void;
-    /** When true, render as a static block that fills its parent
-     *  (used by GithubApp's right pane) instead of as a fixed-position
-     *  modal slide-over. The component's chrome — backdrop, slide
-     *  animation, border-left, drop shadow — is conditionally swapped
-     *  out so the same code path serves both layouts cleanly. */
-    inline?: boolean;
   }
 
   let {
@@ -65,8 +59,7 @@
     onOpenCheckDetails,
     mergeDisabled,
     onSendToClaude,
-    onSendToCursor,
-    inline = false
+    onSendToCursor
   }: Props = $props();
 
   /** Roll a check run's combined {status, conclusion} down to a single key
@@ -148,15 +141,13 @@
   {@const item = inboxState.focusItem}
   {@const stag = stateTag(item)}
   <div
-    class={inline ? 'gfo-inline' : 'slide-over'}
-    onclick={inline ? undefined : (e) => { if (e.target === e.currentTarget) onCloseFocus(); }}
+    class="gfo"
     onkeydown={(e) => { if (e.key === 'Escape') onCloseFocus(); }}
-    role={inline ? 'region' : 'dialog'}
-    aria-modal={inline ? undefined : 'true'}
-    aria-label={inline ? 'Pull request detail' : undefined}
+    role="region"
+    aria-label="Pull request detail"
     tabindex="-1"
   >
-    <div class={inline ? 'gfo-inline-panel' : 'slide-panel'}>
+    <div class="gfo-panel">
       <!-- Unified header bar: close-left, metadata center, "Open on
            GitHub" right. Mirrors `.jdp-head` (Jira) and `.sdp-head`
            (Sentry) so all three detail panes share the same skeleton. -->
@@ -601,8 +592,8 @@
 
 <style>
   /* Focus-pane styles that override or extend the base rules defined
-     globally in app.css. Kept scoped so the inline (GithubApp) and
-     overlay (other solos) renderings stay identical. */
+     globally in app.css. The pane fills its parent column (the right
+     pane of GithubApp). */
 
   /* Unified header bar — close on the left, metadata in the middle,
      "Open on GitHub" on the right. Same shape as `.jdp-head` (Jira) and
@@ -1043,63 +1034,20 @@
     backdrop-filter: blur(12px);
   }
 
-  /* Slide-over (modal mode — used when GithubFocusOverlay is rendered
-     at the page root from a non-GitHub view). */
-  .slide-over {
-    position: fixed; inset: 0;
-    background: var(--backdrop);
-    backdrop-filter: blur(8px);
-    z-index: 180;
-    display: flex; justify-content: flex-end;
-    animation: fadeIn 180ms ease-out;
-  }
-  .slide-panel {
-    width: min(1080px, 92vw);
-    height: 100%;
-    background: var(--bg-0);
-    border-left: 1px solid var(--border-neutral-hi);
-    box-shadow: -20px 0 60px rgba(0, 0, 0, 0.5);
-    display: flex; flex-direction: column;
-    overflow: hidden;
-    animation: slideInRight 240ms cubic-bezier(0.34, 1.56, 0.64, 1);
-    position: relative;
-  }
-
-  /* Inline mode — used by GithubApp's right pane. No backdrop, no
-     fixed positioning, no slide animation. The host fills its grid
-     track and the panel fills the host. Picks up the surrounding
-     `.app-pane` chrome from the parent's layout. */
-  .gfo-inline {
+  /* Fills the parent column (GithubApp's right pane). Picks up the
+     surrounding `.app-pane` chrome from the parent's layout. */
+  .gfo {
     flex: 1; min-height: 0;
     display: flex;
     width: 100%; height: 100%;
     background: transparent;
   }
-  .gfo-inline-panel {
+  .gfo-panel {
     flex: 1; min-width: 0; min-height: 0;
     display: flex; flex-direction: column;
     background: var(--bg-0);
     overflow: hidden;
     position: relative;
   }
-  @keyframes slideInRight {
-    from { transform: translateX(40px); opacity: 0; }
-    to   { transform: translateX(0); opacity: 1; }
-  }
-  @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
   @keyframes check-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-
-  .slide-close {
-    position: absolute;
-    top: 12px; right: 16px;
-    z-index: 5;
-    width: 32px; height: 32px;
-    border-radius: 8px;
-    background: var(--bg-2);
-    border: 1px solid var(--border-neutral-hi);
-    color: var(--text-1);
-    display: inline-flex; align-items: center; justify-content: center;
-    transition: all 120ms;
-  }
-  .slide-close:hover { background: var(--bg-3); color: var(--text-0); border-color: var(--border-hi2); }
 </style>

@@ -1,11 +1,6 @@
 <script lang="ts">
   /* GithubApp — full-screen workspace для GitHub.
-     Layout: [GithubList 380] [GithubFocusOverlay (flex, inline)]
-     Detail = существующий GithubFocusOverlay компонент рендерится
-     inline (`inline={true}` prop) — без модальной chrome (backdrop,
-     slide-animation, fixed-position). Тот же компонент в режиме
-     модала используется в +page.svelte когда фокус выставлен из
-     не-GitHub view (e.g. из Claude chat).
+     Layout: [GithubList 380] [GithubFocusOverlay (flex)].
      Когда focusItem === null — editorial empty state. */
   import GithubList from './github/GithubList.svelte';
   import GithubFocusOverlay from '$lib/components/inbox/GithubFocusOverlay.svelte';
@@ -79,7 +74,6 @@
       <section class="sg-detail app-pane">
         {#if inboxState.focusItem}
           <GithubFocusOverlay
-            inline
             now={p.now}
             tab={p.tab}
             actionBusy={p.actionBusy}
@@ -139,7 +133,4 @@
     min-width: 0;
     display: flex; flex-direction: column;
   }
-  /* GithubFocusOverlay carries its own `.slide-over` wrap — the global
-     override in app.css strips its modal-positioning when rendered
-     inside `.app-shell`. */
 </style>

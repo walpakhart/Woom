@@ -414,12 +414,12 @@
       0 0 12px var(--accent-glow);
   }
   .rail-sigil img {
-    /* 13px tall ≈ matches the visual weight of the 19px square nav
-       icons below, since the W is a low-aspect glyph (244 tall vs
-       655 wide in its tight viewBox) and would dominate the rail
-       column at parity with their box heights. */
-    height: 13px;
-    width: auto;
+    /* The W is wider than tall, so we anchor to a fixed width and
+       let height auto-derive. 30px reads at a comparable visual
+       weight to the 19px square nav icons below despite the glyph's
+       low aspect ratio. */
+    width: 30px;
+    height: auto;
     max-width: 100%;
     display: block;
     filter: drop-shadow(0 1px 0 rgba(0, 0, 0, 0.35));

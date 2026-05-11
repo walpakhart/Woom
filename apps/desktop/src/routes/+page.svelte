@@ -9,9 +9,6 @@
   import Welcome from '$lib/components/ui/Welcome.svelte';
   import { welcomeState } from '$lib/state/welcome.svelte';
   import WorktreeDiffModal from '$lib/components/editor/WorktreeDiffModal.svelte';
-  import JiraDetailPane from '$lib/components/inbox/JiraDetailPane.svelte';
-  import SentryDetailPane from '$lib/components/inbox/SentryDetailPane.svelte';
-  import GithubFocusOverlay from '$lib/components/inbox/GithubFocusOverlay.svelte';
   import Rail from '$lib/components/ui/Rail.svelte';
   import RulesView from '$lib/views/RulesView.svelte';
   import ConnectionsView from '$lib/views/ConnectionsView.svelte';
@@ -233,11 +230,11 @@
 
   /** True whenever the user is in a source-solo view (Jira / GitHub /
    *  Sentry). Used to gate keyboard shortcuts that only make sense
-   *  inside an inbox view (j/k navigation). The detail rendering is
-   *  always inline in the right pane of the source app — there is
-   *  no global slide-over modal anymore, so each app's focus state
-   *  persists across navigation and the user can leave + return
-   *  without losing the PR/ticket/issue they were reading. */
+   *  inside an inbox view (j/k navigation). The detail pane is
+   *  rendered inline in the right pane of the source app, so each
+   *  app's focus state persists across navigation and the user can
+   *  leave + return without losing the PR/ticket/issue they were
+   *  reading. */
   const isSourceApp = $derived(
     view === 'jiraApp' || view === 'githubApp' || view === 'sentryApp'
   );
@@ -369,7 +366,7 @@
   // but we track the *current* target, not "any Claude column".
   let dragOverInstanceId = $state<string | null>(null);
   // Set true briefly when a drag completes so the subsequent synthetic
-  // click doesn't open the slide-over PR detail.
+  // click doesn't open the PR detail pane.
   let justDragged = $state(false);
   // Track mousedown position to distinguish a real click from a drag release.
   let mouseDownPt: { x: number; y: number } | null = null;
@@ -637,7 +634,43 @@
    *     also checks for an existing waitId-marked card with matching
    *     params and skips creation if one exists. (See agentStream.ts.)
    */
+  /** Sentinel session id written by `cursor_mcp::sync` into the env
+   *  block of every woom-* server in `~/.cursor/mcp.json`. The file is
+   *  global so we can't bake a per-session id — instead we route any
+   *  card carrying the sentinel to the currently-focused Cursor chat.
+   *  Single-Cursor flows (the common case) get correct routing; parallel
+   *  Cursor chats all post to whichever is focused. Keep in lock-step
+   *  with `CURSOR_SENTINEL_SESSION_ID` in `cursor_mcp.rs`. */
+  const CURSOR_SENTINEL_SESSION_ID = 'cursor';
+
+  function resolveCursorSentinelSession(): string | null {
+    /* First choice: the chat the user actively has open in the Cursor
+       solo. Falls back to the most-recently-updated Cursor session so
+       a freshly-bundled Cursor instance (no pin yet) still routes. */
+    const pinned = sessionsState.activeByInstance[APP_INSTANCE_IDS.cursor];
+    if (pinned) {
+      const found = sessionsState.list.find((s) => s.id === pinned && s.agentKind === 'cursor');
+      if (found) return found.id;
+    }
+    const cursorSessions = sessionsState.list.filter((s) => s.agentKind === 'cursor');
+    if (!cursorSessions.length) return null;
+    const sessTime = (s: typeof cursorSessions[number]) => {
+      const last = s.messages[s.messages.length - 1]?.at;
+      return last ? new Date(last).getTime() : 0;
+    };
+    cursorSessions.sort((a, b) => sessTime(b) - sessTime(a));
+    return cursorSessions[0].id;
+  }
+
   function handleActionRequest(payload: ActionRequestPayload) {
+    /* Cursor's mcp.json is global, so its sidecars all stamp the same
+       sentinel session id. Resolve it to the right live Cursor chat
+       before the regular lookup runs. */
+    if (payload.session_id === CURSOR_SENTINEL_SESSION_ID) {
+      const resolved = resolveCursorSentinelSession();
+      if (!resolved) return;
+      payload = { ...payload, session_id: resolved };
+    }
     const sess = sessionsState.list.find((s) => s.id === payload.session_id);
     if (!sess) return;
     const matching = sess.actions.find(
@@ -4797,13 +4830,13 @@
   </div>
 </div>
 
-<!-- Inbox focus state (PR / ticket / issue) is now persisted per app
-     and rendered ONLY inline in the matching source app's right pane.
-     There's no global slide-over modal anymore — leaving GitHub for
-     Claude no longer pops the PR over the chat, and returning to GitHub
-     keeps the same PR open. Agent tools that target a source item
-     (`mcp__app__open_github_pr`, etc.) switch the view to that source
-     app on the way in, so the inline pane is the single render path. -->
+<!-- Inbox focus state (PR / ticket / issue) is persisted per app and
+     rendered inline in the matching source app's right pane. Leaving
+     GitHub for Claude no longer pops the PR over the chat, and
+     returning to GitHub keeps the same PR open. Agent tools that
+     target a source item (`mcp__app__open_github_pr`, etc.) switch
+     the view to that source app on the way in, so the inline pane is
+     the single render path. -->
 
 
 {#if worktreeDiffOpen && activeSession?.worktreePath && activeSession.worktreeRepo && activeSession.worktreeBranch}

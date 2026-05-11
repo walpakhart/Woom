@@ -75,6 +75,15 @@ pub struct CardResolution {
 /// end of the channel writes the response to the socket and closes.
 pub type WaitMap = Arc<Mutex<HashMap<String, oneshot::Sender<CardResolution>>>>;
 
+/// Deterministic per-Woom-process socket path. Same formula used by
+/// `lib.rs::action_ipc_state()` (the listener) and by `cursor_mcp.rs`
+/// (the env value written into `~/.cursor/mcp.json`) so both sides
+/// converge on the same file. PID-suffixed for parallel-Woom safety.
+pub fn current_socket_path() -> PathBuf {
+    let pid = std::process::id();
+    std::env::temp_dir().join(format!("woom-ipc-{}.sock", pid))
+}
+
 /// IPC server state, parked in Tauri app state so commands can reach
 /// it. Cheap to clone (everything inside is Arc).
 pub struct ActionIpc {
