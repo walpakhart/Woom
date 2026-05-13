@@ -1,14 +1,14 @@
 <script lang="ts">
   /* RailAppButton — a rail icon for a multi-instance app (Editor /
-     Canvas / Terminal). Single click = switch view to the kind's
-     active instance. Long-press (or right-click) opens a popover
-     showing every open instance + an "Add" button + per-instance ×
-     to remove non-primary entries.
-
-     Why this lives in its own file rather than inline in Rail.svelte:
-     the long-press timer + outside-click handling + per-instance
-     popover would triple the size of Rail.svelte. Keeping it
-     here lets Rail.svelte stay a flat list of icons. */
+     Canvas / Terminal). The kind has a single primary instance + an
+     optional list of secondary instances. Single-click on the primary
+     icon switches the view and activates that instance. When more
+     than one instance exists, a chevron appears at the bottom of the
+     primary icon; clicking it expands the rail inline so each extra
+     instance gets its own rail-btn directly under the primary. From
+     the expanded stack the user can add (+ button) or remove (× on
+     hover) instances without leaving the rail. The previous popover
+     modal is gone — everything lives in the rail itself. */
 
   import {
     layoutState,
@@ -21,109 +21,61 @@
 
   interface Props {
     kind: AppKind;
-    /** Pretty label used in the popover title and tooltip. */
+    /** Pretty label used in tooltips. */
     label: string;
     /** Tooltip + cmd-N hint, e.g. "Editor · ⌘6". */
     tooltip: string;
-    /** True when this kind is the currently active view in +page.svelte.
-     *  Used to light the rail-btn with the brand glow + accent dot. */
+    /** True when this kind is the currently active top-level view. */
     active: boolean;
     /** rail-btn brand tone CSS — same vars the existing buttons use. */
     tone: string;
     glow: string;
     /** Inline `<svg>` icon snippet (so each kind keeps its own glyph). */
     icon: Snippet;
-    /** Click handler — switches the top-level view to this kind. The
-     *  parent +page.svelte already routes to layoutState.activeInstance[kind]. */
+    /** Switches the top-level view to this kind. The parent +page.svelte
+     *  reads `layoutState.activeInstance[kind]` to pick the actual instance,
+     *  so we set the active-instance pointer before calling. */
     onActivate: () => void;
   }
   let p: Props = $props();
 
   const instances = $derived(layoutState.instances[p.kind] ?? []);
   const activeId = $derived(layoutState.activeInstance[p.kind]);
+  const primaryInst = $derived(instances.find((i) => i.primary) ?? instances[0]);
+  const nonPrimary = $derived(instances.filter((i) => !i.primary));
+  const hasExtras = $derived(instances.length > 1);
 
-  let menuOpen = $state(false);
-  let pressTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Whether the secondary instance icons are visible inline. Collapses
+   *  automatically when extras drop back to 0 (e.g. user × the last
+   *  non-primary) so the rail doesn't carry a dead chevron state. */
+  let expanded = $state(false);
+  $effect(() => {
+    if (!hasExtras) expanded = false;
+  });
+
   let dragHoverTimer: ReturnType<typeof setTimeout> | null = null;
-  /** Refs used by the outside-click handler so we only suppress the
-   *  close when the click landed on THIS instance's button or menu —
-   *  not on another rail button that happens to share the same class. */
-  let rootEl: HTMLDivElement | null = $state(null);
-  /** Block the synthetic click that fires after a long-press release —
-   *  otherwise opening the menu would also navigate to the kind. */
-  let suppressClick = $state(false);
 
-  function startPress(e: PointerEvent) {
-    if (e.button !== 0) return;
-    pressTimer = setTimeout(() => {
-      menuOpen = true;
-      suppressClick = true;
-      pressTimer = null;
-    }, 380);
-  }
-  function cancelPress() {
-    if (pressTimer) {
-      clearTimeout(pressTimer);
-      pressTimer = null;
-    }
-  }
-
-  /** Drag-hover expand. Hovering a payload over the rail button for
-   *  ~450 ms opens the instance popover, so the user can pick which
-   *  Editor / Canvas / Terminal instance to drop into. Without this
-   *  the only way to target a non-default instance is to first
-   *  switch to it manually. Cancelled on dragleave / drop. */
-  function onDragEnterBtn(e: DragEvent) {
-    if (!e.dataTransfer) return;
-    if (dragHoverTimer) clearTimeout(dragHoverTimer);
-    dragHoverTimer = setTimeout(() => {
-      menuOpen = true;
-      dragHoverTimer = null;
-    }, 450);
-  }
-  function onDragLeaveBtn() {
-    if (dragHoverTimer) {
-      clearTimeout(dragHoverTimer);
-      dragHoverTimer = null;
-    }
-  }
-  function onClick() {
-    if (suppressClick) {
-      suppressClick = false;
-      return;
-    }
-    p.onActivate();
-  }
-  function onContextMenu(e: MouseEvent) {
-    /* Right-click is a faster alternative to long-press. */
-    e.preventDefault();
-    menuOpen = true;
-  }
-  function onWindowClick(e: MouseEvent) {
-    if (!menuOpen) return;
-    /* Close on any click that lands OUTSIDE this specific component's
-       root. Earlier we exempted any `.rab-btn` (so clicking another
-       app's rail button left this menu open) — that's wrong: clicking
-       anywhere away from the active popover should dismiss it. The
-       button's own onClick handler short-circuits via `suppressClick`
-       when needed, so toggling on the same button still works. */
-    const t = e.target as Node | null;
-    if (rootEl && t && rootEl.contains(t)) return;
-    menuOpen = false;
-  }
-  function onKey(e: KeyboardEvent) {
-    if (e.key === 'Escape' && menuOpen) menuOpen = false;
-  }
-
-  function pickInstance(id: string) {
+  function activate(id: string) {
     setActiveInstance(p.kind, id);
-    menuOpen = false;
     p.onActivate();
+  }
+  function onClickPrimary() {
+    if (primaryInst) activate(primaryInst.id);
+  }
+  /** Right-click on any icon = add a new instance fast. Skips the
+   *  expand step entirely; the new instance becomes active. */
+  function onContextMenu(e: MouseEvent) {
+    e.preventDefault();
+    spawnInstance();
+  }
+  function toggleExpand(e: MouseEvent) {
+    e.stopPropagation();
+    expanded = !expanded;
   }
   function spawnInstance() {
     const inst = addInstance(p.kind);
     if (inst) {
-      menuOpen = false;
+      expanded = true;
       p.onActivate();
     }
   }
@@ -132,208 +84,270 @@
     if (!confirm(`Close ${p.label} · ${name}? Any unsaved per-instance state is dropped.`)) return;
     removeInstance(p.kind, id);
   }
+
+  /** Drag-hover expand. A 450 ms dwell over the primary icon opens the
+   *  inline stack so a payload can be dropped onto a specific instance.
+   *  Cancelled on dragleave. */
+  function onDragEnterPrimary(e: DragEvent) {
+    if (!e.dataTransfer) return;
+    if (!hasExtras) return;
+    if (dragHoverTimer) clearTimeout(dragHoverTimer);
+    dragHoverTimer = setTimeout(() => {
+      expanded = true;
+      dragHoverTimer = null;
+    }, 450);
+  }
+  function onDragLeavePrimary() {
+    if (dragHoverTimer) {
+      clearTimeout(dragHoverTimer);
+      dragHoverTimer = null;
+    }
+  }
+
+  function onKey(e: KeyboardEvent) {
+    if (e.key === 'Escape' && expanded) expanded = false;
+  }
 </script>
 
-<svelte:window onclick={onWindowClick} onkeydown={onKey} />
+<svelte:window onkeydown={onKey} />
 
-<div class="rab" class:menu-open={menuOpen} bind:this={rootEl}>
-  <button
-    class="rail-btn rab-btn"
-    class:active={p.active}
-    style="--rail-tone: {p.tone}; --rail-glow: {p.glow};"
-    data-tooltip={p.tooltip}
-    aria-label={p.label}
-    onpointerdown={startPress}
-    onpointerup={cancelPress}
-    onpointerleave={cancelPress}
-    oncontextmenu={onContextMenu}
-    onclick={onClick}
-    ondragenter={onDragEnterBtn}
-    ondragleave={onDragLeaveBtn}
-  >
-    {@render p.icon()}
-    <!-- The instance count pill used to live here, but the number was
-         visually noisy on the rail and the count is already discoverable
-         via long-press on the icon (which opens the instance popover).
-         Keep the popover dot indicator below as the sole "this kind has
-         extras" affordance. -->
-  </button>
+<div class="rab" class:expanded>
+  <div class="rab-slot">
+    <button
+      class="rail-btn rab-btn"
+      class:active={p.active && activeId === primaryInst?.id}
+      class:kind-active={p.active && activeId !== primaryInst?.id}
+      class:has-extras={hasExtras}
+      style="--rail-tone: {p.tone}; --rail-glow: {p.glow};"
+      data-tooltip={hasExtras ? `${p.tooltip} · ${primaryInst?.name}` : p.tooltip}
+      aria-label={p.label}
+      onclick={onClickPrimary}
+      oncontextmenu={onContextMenu}
+      ondragenter={onDragEnterPrimary}
+      ondragleave={onDragLeavePrimary}
+    >
+      {@render p.icon()}
+    </button>
+    {#if hasExtras}
+      <button
+        class="rab-chevron"
+        class:open={expanded}
+        class:kind-active={p.active}
+        style="--rail-tone: {p.tone}; --rail-glow: {p.glow};"
+        onclick={toggleExpand}
+        aria-label={expanded ? `Collapse ${p.label} stack` : `Expand ${p.label} stack`}
+        title={expanded ? 'Collapse' : `${instances.length} ${p.label.toLowerCase()}s open`}
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <polyline points="6 9 12 15 18 9" />
+        </svg>
+      </button>
+    {/if}
+  </div>
 
-  {#if menuOpen}
-    <div class="rab-menu" role="menu" aria-label="{p.label} instances">
-      <div class="rab-menu-head">
-        <span class="rab-menu-h">{p.label}</span>
-        <span class="rab-menu-sub mono">{instances.length} open</span>
-      </div>
-      <div class="rab-menu-list">
-        {#each instances as inst (inst.id)}
-          {@const isActive = inst.id === activeId}
-          <div class="rab-menu-row" class:active={isActive}>
-            <button
-              type="button"
-              class="rab-menu-pick"
-              onclick={() => pickInstance(inst.id)}
-              title={inst.primary
-                ? `${p.label} (default)`
-                : `${p.label} · ${inst.name}`}
-            >
-              <span class="rab-menu-dot" style="--rab-tone: {p.tone};"></span>
-              <span class="rab-menu-name">{inst.name}</span>
-              {#if inst.primary}<span class="rab-menu-tag mono">primary</span>{/if}
-            </button>
-            {#if !inst.primary}
-              <button
-                type="button"
-                class="rab-menu-x"
-                onclick={(e) => discardInstance(inst.id, inst.name, e)}
-                title="Close this {p.label} instance"
-                aria-label="Close instance"
-              >
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M6 6l12 12M6 18 18 6"/></svg>
-              </button>
-            {/if}
-          </div>
-        {/each}
-      </div>
-      <button class="rab-menu-add" type="button" onclick={spawnInstance}>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
-        New {p.label.toLowerCase()}
+  {#if expanded}
+    <div class="rab-stack">
+      {#each nonPrimary as inst (inst.id)}
+        {@const isActive = p.active && activeId === inst.id}
+        <div class="rab-slot rab-sub">
+          <button
+            class="rail-btn rab-btn rab-sub-btn"
+            class:active={isActive}
+            style="--rail-tone: {p.tone}; --rail-glow: {p.glow};"
+            data-tooltip="{p.label} · {inst.name}"
+            aria-label="{p.label} {inst.name}"
+            onclick={() => activate(inst.id)}
+            oncontextmenu={onContextMenu}
+          >
+            {@render p.icon()}
+          </button>
+          <button
+            class="rab-x"
+            onclick={(e) => discardInstance(inst.id, inst.name, e)}
+            aria-label="Close {p.label} {inst.name}"
+            title="Close {inst.name}"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true">
+              <path d="M6 6l12 12M6 18 18 6" />
+            </svg>
+          </button>
+        </div>
+      {/each}
+      <button
+        class="rab-add"
+        style="--rail-tone: {p.tone}; --rail-glow: {p.glow};"
+        onclick={spawnInstance}
+        aria-label="New {p.label.toLowerCase()}"
+        title="New {p.label.toLowerCase()}"
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true">
+          <path d="M12 5v14M5 12h14" />
+        </svg>
       </button>
     </div>
   {/if}
 </div>
 
 <style>
-  .rab { position: relative; display: inline-flex; }
+  /* Wraps the primary slot + the optional expanded sub-stack. Lays them
+     out as a column matching the parent rail's own flex gap so spacing
+     between RailAppButton entries reads as one continuous rail. */
+  .rab {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+  }
 
-  /* The button itself reuses the chassis `.rail-btn` class so it
-     inherits hover/active/glow from app.css. We just add the
-     stack-indicator on multi-instance kinds. */
+  /* One row of the stack — primary or sub. The primary slot stacks
+     its button + chevron vertically (in flow, so the slot's height
+     reserves the chevron's space and the next rail entry below
+     doesn't get crowded). Sub slots are just the button; the × badge
+     overlays absolutely. */
+  .rab-slot {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1px;
+  }
+
   .rab-btn { position: relative; }
 
+  /* Hide the .rail-btn.active::after accent dot when this kind has
+     extras — the chevron replaces it. Keeps the bottom-of-icon area
+     uncluttered. */
+  :global(.rab-btn.has-extras.active::after) { display: none; }
 
-  /* Popover anchored to the right of the rail button. The rail is
-     dark, so the popover lives on a slightly lighter glass surface
-     to read clearly without competing with content panes. */
-  .rab-menu {
-    position: absolute;
-    left: calc(100% + 8px);
-    top: -4px;
-    min-width: 220px; max-width: 280px;
-    background: rgba(20, 24, 26, 0.96);
-    border: 1px solid var(--border-hi);
-    border-radius: 11px;
-    box-shadow: var(--shadow-3);
-    backdrop-filter: blur(14px);
-    -webkit-backdrop-filter: blur(14px);
-    z-index: 200;
-    padding: 6px;
-    animation: rab-pop 140ms ease-out;
-  }
-  @keyframes rab-pop {
-    from { opacity: 0; transform: translateX(-4px) scale(0.96); }
-    to   { opacity: 1; transform: translateX(0)    scale(1); }
+  /* The kind is the current view but the active instance is a sub —
+     give the primary icon a subtle border tint so the rail still
+     telegraphs "you're somewhere in Editor". The chevron carries the
+     louder accent. */
+  :global(.rab-btn.kind-active:not(.active)) {
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--rail-tone) 22%, transparent);
   }
 
-  .rab-menu-head {
-    display: flex; align-items: baseline; gap: 8px;
-    padding: 8px 10px 6px;
-    border-bottom: 1px solid var(--border);
-    margin-bottom: 4px;
-  }
-  .rab-menu-h {
-    flex: 1;
-    font-family: 'Geist', 'Inter', -apple-system, system-ui, sans-serif;
-    font-size: 16px; font-weight: 600;
-    color: var(--text-0);
-    letter-spacing: -0.01em;
-  }
-  .rab-menu-sub {
-    font-size: 9.5px;
+  /* Chevron sits below the primary icon as a quiet hint — no border, no
+     filled pill, just a small glyph at low opacity. The whole 22×10 box
+     is the hit area, but only the 8px glyph reads, so it doesn't fight
+     the icon above for attention. Brightens on hover and inherits the
+     kind tone when the kind is the current view. */
+  .rab-chevron {
+    width: 24px;
+    height: 10px;
+    display: grid;
+    place-items: center;
+    padding: 0;
+    border: 0;
+    background: transparent;
     color: var(--text-mute);
-    letter-spacing: 0.06em;
-  }
-
-  .rab-menu-list { display: flex; flex-direction: column; gap: 1px; }
-  .rab-menu-row {
-    display: flex; align-items: center;
-    border-radius: 7px;
-    transition: background 100ms;
-  }
-  .rab-menu-row:hover { background: var(--bg-2); }
-  .rab-menu-row.active { background: var(--bg-2); }
-
-  .rab-menu-pick {
-    flex: 1;
-    display: inline-flex; align-items: center; gap: 9px;
-    padding: 7px 10px;
-    text-align: left;
-    background: transparent;
-    border: 0;
-    font-size: 12.5px;
-    color: var(--text-1);
+    opacity: 0.55;
     cursor: pointer;
+    transition: opacity 140ms, color 140ms;
   }
-  .rab-menu-row.active .rab-menu-pick { color: var(--text-0); }
-  .rab-menu-dot {
-    width: 7px; height: 7px;
-    border-radius: 50%;
-    background: var(--rab-tone, var(--accent));
-    box-shadow: 0 0 6px color-mix(in srgb, var(--rab-tone, var(--accent)) 50%, transparent);
-    flex-shrink: 0;
+  .rab-chevron svg {
+    width: 9px;
+    height: 9px;
+    transition: transform var(--dur-slow) var(--ease-spring);
   }
-  .rab-menu-name {
-    flex: 1; min-width: 0;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  .rab-chevron:hover {
+    opacity: 1;
+    color: var(--rail-tone);
   }
-  .rab-menu-tag {
-    font-size: 9px; font-weight: 600;
-    letter-spacing: 0.08em; text-transform: uppercase;
-    padding: 1px 5px; border-radius: 3px;
-    background: var(--bg-3); color: var(--text-mute);
-    border: 1px solid var(--border);
+  .rab-chevron.kind-active {
+    opacity: 1;
+    color: var(--rail-tone);
+  }
+  .rab-chevron.open {
+    opacity: 1;
+  }
+  .rab-chevron.open svg {
+    transform: rotate(180deg);
   }
 
-  /* Per-row × button — only renders for non-primary entries. Sits
-     muted next to the row, flares red on hover. */
-  .rab-menu-x {
-    flex-shrink: 0;
-    width: 22px; height: 22px;
-    display: grid; place-items: center;
-    margin-right: 4px;
-    border-radius: 5px;
-    background: transparent;
-    border: 0;
+  /* Sub-instance stack — pads a touch on top so the chevron's anchor
+     doesn't overlap the first sub icon. */
+  .rab-stack {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    padding-top: 4px;
+    animation: rab-slide var(--dur-base) var(--ease-spring);
+  }
+  @keyframes rab-slide {
+    from { opacity: 0; transform: translateY(-6px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .rab-stack { animation: none; }
+    .rab-chevron, .rab-chevron svg { transition: none; }
+  }
+
+  /* Sub icons render the same kind glyph at a slightly smaller chassis
+     so the primary stays visually dominant. Same rail-btn class, so
+     hover / active / glow vocabulary is preserved. */
+  :global(.rab-sub-btn) {
+    width: 38px !important;
+    height: 38px !important;
+    border-radius: 9px !important;
+  }
+  :global(.rab-sub-btn svg) { width: 17px; height: 17px; }
+
+  /* × badge on the sub row — only visible on hover. Sits at the top-
+     right of the sub icon's slot so it doesn't fight the click area. */
+  .rab-x {
+    position: absolute;
+    top: -4px;
+    right: -6px;
+    width: 18px;
+    height: 18px;
+    display: grid;
+    place-items: center;
+    padding: 0;
+    border: 1px solid var(--border-neutral-hi);
+    border-radius: 50%;
+    background: var(--bg-3);
     color: var(--text-mute);
     cursor: pointer;
     opacity: 0;
-    transition: opacity 100ms, color 100ms, background 100ms;
+    transition: opacity 120ms, color 120ms, background 120ms, transform 120ms;
+    z-index: 3;
   }
-  .rab-menu-row:hover .rab-menu-x { opacity: 0.85; }
-  .rab-menu-x:hover {
+  .rab-x svg { width: 9px; height: 9px; }
+  .rab-sub:hover .rab-x,
+  .rab-x:focus-visible {
     opacity: 1;
-    color: var(--error);
-    background: rgba(232, 130, 100, 0.10);
   }
-  .rab-menu-x svg { width: 11px; height: 11px; }
+  .rab-x:hover {
+    color: var(--error);
+    background: color-mix(in srgb, var(--error) 14%, var(--bg-3));
+    border-color: color-mix(in srgb, var(--error) 50%, var(--border-neutral-hi));
+    transform: scale(1.06);
+  }
 
-  .rab-menu-add {
-    width: 100%;
-    display: inline-flex; align-items: center; gap: 8px; justify-content: center;
-    margin-top: 6px;
-    padding: 8px 10px;
-    border: 1px dashed var(--border-neutral-hi);
-    border-radius: 8px;
+  /* "+ new instance" button at the bottom of the expanded stack. Dashed
+     ring + plus glyph so it reads as an "add slot" affordance rather
+     than another live icon. */
+  .rab-add {
+    width: 38px;
+    height: 38px;
+    display: grid;
+    place-items: center;
+    padding: 0;
+    border: 1px dashed color-mix(in srgb, var(--border-neutral-hi) 90%, transparent);
+    border-radius: 9px;
     background: transparent;
-    color: var(--text-2);
-    font-size: 12.5px; font-weight: 500;
+    color: var(--text-mute);
     cursor: pointer;
     transition: all 140ms;
   }
-  .rab-menu-add svg { width: 13px; height: 13px; }
-  .rab-menu-add:hover {
-    color: var(--accent-bright);
-    border-color: var(--border-accent);
-    background: var(--accent-soft);
+  .rab-add svg { width: 14px; height: 14px; }
+  .rab-add:hover {
+    color: var(--rail-tone);
+    border-color: color-mix(in srgb, var(--rail-tone) 60%, transparent);
+    background: color-mix(in srgb, var(--rail-tone) 10%, transparent);
+    box-shadow: 0 0 12px color-mix(in srgb, var(--rail-glow) 60%, transparent);
   }
 </style>

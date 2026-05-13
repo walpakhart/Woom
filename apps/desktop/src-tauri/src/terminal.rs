@@ -67,6 +67,13 @@ pub struct Session {
     /// (and the user reading the trace) sees readable column names
     /// alongside the opaque uuids.
     pub name: Option<String>,
+    /// Layout-instance id this PTY belongs to (e.g. `terminal-solo`
+    /// for the primary, `terminal:vermeer` for a secondary). The
+    /// frontend tracks one Session per layout instance; surfacing
+    /// the id here lets `get_by_id_or_name` resolve agent calls that
+    /// pass the layout id instead of the art-name. Optional only for
+    /// back-compat with legacy spawns that predated this field.
+    pub instance_id: Option<String>,
     /// Working directory the shell was spawned in. Used by the
     /// bridge as the cwd for agent subprocesses (`bash -c <cmd>`)
     /// so agent commands run in the same place the user expects,
@@ -82,21 +89,26 @@ pub struct TerminalRegistry {
 }
 
 impl TerminalRegistry {
-    /// Snapshot of every live session as `(id, name)`. Used by the
-    /// bridge `list` endpoint so the lock isn't held across `await`.
-    pub fn list(&self) -> Vec<(String, Option<String>)> {
+    /// Snapshot of every live session as `(uuid, name, instance_id)`.
+    /// Used by the bridge `list` endpoint so the lock isn't held
+    /// across `await`. Instance-id is the layout-instance handle
+    /// (e.g. `terminal-solo`) that the frontend uses to address the
+    /// column; surfacing it lets MCP responses cite a stable handle
+    /// the agent already sees in its preamble.
+    pub fn list(&self) -> Vec<(String, Option<String>, Option<String>)> {
         self.sessions
             .lock()
             .iter()
-            .map(|(id, s)| (id.clone(), s.name.clone()))
+            .map(|(id, s)| (id.clone(), s.name.clone(), s.instance_id.clone()))
             .collect()
     }
 
-    /// Resolve an id-or-name to a Session. Tries direct uuid lookup
-    /// first; if that misses, scans for a session whose `name`
-    /// matches the input (case-insensitive). Lets MCP callers pass
-    /// readable column names (e.g. "Notre-Dame") instead of forcing
-    /// every tool call to drag a uuid through chat history.
+    /// Resolve a handle to a Session. Tries, in order: direct uuid
+    /// lookup, case-insensitive match against the art-name (e.g.
+    /// "Notre-Dame"), and case-insensitive match against the
+    /// layout-instance id (e.g. "terminal-solo", "terminal:vermeer").
+    /// Lets MCP callers pass whichever handle they already have in
+    /// hand without forcing a `terminal_list` round-trip.
     pub fn get_by_id_or_name(&self, key: &str) -> Option<Arc<Session>> {
         let map = self.sessions.lock();
         if let Some(s) = map.get(key) {
@@ -105,7 +117,12 @@ impl TerminalRegistry {
         let lower = key.to_ascii_lowercase();
         for s in map.values() {
             if let Some(n) = s.name.as_deref() {
-                if n.eq_ignore_ascii_case(&lower) || n.to_ascii_lowercase() == lower {
+                if n.eq_ignore_ascii_case(key) || n.to_ascii_lowercase() == lower {
+                    return Some(s.clone());
+                }
+            }
+            if let Some(iid) = s.instance_id.as_deref() {
+                if iid.eq_ignore_ascii_case(key) || iid.to_ascii_lowercase() == lower {
                     return Some(s.clone());
                 }
             }
@@ -134,6 +151,11 @@ pub struct SpawnOpts {
     /// on the Session and returned by `terminal_list` so MCP agents
     /// see readable names rather than just uuids.
     pub name: Option<String>,
+    /// Layout-instance id (e.g. `terminal-solo`, `terminal:vermeer`).
+    /// Stored so the bridge's `get_by_id_or_name` can resolve calls
+    /// that use the layout id directly — matching what shows up in
+    /// the agent's preamble.
+    pub instance_id: Option<String>,
 }
 
 /// Spawn a shell attached to a PTY. Returns a stable id the frontend
@@ -219,6 +241,7 @@ pub fn terminal_spawn(
         output_buf: output_buf.clone(),
         output_notify: output_notify.clone(),
         name: opts.name.clone(),
+        instance_id: opts.instance_id.clone(),
         spawn_cwd,
     });
     state.sessions.lock().insert(id.clone(), session);

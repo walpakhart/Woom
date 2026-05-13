@@ -149,6 +149,95 @@
     return { kind: 'tool', cmd, output };
   }
 
+  /** Tool kinds we render with a dedicated icon + colour. Anything else
+   *  falls through to the neutral `unknown` style — still renders, just
+   *  without the per-tool flair. */
+  type ToolKind =
+    | 'read' | 'edit' | 'write' | 'create' | 'delete'
+    | 'bash' | 'grep' | 'glob' | 'webfetch' | 'websearch'
+    | 'todo' | 'switch_cwd' | 'commit' | 'pr'
+    | 'mcp' | 'unknown';
+
+  type ToolHint = {
+    kind: ToolKind;
+    /** Human-readable verb shown on the chip ("Read", "Bash", "Grep"…). */
+    label: string;
+    /** Primary subject — usually a path or command body. Rendered mono. */
+    target: string;
+    /** Optional secondary qualifier ("in <path>" for grep, "(L12–)" for read). */
+    scope: string;
+  };
+
+  /** Convert a `formatToolUse`-shaped hint string back into structure
+   *  so the trace renderer can pick an icon/colour/label per tool kind
+   *  instead of dumping every step as a same-looking `$ …` pill. We
+   *  keep this on the UI side because the over-the-wire format
+   *  (`_read_ \`path\``) is markdown-stable and shared across both
+   *  agents, so any structural decoration belongs in the renderer. */
+  function parseToolHint(raw: string): ToolHint {
+    const fallback = (k: ToolKind, label: string, target = ''): ToolHint => ({
+      kind: k, label, target, scope: '',
+    });
+    const s = raw.trim();
+    /* Bash carries no italics — it ships as `` `$ command` ``. The
+       leading `$ ` was already stripped by `parseTraceSegment` so
+       what's left is the bare command body. */
+    if (!s.startsWith('_')) {
+      /* Could still be a generic Markdown line; treat the whole thing
+         as a Bash command if it looks like one (no leading `_kind_`
+         marker and no markdown emphasis at all). */
+      return fallback('bash', 'Bash', s.replace(/^`|`$/g, ''));
+    }
+    /* `_kind_ \`primary\`[ in \`secondary\`]` — italics + inline-code.
+       We tolerate optional trailing parens like `(L12–)` from Read. */
+    const m = /^_([a-zA-Z][\w. ]*?)_\s*(.*)$/.exec(s);
+    if (!m) return fallback('unknown', 'Tool', s);
+    const verb = m[1].toLowerCase().trim();
+    const rest = m[2].trim();
+    const codes = [...rest.matchAll(/`([^`]+)`/g)].map((mm) => mm[1]);
+    const primary = codes[0] ?? '';
+    const secondary = codes[1] ?? '';
+    /* Pick out trailing parenthetical hint from Read (`(L12–)`). */
+    const parenMatch = / \(([^)]+)\)\s*$/.exec(rest);
+    const paren = parenMatch ? parenMatch[1] : '';
+    const inMatch = / in $/.test(rest.split('`')[2] ?? '');
+    const scope = secondary ? (inMatch ? `in ${secondary}` : secondary) : paren;
+
+    /* Map verb → kind + nice label. The verb space includes mcp
+       calls flattened by formatToolUse (`jira.get_issue`,
+       `app.open_github_pr`, …) — we treat the whole `mcp.*`
+       family as one kind but show the dotted name as the label. */
+    if (verb === 'read') return { kind: 'read', label: 'Read', target: primary, scope };
+    if (verb === 'edit') return { kind: 'edit', label: 'Edit', target: primary, scope };
+    if (verb === 'write') return { kind: 'write', label: 'Write', target: primary, scope };
+    if (verb === 'grep') return { kind: 'grep', label: 'Grep', target: primary, scope };
+    if (verb === 'glob') return { kind: 'glob', label: 'Glob', target: primary, scope };
+    if (verb === 'webfetch') return { kind: 'webfetch', label: 'Fetch', target: primary, scope };
+    if (verb === 'websearch') return { kind: 'websearch', label: 'Search', target: primary, scope };
+    if (verb === 'switch cwd') return { kind: 'switch_cwd', label: 'Switch cwd', target: primary, scope };
+    if (verb === 'commit') return { kind: 'commit', label: 'Commit', target: primary, scope };
+    if (verb === 'open pr') return { kind: 'pr', label: 'PR', target: primary, scope };
+    if (verb === 'notebook edit') return { kind: 'edit', label: 'Notebook', target: primary, scope };
+    if (verb === 'using bash…' || verb === 'propose bash…') {
+      return { kind: 'bash', label: 'Bash', target: primary, scope };
+    }
+    /* mcp__server__tool gets flattened to `server.tool` by formatToolUse. */
+    if (verb.includes('.')) {
+      const segs = verb.split('.');
+      const server = segs[0];
+      const tool = segs.slice(1).join('.').replace(/_/g, ' ');
+      return { kind: 'mcp', label: `${server} · ${tool}`, target: primary, scope };
+    }
+    /* Fallback: surface the verb as the label, keep its own
+       capitalisation (without the underscores formatToolUse used). */
+    return {
+      kind: 'unknown',
+      label: verb.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase()),
+      target: primary,
+      scope,
+    };
+  }
+
   function diffStats(oldText: string, newText: string): { add: number; rem: number } {
     const rows = computeDiffRows(oldText ?? '', newText ?? '');
     let add = 0, rem = 0;
@@ -294,30 +383,90 @@
                       </span>
                     </summary>
                     <div class="trace-body">
+                      {#snippet toolIcon(kind: string)}
+                        {#if kind === 'read'}
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
+                        {:else if kind === 'edit'}
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>
+                        {:else if kind === 'write' || kind === 'create'}
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
+                        {:else if kind === 'delete'}
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>
+                        {:else if kind === 'bash'}
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+                        {:else if kind === 'grep'}
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="20" y1="20" x2="17" y2="17"/></svg>
+                        {:else if kind === 'glob'}
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v11a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-7L10 5H5a2 2 0 0 0-2 2z"/><path d="M9 13l2 2 4-4"/></svg>
+                        {:else if kind === 'webfetch' || kind === 'websearch'}
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>
+                        {:else if kind === 'commit' || kind === 'pr'}
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="M6 8.5V14a4 4 0 0 0 4 4h6"/></svg>
+                        {:else if kind === 'switch_cwd'}
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v11a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-7L10 5H5a2 2 0 0 0-2 2z"/><path d="M16 14l3-3-3-3M9 11h10"/></svg>
+                        {:else if kind === 'mcp'}
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5 12 2"/><line x1="12" y1="22" x2="12" y2="12"/><line x1="22" y1="8.5" x2="12" y2="12"/><line x1="2" y1="8.5" x2="12" y2="12"/></svg>
+                        {:else}
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9 1.65 1.65 0 0 0 4.27 7.18l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6 1.65 1.65 0 0 0 10 3.09V3a2 2 0 1 1 4 0v.09c0 .68.4 1.29 1 1.51"/></svg>
+                        {/if}
+                      {/snippet}
                       {#each ev.segments as seg, si (si)}
                         {@const parsed = parseTraceSegment(seg)}
                         {#if parsed.kind === 'tool' && (parsed.cmd || parsed.output)}
-                          <div class="trace-step">
-                            {#if parsed.cmd}
-                              <div class="trace-cmd-bubble">
-                                <span class="trace-cmd-prompt mono">$</span>
-                                <code class="trace-cmd-text mono">{parsed.cmd}</code>
+                          {@const hint = parseToolHint(parsed.cmd)}
+                          {@const fallbackBash =
+                            !hint.target && !hint.scope && parsed.cmd && hint.kind === 'bash'
+                              ? parsed.cmd : ''}
+                          {@const lineCount = parsed.output ? parsed.output.split('\n').length : 0}
+                          {#if parsed.output}
+                            <!-- Combined card: command is the SUMMARY, output is
+                                 the BODY. Click anywhere on the header to
+                                 expand the inline output — same widget,
+                                 instead of two stacked pills. -->
+                            <details class="trace-step trace-step--{hint.kind} trace-step--has-output">
+                              <summary class="trace-cmd-row trace-cmd-row--toggle">
+                                <span class="trace-cmd-icon" aria-hidden="true">
+                                  {@render toolIcon(hint.kind)}
+                                </span>
+                                <span class="trace-cmd-label mono">{hint.label}</span>
+                                {#if hint.target}
+                                  <code class="trace-cmd-target mono" title={hint.target}>{hint.target}</code>
+                                {/if}
+                                {#if hint.scope}
+                                  <span class="trace-cmd-scope mono">{hint.scope}</span>
+                                {/if}
+                                {#if fallbackBash}
+                                  <code class="trace-cmd-target mono">{fallbackBash}</code>
+                                {/if}
+                                <span class="trace-cmd-meta mono" aria-label="output line count">{lineCount} line{lineCount === 1 ? '' : 's'}</span>
+                                <span class="trace-cmd-caret" aria-hidden="true">
+                                  <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg>
+                                </span>
+                              </summary>
+                              <pre class="trace-out-body mono">{parsed.output}</pre>
+                            </details>
+                          {:else}
+                            <!-- No output (yet): still render the row, just
+                                 non-interactive (matches a streaming step
+                                 before its result lands). -->
+                            <div class="trace-step trace-step--{hint.kind}">
+                              <div class="trace-cmd-row">
+                                <span class="trace-cmd-icon" aria-hidden="true">
+                                  {@render toolIcon(hint.kind)}
+                                </span>
+                                <span class="trace-cmd-label mono">{hint.label}</span>
+                                {#if hint.target}
+                                  <code class="trace-cmd-target mono" title={hint.target}>{hint.target}</code>
+                                {/if}
+                                {#if hint.scope}
+                                  <span class="trace-cmd-scope mono">{hint.scope}</span>
+                                {/if}
+                                {#if fallbackBash}
+                                  <code class="trace-cmd-target mono">{fallbackBash}</code>
+                                {/if}
                               </div>
-                            {/if}
-                            {#if parsed.output}
-                              {@const lineCount = parsed.output.split('\n').length}
-                              <details class="trace-out-bubble">
-                                <summary class="trace-out-head">
-                                  <span class="trace-out-caret" aria-hidden="true">
-                                    <svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg>
-                                  </span>
-                                  <span class="trace-out-tag mono">output</span>
-                                  <span class="trace-out-meta mono">{lineCount} line{lineCount === 1 ? '' : 's'}</span>
-                                </summary>
-                                <pre class="trace-out-body mono">{parsed.output}</pre>
-                              </details>
-                            {/if}
-                          </div>
+                            </div>
+                          {/if}
                         {:else if parsed.kind === 'text'}
                           <div class="trace-line"><Markdown source={seg} onOpenFile={p.onOpenFile} /></div>
                         {/if}
@@ -583,77 +732,133 @@
     display: flex; flex-direction: column;
     gap: 10px;
   }
+  /* Step card — single rounded container that owns the per-kind tone.
+     When there's an output, .trace-step is a <details> element whose
+     <summary> is the command row and whose body is the inline output.
+     One container = one visual unit instead of two stacked pills. */
   .trace-step {
+    --step-tone: var(--accent-bright);
     display: flex; flex-direction: column;
-    gap: 6px;
-  }
-  /* Inner command sub-bubble — terminal-feel surface with a subtle
-     prompt glyph + brand-tinted prompt. Sequence of calls reads like
-     a vertical script. */
-  .trace-cmd-bubble {
-    display: flex; align-items: flex-start; gap: 9px;
-    padding: 7px 11px;
     background: var(--bg-1);
     border: 1px solid var(--border);
+    border-left: 2px solid color-mix(in srgb, var(--step-tone) 65%, var(--border));
     border-radius: 7px;
-    box-shadow: 0 1px 0 rgba(0, 0, 0, 0.04);
+    overflow: hidden;
+    transition: border-color 120ms, background 120ms;
   }
-  .trace-cmd-prompt {
-    flex-shrink: 0;
-    color: var(--app-tone, var(--src-claude));
-    font-size: 12px;
-    line-height: 1.55;
-    font-weight: 600;
+  .trace-step--has-output { cursor: pointer; }
+  .trace-step--has-output:hover {
+    border-color: color-mix(in srgb, var(--step-tone) 32%, var(--border));
+  }
+  /* Command row — leading per-tool icon + verb chip + monospace target.
+     The icon's hue uses the parent's --step-tone; everything else stays
+     neutral so a long list of steps reads as a coherent script. */
+  .trace-cmd-row {
+    display: flex; align-items: center; gap: 9px;
+    padding: 7px 11px;
+    min-width: 0;
+    transition: background 120ms;
+  }
+  .trace-cmd-row--toggle {
+    list-style: none;
     user-select: none;
   }
-  .trace-cmd-text {
+  .trace-cmd-row--toggle::-webkit-details-marker { display: none; }
+  .trace-cmd-row--toggle::marker { content: ''; }
+  .trace-step--has-output:hover .trace-cmd-row--toggle {
+    background: color-mix(in srgb, var(--step-tone) 6%, transparent);
+  }
+  .trace-cmd-icon {
+    flex-shrink: 0;
+    width: 22px; height: 22px;
+    display: grid; place-items: center;
+    border-radius: 6px;
+    color: var(--step-tone);
+    background: color-mix(in srgb, var(--step-tone) 14%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--step-tone) 22%, transparent);
+  }
+  .trace-cmd-icon svg { width: 13px; height: 13px; }
+  .trace-cmd-label {
+    flex-shrink: 0;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--step-tone);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    line-height: 1.2;
+  }
+  .trace-cmd-target {
     flex: 1; min-width: 0;
     font-size: 12px;
     color: var(--text-0);
-    word-break: break-all;
-    line-height: 1.55;
     background: transparent;
     border: none;
     padding: 0;
-  }
-  /* Inner output sub-bubble — collapsible. Header reads "output ·
-     N lines"; expanded body shows the mono pre. */
-  .trace-out-bubble {
-    background: var(--bg-1);
-    border: 1px solid var(--border);
-    border-radius: 7px;
+    white-space: nowrap;
     overflow: hidden;
+    text-overflow: ellipsis;
+    /* Right-side ellipsis bites filenames; flip the direction so the
+       basename stays visible on long absolute paths.
+       (`apps/desktop/src/lib/components/editor/codemirrorLang.ts` →
+       `…/lib/components/editor/codemirrorLang.ts` instead of
+       `apps/desktop/src/lib/components/editor/codemir…`.) */
+    direction: rtl;
+    text-align: left;
+    unicode-bidi: plaintext;
   }
-  .trace-out-head {
-    display: flex; align-items: center; gap: 7px;
-    padding: 6px 11px;
-    cursor: pointer;
-    font-size: 10.5px;
+  /* When the card is open, drop the truncation so the user sees the
+     entire command above the output — they clicked precisely because
+     they wanted the full picture. */
+  .trace-step[open] .trace-cmd-target {
+    direction: ltr;
+    white-space: pre-wrap;
+    overflow: visible;
+    text-overflow: clip;
+    word-break: break-all;
+  }
+  .trace-cmd-scope {
+    flex-shrink: 0;
+    font-size: 11px;
     color: var(--text-mute);
-    user-select: none;
-    list-style: none;
-    transition: background 120ms;
+    line-height: 1.4;
   }
-  .trace-out-head::-webkit-details-marker { display: none; }
-  .trace-out-head::marker { content: ''; }
-  .trace-out-head:hover { background: var(--bg-2); }
-  .trace-out-caret {
+  .trace-cmd-meta {
+    flex-shrink: 0;
+    font-size: 10px;
+    color: var(--text-mute);
+    margin-left: auto;
+    padding-left: 6px;
+  }
+  .trace-cmd-caret {
+    flex-shrink: 0;
     display: inline-grid; place-items: center;
     color: var(--text-mute);
     transition: transform 140ms;
   }
-  .trace-out-bubble[open] .trace-out-caret { transform: rotate(180deg); }
-  .trace-out-bubble[open] .trace-out-head { border-bottom: 1px solid var(--border); }
-  .trace-out-tag {
-    font-size: 10px;
-    color: var(--text-2);
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-  }
-  .trace-out-meta {
-    font-size: 10px;
-    color: var(--text-mute);
-    margin-left: auto;
+  .trace-step[open] .trace-cmd-caret { transform: rotate(180deg); }
+  /* Per-kind hue overrides. Read = info blue, mutations = warm
+     editor-orange, search = mint, web = teal, mcp = lavender,
+     cwd/commit/pr = jira blue. Keeps the sequence scannable
+     ("oh that block was all reads, that one wrote files"). */
+  .trace-step--read       { --step-tone: var(--info, #88C2DD); }
+  .trace-step--grep,
+  .trace-step--glob       { --step-tone: var(--accent-bright); }
+  .trace-step--bash       { --step-tone: var(--src-term, var(--text-2)); }
+  .trace-step--edit,
+  .trace-step--write,
+  .trace-step--create     { --step-tone: var(--src-editor); }
+  .trace-step--delete     { --step-tone: var(--error); }
+  .trace-step--webfetch,
+  .trace-step--websearch  { --step-tone: var(--src-canvas); }
+  .trace-step--commit,
+  .trace-step--pr         { --step-tone: var(--src-jira); }
+  .trace-step--switch_cwd { --step-tone: var(--src-jira); }
+  .trace-step--mcp        { --step-tone: var(--src-github); }
+  /* Inline output body — separated from the command row by a thin
+     divider only when expanded. Same background as the row so the
+     two read as one card (no nested-pill double-border look). */
+  .trace-step[open] .trace-out-body {
+    border-top: 1px solid color-mix(in srgb, var(--step-tone) 18%, var(--border));
   }
   .trace-out-body {
     margin: 0;
@@ -663,9 +868,9 @@
     color: var(--text-1);
     white-space: pre-wrap;
     word-break: break-word;
-    max-height: 300px;
+    max-height: 360px;
     overflow: auto;
-    background: var(--bg-1);
+    background: color-mix(in srgb, var(--step-tone) 4%, var(--bg-1));
   }
   /* Plain text segment fallback — markdown-rendered. */
   .trace-line {

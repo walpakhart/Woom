@@ -126,6 +126,14 @@ export function buildAgentAppContext(callingSessionId: string): string {
   for (const kind of DEFAULT_PANEL_ORDER) {
     const id = APP_INSTANCE_IDS[kind];
     const meta: string[] = [`kind=${kind}`, `id=${id}`];
+    /* Multi-instance kinds (editor/canvas/terminal) carry a curated
+       display name (e.g. "Vermeer") that MCP tools use as the
+       agent-facing handle. Surface it next to the id so the agent
+       picks the readable form. */
+    if (kind === 'editor' || kind === 'canvas' || kind === 'terminal') {
+      const primaryName = layoutState.instances[kind].find((i) => i.id === id)?.name;
+      if (primaryName) meta.push(`name=${primaryName}`);
+    }
     if (kind === 'editor') {
       const path = sessionsState.editorInstanceState[id]?.repoPath ?? layoutState.active.editor.repoPath ?? '';
       meta.push(`repo_path=${path || '(none)'}`);
@@ -150,8 +158,16 @@ export function buildAgentAppContext(callingSessionId: string): string {
           if (linkKind) meta.push(`linked_to_editor=${linkKind}`);
         }
         if (sess.linkedTerminalInstanceId) {
-          const termKind = kindForInstanceId(sess.linkedTerminalInstanceId);
-          if (termKind) meta.push(`linked_to_terminal=${termKind}`);
+          /* Surface the linked terminal's instance ID + display name so
+             the agent can call `terminal_run` / `terminal_buffer` with
+             the column's art-name directly (e.g. "Vermeer") instead
+             of paying a round-trip to `terminal_list`. */
+          const termInst = layoutState.instances.terminal.find(
+            (i) => i.id === sess.linkedTerminalInstanceId
+          );
+          if (termInst) {
+            meta.push(`linked_to_terminal=${termInst.name} (id=${termInst.id})`);
+          }
         }
       }
     }

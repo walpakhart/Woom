@@ -43,11 +43,17 @@ use terminal_bridge_client::BridgeClient;
 ///      `jiraTab` / `sentryTab` — so this also matches the UI rail
 ///      tooltips and the platform pills the user sees.
 const VALID_VIEWS: &[&str] = &[
-    "workbench",
+    "home",
     "github",
     "jira",
     "sentry",
+    "claude",
+    "cursor",
+    "editor",
+    "canvas",
+    "terminal",
     "rules",
+    "library",
     "connections",
     "settings",
 ];
@@ -142,33 +148,12 @@ struct OpenSentryEventParams {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct SwitchViewParams {
-    /// Which top-level tab to switch to. One of:
-    /// `workbench` (default columns view), `repositories` (full GitHub
-    /// browser), `tasks` (Jira board), `issues` (Sentry issues),
-    /// `rules` (user rules editor), `connections` (sources + agents
-    /// configure), `settings`.
+    /// Which app / surface to switch to. One of:
+    /// `home`, `github`, `jira`, `sentry`, `claude`, `cursor`, `editor`,
+    /// `canvas`, `terminal`, `rules`, `library`, `connections`,
+    /// `settings`. Each value maps to a full-screen solo (the rail's
+    /// icons map 1:1 to these names).
     view: String,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct AddEditorInstanceParams {
-    /// Optional absolute path to the folder/repo the new editor column
-    /// should open. Omit to create an empty editor — the user can pick
-    /// a folder afterwards.
-    ///
-    /// Accepts the canonical name `repo_path` plus the common aliases
-    /// `path`, `folder`, `directory`, `cwd`, `repo`, `repoPath` —
-    /// LLMs frequently shorten field names on short tools like this.
-    #[serde(
-        default,
-        alias = "path",
-        alias = "folder",
-        alias = "directory",
-        alias = "cwd",
-        alias = "repo",
-        alias = "repoPath"
-    )]
-    repo_path: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -181,14 +166,15 @@ struct OpenConnectModalParams {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct AddWorkbenchInstanceParams {
-    /// Kind of instance to add. One of: github, jira, sentry, claude,
-    /// cursor, editor. Singleton kinds (github/jira/sentry) are no-ops if
-    /// already present in the active workbench. Accepts `kind` or `type`.
+struct AddAppInstanceParams {
+    /// Which app to spawn. One of: github, jira, sentry, claude, cursor,
+    /// editor, canvas, terminal. Singleton apps (github/jira/sentry/
+    /// claude/cursor) just switch the rail; only editor/canvas/terminal
+    /// actually create a fresh instance. Accepts `kind` or `type`.
     #[serde(alias = "type")]
     kind: String,
     /// Only meaningful when `kind = "editor"`. Absolute folder path to
-    /// open in the new editor column. Omit for an empty editor.
+    /// open in the new editor instance. Omit for an empty editor.
     ///
     /// Aliases: `path`, `folder`, `directory`, `cwd`, `repo`, `repoPath`.
     #[serde(
@@ -201,43 +187,6 @@ struct AddWorkbenchInstanceParams {
         alias = "repoPath"
     )]
     repo_path: Option<String>,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct NewWorkbenchParams {
-    /// Display name for the new workbench tab. Optional — defaults to
-    /// "Workbench".
-    #[serde(default)]
-    name: Option<String>,
-    /// If true, switch the active workbench to the new one immediately
-    /// after creation. Defaults to true — usually what you want when
-    /// the user says "make a new workbench for X".
-    #[serde(default = "default_true")]
-    activate: bool,
-}
-
-fn default_true() -> bool {
-    true
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct SwitchWorkbenchParams {
-    /// Workbench name to switch to. Case-insensitive match. Either
-    /// `name` or `index` must be provided.
-    #[serde(default)]
-    name: Option<String>,
-    /// 0-based index of the workbench tab to switch to. Either `name`
-    /// or `index` must be provided.
-    #[serde(default)]
-    index: Option<usize>,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct FocusWorkbenchInstanceParams {
-    /// Kind of instance to scroll/focus in the active workbench. One of:
-    /// github, jira, sentry, claude, cursor, editor. If no instance of
-    /// this kind exists in the active workbench, one is created.
-    kind: String,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -313,20 +262,20 @@ struct OpenSentryTabParams {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct SetGithubColumnParams {
-    /// Art-name of the github workbench column (e.g. "Petra"). Either
+struct SetGithubInstanceParams {
+    /// Art-name of the github app instance (e.g. "Petra"). Either
     /// `instance_name` or `instance_id` must be provided.
     #[serde(default)]
     instance_name: Option<String>,
-    /// UUID of the github column.
+    /// UUID of the github instance.
     #[serde(default)]
     instance_id: Option<String>,
-    /// `owner/name` to scope the column to (e.g. `Efficiently-Dev/efficiently`).
+    /// `owner/name` to scope the instance to (e.g. `Efficiently-Dev/efficiently`).
     /// Pass empty string `""` to clear the repo filter (= all repos).
     #[serde(default)]
     repo: Option<String>,
     /// Filter mode. One of: involving, authored, review_requested,
-    /// assigned, user, all. Mirrors the dropdown in the column header.
+    /// assigned, user, all. Mirrors the dropdown in the instance header.
     #[serde(default)]
     mode: Option<String>,
     /// Free-text search applied on top of `mode` + `repo` filters.
@@ -338,12 +287,12 @@ struct SetGithubColumnParams {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct SetJiraColumnParams {
-    /// Art-name of the jira workbench column (e.g. "Mona-Lisa").
+struct SetJiraInstanceParams {
+    /// Art-name of the jira app instance (e.g. "Mona-Lisa").
     /// Either `instance_name` or `instance_id` must be provided.
     #[serde(default)]
     instance_name: Option<String>,
-    /// UUID of the jira column.
+    /// UUID of the jira instance.
     #[serde(default)]
     instance_id: Option<String>,
     /// Project key (e.g. `DEVOPS`). Empty string clears the filter.
@@ -364,12 +313,12 @@ struct SetJiraColumnParams {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct SetSentryColumnParams {
-    /// Art-name of the sentry workbench column. Either `instance_name`
+struct SetSentryInstanceParams {
+    /// Art-name of the sentry app instance. Either `instance_name`
     /// or `instance_id` must be provided.
     #[serde(default)]
     instance_name: Option<String>,
-    /// UUID of the sentry column.
+    /// UUID of the sentry instance.
     #[serde(default)]
     instance_id: Option<String>,
     /// Sentry project slugs.
@@ -414,8 +363,6 @@ const INSTANCE_NAME_KEYS: &[&str] = &[
     "instance_name",
     "instanceName",
     "name",
-    "column_name",
-    "columnName",
     "editor_name",
     "agent_name",
     "label",
@@ -424,8 +371,6 @@ const INSTANCE_ID_KEYS: &[&str] = &[
     "instance_id",
     "instanceId",
     "id",
-    "column_id",
-    "columnId",
     "editor_id",
     "agent_id",
     "uuid",
@@ -440,12 +385,12 @@ struct SetEditorRepoPathParams {
     /// Schema-as-`Option<String>` is intentional — see the comment on
     /// `repo_path` below. Runtime type is still `Option<Value>` so
     /// `coerce_to_string` can salvage non-string shapes.
-    #[serde(default, alias = "name", alias = "instanceName", alias = "column_name")]
+    #[serde(default, alias = "name", alias = "instanceName")]
     #[schemars(with = "Option<String>")]
     instance_name: Option<serde_json::Value>,
     /// UUID of the editor instance. Either `instance_name` or
     /// `instance_id` must be provided. Accepts the alias `id`.
-    #[serde(default, alias = "id", alias = "instanceId", alias = "column_id")]
+    #[serde(default, alias = "id", alias = "instanceId")]
     #[schemars(with = "Option<String>")]
     instance_id: Option<serde_json::Value>,
     /// Absolute folder path to open in the editor. If the editor has
@@ -495,17 +440,17 @@ struct SetEditorRepoPathParams {
 struct SetAgentCwdParams {
     /// Use `target = "self"` to point at the calling session (most
     /// common when the user says "switch myself"). Otherwise pass
-    /// `instance_name` or `instance_id` of the target agent column.
+    /// `instance_name` or `instance_id` of the target agent instance.
     #[serde(default)]
     target: Option<String>,
     /// Art-name of the agent instance. Optional — only used when
     /// `target` is omitted or != "self". Accepts the alias `name`.
     /// Same `schemars(with = …)` rationale as `SetEditorRepoPathParams`.
-    #[serde(default, alias = "name", alias = "instanceName", alias = "column_name")]
+    #[serde(default, alias = "name", alias = "instanceName")]
     #[schemars(with = "Option<String>")]
     instance_name: Option<serde_json::Value>,
     /// UUID of the agent instance. Accepts the alias `id`.
-    #[serde(default, alias = "id", alias = "instanceId", alias = "column_id")]
+    #[serde(default, alias = "id", alias = "instanceId")]
     #[schemars(with = "Option<String>")]
     instance_id: Option<serde_json::Value>,
     /// Absolute folder path to use as cwd. The change takes effect on
@@ -1036,9 +981,10 @@ fn validate_one_of(value: &str, choices: &[&str], label: &str) -> Result<(), Err
 }
 
 /// Pull a non-empty `instance_name` first, fall back to `instance_id`,
-/// or fail with the same error every column-mutating tool wants. Centralised
-/// because every `set_*_column` tool needs the exact same dispatch and we
-/// don't want to copy 6 lines of `.trim().filter().or()` six times.
+/// or fail with the same error every instance-mutating tool wants.
+/// Centralised because every `set_*_instance` tool needs the exact same
+/// dispatch and we don't want to copy 6 lines of `.trim().filter().or()`
+/// six times.
 fn require_instance_label<'a>(
     name: Option<&'a str>,
     id: Option<&'a str>,
@@ -1058,7 +1004,7 @@ fn require_instance_label<'a>(
 /// structured `Parameters(…)` it sent, but the user sees this string in
 /// the trace pill — so we want it readable, comma-separated, and skip
 /// keys the caller didn't touch. Keeping it as a helper because the
-/// three column-mutator tools (github/jira/sentry) follow the same
+/// three instance-mutator tools (github/jira/sentry) follow the same
 /// "patch only the keys you want" semantics and would otherwise each
 /// reimplement the same Vec push + join.
 struct FilterBits(Vec<String>);
@@ -1141,7 +1087,7 @@ impl App {
     }
 
     #[tool(
-        description = "Open a Jira issue in Woom's slide-over pane. Same as the user clicking the ticket from the Jira column — shows description, comments, transitions, worklog. Use when the user says \"show DEVOPS-414\" or wants to look at a specific ticket."
+        description = "Open a Jira issue in Woom's slide-over pane. Same as the user clicking the ticket from the Jira solo — shows description, comments, transitions, worklog. Use when the user says \"show DEVOPS-414\" or wants to look at a specific ticket."
     )]
     async fn open_jira_issue(
         &self,
@@ -1197,7 +1143,7 @@ impl App {
     }
 
     #[tool(
-        description = "Switch Woom's top-level view tab. Available tabs: `workbench` (default — columns), `github` (GitHub browser with code/branches/releases/PRs/issues), `jira` (Jira board / inbox), `sentry` (Sentry issues browser), `rules` (user-rules editor), `connections` (sources + agents configure), `settings`. Use when the user wants to navigate (\"open github\", \"go to jira\", \"show me sentry issues\"). For SCOPED navigation (specific repo / project / sprint / sentry filter), prefer `open_github_repo` / `open_jira_tab` / `open_sentry_tab` instead — they switch the view AND apply filters in one call."
+        description = "Switch Woom's active solo (top-level app). One of: `home`, `github`, `jira`, `sentry`, `claude`, `cursor`, `editor`, `canvas`, `terminal`, `rules`, `library`, `connections`, `settings`. Each value maps 1:1 to a rail icon. Use when the user wants to navigate (\"open github\", \"go to jira\", \"show me sentry issues\"). For SCOPED navigation (specific repo / project / sprint / sentry filter), prefer `open_github_repo` / `open_jira_tab` / `open_sentry_tab` instead — they switch the solo AND apply filters in one call."
     )]
     async fn switch_view(
         &self,
@@ -1208,24 +1154,6 @@ impl App {
             "Switching Woom view → {}.",
             view
         ))]))
-    }
-
-    #[tool(
-        description = "Add a new Editor column to the active workbench. If `repo_path` is provided, the new editor opens that folder immediately. Omit `repo_path` to create an empty editor the user can fill in. Use when the user says \"open the X folder in editor\" or asks to look at code from a different repo than the one already open."
-    )]
-    async fn add_editor_instance(
-        &self,
-        Parameters(AddEditorInstanceParams { repo_path }): Parameters<AddEditorInstanceParams>,
-    ) -> Result<CallToolResult, ErrorData> {
-        match repo_path.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-            Some(p) => Ok(CallToolResult::success(vec![Content::text(format!(
-                "Adding new Editor column with folder `{}`.",
-                p
-            ))])),
-            None => Ok(CallToolResult::success(vec![Content::text(
-                "Adding new empty Editor column.".to_string(),
-            )])),
-        }
     }
 
     #[tool(
@@ -1243,84 +1171,27 @@ impl App {
     }
 
     #[tool(
-        description = "Add a column / instance of any kind to the active workbench. Replaces `add_editor_instance` with a single tool that handles all kinds. Kinds: `github` (PR/issue inbox), `jira` (Jira inbox), `sentry` (Sentry issues inbox), `claude` (Claude chat column), `cursor` (Cursor chat column), `editor` (file browser + editor). For `editor`, optionally pass `repo_path` to open a folder immediately. Singleton kinds (github/jira/sentry) are no-ops if already present in the active workbench. Use whenever the user asks to \"add a Claude column\" / \"open editor for /Users/me/Repos/foo\" / \"give me another agent\"."
+        description = "Spawn a new instance of an app. Kinds: `github` (PR/issue inbox), `jira` (Jira inbox), `sentry` (Sentry issues inbox), `claude` (Claude chat), `cursor` (Cursor chat), `editor` (file browser + editor), `canvas` (whiteboard), `terminal` (PTY shell). For `editor`, optionally pass `repo_path` to open a folder immediately. Singleton apps (github/jira/sentry/claude/cursor) ignore the spawn and just switch the rail to them — only `editor`/`canvas`/`terminal` actually support multiple instances. Use whenever the user asks to \"open another Editor for /Users/me/Repos/foo\" / \"give me a second terminal\"."
     )]
-    async fn add_workbench_instance(
+    async fn add_app_instance(
         &self,
-        Parameters(AddWorkbenchInstanceParams { kind, repo_path }): Parameters<AddWorkbenchInstanceParams>,
+        Parameters(AddAppInstanceParams { kind, repo_path }): Parameters<AddAppInstanceParams>,
     ) -> Result<CallToolResult, ErrorData> {
         validate_one_of(&kind, VALID_INSTANCE_KINDS, "kind")?;
         let path = repo_path.as_deref().map(str::trim).filter(|s| !s.is_empty());
         match (kind.as_str(), path) {
             ("editor", Some(p)) => Ok(CallToolResult::success(vec![Content::text(format!(
-                "Adding new Editor column with folder `{}`.",
+                "Spawning a new Editor instance pointed at `{}`.",
                 p
             ))])),
             ("editor", None) => Ok(CallToolResult::success(vec![Content::text(
-                "Adding new empty Editor column.".to_string(),
+                "Spawning a new empty Editor instance.".to_string(),
             )])),
             (k, _) => Ok(CallToolResult::success(vec![Content::text(format!(
-                "Adding new `{}` column to the active workbench.",
+                "Spawning a new `{}` instance.",
                 k
             ))])),
         }
-    }
-
-    #[tool(
-        description = "Create a new workbench tab with optional name. By default the new workbench becomes active. Pass `activate=false` to create-without-switch (rare). Use when the user says \"make a new workbench for the X feature\" — workbenches are independent column sets, so a new one means a clean slate."
-    )]
-    async fn new_workbench(
-        &self,
-        Parameters(NewWorkbenchParams { name, activate }): Parameters<NewWorkbenchParams>,
-    ) -> Result<CallToolResult, ErrorData> {
-        let label = name
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .unwrap_or("Workbench")
-            .to_string();
-        let suffix = if activate { " and switching to it" } else { " in the background" };
-        Ok(CallToolResult::success(vec![Content::text(format!(
-            "Creating workbench `{}`{}.",
-            label, suffix
-        ))]))
-    }
-
-    #[tool(
-        description = "Switch the active workbench to one identified by `name` (case-insensitive) or 0-based `index`. Provide exactly one of the two. Use when the user references a workbench by label (\"go to the Manage workbench\") or position (\"switch to the second workbench\")."
-    )]
-    async fn switch_workbench(
-        &self,
-        Parameters(SwitchWorkbenchParams { name, index }): Parameters<SwitchWorkbenchParams>,
-    ) -> Result<CallToolResult, ErrorData> {
-        match (name.as_deref().map(str::trim).filter(|s| !s.is_empty()), index) {
-            (Some(n), _) => Ok(CallToolResult::success(vec![Content::text(format!(
-                "Switching to workbench `{}`.",
-                n
-            ))])),
-            (None, Some(i)) => Ok(CallToolResult::success(vec![Content::text(format!(
-                "Switching to workbench #{}.",
-                i
-            ))])),
-            (None, None) => Err(ErrorData::invalid_params(
-                "either `name` or `index` must be provided",
-                None,
-            )),
-        }
-    }
-
-    #[tool(
-        description = "Scroll the existing column of `kind` in the active workbench into view (and highlight it). If no column of that kind exists, one is created. Useful when the user says \"focus the GitHub column\" / \"show me the editor\" / \"jump to claude\" — saves them a horizontal scroll."
-    )]
-    async fn focus_workbench_instance(
-        &self,
-        Parameters(FocusWorkbenchInstanceParams { kind }): Parameters<FocusWorkbenchInstanceParams>,
-    ) -> Result<CallToolResult, ErrorData> {
-        validate_one_of(&kind, VALID_INSTANCE_KINDS, "kind")?;
-        Ok(CallToolResult::success(vec![Content::text(format!(
-            "Focusing `{}` column in the active workbench.",
-            kind
-        ))]))
     }
 
     #[tool(
@@ -1435,11 +1306,11 @@ impl App {
     }
 
     #[tool(
-        description = "Apply filters to a GitHub workbench column (kind=`github`). Identify the column by `instance_name` (art-name like \"Petra\") or `instance_id`. `repo` is `owner/name` (or empty string `\"\"` to clear → all repos), `mode` is involving/authored/review_requested/assigned/user/all, `search` is free-text, `custom_user` is a GitHub login (only used when `mode=user`). Pass only the keys you want to change; omitted keys keep their current value. Use this instead of `add_workbench_instance kind=github` when a column already exists — \"show authored PRs in efficiently in the github column\", \"filter Petra to only review-requested\"."
+        description = "Apply filters to the GitHub app instance (kind=`github`). Identify by `instance_name` (art-name like \"Petra\") or `instance_id`. `repo` is `owner/name` (or empty string `\"\"` to clear → all repos), `mode` is involving/authored/review_requested/assigned/user/all, `search` is free-text, `custom_user` is a GitHub login (only used when `mode=user`). Pass only the keys you want to change; omitted keys keep their current value. Use this when a GitHub instance already exists — \"show authored PRs in efficiently in github\", \"filter Petra to only review-requested\"."
     )]
-    async fn set_github_column(
+    async fn set_github_instance(
         &self,
-        Parameters(SetGithubColumnParams { instance_name, instance_id, repo, mode, search, custom_user }): Parameters<SetGithubColumnParams>,
+        Parameters(SetGithubInstanceParams { instance_name, instance_id, repo, mode, search, custom_user }): Parameters<SetGithubInstanceParams>,
     ) -> Result<CallToolResult, ErrorData> {
         let label = require_instance_label(instance_name.as_deref(), instance_id.as_deref())?;
         if let Some(m) = mode.as_deref() {
@@ -1459,18 +1330,18 @@ impl App {
             bits.push_kv("custom_user", &u);
         }
         Ok(CallToolResult::success(vec![Content::text(format!(
-            "Updating github column `{}`: {}.",
+            "Updating github instance `{}`: {}.",
             label,
             bits.summary("no filter changes")
         ))]))
     }
 
     #[tool(
-        description = "Apply filters to a Jira workbench column (kind=`jira`). Identify by `instance_name` or `instance_id`. `project_key` (empty string clears), `status_name`, `search`, `board_ids`, `sprint_ids` — same semantics as `open_jira_tab`. Pass only what you want to change. Use when a Jira column already exists and the user asks for a different scope (\"narrow Mona-Lisa to DEVOPS\", \"show in-review only in the jira column\")."
+        description = "Apply filters to the Jira app instance (kind=`jira`). Identify by `instance_name` or `instance_id`. `project_key` (empty string clears), `status_name`, `search`, `board_ids`, `sprint_ids` — same semantics as `open_jira_tab`. Pass only what you want to change. Use when a Jira instance already exists and the user asks for a different scope (\"narrow Mona-Lisa to DEVOPS\", \"show in-review only in jira\")."
     )]
-    async fn set_jira_column(
+    async fn set_jira_instance(
         &self,
-        Parameters(SetJiraColumnParams { instance_name, instance_id, project_key, status_name, search, board_ids, sprint_ids }): Parameters<SetJiraColumnParams>,
+        Parameters(SetJiraInstanceParams { instance_name, instance_id, project_key, status_name, search, board_ids, sprint_ids }): Parameters<SetJiraInstanceParams>,
     ) -> Result<CallToolResult, ErrorData> {
         let label = require_instance_label(instance_name.as_deref(), instance_id.as_deref())?;
         let mut bits = changed_filter_bits();
@@ -1493,18 +1364,18 @@ impl App {
             bits.push_kv("sprints", &format!("[{}]", s.join(",")));
         }
         Ok(CallToolResult::success(vec![Content::text(format!(
-            "Updating jira column `{}`: {}.",
+            "Updating jira instance `{}`: {}.",
             label,
             bits.summary("no filter changes")
         ))]))
     }
 
     #[tool(
-        description = "Apply filters to a Sentry workbench column (kind=`sentry`). Identify by `instance_name` or `instance_id`. `projects`, `search`, `status`, `level`, `environment` — same semantics as `open_sentry_tab`. Pass only what you want to change. Use to retarget an existing Sentry column (\"only show production fatals in the sentry column\")."
+        description = "Apply filters to the Sentry app instance (kind=`sentry`). Identify by `instance_name` or `instance_id`. `projects`, `search`, `status`, `level`, `environment` — same semantics as `open_sentry_tab`. Pass only what you want to change. Use to retarget the existing Sentry instance (\"only show production fatals in sentry\")."
     )]
-    async fn set_sentry_column(
+    async fn set_sentry_instance(
         &self,
-        Parameters(SetSentryColumnParams { instance_name, instance_id, projects, search, status, level, environment }): Parameters<SetSentryColumnParams>,
+        Parameters(SetSentryInstanceParams { instance_name, instance_id, projects, search, status, level, environment }): Parameters<SetSentryInstanceParams>,
     ) -> Result<CallToolResult, ErrorData> {
         let label = require_instance_label(instance_name.as_deref(), instance_id.as_deref())?;
         if let Some(s) = status.as_deref() {
@@ -1530,14 +1401,14 @@ impl App {
             bits.push_kv("env", &e);
         }
         Ok(CallToolResult::success(vec![Content::text(format!(
-            "Updating sentry column `{}`: {}.",
+            "Updating sentry instance `{}`: {}.",
             label,
             bits.summary("no filter changes")
         ))]))
     }
 
     #[tool(
-        description = "Change the open folder of an EXISTING editor column. Use this when the user says \"switch the editor to /path\" — do NOT use add_workbench_instance, which creates a new column. Identify the editor by `instance_name` (the art-name like \"Sagrada-Familia\" shown in the workbench bar) or `instance_id`. If the editor has linked agent sessions, their cwd is auto-updated to match (no separate set_agent_cwd call needed)."
+        description = "Change the open folder of an EXISTING editor instance. Use this when the user says \"switch the editor to /path\" — do NOT use add_app_instance, which spawns a NEW editor. Identify the editor by `instance_name` (the art-name like \"Sagrada-Familia\" shown in the rail popover) or `instance_id`. If the editor has linked agent sessions, their cwd is auto-updated to match (no separate set_agent_cwd call needed)."
     )]
     async fn set_editor_repo_path(
         &self,
@@ -1571,7 +1442,7 @@ impl App {
                 received_summary
             );
             return Err(ErrorData::invalid_params(
-                format!("either `instance_name` (alias `name`, `instanceName`, `column_name`, `editor_name`, `label`) or `instance_id` (alias `id`, `instanceId`, `column_id`, `editor_id`, `uuid`) must be provided. Got: {}. The art-name is the one shown in the workbench column header — e.g. \"Sagrada-Familia\".", received_summary),
+                format!("either `instance_name` (alias `name`, `instanceName`, `editor_name`, `label`) or `instance_id` (alias `id`, `instanceId`, `editor_id`, `uuid`) must be provided. Got: {}. The art-name is the one shown in the rail popover — e.g. \"Sagrada-Familia\".", received_summary),
                 None,
             ));
         }
@@ -1583,7 +1454,7 @@ impl App {
     }
 
     #[tool(
-        description = "Change an agent session's cwd (working directory). Use when the user says \"switch yourself to /path\" / \"point Claude at /repo\" / \"have the cursor agent work on X\". For yourself, pass `target=\"self\"` — the OS process running this turn keeps its old spawn-time cwd, BUT you can keep working in the new repo within the same turn by addressing files with absolute paths (Read/Write/Edit) and prefixing shell commands with `cd <new_path> && ...`. The next turn spawns fresh with the new cwd as default, so the absolute-path workaround is a one-turn thing. For another agent column, pass `instance_name` (e.g. \"Mona-Lisa\") or `instance_id`. Do NOT use this to create a new agent — use add_workbench_instance for that."
+        description = "Change an agent session's cwd (working directory). Use when the user says \"switch yourself to /path\" / \"point Claude at /repo\" / \"have the cursor agent work on X\". For yourself, pass `target=\"self\"` — the OS process running this turn keeps its old spawn-time cwd, BUT you can keep working in the new repo within the same turn by addressing files with absolute paths (Read/Write/Edit) and prefixing shell commands with `cd <new_path> && ...`. The next turn spawns fresh with the new cwd as default, so the absolute-path workaround is a one-turn thing. For another agent instance, pass `instance_name` (e.g. \"Mona-Lisa\") or `instance_id`. Do NOT use this to create a new agent — use add_app_instance for that."
     )]
     async fn set_agent_cwd(
         &self,
@@ -1614,7 +1485,7 @@ impl App {
         if !is_self {
             if name.is_none() && id.is_none() {
                 return Err(ErrorData::invalid_params(
-                    format!("for non-self target, either `instance_name` (alias `name`, `instanceName`, `column_name`) or `instance_id` (alias `id`, `instanceId`, `column_id`) must be provided. To target the calling session itself, pass `target=\"self\"` instead. Got: {}", received_summary),
+                    format!("for non-self target, either `instance_name` (alias `name`, `instanceName`) or `instance_id` (alias `id`, `instanceId`) must be provided. To target the calling session itself, pass `target=\"self\"` instead. Got: {}", received_summary),
                     None,
                 ));
             }
@@ -1650,11 +1521,11 @@ impl App {
     }
 
     #[tool(
-        description = "Re-list the workbenches and their column instances. The Woom runtime injects this state into your system prompt at the start of every turn, so you usually already know it. Call this only if you suspect the preamble is stale (e.g. you just added a column and want to confirm its name/id), or if the user references something that wasn't in the preamble."
+        description = "Re-list the app instances open in Woom. The runtime injects this state into your system prompt at the start of every turn, so you usually already know it. Call this only if you suspect the preamble is stale (e.g. you just spawned a new instance and want to confirm its name/id), or if the user references something that wasn't in the preamble."
     )]
     async fn list_instances(&self) -> Result<CallToolResult, ErrorData> {
         Ok(CallToolResult::success(vec![Content::text(
-            "Woom injects the current workbench / instance map into your system prompt at the start of every turn. Re-read it for the latest state. (This tool is a placeholder — the frontend interceptor doesn't need to mutate anything for it; the actual data lives in the system prompt preamble.)".to_string(),
+            "Woom injects the current app-instance map into your system prompt at the start of every turn. Re-read it for the latest state. (This tool is a placeholder — the frontend interceptor doesn't need to mutate anything for it; the actual data lives in the system prompt preamble.)".to_string(),
         )]))
     }
 
@@ -2100,7 +1971,7 @@ impl App {
 
     // ---- Terminal MCP ----------------------------------------------------
     //
-    // The user's workbench can host Terminal columns — full PTY-backed
+    // Woom can host multiple Terminal instances — full PTY-backed
     // shells. These four tools let an agent drive the SAME PTY the
     // user is staring at: keystroke-level visibility into agent work,
     // no parallel-shell drift, no extra surface to switch to. Every
@@ -2108,27 +1979,28 @@ impl App {
     // `terminal_bridge_client`).
 
     #[tool(
-        description = "List every Terminal column open in the user's Woom workbench. Returns each terminal's human-readable column `name` (e.g. `Vermeer`, `Notre-Dame`) — that's what you pass as `id` to terminal_run / terminal_write / terminal_buffer.\n\n**SKIP THIS CALL if your session preamble already shows `linked_to_terminal=<name>`.** When a session is linked to a terminal, the workbench layout in your system prompt already names it — call terminal_run directly with that name. Calling terminal_list anyway is a wasted round-trip.\n\nUse this only when: (a) no link is shown in the preamble and the user asks you to do terminal work, (b) you need to disambiguate between multiple terminals, (c) the user mentions a terminal by name and you want to confirm it exists.\n\nEmpty list = no Terminal columns open yet (suggest the user add one from the workbench pill bar)."
+        description = "List every Terminal instance open in Woom. Returns each terminal's human-readable `name` (e.g. `Vermeer`, `Notre-Dame`) — that's what you pass as `id` to terminal_run / terminal_write / terminal_buffer.\n\n**SKIP THIS CALL if your session preamble already shows `linked_to_terminal=<name>`.** When a session is linked to a terminal, the app-instance map in your system prompt already names it — call terminal_run directly with that name. Calling terminal_list anyway is a wasted round-trip.\n\nUse this only when: (a) no link is shown in the preamble and the user asks you to do terminal work, (b) you need to disambiguate between multiple terminals, (c) the user mentions a terminal by name and you want to confirm it exists.\n\nEmpty list = no Terminal instances open yet (suggest the user spawn one from the rail's Terminal popover)."
     )]
     async fn terminal_list(&self) -> Result<CallToolResult, ErrorData> {
         let client = BridgeClient::discover().map_err(bridge_to_mcp)?;
         let resp = client.list().await.map_err(bridge_to_mcp)?;
         if resp.instances.is_empty() {
             return Ok(CallToolResult::success(vec![Content::text(
-                "No Terminal columns open. Ask the user to add one from the workbench pill bar (Terminal +)."
+                "No Terminal instances open. Ask the user to spawn one from the rail's Terminal popover (long-press the Terminal icon → +)."
                     .to_string(),
             )]));
         }
         let lines: Vec<String> = resp
             .instances
             .iter()
-            .map(|i| match &i.name {
-                Some(n) => format!("- name: {}  (uuid: {})", n, i.uuid),
-                None => format!("- (unnamed)  (uuid: {})", i.uuid),
+            .map(|i| {
+                let name = i.name.as_deref().unwrap_or("(unnamed)");
+                let inst = i.instance_id.as_deref().unwrap_or("(none)");
+                format!("- name: {}  (instance_id: {}, uuid: {})", name, inst, i.uuid)
             })
             .collect();
         Ok(CallToolResult::success(vec![Content::text(format!(
-            "{} terminal{} open:\n{}\n\nUse the `name` (e.g. `Vermeer`, `Notre-Dame`) as the `id` parameter to terminal_run / terminal_write / terminal_buffer. The uuid is only there as a fallback if two columns share a name.",
+            "{} terminal{} open:\n{}\n\nPass the `name` (e.g. `Vermeer`, `Notre-Dame`) as the `id` parameter to terminal_run / terminal_write / terminal_buffer — that's the form that reads cleanly in chat history. The `instance_id` (e.g. `terminal-solo`) also resolves; the per-spawn `uuid` is a last-resort handle when two instances share a name.",
             resp.instances.len(),
             if resp.instances.len() == 1 { "" } else { "s" },
             lines.join("\n")
@@ -2136,7 +2008,7 @@ impl App {
     }
 
     #[tool(
-        description = "Run ONE shell command in a user-visible Terminal column and block until it finishes. Returns `{ stdout, exit_code, timed_out, interactive_prompt? }`.\n\n## Rules\n\n1. **One purpose per call.** No `;` / `&&` / `for` / multi-pipe blobs. `git status`, then `git diff`, then `git log` — three calls, three responses. The bridge is fast (~50ms round-trip); chaining is a false economy that makes failures impossible to attribute and stdouts impossible to read.\n2. **No `echo '=== separator ==='` lines.** Each call's stdout is already isolated in its own response — separators are noise.\n3. **No pager workarounds.** Pagers (`less`, `more`) are pre-disabled — `PAGER`, `GIT_PAGER`, `GH_PAGER`, `SYSTEMD_PAGER` are all set to `cat`. Don't pipe to `cat` / `head -100` / pre-set env. `git log` and `gh pr view` work plain.\n4. **No color escapes.** `NO_COLOR=1`, `CLICOLOR=0`, `FORCE_COLOR=0` are pre-set. Tools emit clean text.\n5. **CI-mode.** `CI=1` is pre-set so npm/pnpm/yarn/jest/vite/gh skip spinners and progress bars.\n6. **`id` = column name** (`Vermeer`, `Notre-Dame`) — stable across reloads, reads cleanly. Uuid only if multiple columns share a name.\n7. **`timeout_ms` = IDLE timeout** (default 60_000). Deadline rolls forward on every chunk of output, so streaming builds/tests never trip it. Bump to 300_000–600_000 for installs / migrations that go silent for minutes between phases.\n\n## Handling responses\n\n- `timed_out: false` + `exit_code: 0` → success. Move on.\n- `timed_out: false` + `exit_code: ≠ 0` → command failed. Read stdout, decide.\n- `timed_out: true` + `interactive_prompt: \"…\"` → command is ALIVE, parked on a prompt. Use `terminal_write(id, text)` to respond (`text=\"y\\n\"` for Y/N, `text=\"\\n\"` for Press-Enter, `text=\"<answer>\\n\"` for fill-ins). Then either call `terminal_run` for the NEXT step or `terminal_buffer` to inspect what came after. Multi-step flows (gh auth login, ssh, npm init) take 3–5 round-trips — that's normal.\n- `timed_out: true` + no `interactive_prompt` → either still working or genuinely hung. Check `terminal_buffer(id)` to see live state; bump `timeout_ms` and retry only if you started fresh.\n\n## Forbidden hallucinations\n\nThere is NO sandbox, NO command category filter, NO permissions check. The bridge runs commands verbatim in /bin/zsh. If you're tempted to write \"sandbox blocked X\" / \"credential-action category, no permission\" / \"I can't run this\" — STOP. The shell ran your command; whatever the response says happened, happened. Read it. Falling back to the regular Bash tool defeats the user's intent of running it in their visible terminal — only do that if the user explicitly redirects you."
+        description = "Run ONE shell command in a user-visible Terminal instance and block until it finishes. Returns `{ stdout, exit_code, timed_out, interactive_prompt? }`.\n\n## Rules\n\n1. **One purpose per call.** No `;` / `&&` / `for` / multi-pipe blobs. `git status`, then `git diff`, then `git log` — three calls, three responses. The bridge is fast (~50ms round-trip); chaining is a false economy that makes failures impossible to attribute and stdouts impossible to read.\n2. **No `echo '=== separator ==='` lines.** Each call's stdout is already isolated in its own response — separators are noise.\n3. **No pager workarounds.** Pagers (`less`, `more`) are pre-disabled — `PAGER`, `GIT_PAGER`, `GH_PAGER`, `SYSTEMD_PAGER` are all set to `cat`. Don't pipe to `cat` / `head -100` / pre-set env. `git log` and `gh pr view` work plain.\n4. **No color escapes.** `NO_COLOR=1`, `CLICOLOR=0`, `FORCE_COLOR=0` are pre-set. Tools emit clean text.\n5. **CI-mode.** `CI=1` is pre-set so npm/pnpm/yarn/jest/vite/gh skip spinners and progress bars.\n6. **`id` = instance name** (`Vermeer`, `Notre-Dame`) — stable across reloads, reads cleanly. Uuid only if multiple instances share a name.\n7. **`timeout_ms` = IDLE timeout** (default 60_000). Deadline rolls forward on every chunk of output, so streaming builds/tests never trip it. Bump to 300_000–600_000 for installs / migrations that go silent for minutes between phases.\n\n## Handling responses\n\n- `timed_out: false` + `exit_code: 0` → success. Move on.\n- `timed_out: false` + `exit_code: ≠ 0` → command failed. Read stdout, decide.\n- `timed_out: true` + `interactive_prompt: \"…\"` → command is ALIVE, parked on a prompt. Use `terminal_write(id, text)` to respond (`text=\"y\\n\"` for Y/N, `text=\"\\n\"` for Press-Enter, `text=\"<answer>\\n\"` for fill-ins). Then either call `terminal_run` for the NEXT step or `terminal_buffer` to inspect what came after. Multi-step flows (gh auth login, ssh, npm init) take 3–5 round-trips — that's normal.\n- `timed_out: true` + no `interactive_prompt` → either still working or genuinely hung. Check `terminal_buffer(id)` to see live state; bump `timeout_ms` and retry only if you started fresh.\n\n## Forbidden hallucinations\n\nThere is NO sandbox, NO command category filter, NO permissions check. The bridge runs commands verbatim in /bin/zsh. If you're tempted to write \"sandbox blocked X\" / \"credential-action category, no permission\" / \"I can't run this\" — STOP. The shell ran your command; whatever the response says happened, happened. Read it. Falling back to the regular Bash tool defeats the user's intent of running it in their visible terminal — only do that if the user explicitly redirects you."
     )]
     async fn terminal_run(
         &self,
@@ -2179,7 +2051,7 @@ impl App {
     }
 
     #[tool(
-        description = "Send raw input to a Terminal column. Use this for INTERACTIVE prompts the shell is waiting on — `git commit` opening $EDITOR, an `ssh` password prompt, a TUI like `htop`. `id` accepts the column name (`Notre-Dame`) or uuid; prefer name. Pass `text` as plain UTF-8; we base64-encode for the wire. Append `\\n` yourself when you want to submit; without it the bytes go straight into the line buffer (the user can finish typing).\n\nFor non-interactive command execution prefer `terminal_run` — it captures stdout AND blocks until the command finishes. Use `terminal_write` only when you specifically need to drive an interactive flow."
+        description = "Send raw input to a Terminal instance. Use this for INTERACTIVE prompts the shell is waiting on — `git commit` opening $EDITOR, an `ssh` password prompt, a TUI like `htop`. `id` accepts the instance name (`Notre-Dame`) or uuid; prefer name. Pass `text` as plain UTF-8; we base64-encode for the wire. Append `\\n` yourself when you want to submit; without it the bytes go straight into the line buffer (the user can finish typing).\n\nFor non-interactive command execution prefer `terminal_run` — it captures stdout AND blocks until the command finishes. Use `terminal_write` only when you specifically need to drive an interactive flow."
     )]
     async fn terminal_write(
         &self,
@@ -2198,15 +2070,22 @@ impl App {
             )
             .await
             .map_err(bridge_to_mcp)?;
+        /* Echo back the instance's art-name rather than the raw `id`
+           the agent supplied. Lots of agents pass `terminal-solo` (the
+           layout id from the preamble) but the chat reads better with
+           the user-visible name (e.g. "Hopper"). Best-effort: if the
+           list call fails or finds nothing, fall back to the raw id
+           so we never block the response. */
+        let label = resolve_terminal_label(&client, &id).await;
         Ok(CallToolResult::success(vec![Content::text(format!(
             "Wrote {} byte(s) to terminal {}.",
             text.len(),
-            id
+            label
         ))]))
     }
 
     #[tool(
-        description = "Read the recent scrollback of a Terminal column. Returns the last `lines` lines (default 200) of accumulated output, ANSI-stripped. `id` accepts the column name (`Notre-Dame`) or uuid; prefer name.\n\nUse this to inspect output the user produced themselves (or output from a previous tool call you forgot to capture) — e.g. \"what did the test runner print last?\" or \"what's the user's $PATH?\". Be careful: this returns OLD output that may include prior user attempts. To run a fresh command and capture ONLY its result, use `terminal_run` (the buffer view will include both old and new bytes).\n\n`total_bytes` in the response counts every byte the session has emitted since spawn (mod the 64 KB ring buffer cap)."
+        description = "Read the recent scrollback of a Terminal instance. Returns the last `lines` lines (default 200) of accumulated output, ANSI-stripped. `id` accepts the instance name (`Notre-Dame`) or uuid; prefer name.\n\nUse this to inspect output the user produced themselves (or output from a previous tool call you forgot to capture) — e.g. \"what did the test runner print last?\" or \"what's the user's $PATH?\". Be careful: this returns OLD output that may include prior user attempts. To run a fresh command and capture ONLY its result, use `terminal_run` (the buffer view will include both old and new bytes).\n\n`total_bytes` in the response counts every byte the session has emitted since spawn (mod the 64 KB ring buffer cap)."
     )]
     async fn terminal_buffer(
         &self,
@@ -2220,6 +2099,29 @@ impl App {
         Ok(CallToolResult::success(vec![Content::text(format!(
             "(total {} bytes since spawn)\n\n{}",
             resp.total_bytes, resp.text
+        ))]))
+    }
+
+    #[tool(
+        description = "Ensure a Terminal instance has a live PTY AND link it to the calling session — the one-shot setup the agent needs before driving `terminal_run` / `terminal_write` / `terminal_buffer`.\n\nWhen to call: your session preamble shows no `linked_to_terminal=…`, OR `terminal_list` came back empty, OR the user just asked you to \"run X in the terminal\" and there's no obvious target. This is your bootstrap — call once at the top of the turn, then drive the returned name in subsequent terminal_* tools.\n\nDefaults: with no args, picks the primary terminal instance (the one with `id=terminal-solo` in the preamble, art-name like \"Vermeer\") and links it to YOU (the calling session). The PTY spawns if it wasn't already, cwd inherits from your linked editor (if any) or $HOME.\n\nTargeting a specific instance: pass `instance_name` (the art-name shown in the rail popover — \"Vermeer\", \"Notre-Dame\") OR `instance_id` (e.g. `terminal-solo` or `terminal:vermeer`). Use this when the user already has multiple terminal instances open and named one explicitly.\n\nReturns the instance's art-name as the canonical `id` for follow-up tool calls. Idempotent — calling it twice doesn't spawn twice."
+    )]
+    async fn ensure_terminal(
+        &self,
+        Parameters(EnsureTerminalParams { instance_name, instance_id, extras: _ }): Parameters<EnsureTerminalParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let name = instance_name.as_ref().and_then(coerce_to_string);
+        let id = instance_id.as_ref().and_then(coerce_to_string);
+        let label = name
+            .as_deref()
+            .or(id.as_deref())
+            .unwrap_or("primary terminal instance");
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Ensuring Terminal `{}` is spawned and linked to this session. \
+             Use the instance's art-name as the `id` parameter to `terminal_run` / `terminal_write` / \
+             `terminal_buffer` from this point on. The PTY spawn races with your next tool call — \
+             if `terminal_run` returns \"unknown terminal id-or-name\", retry once after a brief \
+             pause; the dispatcher needs ~50–200 ms to finish wiring it up on the first call.",
+            label
         ))]))
     }
 
@@ -2264,16 +2166,84 @@ impl App {
 
 /// Map a `BridgeError` to the MCP tool error shape. We surface the
 /// underlying message verbatim — the agent reads it directly and can
-/// suggest concrete user actions ("open a Terminal column", "restart
+/// suggest concrete user actions ("open a Terminal instance", "restart
 /// Woom").
 fn bridge_to_mcp(err: terminal_bridge_client::BridgeError) -> ErrorData {
     ErrorData::internal_error(err.to_string(), None)
 }
 
+/// Resolve any of {instance name, instance_id, uuid} → the human-readable
+/// instance name, so MCP tool responses surface "Wrote N bytes to terminal
+/// Hopper" instead of "...terminal-solo". Best-effort: returns the raw
+/// `id` argument when the bridge can't list (transient) or when no
+/// instance matches.
+async fn resolve_terminal_label(
+    client: &terminal_bridge_client::BridgeClient,
+    id: &str,
+) -> String {
+    if let Ok(list) = client.list().await {
+        for inst in list.instances {
+            let matches_name = inst.name.as_deref() == Some(id);
+            let matches_instance = inst.instance_id.as_deref() == Some(id);
+            let matches_uuid = inst.uuid == id;
+            if matches_name || matches_instance || matches_uuid {
+                if let Some(name) = inst.name {
+                    return name;
+                }
+                return inst.uuid;
+            }
+        }
+    }
+    id.to_string()
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct EnsureTerminalParams {
+    /// Art-name of the terminal instance to ensure (e.g. "Vermeer",
+    /// "Notre-Dame"). When omitted, defaults to the primary terminal
+    /// instance. Accepts the alias `name`. Same `schemars(with = …)`
+    /// trick as `SetEditorRepoPathParams` so cursor-agent doesn't
+    /// strip the field.
+    #[serde(
+        default,
+        alias = "name",
+        alias = "instanceName",
+        alias = "terminal_name",
+        alias = "label"
+    )]
+    #[schemars(with = "Option<String>")]
+    instance_name: Option<serde_json::Value>,
+    /// Stable id of the terminal instance. Use this when there are
+    /// multiple instances and you know the layout id (e.g.
+    /// `terminal-solo` for the primary, `terminal:vermeer` for a
+    /// secondary). Accepts the alias `id`.
+    #[serde(
+        default,
+        alias = "id",
+        alias = "instanceId",
+        alias = "terminal_id"
+    )]
+    #[schemars(with = "Option<String>")]
+    instance_id: Option<serde_json::Value>,
+    /// Catch-all for wrappers (`args`, `arguments`, …) and aliases we
+    /// haven't enumerated. Not currently inspected on the sidecar side
+    /// because the dispatcher does its own deep walk for these fields;
+    /// we keep the catch-all so deserialize doesn't reject unfamiliar
+    /// keys.
+    #[serde(flatten)]
+    #[allow(dead_code)]
+    extras: std::collections::BTreeMap<String, serde_json::Value>,
+}
+
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct TerminalRunParams {
-    /// Stable terminal id from `terminal_list`. Per-spawn uuid; not
-    /// the human-readable column "art name" — that one isn't unique.
+    /// Terminal handle — PREFER the instance's art-name (e.g.
+    /// "Vermeer", "Notre-Dame") as shown in `terminal_list` or in
+    /// your session preamble's `linked_to_terminal=<name> (id=…)`
+    /// line. The layout instance id (e.g. `terminal-solo`,
+    /// `terminal:vermeer`) and the per-spawn uuid also resolve as
+    /// a fallback. The name reads cleanly in chat history; the
+    /// uuid does not.
     id: String,
     /// Shell command (zsh syntax) to run. Wrapped server-side as
     /// `{ <cmd>; }; printf 'sentinel%d\n' $?` so $? captures the
@@ -2308,29 +2278,26 @@ impl ServerHandler for App {
         let mut info = ServerInfo::default();
         info.capabilities = ServerCapabilities::builder().enable_tools().build();
         info.instructions = Some(
-            "Drive Woom's UI directly. Use these tools when the user wants you to NAVIGATE the app on their behalf:\n\
+            "Drive Woom's UI directly. Woom is organised as full-screen solos (one app at a time, switched via the rail). Use these tools when the user wants you to NAVIGATE the app on their behalf:\n\
              \n\
-             ## Detail panes (slide-over from any view)\n\
+             ## Detail panes (slide-over from any solo)\n\
              - open_github_pr / open_github_issue — show a PR or issue in the detail pane (with optional tab focus for PRs).\n\
              - open_jira_issue — open a Jira ticket's slide-over.\n\
              - open_sentry_issue — open a Sentry issue's slide-over.\n\
              \n\
-             ## Top-level navigation\n\
-             - switch_view — change the top-level tab (workbench / github / jira / sentry / rules / connections / settings). Use ONLY when the user wants the bare tab without any specific scope; if they name a repo / project / sprint / Sentry filter, prefer the targeted opener below.\n\
-             - open_github_repo — GitHub tab + specific repo on a section (code/pulls/issues/actions/releases). Pass `path` with `section=code` to drill into a file (\"open src/lib/auth.ts in efficiently\").\n\
-             - open_jira_tab — Jira tab + Jira filters (project_key / status_name / search / board_ids / sprint_ids). Use for \"my Jira tickets in DEVOPS\", \"sprint 160 in Jira\".\n\
-             - open_sentry_tab — Sentry tab + Sentry filters (projects / search / status / level / environment). Use for \"production crashes\", \"unresolved errors in checkout-web\".\n\
+             ## Top-level navigation (switch solos)\n\
+             - switch_view — change the active solo (home / github / jira / sentry / claude / cursor / editor / canvas / terminal / rules / library / connections / settings). Use ONLY when the user wants the bare solo without any specific scope; if they name a repo / project / sprint / Sentry filter, prefer the targeted opener below.\n\
+             - open_github_repo — GitHub solo + specific repo on a section (code/pulls/issues/actions/releases). Pass `path` with `section=code` to drill into a file (\"open src/lib/auth.ts in efficiently\").\n\
+             - open_jira_tab — Jira solo + Jira filters (project_key / status_name / search / board_ids / sprint_ids). Use for \"my Jira tickets in DEVOPS\", \"sprint 160 in Jira\".\n\
+             - open_sentry_tab — Sentry solo + Sentry filters (projects / search / status / level / environment). Use for \"production crashes\", \"unresolved errors in checkout-web\".\n\
              \n\
-             ## Workbench manipulation\n\
-             - new_workbench — create a fresh workbench tab (with optional name). Activates it by default.\n\
-             - switch_workbench — switch active workbench by name or index.\n\
-             - add_workbench_instance — add a NEW column (github/jira/sentry/claude/cursor/editor). Use ONLY when the user explicitly asks for a new/another column. Do NOT use for \"switch the editor to /path\" — that's set_editor_repo_path.\n\
-             - set_editor_repo_path — change an EXISTING editor's open folder. Linked agents auto-follow. CANONICAL shape: `{\"instance_name\": \"<art-name>\", \"repo_path\": \"/abs/path\"}`. The handler is permissive: aliases accepted (`path`, `folder`, `directory`, `cwd`, `repo`, `repoPath`, `folderPath`, `dirPath`, `fullPath`, `absolutePath` for the path; `name`, `instanceName`, `column_name` for the name; `id`, `instanceId`, `column_id`, `uuid` for the id), and the whole arguments object can be wrapped under `args` / `arguments` / `params` / `input`. STILL prefer the canonical names — fewer round-trips when the wrapper isn't there.\n\
-             - set_agent_cwd — change an agent session's cwd. `target=self` for yourself, or `instance_name` (alias: `name`) for another column. `repo_path` accepts the same aliases and wrapper shapes as set_editor_repo_path. Effective from the next turn.\n\
-             - focus_workbench_instance — scroll-to + highlight an existing column (creates one if none exists).\n\
-             - list_instances — re-read the workbench layout if you think your preamble is stale.\n\
-             - add_editor_instance — DEPRECATED, use add_workbench_instance with kind=`editor`. Kept for back-compat.\n\
-             - set_github_column / set_jira_column / set_sentry_column — patch filters on an EXISTING workbench column (identify by `instance_name` or `instance_id`). Pass only the keys you want to change; omitted keys are preserved. Pass empty string `\"\"` to clear a single-value filter (e.g. `repo=\"\"` = all repos). Use these to retarget a column the user already has open.\n\
+             ## App instances\n\
+             Solos can host multiple instances (editor / canvas / terminal) — each with a curated art-name (\"Vermeer\", \"Hopper\", \"Sagrada-Familia\"). The rail's icon for that kind shows a popover listing them. Singleton solos (github / jira / sentry / claude / cursor) always have exactly one instance.\n\
+             - add_app_instance — spawn a NEW instance (kind=editor/canvas/terminal). For editor, optionally pass `repo_path` to open a folder immediately. Singleton kinds just switch the rail to that solo. Use ONLY when the user explicitly asks for a new/another instance. Do NOT use for \"switch the editor to /path\" — that's set_editor_repo_path.\n\
+             - set_editor_repo_path — change an EXISTING editor instance's open folder. Linked agents auto-follow. CANONICAL shape: `{\"instance_name\": \"<art-name>\", \"repo_path\": \"/abs/path\"}`. The handler is permissive: aliases accepted (`path`, `folder`, `directory`, `cwd`, `repo`, `repoPath`, `folderPath`, `dirPath`, `fullPath`, `absolutePath` for the path; `name`, `instanceName` for the name; `id`, `instanceId`, `uuid` for the id), and the whole arguments object can be wrapped under `args` / `arguments` / `params` / `input`.\n\
+             - set_agent_cwd — change an agent session's cwd. `target=self` for yourself, or `instance_name` for another agent instance. `repo_path` accepts the same aliases and wrapper shapes as set_editor_repo_path. Effective from the next turn.\n\
+             - list_instances — re-read the app-instance map if you think your preamble is stale.\n\
+             - set_github_instance / set_jira_instance / set_sentry_instance — patch filters on an EXISTING source instance (identify by `instance_name` or `instance_id`). Pass only the keys you want to change; omitted keys are preserved. Pass empty string `\"\"` to clear a single-value filter (e.g. `repo=\"\"` = all repos). Use these to retarget an instance the user already has open.\n\
              \n\
              ## Sources\n\
              - open_connect_modal — surface the connect/status modal for any source/agent (use when the user asks about an integration that isn't connected yet — e.g. they mention Slack and you can see it's not in their connected list).\n\
@@ -2352,15 +2319,16 @@ impl ServerHandler for App {
              - canvas_set_viewport — pan/zoom the camera programmatically (use to zoom out after a layout so the user sees the whole graph).\n\
              - canvas_upload_image — paste a base64-encoded image onto the canvas; useful when you've generated a chart externally.\n\
              \n\
-             ## Terminal — drive the user's PTY column\n\
-             Woom workbench can host Terminal columns (real /bin/zsh PTY). The user SEES every keystroke in real time — so prefer these over the generic `bash` tool whenever transparency / debuggability matters. EVERY terminal_* tool's `id` parameter accepts EITHER the column name (`Notre-Dame`) or the uuid from terminal_list — PREFER NAME so the call reads cleanly in chat history.\n\
-             - terminal_list — discover open terminals (returns name + uuid pairs).\n\
+             ## Terminal — drive the user's PTY instance\n\
+             Woom can host multiple Terminal instances (real /bin/zsh PTY). The user SEES every keystroke in real time — so prefer these over the generic `bash` tool whenever transparency / debuggability matters. EVERY terminal_* tool's `id` parameter accepts EITHER the instance's art-name (`Notre-Dame`), the layout instance id (`terminal-solo`), or the per-spawn uuid — PREFER NAME so the call reads cleanly in chat history.\n\
+             - ensure_terminal(instance_name?, instance_id?) — BOOTSTRAP: ensures a terminal instance has a live PTY AND links it to your session. Call this FIRST when your preamble shows no `linked_to_terminal=…` or when `terminal_list` is empty. Returns the instance's art-name to use as `id` for follow-up tool calls. Default targets the primary terminal instance.\n\
+             - terminal_list — discover open terminals (returns name + uuid pairs). SKIP if your preamble already shows `linked_to_terminal=<name> (id=…)` — use that name directly.\n\
              - terminal_run(id, cmd, timeout_ms?) — BLOCKS on a command, returns stdout + exit_code. Stdout is ONLY this run's output (echoes of input + prior scrollback are excluded). Default timeout 60s; use 180000–600000 ms for build / install / test commands. Treat `timed_out: true` as inconclusive — don't decide failure on timeout alone.\n\
              - terminal_write(id, text) — raw input for INTERACTIVE prompts (git editor, ssh password, htop keys). Append \\n to submit.\n\
              - terminal_buffer(id, lines?) — read recent scrollback (default last 200 lines). NOTE: includes prior user input AND prior tool runs — don't infer command results from buffer bytes; use terminal_run to actually run + capture cleanly.\n\
              \n\
              # When to chain calls\n\
-             These tools compose. \"Open the actions tab for forge\" → open_github_repo(owner=…, repo=forge, section=actions) — one call, no need to switch_view first. \"Make a new workbench called Hotfix and add a Claude column there\" → new_workbench + add_workbench_instance(kind=claude). Don't ask for confirmation — these are harmless navigation that gives the user the same view they'd get clicking through manually."
+             These tools compose. \"Open the actions tab for efficiently\" → open_github_repo(owner=…, repo=efficiently, section=actions) — one call, no need to switch_view first. \"Open another editor on /Users/me/Repos/foo\" → add_app_instance(kind=editor, repo_path=…). Don't ask for confirmation — these are harmless navigation that gives the user the same view they'd get clicking through manually."
                 .to_string(),
         );
         info

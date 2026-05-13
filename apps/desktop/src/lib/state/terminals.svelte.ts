@@ -88,20 +88,27 @@ export const terminalsState = {
 
 /** Spawn-or-attach. Idempotent: a second call with the same instanceId
  *  returns the existing session without re-spawning. The cwd / cols /
- *  rows args are only honoured on first spawn — once the PTY exists,
- *  it keeps its original geometry until `terminal_resize` is invoked
- *  by the surface. */
+ *  rows / name args are only honoured on first spawn — once the PTY
+ *  exists, it keeps its original geometry until `terminal_resize` is
+ *  invoked by the surface. `name` is the human-readable column label
+ *  (e.g. "Vermeer") so MCP `terminal_list` returns names agents can
+ *  call directly instead of opaque uuids. */
 export async function ensureTerminalSession(
   instanceId: string,
   cwd: string | null,
   cols = 120,
-  rows = 32
+  rows = 32,
+  name: string | null = null
 ): Promise<TerminalSession> {
   const existing = _sessions[instanceId];
   if (existing) return existing;
 
   const result = await invoke<{ id: string }>('terminal_spawn', {
-    opts: { cwd, cols, rows, name: null }
+    /* `instance_id` is the Svelte-side handle for the column (e.g.
+       `terminal-solo`). Carrying it into the Rust registry lets the
+       MCP bridge resolve agent calls that pass the layout id directly,
+       which is what the agent sees first in its preamble. */
+    opts: { cwd, cols, rows, name, instance_id: instanceId }
   });
 
   _sessions[instanceId] = {
@@ -236,7 +243,8 @@ export async function restartTerminalSession(
   instanceId: string,
   cwd: string | null,
   cols = 120,
-  rows = 32
+  rows = 32,
+  name: string | null = null
 ): Promise<TerminalSession> {
   const existing = _sessions[instanceId];
   if (existing) {
@@ -248,7 +256,7 @@ export async function restartTerminalSession(
     try { await invoke('terminal_kill', { id: existing.ptyId }); } catch {}
     delete _sessions[instanceId];
   }
-  return ensureTerminalSession(instanceId, cwd, cols, rows);
+  return ensureTerminalSession(instanceId, cwd, cols, rows, name);
 }
 
 /** Permanent kill — used when the user explicitly closes a terminal

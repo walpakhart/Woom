@@ -13,9 +13,14 @@
   interface Props {
     open: boolean;
     onClose: () => void;
+    /** Optional handoff to the longer-form Welcome / orientation
+     *  surface. When provided, the cheatsheet footer surfaces a
+     *  "New here? Take the tour →" link so users who hit `?` looking
+     *  for help (not just a key list) can discover it. */
+    onOpenWelcome?: () => void;
   }
 
-  let { open, onClose }: Props = $props();
+  let { open, onClose, onOpenWelcome }: Props = $props();
 
   /* Detect macOS for the ⌘ vs Ctrl rendering. Woom ships macOS-
    * only today (`docs/SPEC.md §13`), but the rest of the codebase
@@ -33,8 +38,14 @@
     {
       title: 'Global',
       rows: [
-        { keys: `${mod} K`, label: 'Open command palette' },
+        { keys: `${mod} K`, label: 'Open command palette — search anywhere' },
+        { keys: `${mod} E`, label: 'Quick switcher — jump to most-recently-touched' },
+        { keys: `${mod} 0`, label: 'Switch to Home' },
+        { keys: `${mod} 1..3`, label: 'Switch to Jira / GitHub / Sentry' },
+        { keys: `${mod} 4..5`, label: 'Switch to Claude / Cursor' },
+        { keys: `${mod} 6..8`, label: 'Switch to Editor / Canvas / Terminal' },
         { keys: '?', label: 'Show this cheatsheet' },
+        { keys: `${shift}${mod} ?`, label: 'Welcome / tour — what is Woom and how is it organised' },
         { keys: 'Esc', label: 'Close overlay / focus pane' }
       ]
     },
@@ -50,7 +61,11 @@
       rows: [
         { keys: `${mod} S`, label: 'Save active file' },
         { keys: `${mod} P`, label: 'Quick-open file in repo' },
-        { keys: `${mod} F`, label: 'Find in current buffer' }
+        { keys: `${mod}${shift} O`, label: 'Go to symbol in file (regex outline — TS / Rust / Py / Go / Svelte / MD)' },
+        { keys: `${mod}${shift} V`, label: 'Markdown preview — cycle Edit / Split / Preview' },
+        { keys: `${mod} F`, label: 'Find in current buffer' },
+        { keys: `${mod}${shift} F`, label: 'Find in files — project-wide grep' },
+        { keys: `${mod}${shift} R`, label: 'Review pane — accept / reject every agent edit (j / k · a · r · e)' }
       ]
     },
     {
@@ -58,6 +73,7 @@
       rows: [
         { keys: 'Enter', label: 'Send message' },
         { keys: `${shift} Enter`, label: 'Newline in composer' },
+        { keys: '↑ / ↓', label: 'Cycle through previously-sent prompts in this session' },
         { keys: `${mod} ${altKey} C`, label: 'Compact session (drop history, keep summary)' },
         { keys: '/compact', label: 'Slash command — same as the toolbar compact button' },
         { keys: '/clear', label: 'Slash command — wipe this session\'s messages' },
@@ -128,6 +144,11 @@
       </div>
       <footer class="cheatsheet-foot">
         <span class="cheatsheet-hint">Read the spec: <span class="mono">docs/ROADMAP_1.0.md</span></span>
+        {#if onOpenWelcome}
+          <button class="cheatsheet-tour-btn" onclick={onOpenWelcome} type="button">
+            New here? Take the tour <span class="mono">{shift}{mod} ?</span> →
+          </button>
+        {/if}
       </footer>
     </section>
   </div>
@@ -193,8 +214,27 @@
   }
   .cheatsheet-label { margin: 0; font-size: 12.5px; color: var(--text-1); line-height: 1.4; }
   .cheatsheet-foot {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
     padding: 10px 22px; border-top: 1px solid var(--border-neutral);
     font-size: 11px; color: var(--text-mute);
+  }
+  .cheatsheet-tour-btn {
+    background: transparent; border: 0;
+    color: var(--accent-bright);
+    font-size: 11px; font-weight: 600;
+    cursor: pointer;
+    padding: 0;
+    display: inline-flex; align-items: center; gap: 6px;
+    letter-spacing: 0.01em;
+  }
+  .cheatsheet-tour-btn:hover { color: var(--accent); }
+  .cheatsheet-tour-btn .mono {
+    background: var(--bg-2);
+    border: 1px solid var(--border-neutral);
+    border-radius: 4px;
+    padding: 1px 5px;
+    font-size: 10px;
+    color: var(--text-1);
   }
 
   @media (prefers-reduced-motion: reduce) {

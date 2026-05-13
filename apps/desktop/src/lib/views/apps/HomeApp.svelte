@@ -38,6 +38,12 @@
     onNavigate: (v: View) => void;
     onOpenSession: (sessionId: string, agentInstanceId: string) => void;
     onNewChat: (kind: 'claude' | 'cursor') => void;
+    /** Opens the long-form Welcome / Help overlay. Surfaced as a
+     *  small "Take the tour" pill in the hero so first-time users
+     *  have a discoverable entry point that doesn't require knowing
+     *  the ⇧⌘? shortcut up front. Optional — when omitted, the
+     *  pill is simply not rendered. */
+    onOpenWelcome?: () => void;
   }
   let p: Props = $props();
 
@@ -297,7 +303,16 @@
         <div class="ho-hero-text">
           <h1 class="ho-hero-h">{greeting}.</h1>
           <p class="ho-hero-pulse">{pulse}</p>
-          <p class="ho-hero-date mono">{todayLabel}</p>
+          <div class="ho-hero-meta">
+            <span class="ho-hero-date mono">{todayLabel}</span>
+            {#if p.onOpenWelcome}
+              <button class="ho-hero-tour" onclick={p.onOpenWelcome} type="button">
+                <span aria-hidden="true">✦</span>
+                Take the tour
+                <span class="ho-hero-tour-kbd mono">⇧⌘?</span>
+              </button>
+            {/if}
+          </div>
         </div>
       </div>
 
@@ -700,6 +715,39 @@
     text-transform: uppercase;
     letter-spacing: 0.13em;
     color: var(--text-mute);
+  }
+  /* Meta row under the pulse line — date stays calm, tour pill draws
+     a soft accent stroke so first-time users notice it without it
+     screaming on every load. */
+  .ho-hero-meta {
+    display: flex; align-items: center; gap: 14px;
+    margin-top: 4px;
+    flex-wrap: wrap;
+  }
+  .ho-hero-tour {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 10px 4px 8px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--accent) 8%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
+    color: var(--accent-bright);
+    font-size: 11.5px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 140ms, border-color 140ms, transform 140ms;
+  }
+  .ho-hero-tour:hover {
+    background: color-mix(in srgb, var(--accent) 16%, transparent);
+    border-color: color-mix(in srgb, var(--accent) 42%, var(--border));
+    transform: translateY(-1px);
+  }
+  .ho-hero-tour-kbd {
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0 5px;
+    font-size: 9.5px;
+    color: var(--text-1);
   }
 
   /* 24h activity histogram — ambient, not central. */

@@ -12,6 +12,7 @@ mod git;
 mod github;
 mod jira;
 mod keychain;
+mod library;
 mod memory_local;
 mod sentry;
 mod terminal;
@@ -354,6 +355,15 @@ pub fn run() {
             claude_stop,
             agent_generate_commit_message,
             agent_status,
+            library_list_installed,
+            library_install_skill_git,
+            library_install_skill_inline,
+            library_install_anthropic_skill,
+            library_plugin_install_anthropic,
+            library_uninstall_skill,
+            library_plugin_marketplace_add,
+            library_plugin_install,
+            library_plugin_uninstall,
             fs_read_file,
             fs_write_file,
             fs_write_bytes,
@@ -365,6 +375,7 @@ pub fn run() {
             set_window_zoom,
             fs_list_dir,
             fs_walk_files,
+            fs_search_text,
             fs_path_exists,
             fs_bash_run,
             git_status,
@@ -374,6 +385,7 @@ pub fn run() {
             git_current_branch,
             git_checkout,
             git_create_branch,
+            git_fetch,
             git_stage,
             git_unstage,
             git_discard,
@@ -406,11 +418,12 @@ pub fn run() {
             list_bundled_docs,
             read_bundled_doc,
             fs_remove_file,
+            fs_remove_dir,
             fs_rename,
             fs_reveal_in_finder,
             mcp_sidecar_health,
             memory_local::memory_save_local,
-            // Terminal column — PTY-backed shell per workbench instance.
+            // Terminal app — PTY-backed shell per terminal instance.
             // Spawn returns a stable id; output streams over
             // `terminal:output:<id>` Tauri events; write/resize/kill
             // address by id. See `terminal.rs`.
@@ -1406,11 +1419,11 @@ async fn claude_ask(
     // `claude-sonnet-4-6` so the typical case doesn't burn the 5h quota.
     #[allow(non_snake_case)] claudeModel: Option<String>,
     // Per-turn dynamic context describing the agent's UI surroundings —
-    // active workbench, sibling instances + their names + cwds, and which
-    // instance the calling session is bound to. Built fresh on the
-    // frontend before every turn (workbench layout changes, sessions
-    // change cwd) so the agent always sees current state. Prepended to
-    // the system prompt for Claude / to the prompt itself for Cursor.
+    // the active solo, sibling app instances + their names + cwds, and
+    // which instance the calling session is bound to. Built fresh on the
+    // frontend before every turn (instance map changes, sessions change
+    // cwd) so the agent always sees current state. Prepended to the
+    // system prompt for Claude / to the prompt itself for Cursor.
     #[allow(non_snake_case)] appContext: Option<String>,
     // Absolute paths of image files attached to this turn. For Claude these
     // get base64-embedded as `image` content blocks via stream-json input
@@ -1572,6 +1585,59 @@ async fn agent_generate_commit_message(
 
 // ---------- FS ----------
 
+// ---- Library (skills / plugins store) --------------------------------
+
+#[tauri::command]
+fn library_list_installed() -> Result<library::InstalledList, String> {
+    Ok(library::list_installed())
+}
+
+#[tauri::command]
+fn library_install_skill_git(
+    url: String,
+    slug: String,
+) -> Result<library::InstalledSkill, String> {
+    library::install_skill_git(&url, &slug)
+}
+
+#[tauri::command]
+fn library_install_skill_inline(
+    slug: String,
+    content: String,
+) -> Result<library::InstalledSkill, String> {
+    library::install_skill_inline(&slug, &content)
+}
+
+#[tauri::command]
+fn library_install_anthropic_skill(name: String) -> Result<library::InstalledSkill, String> {
+    library::install_anthropic_skill(&name)
+}
+
+#[tauri::command]
+fn library_plugin_install_anthropic(name: String) -> Result<String, String> {
+    library::plugin_install_anthropic(&name)
+}
+
+#[tauri::command]
+fn library_uninstall_skill(slug: String) -> Result<(), String> {
+    library::uninstall_skill(&slug)
+}
+
+#[tauri::command]
+fn library_plugin_marketplace_add(url: String) -> Result<String, String> {
+    library::plugin_marketplace_add(&url)
+}
+
+#[tauri::command]
+fn library_plugin_install(reference: String) -> Result<String, String> {
+    library::plugin_install(&reference)
+}
+
+#[tauri::command]
+fn library_plugin_uninstall(name: String) -> Result<String, String> {
+    library::plugin_uninstall(&name)
+}
+
 #[tauri::command]
 fn fs_read_file(path: String) -> Result<String, String> {
     fs::read_file(&path)
@@ -1589,6 +1655,16 @@ fn fs_write_file(path: String, contents: String) -> Result<(), String> {
 #[tauri::command]
 fn fs_remove_file(path: String) -> Result<(), String> {
     fs::remove_file_if_exists(&path)
+}
+
+/// Recursively delete a directory and all its contents. Used by the
+/// FileTree right-click "Delete folder" path. The frontend already
+/// gated the action behind a confirm() dialog; the safety net here
+/// is the depth check inside `fs::remove_dir_recursive` which keeps
+/// a misclick from nuking a system folder.
+#[tauri::command]
+fn fs_remove_dir(path: String) -> Result<(), String> {
+    fs::remove_dir_recursive(&path)
 }
 
 /// Rename / move a path. Refuses to overwrite an existing
@@ -1945,6 +2021,19 @@ fn fs_walk_files(
     fs::walk_files(&root, query.as_deref(), mf, md)
 }
 
+/// Project-wide content search — the Editor's ⌘⇧F overlay. Plain
+/// case-insensitive substring; binary / oversized files skipped.
+/// See `fs::search_text` for the heuristics.
+#[tauri::command]
+fn fs_search_text(
+    root: String,
+    query: String,
+    max_results: Option<u32>,
+) -> Result<fs::SearchTextResult, String> {
+    let cap = max_results.map(|x| x as usize).unwrap_or(500).clamp(1, 5_000);
+    fs::search_text(&root, &query, cap)
+}
+
 #[tauri::command]
 fn fs_path_exists(path: String) -> bool {
     fs::path_exists(&path)
@@ -1988,8 +2077,18 @@ fn git_checkout(repo: String, branch: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn git_create_branch(repo: String, name: String, checkout: bool) -> Result<(), String> {
-    git::create_branch(&repo, &name, checkout)
+fn git_create_branch(
+    repo: String,
+    name: String,
+    checkout: bool,
+    start_point: Option<String>,
+) -> Result<(), String> {
+    git::create_branch(&repo, &name, checkout, start_point.as_deref())
+}
+
+#[tauri::command]
+fn git_fetch(repo: String) -> Result<String, String> {
+    git::fetch(&repo)
 }
 
 #[tauri::command]

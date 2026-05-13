@@ -696,7 +696,6 @@
             ondragend={p.onDragEnd}
             onclick={(e) => clickItem(it, e)}
             ondblclick={() => p.onOpenBrowser(it.url)}
-            title={it.title}
           >
             <div class="gl-card-top">
               <span class="gl-card-st {stateClass(it)}">{stateLabel(it)}</span>
@@ -1020,13 +1019,17 @@
   .gl-card.active {
     background: var(--bg-2);
     border-color: var(--border-hi);
+    /* Theme-aware: ring tint follows `--src-github` (purple in dark,
+       deep violet in light), drop-shadow swaps to sage-on-cream via
+       `--shadow-2`. Hardcoded blacks were burning a halo on the cream
+       surface in the light theme. */
     box-shadow:
-      0 0 0 1px rgba(181, 132, 255, 0.32),
-      0 12px 24px rgba(0, 0, 0, 0.28);
+      0 0 0 1px color-mix(in srgb, var(--src-github) 32%, transparent),
+      var(--shadow-2);
   }
   .gl-card.active::before {
     opacity: 1;
-    box-shadow: 0 0 10px rgba(181, 132, 255, 0.40);
+    box-shadow: 0 0 10px color-mix(in srgb, var(--src-github) 40%, transparent);
   }
 
   .gl-card-top { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }

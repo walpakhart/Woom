@@ -337,7 +337,6 @@
             ondragend={p.onDragEnd}
             onclick={(e) => clickItem(it, e)}
             ondblclick={() => p.onOpenBrowser(it.permalink)}
-            title={`${it.short_id} · ${it.title}`}
           >
             <div class="sl-card-top">
               <span class="sl-level {sentryLevelClass(it.level)}">{it.level}</span>
@@ -594,13 +593,16 @@
   .sl-card.active {
     background: var(--bg-2);
     border-color: var(--border-hi);
+    /* Tint follows the brand var (`--error` is sentry's pulse colour
+       on both themes); drop-shadow uses the theme's own `--shadow-2`
+       so the lift reads on cream as well as on noir. */
     box-shadow:
-      0 0 0 1px rgba(232, 130, 100, 0.32),
-      0 12px 24px rgba(0, 0, 0, 0.28);
+      0 0 0 1px color-mix(in srgb, var(--error) 32%, transparent),
+      var(--shadow-2);
   }
   .sl-card.active::before {
     opacity: 1;
-    box-shadow: 0 0 10px rgba(232, 130, 100, 0.40);
+    box-shadow: 0 0 10px color-mix(in srgb, var(--error) 40%, transparent);
   }
 
   .sl-card-top { display: flex; align-items: center; gap: 7px; }

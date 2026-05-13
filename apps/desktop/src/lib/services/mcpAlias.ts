@@ -98,12 +98,12 @@ export const REPO_PATH_KEYS = [
 ];
 
 export const INSTANCE_NAME_KEYS = [
-  'instance_name', 'instanceName', 'name', 'column_name', 'columnName',
+  'instance_name', 'instanceName', 'name',
   'editor_name', 'agent_name', 'label'
 ];
 
 export const INSTANCE_ID_KEYS = [
-  'instance_id', 'instanceId', 'id', 'column_id', 'columnId',
+  'instance_id', 'instanceId', 'id',
   'editor_id', 'agent_id', 'uuid'
 ];
 

@@ -35,6 +35,7 @@
   import { WebLinksAddon } from '@xterm/addon-web-links';
   import '@xterm/xterm/css/xterm.css';
   import { sessionsState } from '$lib/state/sessions.svelte';
+  import { layoutState } from '$lib/state/layout.svelte';
   import {
     ensureTerminalSession,
     restartTerminalSession,
@@ -178,7 +179,14 @@
       cursorBlink: true,
       scrollback: 5000,
       allowProposedApi: true,
-      convertEol: false,
+      /* Bare `\n` arriving without a preceding `\r` would otherwise
+         leave the cursor at its current column and just move down one
+         row — producing the diagonal "staircase" you sometimes see in
+         pipe-style output (`ls | cat`, agent-driven `terminal_run`
+         responses that capture child stdout without re-cooking the
+         line). xterm only adds the `\r` when there isn't one already,
+         so this is safe for normal cooked-tty output too. */
+      convertEol: true,
       // Use the live theme's surface + foreground so the terminal
       // doesn't look like an embed of a different app. Per-source
       // palette below stays a fixed warm/blue mix that reads well
@@ -289,7 +297,18 @@
         try { fit.fit(); } catch {}
         const cols = term.cols;
         const rows = term.rows;
-        const sess = await ensureTerminalSession(instanceId, autoLinkedCwd ?? cwd, cols, rows);
+        /* Look up the layout's curated mark (e.g. "Vermeer") and pass
+           it to the PTY so MCP `terminal_list` returns a stable
+           agent-friendly name instead of just a uuid. */
+        const layoutName =
+          layoutState.instances.terminal.find((i) => i.id === instanceId)?.name ?? null;
+        const sess = await ensureTerminalSession(
+          instanceId,
+          autoLinkedCwd ?? cwd,
+          cols,
+          rows,
+          layoutName
+        );
 
         /* Replay every captured chunk in order. Xterm processes ANSI
            and writes to its scrollback buffer synchronously, so this

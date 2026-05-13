@@ -49,6 +49,34 @@ const FILENAME_MAP: Record<string, () => Extension> = {
   gemfile: () => legacy(ruby),
   procfile: () => legacy(shell),
   'cmakelists.txt': () => legacy(shell),
+
+  /* Dotfiles without a real extension. Most of these are tiny config
+     files where ALL the user really needs is comment + key=value
+     highlighting; shell mode covers `# comment` and bare-word lines
+     cleanly enough that a plain `.gitignore` stops looking like a
+     wall of white text. JSON-shaped dotfiles get the json mode so
+     strings / numbers / brackets light up. */
+  '.gitignore': () => legacy(shell),
+  '.dockerignore': () => legacy(shell),
+  '.prettierignore': () => legacy(shell),
+  '.eslintignore': () => legacy(shell),
+  '.npmignore': () => legacy(shell),
+  '.gitattributes': () => legacy(shell),
+  '.editorconfig': () => legacy(toml),
+  '.npmrc': () => legacy(shell),
+  '.nvmrc': () => legacy(shell),
+  '.yarnrc': () => legacy(shell),
+  '.tool-versions': () => legacy(shell),
+  '.python-version': () => legacy(shell),
+  '.ruby-version': () => legacy(shell),
+  '.node-version': () => legacy(shell),
+  '.env': () => legacy(shell),
+  '.envrc': () => legacy(shell),
+  '.prettierrc': () => json(),
+  '.babelrc': () => json(),
+  '.eslintrc': () => json(),
+  '.stylelintrc': () => json(),
+  '.swcrc': () => json(),
 };
 
 // Extension-keyed matches (the main path).
@@ -129,6 +157,16 @@ const EXT_MAP: Record<string, () => Extension> = {
   ini: () => legacy(toml),
 };
 
+/* Strip suffixes that don't change the file's REAL syntax — they only
+   mark a variant. `foo.example` / `foo.template` / `foo.sample` /
+   `foo.dist` / `foo.bak` / `foo.orig` are all "the foo file but…",
+   so peel them off and re-resolve. Bounded to one peel so we don't
+   accidentally chase `a.b.c.d` to nothing. */
+const VARIANT_SUFFIXES = new Set([
+  'example', 'sample', 'template', 'tmpl', 'tpl',
+  'dist', 'default', 'bak', 'orig', 'old', 'new', 'in',
+]);
+
 /**
  * Pick the best CodeMirror language extension for a given file path.
  * Falls back to an empty extension array (plain text) if nothing matches.
@@ -138,15 +176,46 @@ export function languageFor(path: string): Extension {
   const base = path.split('/').pop() ?? path;
   const lower = base.toLowerCase();
 
-  // Exact filename match (Jenkinsfile, Dockerfile, …).
+  // Exact filename match (Jenkinsfile, Dockerfile, .gitignore, .env, …).
   if (FILENAME_MAP[lower]) return FILENAME_MAP[lower]();
 
   // Dockerfile.stage, Dockerfile.prod, etc.
   if (lower.startsWith('dockerfile.')) return legacy(dockerFile);
   if (lower.startsWith('jenkinsfile.')) return legacy(groovy);
 
+  /* `.env.example`, `.env.local`, `.env.production`, `.env.test`, …
+     All are env files in syntax — same shell-style `# comment` +
+     `KEY=value`. Catch the family before the generic ext lookup so
+     `.env.example` doesn't fall through as an unknown `example`
+     extension. */
+  if (lower.startsWith('.env.')) return legacy(shell);
+
+  /* `.eslintrc.json`, `.babelrc.yaml`, `.prettierrc.toml`, …
+     The dotfile basename carries the *family*, the second segment
+     carries the *encoding*. Trust the encoding. */
+  const dotFirst = lower.indexOf('.', 1);
+  if (lower.startsWith('.') && dotFirst > 0) {
+    const tail = lower.slice(dotFirst + 1);
+    if (EXT_MAP[tail]) return EXT_MAP[tail]();
+  }
+
   const dot = lower.lastIndexOf('.');
   if (dot <= 0) return [];
   const ext = lower.slice(dot + 1);
-  return EXT_MAP[ext]?.() ?? [];
+  if (EXT_MAP[ext]) return EXT_MAP[ext]();
+
+  /* `config.yaml.example`, `service.json.template`, `httpd.conf.dist`,
+     `init.sh.bak` — the LAST extension is a variant marker, so peel
+     it and try again with the underlying type. Without this every
+     `*.example` file rendered as plain text. */
+  if (VARIANT_SUFFIXES.has(ext)) {
+    const inner = lower.slice(0, dot);
+    const innerDot = inner.lastIndexOf('.');
+    if (innerDot > 0) {
+      const realExt = inner.slice(innerDot + 1);
+      if (EXT_MAP[realExt]) return EXT_MAP[realExt]();
+    }
+  }
+
+  return [];
 }

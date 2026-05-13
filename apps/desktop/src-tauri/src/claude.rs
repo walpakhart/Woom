@@ -27,7 +27,7 @@ pub fn new_runners() -> Runners {
 
 /// Spawn signature — the args that have to match for a warm CLI to be
 /// reusable on the next `ask`. If any of these change between prewarm
-/// and ask (user changed cwd, model, or workbench layout enough to
+/// and ask (user changed cwd, model, or app-instance layout enough to
 /// shift `appContext`), we kill the warm and respawn fresh.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SpawnSig {
@@ -380,7 +380,7 @@ async fn spawn_claude_armed(args: &AskArgs<'_>) -> Result<ArmedCli, ClaudeRunErr
     // that mutates per turn.
     //   1. Memory hint — fully static.
     //   2. User rules — changes only when the user edits the Rules tab.
-    //   3. Per-turn UI context — workbench layout, cwds, linked agents,
+    //   3. Per-turn UI context — app-instance map, cwds, linked agents,
     //      one-shot cwd-switch recap. Goes LAST so the preceding block
     //      stays a stable prefix.
     let mut system_parts: Vec<String> = Vec::new();
@@ -503,6 +503,18 @@ async fn spawn_claude_armed(args: &AskArgs<'_>) -> Result<ArmedCli, ClaudeRunErr
             cmd.arg("--allowedTools").arg(allowed.join(","));
         }
     }
+    // Woom is the trust boundary, not the CLI. The user already
+    // consented to running Claude by launching Woom and starting this
+    // chat; every tool call streams visibly in the chat surface, and
+    // genuinely destructive shell ops (git push/reset/rebase, rm, npm
+    // install) go through `propose_bash` which surfaces an explicit
+    // user-facing approval card before executing. Without this flag
+    // the CLI prompts the user on EVERY built-in tool call (Bash,
+    // Read, Edit, Write, Grep, …) — which is the "endlessly asks for
+    // permissions" symptom that makes the agent unusable on a fresh
+    // install. `--allowedTools` only governs MCP tools; built-ins
+    // need this flag to skip the same per-call prompt.
+    cmd.arg("--dangerously-skip-permissions");
     if let Some(dir) = args.cwd {
         cmd.current_dir(dir);
     }

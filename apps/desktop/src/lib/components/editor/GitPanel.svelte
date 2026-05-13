@@ -36,6 +36,16 @@
   let showBranches = $state(false);
   let newBranchName = $state('');
   let creating = $state(false);
+  /** Fork-point for the new branch: '' = current HEAD; 'feat/foo' =
+   *  local branch name; 'origin/main' = remote ref. The picker below
+   *  the input is filtered by the same `branchFilter` so the user
+   *  can type once to find both. */
+  let newBranchFrom = $state('');
+  /** Substring filter for the branch list. Matches against `b.name`
+   *  case-insensitively. We deliberately keep the filter sticky as
+   *  the user opens / closes the picker — a common flow is "search
+   *  → find → switch → re-open same search to compare". */
+  let branchFilter = $state('');
 
   // PR creation
   let ghAvailable = $state(false);
@@ -184,12 +194,44 @@
     await withBusy(`checkout ${name}`, () => invoke('git_checkout', { repo, branch: name }));
   }
 
+  /** Checkout a remote branch as a new local tracking branch. We strip
+   *  the `origin/` prefix for the local name so the user gets `feat/foo`
+   *  locally tracking `origin/feat/foo` — same shape as `git checkout
+   *  --track`. If a local branch with that name already exists git
+   *  will error and we surface the message via `error`. */
+  async function checkoutRemote(remoteName: string) {
+    const localName = remoteName.replace(/^origin\//, '');
+    showBranches = false;
+    await withBusy(`checkout ${localName}`, () =>
+      invoke('git_create_branch', {
+        repo,
+        name: localName,
+        checkout: true,
+        startPoint: remoteName
+      })
+    );
+  }
+
   async function createBranch() {
     if (!newBranchName.trim()) return;
     const name = newBranchName.trim();
-    await withBusy(`create ${name}`, () => invoke('git_create_branch', { repo, name, checkout: true }));
+    const from = newBranchFrom.trim();
+    const label = from ? `${name} (from ${from})` : name;
+    await withBusy(`create ${label}`, () =>
+      invoke('git_create_branch', {
+        repo,
+        name,
+        checkout: true,
+        startPoint: from || null
+      })
+    );
     newBranchName = '';
+    newBranchFrom = '';
     creating = false;
+  }
+
+  async function fetchAll() {
+    await withBusy('fetch', () => invoke('git_fetch', { repo }));
   }
 
   function openPrDialog() {
@@ -229,7 +271,30 @@
 
   const stagedFiles = $derived((status?.files ?? []).filter((f) => f.staged));
   const unstagedFiles = $derived((status?.files ?? []).filter((f) => f.unstaged && !f.staged));
-  const localBranches = $derived(branches.filter((b) => !b.is_remote));
+  const filterNeedle = $derived(branchFilter.trim().toLowerCase());
+  const localBranches = $derived(
+    branches
+      .filter((b) => !b.is_remote)
+      .filter((b) => !filterNeedle || b.name.toLowerCase().includes(filterNeedle))
+  );
+  /** Set of local branch names, used to mark remote branches that
+   *  already have a local counterpart (so we can render a "checked
+   *  out" hint instead of an active "checkout" button). */
+  const localBranchSet = $derived(
+    new Set(branches.filter((b) => !b.is_remote).map((b) => b.name))
+  );
+  const remoteBranches = $derived(
+    branches
+      .filter((b) => b.is_remote)
+      .filter((b) => !filterNeedle || b.name.toLowerCase().includes(filterNeedle))
+  );
+  /** Pickable fork-points for "+ new branch from …": local first, then
+   *  remote. Filtered by the same needle so one input drives both
+   *  switching and creation. */
+  const forkPickable = $derived([
+    ...branches.filter((b) => !b.is_remote).map((b) => b.name),
+    ...branches.filter((b) => b.is_remote).map((b) => b.name)
+  ]);
   const canOpenPr = $derived(!!status?.upstream && !!status?.branch && ghAvailable);
 </script>
 
@@ -262,26 +327,81 @@
 
   {#if showBranches}
     <div class="gp-branches">
-      <div class="gp-section-title">Local branches</div>
-      {#each localBranches as b (b.name)}
-        <button class="gp-branch-row" class:current={b.is_current} onclick={() => switchBranch(b.name)} disabled={b.is_current || !!busy}>
-          <span class="mono">{b.name}</span>
-          {#if b.upstream}<span class="gp-upstream">→ {b.upstream}</span>{/if}
-        </button>
-      {/each}
+      <div class="gp-branches-toolbar">
+        <div class="gp-search">
+          <svg class="i i-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3-3"/></svg>
+          <input
+            class="gp-search-input"
+            placeholder="Filter branches…"
+            bind:value={branchFilter}
+            onkeydown={(e) => { if (e.key === 'Escape') branchFilter = ''; }}
+          />
+          {#if branchFilter}
+            <button class="gp-search-clear" onclick={() => (branchFilter = '')} title="Clear filter" aria-label="Clear filter">
+              <svg class="i i-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M18 6 6 18M6 6l12 12"/></svg>
+            </button>
+          {/if}
+        </div>
+        <button class="gp-btn-ghost" onclick={fetchAll} disabled={!!busy} title="git fetch --all --prune">fetch</button>
+      </div>
+
+      {#if localBranches.length > 0}
+        <div class="gp-section-title">Local · {localBranches.length}</div>
+        {#each localBranches as b (b.name)}
+          <button class="gp-branch-row" class:current={b.is_current} onclick={() => switchBranch(b.name)} disabled={b.is_current || !!busy}>
+            <span class="mono gp-branch-row-name">{b.name}</span>
+            {#if b.upstream}<span class="gp-upstream">→ {b.upstream}</span>{/if}
+          </button>
+        {/each}
+      {/if}
+
+      {#if remoteBranches.length > 0}
+        <div class="gp-section-title">Remote · {remoteBranches.length}</div>
+        {#each remoteBranches as b (b.name)}
+          {@const localExists = localBranchSet.has(b.name.replace(/^origin\//, ''))}
+          <button
+            class="gp-branch-row gp-branch-row--remote"
+            onclick={() => (localExists ? switchBranch(b.name.replace(/^origin\//, '')) : checkoutRemote(b.name))}
+            disabled={!!busy}
+            title={localExists ? `Switch to local ${b.name.replace(/^origin\//, '')}` : `Check out ${b.name} as local tracking branch`}
+          >
+            <svg class="gp-branch-cloud i i-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M17 18a4 4 0 0 0 0-8 6 6 0 0 0-11.2 2A4 4 0 0 0 7 18z"/></svg>
+            <span class="mono gp-branch-row-name">{b.name}</span>
+            {#if localExists}<span class="gp-upstream">· local</span>{/if}
+          </button>
+        {/each}
+      {/if}
+
+      {#if filterNeedle && localBranches.length === 0 && remoteBranches.length === 0}
+        <div class="gp-empty-pick">No branches match “{branchFilter}”.</div>
+      {/if}
+
       <div class="gp-new-branch">
         {#if creating}
-          <input
-            class="gp-input"
-            placeholder="new-branch-name"
-            bind:value={newBranchName}
-            onkeydown={(e) => { if (e.key === 'Enter') void createBranch(); if (e.key === 'Escape') { creating = false; newBranchName = ''; } }}
-            {@attach (node: HTMLInputElement) => node.focus()}
-          />
-          <button class="gp-btn-ghost" onclick={createBranch} disabled={!newBranchName.trim() || !!busy}>create</button>
-          <button class="gp-btn-ghost" onclick={() => { creating = false; newBranchName = ''; }}>cancel</button>
+          <div class="gp-new-stack">
+            <input
+              class="gp-input"
+              placeholder="new-branch-name"
+              bind:value={newBranchName}
+              onkeydown={(e) => { if (e.key === 'Enter' && newBranchName.trim()) void createBranch(); if (e.key === 'Escape') { creating = false; newBranchName = ''; newBranchFrom = ''; } }}
+              {@attach (node: HTMLInputElement) => node.focus()}
+            />
+            <div class="gp-from-row">
+              <span class="gp-from-lbl mono">from</span>
+              <select class="gp-input gp-from-select" bind:value={newBranchFrom}>
+                <option value="">{status?.branch ? `current (${status.branch})` : 'current HEAD'}</option>
+                {#each forkPickable as fp (fp)}
+                  <option value={fp}>{fp}</option>
+                {/each}
+              </select>
+            </div>
+            <div class="gp-new-actions">
+              <button class="gp-btn-ghost" onclick={createBranch} disabled={!newBranchName.trim() || !!busy}>create</button>
+              <button class="gp-btn-ghost" onclick={() => { creating = false; newBranchName = ''; newBranchFrom = ''; }}>cancel</button>
+            </div>
+          </div>
         {:else}
-          <button class="gp-btn-ghost" onclick={() => (creating = true)}>+ new branch</button>
+          <button class="gp-btn-ghost" onclick={() => { creating = true; newBranchFrom = ''; }}>+ new branch</button>
         {/if}
       </div>
     </div>
@@ -429,12 +549,45 @@
 
   .gp-branches {
     border-bottom: 1px solid var(--border-neutral);
-    padding: 6px 0;
-    max-height: 250px; overflow-y: auto;
+    padding: 6px 0 8px;
+    max-height: 360px; overflow-y: auto;
     flex-shrink: 0;
   }
   .gp-section-title { font-size: 10.5px; color: var(--text-2); padding: 6px 12px 4px; text-transform: uppercase; letter-spacing: 0.06em; }
   .gp-section-head { display: flex; align-items: baseline; justify-content: space-between; padding-right: 12px; }
+  .gp-branches-toolbar {
+    display: flex; gap: 6px; align-items: center;
+    padding: 4px 10px 6px;
+    border-bottom: 1px dashed var(--border-neutral);
+    margin-bottom: 4px;
+  }
+  .gp-search {
+    flex: 1; min-width: 0;
+    position: relative;
+    display: flex; align-items: center; gap: 6px;
+    padding: 4px 6px 4px 8px;
+    background: var(--bg-0);
+    border: 1px solid var(--border-neutral-hi);
+    border-radius: 6px;
+  }
+  .gp-search:focus-within { border-color: var(--border-hi2); }
+  .gp-search > svg { color: var(--text-mute); flex-shrink: 0; width: 12px; height: 12px; }
+  .gp-search-input {
+    flex: 1; min-width: 0;
+    background: transparent; border: none; outline: none;
+    color: var(--text-0); font-size: 12px; font-family: inherit;
+    padding: 0;
+  }
+  .gp-search-input::placeholder { color: var(--text-mute); }
+  .gp-search-clear {
+    width: 18px; height: 18px;
+    display: grid; place-items: center;
+    border-radius: 4px; color: var(--text-mute);
+    flex-shrink: 0;
+  }
+  .gp-search-clear:hover { color: var(--text-0); background: var(--bg-2); }
+  .gp-search-clear svg { width: 11px; height: 11px; }
+
   .gp-branch-row {
     display: flex; align-items: center; gap: 8px;
     width: 100%; padding: 4px 12px;
@@ -444,8 +597,26 @@
   .gp-branch-row:hover:not(:disabled) { background: var(--bg-2); color: var(--text-0); }
   .gp-branch-row.current { color: var(--accent-bright); }
   .gp-branch-row.current::before { content: '●'; font-size: 8px; }
-  .gp-upstream { color: var(--text-mute); font-size: 11px; }
-  .gp-new-branch { display: flex; gap: 6px; align-items: center; padding: 6px 12px 2px; }
+  .gp-branch-row-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 0 1 auto; }
+  .gp-branch-row--remote { color: var(--text-2); }
+  .gp-branch-row--remote:hover:not(:disabled) { color: var(--accent-bright); background: var(--bg-2); }
+  .gp-branch-cloud { color: var(--text-mute); flex-shrink: 0; width: 12px; height: 12px; }
+  .gp-branch-row--remote:hover .gp-branch-cloud { color: var(--accent-bright); }
+  .gp-upstream { color: var(--text-mute); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .gp-empty-pick { padding: 10px 12px; font-size: 11.5px; color: var(--text-mute); text-align: center; }
+  .gp-new-branch { display: flex; gap: 6px; align-items: stretch; padding: 8px 12px 2px; border-top: 1px dashed var(--border-neutral); margin-top: 4px; }
+  .gp-new-stack { display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 0; }
+  .gp-from-row { display: flex; align-items: center; gap: 8px; }
+  .gp-from-lbl { font-size: 10.5px; color: var(--text-mute); text-transform: uppercase; letter-spacing: 0.08em; flex-shrink: 0; }
+  .gp-from-select {
+    flex: 1; min-width: 0;
+    cursor: pointer;
+    background: var(--bg-0);
+    color: var(--text-0);
+    -webkit-appearance: menulist-button;
+    appearance: auto;
+  }
+  .gp-new-actions { display: flex; justify-content: flex-end; gap: 6px; }
   .gp-btn-ghost {
     font-size: 11.5px; color: var(--text-1);
     padding: 3px 8px; border-radius: 4px;

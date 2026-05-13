@@ -23,10 +23,13 @@
   import TerminalSurface from './terminal/TerminalSurface.svelte';
   import InlineClaude from './editor/InlineClaude.svelte';
   import Splitter from '$lib/components/ui/Splitter.svelte';
+  import SidePaneRail from '$lib/components/ui/SidePaneRail.svelte';
   import { layoutState, kindForInstanceId, APP_INSTANCE_IDS } from '$lib/state/layout.svelte';
   import { sessionsState } from '$lib/state/sessions.svelte';
   import { applyTerminalSelectionToAgent } from '$lib/services/applyToAgent';
   import { clearTerminalScrollback } from '$lib/state/terminals.svelte';
+  import { fly } from 'svelte/transition';
+  import { cubicOut } from 'svelte/easing';
 
   interface Props {
     instanceId: string;
@@ -161,6 +164,7 @@
 
 <section
   class="app-shell st-shell"
+  class:st-shell--rail={!sideOpen}
   style="--app-tone: var(--src-term); --app-glow: rgba(245,240,234,0.30);"
 >
   {#if sideOpen}
@@ -226,7 +230,7 @@
         </section>
       {/snippet}
       {#snippet end()}
-        <aside class="app-pane st-side">
+        <aside class="app-pane st-side" in:fly={{ x: 24, duration: 220, easing: cubicOut }}>
           <InlineClaude
             instanceId={p.instanceId}
             linkKind="terminal"
@@ -241,7 +245,7 @@
       {/snippet}
     </Splitter>
   {:else}
-    <section class="app-pane st-main st-main--full">
+    <section class="app-pane st-main">
       <TerminalSurface
         instanceId={p.instanceId}
         cwd={p.cwd ?? null}
@@ -285,15 +289,31 @@
           {/each}
         </div>
       {/if}
-      <button class="st-show-side" title="Show inline agents" onclick={() => (sideOpen = true)}>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M14 6l-6 6 6 6"/></svg>
-      </button>
     </section>
+    <div class="st-rail-slot" in:fly={{ x: 24, duration: 220, easing: cubicOut }}>
+      <SidePaneRail
+        linkedAgents={linkedAgents.map((la) => ({
+          sessionId: la.sessionId,
+          agentInstanceId: la.agentInstanceId,
+          kind: la.kind,
+          title: la.title
+        }))}
+        onExpand={() => (sideOpen = true)}
+      />
+    </div>
   {/if}
 </section>
 
 <style>
   .st-shell { display: block; padding: var(--app-pad, 14px); }
+  .st-shell.st-shell--rail {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 52px;
+    gap: 0;
+    transition: grid-template-columns var(--dur-base) var(--ease-out);
+  }
+  .st-rail-slot { height: 100%; min-width: 0; }
+  .st-rail-slot :global(.spr) { width: 100%; }
   .st-shell :global(.s-start),
   .st-shell :global(.s-end) {
     height: 100%;
@@ -315,27 +335,12 @@
     overflow: hidden;
     background: var(--bg-0);
     position: relative;
+    height: 100%;
   }
-  .st-main--full { height: 100%; }
   .st-main :global(.terminal-surface) {
     background: var(--bg-0) !important;
     flex: 1 1 auto;
   }
-  .st-show-side {
-    position: absolute;
-    top: 14px; right: 14px;
-    width: 26px; height: 26px;
-    display: grid; place-items: center;
-    border-radius: 6px;
-    background: rgba(20,24,26,0.85);
-    border: 1px solid var(--border);
-    color: var(--text-2);
-    cursor: pointer;
-    backdrop-filter: blur(8px);
-  }
-  .st-show-side:hover { color: var(--text-0); border-color: var(--border-hi); }
-  .st-show-side svg { width: 13px; height: 13px; }
-
   /* Clear-screen pill — sits one slot below the show-side toggle so
      the two affordances stack neatly when both are visible. Faded by
      default, fades up on parent hover so it doesn't compete with the
@@ -366,9 +371,6 @@
     background: rgba(20, 24, 26, 0.92);
   }
   .st-clear svg { width: 13px; height: 13px; }
-  /* When the side panel is hidden, the show-side toggle takes the
-     top-right slot; nudge clear down one row so they don't overlap. */
-  .st-main--full .st-clear { right: 50px; }
 
   /* Floating "Apply to <agent>" popover — same look + layering as
      EditorView's `.ev-apply-pop`. Anchored to the end of the

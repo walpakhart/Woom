@@ -172,6 +172,226 @@ pub fn walk_files(
     Ok(out)
 }
 
+/// Single hit produced by `search_text` — one match within a single
+/// line of a single text file. `byte_offset` is the absolute byte
+/// offset of the match's first byte within the file (CodeMirror's
+/// `from`); `line_byte_offset` is the byte offset of the line's first
+/// byte (used by the caller to compute approximate scroll target).
+/// `preview` is the matching line's content, trimmed if very long.
+#[derive(Debug, Serialize, Clone)]
+pub struct TextMatch {
+    pub path: String,
+    pub line: u32,
+    pub col: u32,
+    pub byte_offset: u64,
+    pub line_byte_offset: u64,
+    pub match_len: u32,
+    pub preview: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct SearchTextResult {
+    /// Up to `max_results` matches, ordered by walk order (BFS by dir
+    /// depth, alphabetical within a dir). Hitting the cap is reported
+    /// via `truncated = true` so the UI can render "+ more" hints.
+    pub matches: Vec<TextMatch>,
+    pub truncated: bool,
+    /// Files actually scanned — useful for "Searched N files" footer.
+    pub files_scanned: u32,
+}
+
+/// Project-wide grep used by the Editor's ⌘⇧F overlay. Plain
+/// case-insensitive substring search; no regex / glob filters in v1
+/// (matches the cut from `ROADMAP_1.0.md §2.1`).
+///
+/// Heuristics:
+///   * Skip noisy dirs (same list as `walk_files` — node_modules,
+///     target, .git, etc.) so a search in a monorepo doesn't read
+///     50k vendor files.
+///   * Skip files > 1 MiB and files whose first 8 KiB contain a null
+///     byte (rough binary heuristic).
+///   * Cap matches per file (50) so one mega-line-count file doesn't
+///     dominate the result list.
+///   * Cap total matches (`max_results`); set `truncated` on overflow.
+///   * Depth-limit at 12 — deep enough for real projects, shallow
+///     enough to keep stalls bounded.
+///
+/// The query is treated as a literal string (lowercased on both
+/// sides). Empty / whitespace-only queries return an empty result.
+pub fn search_text(
+    root: &str,
+    query: &str,
+    max_results: usize,
+) -> Result<SearchTextResult, String> {
+    use std::collections::VecDeque;
+    use std::io::Read;
+    let q = query.trim();
+    if q.is_empty() {
+        return Ok(SearchTextResult {
+            matches: Vec::new(),
+            truncated: false,
+            files_scanned: 0,
+        });
+    }
+    let root_path = std::path::Path::new(root);
+    if !root_path.is_dir() {
+        return Err(format!("not a directory: {}", root));
+    }
+    const SKIP_DIRS: &[&str] = &[
+        ".git", "node_modules", ".next", ".nuxt", "dist", "build", "out",
+        "target", ".turbo", ".cache", ".parcel-cache", ".svelte-kit",
+        ".vercel", ".pnpm-store", "vendor", ".idea", ".vscode", ".angular",
+        ".nx", ".localstack", "coverage", ".DS_Store",
+    ];
+    const MAX_FILE_BYTES: u64 = 1024 * 1024; // 1 MiB
+    const BINARY_PROBE_BYTES: usize = 8 * 1024;
+    const MAX_MATCHES_PER_FILE: usize = 50;
+    const MAX_DEPTH: usize = 12;
+    const PREVIEW_MAX_LEN: usize = 240;
+
+    let needle = q.to_lowercase();
+    let mut matches: Vec<TextMatch> = Vec::new();
+    let mut files_scanned: u32 = 0;
+    let mut truncated = false;
+    let mut queue: VecDeque<(std::path::PathBuf, usize)> = VecDeque::new();
+    queue.push_back((root_path.to_path_buf(), 0));
+
+    'walk: while let Some((dir, depth)) = queue.pop_front() {
+        let rd = match std::fs::read_dir(&dir) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        // Collect entries first so we can sort within a directory —
+        // gives the user stable, alphabetical output for grouped
+        // results.
+        let mut entries: Vec<std::fs::DirEntry> = rd.flatten().collect();
+        entries.sort_by_key(|e| e.file_name());
+
+        for entry in entries {
+            if matches.len() >= max_results {
+                truncated = true;
+                break 'walk;
+            }
+            let name = entry.file_name().to_string_lossy().to_string();
+            if SKIP_DIRS.contains(&name.as_str()) {
+                continue;
+            }
+            let path = entry.path();
+            let meta = match entry.metadata() {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+            if meta.is_dir() {
+                if depth + 1 < MAX_DEPTH {
+                    queue.push_back((path, depth + 1));
+                }
+                continue;
+            }
+            if !meta.is_file() {
+                continue;
+            }
+            if meta.len() > MAX_FILE_BYTES {
+                continue;
+            }
+
+            // Binary heuristic: peek at the first 8 KiB for a NUL byte.
+            let mut file = match std::fs::File::open(&path) {
+                Ok(f) => f,
+                Err(_) => continue,
+            };
+            let mut probe = vec![0u8; BINARY_PROBE_BYTES.min(meta.len() as usize)];
+            let probed = match file.read(&mut probe) {
+                Ok(n) => n,
+                Err(_) => continue,
+            };
+            if probe[..probed].contains(&0u8) {
+                continue;
+            }
+            // Re-read full contents as UTF-8 (lossy — keeps weirdly-
+            // encoded but mostly-ASCII files searchable instead of
+            // dropping them entirely).
+            let raw = match std::fs::read(&path) {
+                Ok(b) => b,
+                Err(_) => continue,
+            };
+            let contents = String::from_utf8_lossy(&raw);
+            files_scanned += 1;
+
+            let mut per_file = 0usize;
+            let mut line_byte_offset: u64 = 0;
+            for (line_idx, line) in contents.split('\n').enumerate() {
+                let lower = line.to_lowercase();
+                let mut search_from = 0usize;
+                while let Some(rel) = lower[search_from..].find(&needle) {
+                    let col_bytes = search_from + rel;
+                    let abs_offset = line_byte_offset + col_bytes as u64;
+                    // Trim the preview around the match — long minified
+                    // lines would otherwise blow up the response size.
+                    let preview = trim_preview(line, col_bytes, PREVIEW_MAX_LEN);
+                    matches.push(TextMatch {
+                        path: path.to_string_lossy().to_string(),
+                        line: (line_idx + 1) as u32,
+                        col: (col_bytes + 1) as u32,
+                        byte_offset: abs_offset,
+                        line_byte_offset,
+                        match_len: needle.len() as u32,
+                        preview,
+                    });
+                    per_file += 1;
+                    if matches.len() >= max_results {
+                        truncated = true;
+                        break 'walk;
+                    }
+                    if per_file >= MAX_MATCHES_PER_FILE {
+                        break;
+                    }
+                    search_from = col_bytes + needle.len();
+                    if search_from >= line.len() {
+                        break;
+                    }
+                }
+                if per_file >= MAX_MATCHES_PER_FILE {
+                    break;
+                }
+                // +1 for the newline byte we split on.
+                line_byte_offset += line.len() as u64 + 1;
+            }
+        }
+    }
+
+    Ok(SearchTextResult {
+        matches,
+        truncated,
+        files_scanned,
+    })
+}
+
+/// Trim a preview line around the match column. We pad on both sides
+/// up to `max_len`; if the line itself is short enough, return it
+/// untouched. Adds Unicode ellipsis at the truncation boundary so the
+/// UI can render the snippet without measuring overflow.
+fn trim_preview(line: &str, match_col_bytes: usize, max_len: usize) -> String {
+    let chars: Vec<char> = line.chars().collect();
+    if chars.len() <= max_len {
+        return line.to_string();
+    }
+    // Translate byte-col → char-col so the trim window centres on the
+    // hit even when the line has multi-byte runs.
+    let char_col = line[..match_col_bytes.min(line.len())].chars().count();
+    let half = max_len / 2;
+    let start = char_col.saturating_sub(half);
+    let end = (start + max_len).min(chars.len());
+    let mut out = String::new();
+    if start > 0 {
+        out.push('…');
+    }
+    out.extend(chars[start..end].iter());
+    if end < chars.len() {
+        out.push('…');
+    }
+    out
+}
+
 /// Delete a single file. Used for canvas-on-disk garbage collection
 /// and similar straightforward removals. Idempotent on missing
 /// files — no error when the path is already gone, since the
@@ -182,6 +402,37 @@ pub fn remove_file_if_exists(path: &str) -> Result<(), String> {
         return Ok(());
     }
     std::fs::remove_file(p).map_err(|e| format!("remove {}: {}", path, e))
+}
+
+/// Recursively delete a directory and everything inside it. Used by
+/// the FileTree right-click "Delete folder" affordance. Refuses to:
+///   - delete a missing path (caller bug — surface the error)
+///   - delete a path that isn't a directory (use `remove_file_if_exists`)
+///   - cross filesystem roots ("/", "/Users", "/Users/<name>") which
+///     would be a catastrophe on a mistaken click
+///
+/// The depth-of-3 root guard is conservative — the user can still
+/// delete `~/Repos/pers/woom` (4 deep) but not `~/` itself, which is
+/// the right asymmetry for an explorer feature.
+pub fn remove_dir_recursive(path: &str) -> Result<(), String> {
+    let p = std::path::Path::new(path);
+    if !p.exists() {
+        return Err(format!("path {path} does not exist"));
+    }
+    if !p.is_dir() {
+        return Err(format!("path {path} is not a directory"));
+    }
+    /* Refuse to delete the root or extremely shallow paths. Counting
+       components on an absolute path: `/` → 1, `/Users` → 2,
+       `/Users/foo` → 3. We require at least 4 (e.g. `/Users/foo/x`)
+       so a stray click from the explorer can't wipe a home folder. */
+    let depth = p.components().count();
+    if depth < 4 {
+        return Err(format!(
+            "refusing to delete {path}: path is too shallow (depth {depth} < 4) — use Finder for system folders"
+        ));
+    }
+    std::fs::remove_dir_all(p).map_err(|e| format!("remove_dir {path}: {e}"))
 }
 
 #[derive(Debug, Serialize, Clone)]

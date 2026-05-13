@@ -20,6 +20,9 @@
   import ChatThread from './agent/ChatThread.svelte';
   import Composer from './agent/Composer.svelte';
   import Splitter from '$lib/components/ui/Splitter.svelte';
+  import { onMount } from 'svelte';
+  import { fly } from 'svelte/transition';
+  import { cubicOut } from 'svelte/easing';
   import type { ClaudeAction } from '$lib/types';
 
   type Kind = 'claude' | 'cursor';
@@ -89,6 +92,21 @@
      downstream without per-component changes. */
   const tone = $derived('var(--accent)');
   const glow = $derived('var(--accent-glow)');
+
+  /** Worktree pane open state. Persisted globally per agent kind so
+   *  Claude and Cursor can have independent preferences (some users
+   *  keep Cursor's worktree pane closed because it gets noisy with
+   *  many parallel sessions). */
+  // svelte-ignore state_referenced_locally
+  const wtStorageKey = `agent-worktree-side-open:${p.kind}`;
+  let worktreeOpen = $state(true);
+  onMount(() => {
+    const v = localStorage.getItem(wtStorageKey);
+    if (v === '0' || v === '1') worktreeOpen = v === '1';
+  });
+  $effect(() => {
+    localStorage.setItem(wtStorageKey, worktreeOpen ? '1' : '0');
+  });
 </script>
 
 <section
@@ -109,75 +127,148 @@
       <SessionsSidebar kind={p.kind} instanceId={p.instanceId} now={p.now} />
     {/snippet}
     {#snippet end()}
-      <!-- Inner split: chat (flex) | worktree side (320, fixed). -->
-      <Splitter
-        direction="horizontal"
-        fixedSide="end"
-        persistKey="agent-{p.kind}-worktree"
-        initial={320}
-        min={260}
-        max={520}
-      >
-        {#snippet start()}
-          <section class="sa-chat app-pane">
-            <ChatHeader
-              kind={p.kind}
-              instanceId={p.instanceId}
-              thinkingStartedAt={p.thinkingStartedAt}
-              thinkingTick={p.thinkingTick}
-              onStop={p.onStop}
-            />
-            <WorktreeBar
-              kind={p.kind}
-              editorRepoPath={p.editorRepoPath}
-              onPickCwd={p.onPickCwd}
-              onClearCwd={p.onClearCwd}
-              onToggleEditorLink={p.onToggleEditorLink}
-              onLinkToEditorInstance={p.onLinkToEditorInstance}
-              onToggleTerminalLink={p.onToggleTerminalLink}
-              onLinkToTerminalInstance={p.onLinkToTerminalInstance}
-              onToggleCanvasLink={p.onToggleCanvasLink}
-              onLinkToCanvas={p.onLinkToCanvas}
-              onCreateWorktree={p.onCreateWorktree}
-              onOpenWorktreeDiff={p.onOpenWorktreeDiff}
-              onRemoveWorktree={p.onRemoveWorktree}
-              worktreeBusy={p.worktreeBusy}
-            />
-            <ChatThread
-              kind={p.kind}
-              thinkingStartedAt={p.thinkingStartedAt}
-              thinkingTick={p.thinkingTick}
-              onUpdateAction={p.onUpdateAction}
-              onRemoveAction={p.onRemoveAction}
-              onExecuteAction={p.onExecuteAction}
-              onOpenPrInWoom={p.onOpenPrInWoom}
-              onStartEditMessage={p.onStartEditMessage}
-              onResendMessage={p.onResendMessage}
-              onOpenFile={p.onOpenFile}
-            />
-            <Composer
-              kind={p.kind}
-              onSend={p.onSend}
-              onStop={p.onStop}
-              onPasteImages={p.onPasteImages}
-              onDragOver={p.onDragOver}
-              onDrop={p.onDrop}
-              onDragLeave={p.onDragLeave}
-            />
-          </section>
-        {/snippet}
-        {#snippet end()}
-          <WorktreeSide
+      {#if worktreeOpen}
+        <!-- Inner split: chat (flex) | worktree side (320, fixed). -->
+        <Splitter
+          direction="horizontal"
+          fixedSide="end"
+          persistKey="agent-{p.kind}-worktree"
+          initial={320}
+          min={260}
+          max={520}
+        >
+          {#snippet start()}
+            <section class="sa-chat app-pane">
+              <ChatHeader
+                kind={p.kind}
+                instanceId={p.instanceId}
+                thinkingStartedAt={p.thinkingStartedAt}
+                thinkingTick={p.thinkingTick}
+                onStop={p.onStop}
+              />
+              <WorktreeBar
+                kind={p.kind}
+                editorRepoPath={p.editorRepoPath}
+                onPickCwd={p.onPickCwd}
+                onClearCwd={p.onClearCwd}
+                onToggleEditorLink={p.onToggleEditorLink}
+                onLinkToEditorInstance={p.onLinkToEditorInstance}
+                onToggleTerminalLink={p.onToggleTerminalLink}
+                onLinkToTerminalInstance={p.onLinkToTerminalInstance}
+                onToggleCanvasLink={p.onToggleCanvasLink}
+                onLinkToCanvas={p.onLinkToCanvas}
+                onCreateWorktree={p.onCreateWorktree}
+                onOpenWorktreeDiff={p.onOpenWorktreeDiff}
+                onRemoveWorktree={p.onRemoveWorktree}
+                worktreeBusy={p.worktreeBusy}
+              />
+              <ChatThread
+                kind={p.kind}
+                thinkingStartedAt={p.thinkingStartedAt}
+                thinkingTick={p.thinkingTick}
+                onUpdateAction={p.onUpdateAction}
+                onRemoveAction={p.onRemoveAction}
+                onExecuteAction={p.onExecuteAction}
+                onOpenPrInWoom={p.onOpenPrInWoom}
+                onStartEditMessage={p.onStartEditMessage}
+                onResendMessage={p.onResendMessage}
+                onOpenFile={p.onOpenFile}
+              />
+              <Composer
+                kind={p.kind}
+                onSend={p.onSend}
+                onStop={p.onStop}
+                onPasteImages={p.onPasteImages}
+                onDragOver={p.onDragOver}
+                onDrop={p.onDrop}
+                onDragLeave={p.onDragLeave}
+              />
+            </section>
+          {/snippet}
+          {#snippet end()}
+            <div in:fly={{ x: 24, duration: 220, easing: cubicOut }} style="height:100%; min-width:0;">
+              <WorktreeSide
+                kind={p.kind}
+                onOpenWorktreeDiff={p.onOpenWorktreeDiff}
+                onCopyWorktreeBranch={p.onCopyWorktreeBranch}
+                onOpenWorktreeInEditor={p.onOpenWorktreeInEditor}
+                onCreateWorktree={p.onCreateWorktree}
+                onRemoveWorktree={p.onRemoveWorktree}
+                worktreeBusy={p.worktreeBusy}
+                onCollapse={() => (worktreeOpen = false)}
+              />
+            </div>
+          {/snippet}
+        </Splitter>
+      {:else}
+        <section class="sa-chat-grid">
+        <section class="sa-chat sa-chat--full app-pane">
+          <ChatHeader
             kind={p.kind}
-            onOpenWorktreeDiff={p.onOpenWorktreeDiff}
-            onCopyWorktreeBranch={p.onCopyWorktreeBranch}
-            onOpenWorktreeInEditor={p.onOpenWorktreeInEditor}
+            instanceId={p.instanceId}
+            thinkingStartedAt={p.thinkingStartedAt}
+            thinkingTick={p.thinkingTick}
+            onStop={p.onStop}
+          />
+          <WorktreeBar
+            kind={p.kind}
+            editorRepoPath={p.editorRepoPath}
+            onPickCwd={p.onPickCwd}
+            onClearCwd={p.onClearCwd}
+            onToggleEditorLink={p.onToggleEditorLink}
+            onLinkToEditorInstance={p.onLinkToEditorInstance}
+            onToggleTerminalLink={p.onToggleTerminalLink}
+            onLinkToTerminalInstance={p.onLinkToTerminalInstance}
+            onToggleCanvasLink={p.onToggleCanvasLink}
+            onLinkToCanvas={p.onLinkToCanvas}
             onCreateWorktree={p.onCreateWorktree}
+            onOpenWorktreeDiff={p.onOpenWorktreeDiff}
             onRemoveWorktree={p.onRemoveWorktree}
             worktreeBusy={p.worktreeBusy}
           />
-        {/snippet}
-      </Splitter>
+          <ChatThread
+            kind={p.kind}
+            thinkingStartedAt={p.thinkingStartedAt}
+            thinkingTick={p.thinkingTick}
+            onUpdateAction={p.onUpdateAction}
+            onRemoveAction={p.onRemoveAction}
+            onExecuteAction={p.onExecuteAction}
+            onOpenPrInWoom={p.onOpenPrInWoom}
+            onStartEditMessage={p.onStartEditMessage}
+            onResendMessage={p.onResendMessage}
+            onOpenFile={p.onOpenFile}
+          />
+          <Composer
+            kind={p.kind}
+            onSend={p.onSend}
+            onStop={p.onStop}
+            onPasteImages={p.onPasteImages}
+            onDragOver={p.onDragOver}
+            onDrop={p.onDrop}
+            onDragLeave={p.onDragLeave}
+          />
+        </section>
+        <!-- Skinny rail (52px) when the worktree pane is collapsed.
+             Single expand button + folder-icon teaser so the user
+             knows there's a worktree pane parked here. -->
+        <aside class="sa-rail" in:fly={{ x: 24, duration: 220, easing: cubicOut }}>
+          <button
+            class="sa-rail-btn"
+            title="Expand worktree pane"
+            aria-label="Expand worktree pane"
+            onclick={() => (worktreeOpen = true)}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 6l-6 6 6 6"/></svg>
+          </button>
+          <div class="sa-rail-divider" aria-hidden="true"></div>
+          <div class="sa-rail-glyph" title="Worktree" aria-label="Worktree" >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+            </svg>
+          </div>
+        </aside>
+        </section>
+      {/if}
     {/snippet}
   </Splitter>
 </section>
@@ -194,7 +285,63 @@
     display: flex; flex-direction: column;
     overflow: hidden;
     height: 100%;
+    position: relative;
   }
+  .sa-chat--full {
+    width: 100%;
+  }
+  /* When the worktree pane is collapsed, switch the chat-pane area
+     to a 2-col grid: chat (1fr) + 52px rail. */
+  .sa-chat-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 52px;
+    height: 100%;
+    transition: grid-template-columns var(--dur-base) var(--ease-out);
+  }
+  .sa-rail {
+    display: flex; flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 6px;
+    height: 100%;
+    background: var(--bg-glass, rgba(20, 24, 26, 0.66));
+    border-left: 1px solid var(--border);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    overflow: hidden;
+    box-sizing: border-box;
+  }
+  .sa-rail-btn {
+    width: 36px; height: 36px;
+    display: grid; place-items: center;
+    border-radius: 8px;
+    color: var(--text-2);
+    background: transparent; border: 1px solid transparent;
+    cursor: pointer;
+    transition:
+      color var(--dur-quick) var(--ease-out),
+      background var(--dur-quick) var(--ease-out),
+      border-color var(--dur-quick) var(--ease-out),
+      transform var(--dur-quick) var(--ease-spring);
+  }
+  .sa-rail-btn:hover {
+    color: var(--text-0);
+    background: var(--bg-elev, var(--bg-2));
+    border-color: var(--border-hi);
+    transform: scale(1.04);
+  }
+  .sa-rail-btn svg { width: 14px; height: 14px; }
+  .sa-rail-divider {
+    width: 28px; height: 1px;
+    background: var(--border);
+    margin: 4px 0;
+  }
+  .sa-rail-glyph {
+    width: 36px; height: 36px;
+    display: grid; place-items: center;
+    color: var(--text-mute);
+  }
+  .sa-rail-glyph svg { width: 18px; height: 18px; }
 
   /* Splitter children fill their pane fully. */
   .sa :global(.s-start),

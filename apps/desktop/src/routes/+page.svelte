@@ -6,11 +6,13 @@
   import { open as openDialog } from '@tauri-apps/plugin-dialog';
   import Sigil from '$lib/components/ui/Sigil.svelte';
   import Cheatsheet from '$lib/components/ui/Cheatsheet.svelte';
+  import WelcomeOverlay from '$lib/components/ui/WelcomeOverlay.svelte';
   import Welcome from '$lib/components/ui/Welcome.svelte';
   import { welcomeState } from '$lib/state/welcome.svelte';
   import WorktreeDiffModal from '$lib/components/editor/WorktreeDiffModal.svelte';
   import Rail from '$lib/components/ui/Rail.svelte';
   import RulesView from '$lib/views/RulesView.svelte';
+  import LibraryApp from '$lib/views/apps/LibraryApp.svelte';
   import ConnectionsView from '$lib/views/ConnectionsView.svelte';
   import SettingsView from '$lib/views/SettingsView.svelte';
   import AgentApp from '$lib/views/apps/AgentApp.svelte';
@@ -23,6 +25,9 @@
   import HomeApp from '$lib/views/apps/HomeApp.svelte';
   import BrandIcon from '$lib/components/ui/BrandIcon.svelte';
   import CommandPalette from '$lib/components/ui/CommandPalette.svelte';
+  import SearchInFilesOverlay from '$lib/components/editor/SearchInFilesOverlay.svelte';
+  import QuickOpenOverlay from '$lib/components/editor/QuickOpenOverlay.svelte';
+  import SymbolPickerOverlay from '$lib/components/editor/SymbolPickerOverlay.svelte';
   import ModalsRoot from '$lib/components/modals/ModalsRoot.svelte';
   import {
     restoreCanvasState,
@@ -76,6 +81,8 @@
     restorePanelState,
     registerInstanceRemovedHook,
     APP_INSTANCE_IDS,
+    MULTI_INSTANCE_KINDS,
+    addInstance as addLayoutInstance,
     kindForInstanceId
   } from '$lib/state/layout.svelte';
   import {
@@ -176,6 +183,7 @@
   } from '$lib/state/modals.svelte';
   import { appHasFocus, notifyClaudeRunComplete } from '$lib/notifications';
   import { effectiveCwd, dispatchAction } from '$lib/exec/actions';
+  import { ensureTerminalSession } from '$lib/state/terminals.svelte';
   import {
     runAgentRequest,
     stopAgentRequest,
@@ -220,6 +228,7 @@
     | 'canvasApp'
     | 'terminalApp'
     | 'rules'
+    | 'library'
     | 'connections'
     | 'settings';
   type DetailTab = 'conversation' | 'commits' | 'files' | 'reviews' | 'checks';
@@ -227,6 +236,21 @@
   /* Default view = Claude solo. Fresh installs land here (or get
    * redirected to Connections by the rail if nothing is set up). */
   let view = $state<View>('claudeApp');
+
+  /* ⌘0..⌘8 → solo. Order matches the rail top-to-bottom so the digit
+   * reads as "the icon at row N". Rail tooltips have advertised these
+   * since v1; the keyboard binding lives in onKey below. */
+  const SOLO_BY_DIGIT: Record<string, View> = {
+    '0': 'home',
+    '1': 'jiraApp',
+    '2': 'githubApp',
+    '3': 'sentryApp',
+    '4': 'claudeApp',
+    '5': 'cursorApp',
+    '6': 'editorApp',
+    '7': 'canvasApp',
+    '8': 'terminalApp'
+  };
 
   /** True whenever the user is in a source-solo view (Jira / GitHub /
    *  Sentry). Used to gate keyboard shortcuts that only make sense
@@ -239,9 +263,36 @@
     view === 'jiraApp' || view === 'githubApp' || view === 'sentryApp'
   );
   let paletteOpen = $state(false);
+  /* Which "flavour" of palette is currently open. `recents` is the
+   * ⌘E quick-switcher mode (only Recent section, larger cap, Cmd-Tab
+   * feel); `normal` is the full ⌘K palette. Bound to the palette so
+   * it can settle back to `normal` on close. */
+  let paletteMode = $state<'normal' | 'recents'>('normal');
+  /* ⌘⇧F project-wide find — closes the long-standing cut from
+   * EDITOR.md §1.3 + ROADMAP_1.0.md §2.1. Runs against the editor
+   * singleton's repoPath via `fs_search_text`. */
+  let searchInFilesOpen = $state(false);
+  /* ⌘P quick-open overlay. Same scope as SearchInFilesOverlay (the
+   * active editor's repo), but keys on the file's name + relative
+   * path via `fs_walk_files` + `fuzzyScoreAny`. Lives next to the
+   * search overlay so the keyboard handlers below can flip both with
+   * the same Esc cascade. */
+  let quickOpenOpen = $state(false);
+  /* ⇧⌘O symbol-outline picker — companion to ⌘P but scoped to the
+   * currently-active editor buffer. We extract symbols via a small
+   * regex pass (services/symbolOutline.ts) instead of standing up a
+   * tree-sitter pipeline; the picker reads `localStorage`'s
+   * per-instance active-file key and runs the parse on demand. */
+  let symbolPickerOpen = $state(false);
   /* Cheatsheet overlay (`?` toggles). Owned at +page level so any
    * shortcut, anywhere, can flip it without prop-drilling. */
   let cheatsheetOpen = $state(false);
+  /* Welcome / "what is this app" overlay. ⇧⌘? toggles — Cheatsheet
+   * stays on bare `?` because it's a quick lookup, while Welcome is
+   * the longer-form orientation surface. We keep them separate so
+   * users coming from "show me the keys" don't have to scroll past
+   * an essay. */
+  let welcomeOpen = $state(false);
   let tab = $state<DetailTab>('conversation');
 
   // Biometric gate. Before first unlock the UI shows a "Locked" overlay so
@@ -313,47 +364,6 @@
     } else {
       sessionsState.editorInstanceState[id].repoPath = value;
     }
-  }
-
-
-  // ---- Drag autoscroll for card DnD (Jira/GitHub → Claude column) ----
-  // When the user grabs a card and drags it toward an off-screen column,
-  // the solo auto-scrolls so the drop target comes into view.
-  let dragPointerX = $state(0);
-  let dragAutoscrollRaf: number | null = null;
-
-  function trackDragPointer(e: DragEvent) {
-    dragPointerX = e.clientX;
-    if (dragAutoscrollRaf === null && dragState.payload) {
-      dragAutoscrollRaf = requestAnimationFrame(dragAutoscrollStep);
-    }
-  }
-
-  function dragAutoscrollStep() {
-    if (!dragState.payload) { dragAutoscrollRaf = null; return; }
-    const wb = document.querySelector('.wb-columns') as HTMLElement | null;
-    if (!wb) { dragAutoscrollRaf = null; return; }
-    const rect = wb.getBoundingClientRect();
-    const vw = window.innerWidth || document.documentElement.clientWidth;
-    const effectiveRight = Math.min(rect.right, vw);
-    const effectiveLeft = Math.max(rect.left, 0);
-    const edge = 100;
-    const maxStep = 26;
-    let dx = 0;
-    if (dragPointerX > effectiveRight - edge) {
-      dx = Math.min(maxStep, Math.max(4, Math.round((dragPointerX - (effectiveRight - edge)) / 3)));
-    } else if (dragPointerX > 0 && dragPointerX < effectiveLeft + edge) {
-      dx = -Math.min(maxStep, Math.max(4, Math.round(((effectiveLeft + edge) - dragPointerX) / 3)));
-    }
-    if (dx !== 0) {
-      wb.scrollLeft = Math.max(0, Math.min(wb.scrollWidth - wb.clientWidth, wb.scrollLeft + dx));
-    }
-    dragAutoscrollRaf = requestAnimationFrame(dragAutoscrollStep);
-  }
-
-  function stopDragAutoscroll() {
-    if (dragAutoscrollRaf !== null) cancelAnimationFrame(dragAutoscrollRaf);
-    dragAutoscrollRaf = null;
   }
 
 
@@ -1054,9 +1064,6 @@
          path is for the inbox / file-tree drags; chat messages don't
          flow through `onDragStart` here. */
     }
-    // Track pointer globally so we can auto-scroll .wb-columns when the
-    // user drags a card near either edge.
-    document.addEventListener('dragover', trackDragPointer);
   }
 
   function onDragEnd() {
@@ -1064,8 +1071,6 @@
     clearAgentDragState();
     justDragged = true;
     setTimeout(() => (justDragged = false), 120);
-    document.removeEventListener('dragover', trackDragPointer);
-    stopDragAutoscroll();
   }
 
   /** Returns true if `e` carries a payload an agent column can accept —
@@ -1197,7 +1202,12 @@
     if (blobs.length === 0) return 0;
     // Resolve target the same way `onAgentDrop` does: active session in this
     // column, then any session bound here, then a fresh one of this kind.
-    const activeId = sessionsState.activeByInstance[instanceId];
+    // Prefer `activeIds[kind]` since that's what ChatThread renders;
+    // `activeByInstance[instanceId]` only updates when the focused
+    // session has an `agentInstanceId`, which leaves floating sessions
+    // out of sync.
+    const activeId =
+      sessionsState.activeIds[kind] ?? sessionsState.activeByInstance[instanceId];
     let target = activeId ? sessionsState.list.find((s) => s.id === activeId) ?? null : null;
     if (!target) target = sessionsState.list.find((s) => s.agentInstanceId === instanceId) ?? null;
     if (!target) {
@@ -1232,8 +1242,18 @@
     // Pick (or create) the drop target: the active session in THIS column
     // instance. Falls back to any session bound to this instance, then a
     // floating session of this kind (adopted), then a fresh one.
+    //
+    // Prefer `activeIds[kind]` over `activeByInstance[instanceId]` —
+    // ChatThread reads the former, and `focusSession` only writes the
+    // latter for sessions that already have an `agentInstanceId`. A
+    // floating chat (agentInstanceId === null) appears in the column
+    // and its messages render correctly, but the per-instance pointer
+    // stays on whatever was previously bound — so drops landed in the
+    // wrong session. Reading activeIds[kind] keeps drop target ==
+    // visible chat regardless of binding state.
     const pickTarget = (): ClaudeSession | null => {
-      const activeId = sessionsState.activeByInstance[instanceId];
+      const activeId =
+        sessionsState.activeIds[kind] ?? sessionsState.activeByInstance[instanceId];
       let t = activeId ? sessionsState.list.find((s) => s.id === activeId) ?? null : null;
       if (!t) t = sessionsState.list.find((s) => s.agentInstanceId === instanceId) ?? null;
       if (!t) {
@@ -1678,6 +1698,22 @@
     const patch: Partial<typeof sess> = { linkedTerminalInstanceId: terminalInstanceId };
     if (!sess.agentInstanceId) patch.agentInstanceId = APP_INSTANCE_IDS[sess.agentKind];
     updateSession(sessionId, patch);
+    /* Eager-spawn the PTY so the agent's `mcp__app__terminal_*` calls
+       hit a live session immediately — previously the PTY only spawned
+       on first surface mount, so an agent linked through the cwd-bar
+       (without the user opening the Terminal solo) saw an empty
+       `terminal_list` and bounced off. Picks up the editor's repoPath
+       when the session is also editor-linked; otherwise inherits the
+       layout's last-used cwd / $HOME. Idempotent — second call is a
+       no-op when the session already exists. */
+    const layoutName =
+      layoutState.instances.terminal.find((i) => i.id === terminalInstanceId)?.name ?? null;
+    const editorCwd =
+      sess.linkedToEditor && sess.linkedToEditorInstanceId
+        ? sessionsState.editorInstanceState[sess.linkedToEditorInstanceId]?.repoPath ?? null
+        : null;
+    const spawnCwd = editorCwd ?? layoutState.active.terminal.cwd ?? null;
+    void ensureTerminalSession(terminalInstanceId, spawnCwd, 120, 32, layoutName);
   }
 
   function unlinkSessionFromTerminal(sessionId: string) {
@@ -1846,77 +1882,28 @@
     ensureEditorShowing(path);
   }
 
-  /** Handle a click on a @file/@dir mention inside a rendered chat bubble.
-      `path` is whatever the mention's @token resolved to — usually a path
-      relative to the session's cwd/worktree/editor. We try each of those
-      three roots, in priority order, until something exists on disk.
-      
-      File mentions go through `openFileInEditor` which opens a tab without
-      clobbering the editor's repoPath (was a real bug — clicking
-      `@scripts/.../resolve-components.js` made FileTree treat the file
-      itself as the repo root, scrambling the tree). Folder mentions
-      (trailing `/`) keep the legacy `ensureEditorShowing` behaviour
-      because that's what the user actually wants when they click a
-      directory: scope the tree to it. */
-  async function openMentionPath(path: string) {
-    const isDir = path.endsWith('/');
-    const candidates: string[] = [];
-    if (path.startsWith('/')) {
-      candidates.push(path);
-    } else {
-      const trimmed = path.replace(/\/$/, '');
-      const roots = [
-        activeSession?.worktreePath,
-        activeSession?.cwd,
-        editorRepoPath
-      ].filter((r): r is string => !!r);
-      for (const root of roots) {
-        candidates.push(`${root.replace(/\/$/, '')}/${trimmed}`);
-      }
-    }
-    const linkedEditorId = activeSession?.linkedToEditorInstanceId ?? null;
-    for (const abs of candidates) {
-      try {
-        const ok = await invoke<boolean>('fs_path_exists', { path: abs });
-        if (ok) {
-          if (isDir) {
-            ensureEditorShowing(abs);
-          } else {
-            await openFileInEditor(abs, { preferInstanceId: linkedEditorId });
-          }
-          return;
-        }
-      } catch {
-        // keep trying the next candidate
-      }
-    }
-    // Last-ditch: open the first candidate anyway — the Editor will surface
-    // its own "file not found" state if the path is wrong.
-    if (candidates[0]) {
-      if (isDir) {
-        ensureEditorShowing(candidates[0]);
-      } else {
-        await openFileInEditor(candidates[0], { preferInstanceId: linkedEditorId });
-      }
-    }
-  }
-
   /** Spawn a fresh chat in the Claude/Cursor singleton. */
   function spawnAgentChat(kind: 'claude' | 'cursor') {
     newClaudeSession({ agentKind: kind, agentInstanceId: APP_INSTANCE_IDS[kind] });
   }
 
-  /** Keep every linked session's cwd in sync with the editor singleton's
-   *  open repoPath. Manually picking a cwd (via pickCwd / worktree ops)
-   *  breaks the link elsewhere. App mode: only one editor, so the
-   *  binding never goes stale unless the user explicitly unlinks. */
+  /** Keep every linked session's cwd in sync with whichever editor
+   *  instance it's bound to. Each session has its OWN
+   *  `linkedToEditorInstanceId` — chat A can follow Vermeer while chat
+   *  B follows Hokusai — so we mirror the path from THAT instance, not
+   *  from the primary. Sessions without an explicit instance id fall
+   *  back to the primary so legacy data stays linked.
+   *
+   *  (Earlier this effect forced every session onto `APP_INSTANCE_IDS.editor`
+   *  on the assumption that there was only one editor; with multi-instance
+   *  editors that overwrote per-session pointers to secondary instances.) */
   $effect(() => {
-    const editorId = APP_INSTANCE_IDS.editor;
-    const editorPath = sessionsState.editorInstanceState[editorId]?.repoPath ?? null;
     for (const s of sessionsState.list) {
       if (!s.linkedToEditor) continue;
+      const editorId = s.linkedToEditorInstanceId ?? APP_INSTANCE_IDS.editor;
+      const editorPath = sessionsState.editorInstanceState[editorId]?.repoPath ?? null;
       const patch: Partial<ClaudeSession> = {};
-      if (s.linkedToEditorInstanceId !== editorId) {
+      if (!s.linkedToEditorInstanceId) {
         patch.linkedToEditorInstanceId = editorId;
       }
       if (s.cwd !== editorPath) {
@@ -2873,7 +2860,7 @@
         scheduleSentryTabFilterRefresh();
         return;
       }
-      case 'mcp__app__set_github_column': {
+      case 'mcp__app__set_github_instance': {
         const inst = findInstanceByNameOrId('github', str('instance_name'), str('instance_id'));
         if (!inst) return;
         const patch: Partial<GithubFilters> = {};
@@ -2892,7 +2879,7 @@
         updateGithubFilters(inst.id, patch);
         return;
       }
-      case 'mcp__app__set_jira_column': {
+      case 'mcp__app__set_jira_instance': {
         const inst = findInstanceByNameOrId('jira', str('instance_name'), str('instance_id'));
         if (!inst) return;
         const patch: Partial<JiraFilters> = {};
@@ -2917,7 +2904,7 @@
         updateJiraFilters(inst.id, patch);
         return;
       }
-      case 'mcp__app__set_sentry_column': {
+      case 'mcp__app__set_sentry_instance': {
         const inst = findInstanceByNameOrId('sentry', str('instance_name'), str('instance_id'));
         if (!inst) return;
         const patch: SentryFilterPatch = {};
@@ -2998,6 +2985,55 @@
       case 'mcp__app__list_instances': {
         // No-op: the data lives in the system-prompt preamble and is
         // refreshed on every turn. The sidecar's tool reply explains.
+        return;
+      }
+      case 'mcp__app__add_app_instance': {
+        /* Spawn a new app instance. The sidecar shipped this tool but
+         * the dispatcher had no handler — agent saw a "success" message,
+         * UI didn't change, then on follow-up ("link them") it fell back
+         * to set_editor_repo_path which mutated the EXISTING editor.
+         *
+         * Editor / canvas / terminal support multi-instance; the
+         * singleton kinds (github / jira / sentry / claude / cursor)
+         * just switch the rail to that solo. */
+        const kindRaw = str('kind').toLowerCase();
+        type AppKind = PanelKind;
+        const VALID_KINDS: AppKind[] = [
+          'github', 'jira', 'sentry', 'claude', 'cursor',
+          'editor', 'canvas', 'terminal'
+        ];
+        if (!(VALID_KINDS as readonly string[]).includes(kindRaw)) return;
+        const kind = kindRaw as AppKind;
+        const VIEW_BY_KIND: Record<AppKind, View> = {
+          github: 'githubApp',
+          jira: 'jiraApp',
+          sentry: 'sentryApp',
+          claude: 'claudeApp',
+          cursor: 'cursorApp',
+          editor: 'editorApp',
+          canvas: 'canvasApp',
+          terminal: 'terminalApp'
+        };
+        if (!MULTI_INSTANCE_KINDS.has(kind)) {
+          /* Singleton kinds: just switch view. The sidecar description
+           * already promises "no-op if already present". */
+          view = VIEW_BY_KIND[kind];
+          return;
+        }
+        const inst = addLayoutInstance(kind);
+        if (!inst) return;
+        /* Editor-only: set the just-spawned instance's repoPath if
+         * provided. We deliberately do NOT touch the calling session's
+         * editor link — that's the user's call. If the session was
+         * unlinked before, spawning an editor doesn't suddenly bind
+         * them; if it was linked elsewhere, that link stays. The agent
+         * can ask the user "want me to link?" or the user picks via the
+         * cwd-bar's "Link editor…" dropdown. */
+        if (kind === 'editor') {
+          const repoPath = pickDeep(input as Record<string, unknown>, REPO_PATH_KEYS_DEEP);
+          if (repoPath) setEditorRepoPath(repoPath, inst.id);
+        }
+        view = VIEW_BY_KIND[kind];
         return;
       }
       /* ---- Canvas (whiteboard) ---- */
@@ -4063,15 +4099,90 @@
   function onKey(e: KeyboardEvent) {
     if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
       e.preventDefault();
+      paletteMode = 'normal';
       paletteOpen = !paletteOpen;
+    } else if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'f' || e.key === 'F')) {
+      /* ⌘⇧F — project-wide find. Standard IDE shortcut every
+       * dev coming from VSCode / Cursor / JetBrains expects.
+       * Toggle: pressing again while open closes (matches ⌘K). */
+      e.preventDefault();
+      searchInFilesOpen = !searchInFilesOpen;
+    } else if ((e.metaKey || e.ctrlKey) && (e.key === 'p' || e.key === 'P') && !e.shiftKey && !e.altKey) {
+      /* ⌘P — quick-open file picker. Mirror of VSCode / Cursor /
+       * Sublime; the most-used IDE shortcut after Esc. Toggle so
+       * a stray second press dismisses cleanly. */
+      e.preventDefault();
+      quickOpenOpen = !quickOpenOpen;
+    } else if (
+      (e.metaKey || e.ctrlKey) && e.shiftKey &&
+      (e.key === '?' || e.key === '/' || e.code === 'Slash')
+    ) {
+      /* ⇧⌘? — toggle the Welcome / Help overlay. We accept both `?`
+       * (shift-/ on US layouts surfaces the printable char) and `/`
+       * + `e.code === 'Slash'` so non-US layouts where shift-/ resolves
+       * to something else still hit the binding. Mutually exclusive
+       * with the bare-`?` cheatsheet — closing one before flipping
+       * the other keeps the modal stack legible. */
+      e.preventDefault();
+      cheatsheetOpen = false;
+      welcomeOpen = !welcomeOpen;
+    } else if (
+      (e.metaKey || e.ctrlKey) && e.shiftKey &&
+      (e.key === 'v' || e.key === 'V' || e.code === 'KeyV') &&
+      view === 'editorApp'
+    ) {
+      /* ⇧⌘V — cycle Markdown preview mode (off → split → only → off).
+       * Mirrors VSCode's "Open Preview to the Side" muscle memory.
+       * Scoped to the editor solo so the binding doesn't fight Apple's
+       * paste-without-formatting binding when the user is in another
+       * surface. */
+      e.preventDefault();
+      window.dispatchEvent(new CustomEvent('woom:editor:toggle-md-preview'));
+    } else if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'o' || e.key === 'O' || e.code === 'KeyO')) {
+      /* ⇧⌘O — Go to symbol in file. Same shortcut VSCode / Cursor
+       * already train people on, so muscle memory carries over.
+       * `e.code` fallback because the shifted-O may report differently
+       * on non-US layouts (Cmd-Shift remaps the printable char). */
+      e.preventDefault();
+      symbolPickerOpen = !symbolPickerOpen;
+    } else if ((e.metaKey || e.ctrlKey) && e.key === 'e' && !e.shiftKey && !e.altKey) {
+      /* ⌘E — quick switcher to most-recently-touched things. Open in
+       * `recents` mode (other sections hidden until the typed query
+       * stops matching any recent row). Mirrors JetBrains' Recent
+       * Files / VS Code's "Quick Open Last" muscle memory. */
+      e.preventDefault();
+      paletteMode = 'recents';
+      paletteOpen = true;
+    } else if (
+      (e.metaKey || e.ctrlKey) &&
+      !e.shiftKey && !e.altKey &&
+      e.key >= '0' && e.key <= '8'
+    ) {
+      /* ⌘0..⌘8 — solo switcher. The rail tooltips have promised
+       * these shortcuts since the rail's first pass (`Home · ⌘0`,
+       * `Jira · ⌘1`, …, `Terminal · ⌘8`) but the keyboard handler
+       * never landed — this closes that gap. Order matches the rail
+       * top-to-bottom so the digit reads as the icon's row. */
+      e.preventDefault();
+      const targetView = SOLO_BY_DIGIT[e.key];
+      if (targetView) view = targetView;
     } else if (e.key === 'Escape') {
-      /* Cheatsheet wins on its own Escape — keep the existing modal
-         cascade for everything else. */
+      /* Cheatsheet / Welcome win on their own Escape — neither
+         lives in the modal stack the rest of the cascade walks, so
+         we shortcut out before clearing inbox / palette state.
+         Welcome takes priority because it's the bigger surface. */
+      if (welcomeOpen) {
+        welcomeOpen = false;
+        return;
+      }
       if (cheatsheetOpen) {
         cheatsheetOpen = false;
         return;
       }
       paletteOpen = false;
+      searchInFilesOpen = false;
+      quickOpenOpen = false;
+      symbolPickerOpen = false;
       if (patModal && !patModal.busy) closeModal('pat');
       if (jiraModal && !jiraModal.busy) closeModal('jiraConnect');
       if (claudeModal && !claudeModal.loading) closeModal('claudeStatus');
@@ -4165,7 +4276,11 @@
       inboxState.jiraFocusKey ||
       inboxState.sentryFocusId ||
       paletteOpen ||
-      cheatsheetOpen
+      searchInFilesOpen ||
+      quickOpenOpen ||
+      symbolPickerOpen ||
+      cheatsheetOpen ||
+      welcomeOpen
     );
   }
 
@@ -4487,7 +4602,27 @@
 
 <svelte:window onkeydown={onKey} />
 
-<Cheatsheet open={cheatsheetOpen} onClose={() => (cheatsheetOpen = false)} />
+<Cheatsheet
+  open={cheatsheetOpen}
+  onClose={() => (cheatsheetOpen = false)}
+  onOpenWelcome={() => {
+    cheatsheetOpen = false;
+    queueMicrotask(() => (welcomeOpen = true));
+  }}
+/>
+
+<WelcomeOverlay
+  open={welcomeOpen}
+  onClose={() => (welcomeOpen = false)}
+  setView={(v) => (view = v)}
+  onOpenCheatsheet={() => {
+    /* Hand off cleanly: Welcome closes itself, Cheatsheet opens
+       on the next microtask so the focus-trap unmount happens
+       before the new modal claims focus. */
+    welcomeOpen = false;
+    queueMicrotask(() => (cheatsheetOpen = true));
+  }}
+/>
 
 <!-- First-launch welcome flow. Renders only when (a) the user has
      unlocked through the biometric gate (no point showing it under
@@ -4583,6 +4718,7 @@
           newClaudeSession({ agentKind: kind, agentInstanceId: APP_INSTANCE_IDS[kind] });
           view = kind === 'cursor' ? 'cursorApp' : 'claudeApp';
         }}
+        onOpenWelcome={() => (welcomeOpen = true)}
       />
 
     {:else if view === 'githubApp'}
@@ -4662,6 +4798,9 @@
     {:else if view === 'rules'}
       <RulesView />
 
+    {:else if view === 'library'}
+      <LibraryApp />
+
     {:else if view === 'connections'}
       <ConnectionsView
         {sourceConns}
@@ -4717,7 +4856,6 @@
           onDragOver={(e) => onAgentDragOver(APP_INSTANCE_IDS.claude, 'claude', e)}
           onDrop={(e) => onAgentDrop(APP_INSTANCE_IDS.claude, 'claude', e)}
           onDragLeave={() => onAgentDragLeave(APP_INSTANCE_IDS.claude)}
-          onOpenFile={(path) => void openMentionPath(path)}
         />
       {/if}
 
@@ -4758,7 +4896,6 @@
           onDragOver={(e) => onAgentDragOver(APP_INSTANCE_IDS.cursor, 'cursor', e)}
           onDrop={(e) => onAgentDrop(APP_INSTANCE_IDS.cursor, 'cursor', e)}
           onDragLeave={() => onAgentDragLeave(APP_INSTANCE_IDS.cursor)}
-          onOpenFile={(path) => void openMentionPath(path)}
         />
       {/if}
 
@@ -4876,8 +5013,24 @@
 
 <CommandPalette
   bind:open={paletteOpen}
+  bind:mode={paletteMode}
   setView={(v) => (view = v)}
   actions={paletteActions}
+/>
+
+<SearchInFilesOverlay
+  bind:open={searchInFilesOpen}
+  setView={(v) => (view = v)}
+/>
+
+<QuickOpenOverlay
+  bind:open={quickOpenOpen}
+  setView={(v) => (view = v)}
+/>
+
+<SymbolPickerOverlay
+  bind:open={symbolPickerOpen}
+  setView={(v) => (view = v)}
 />
 
 <style>

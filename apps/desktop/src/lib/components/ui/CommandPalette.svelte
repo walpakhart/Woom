@@ -20,7 +20,14 @@
   import { kindForInstanceId } from '$lib/state/layout.svelte';
   import { sessionsState } from '$lib/state/sessions.svelte';
   import { fuzzyScoreAny } from '$lib/services/fuzzyMatch';
-  import { mruRank, recordPalettePick } from '$lib/state/paletteMru.svelte';
+  import {
+    mruRank,
+    recordPalettePick,
+    forgetPalettePick,
+    paletteMruState,
+    type MruPicker,
+    type MruSnapshot
+  } from '$lib/state/paletteMru.svelte';
   import { isPalettePinned, togglePalettePin, pinnedState } from '$lib/state/pinned.svelte';
   import { focusTrap } from '$lib/actions/focusTrap';
   import type { View } from '$lib/state/view.svelte';
@@ -52,12 +59,24 @@
     /** Top-level "Actions" rows (connect / disconnect / show cheatsheet
      *  / report bug …). Built by the parent. */
     actions?: PaletteAction[];
+    /** Optional mode. `recents` opens directly on the Recent section
+     *  with a larger cap and other sections collapsed — bound to ⌘E
+     *  for a Cmd-Tab-style quick switcher. Falls through to the full
+     *  palette as soon as the user types a query that doesn't match
+     *  anything recent. */
+    mode?: 'normal' | 'recents';
   }
 
-  let { open = $bindable(), setView, actions = [] }: Props = $props();
+  let { open = $bindable(), setView, actions = [], mode = $bindable('normal') }: Props = $props();
 
   let query = $state('');
   let selectedIdx = $state(0);
+
+  /* When opened in `recents` mode, the palette starts collapsed to
+   * just the Recent section. If the user types a query that has zero
+   * matches in recents, we auto-expand to the full palette so the
+   * shortcut never feels like a dead-end. */
+  const recentsOnly = $derived(mode === 'recents');
 
   type Result = {
     key: string;
@@ -70,12 +89,89 @@
      *  scores rank earlier within their section. */
     score: number;
     pick: () => void;
+    /** Extras attached to specific row kinds (e.g. Recent rows carry
+     *  the original MRU key so the ✕ "forget" button knows what to
+     *  remove, and a timestamp for the "2m ago" hint). */
+    meta?: { ts?: number; originalKey?: string };
   };
 
   function close() {
     open = false;
     query = '';
     selectedIdx = 0;
+    /* Always settle back to normal mode on close so a re-open via
+     * ⌘K starts unbiased. ⌘E re-applies recents mode itself. */
+    mode = 'normal';
+  }
+
+  /* Re-execute the navigation captured by a Recent row's picker.
+   * Mirrors what each section's pick() does today; the Recent
+   * section reuses this so we don't have to keep the original
+   * closures alive across restarts. Returns false if the picker
+   * couldn't be acted on (e.g. a deleted action) so the caller can
+   * surface the dead row. */
+  function dispatchPicker(picker: MruPicker): boolean {
+    switch (picker.kind) {
+      case 'view':
+        setView(picker.view);
+        return true;
+      case 'app-editor':
+        setView('editorApp');
+        return true;
+      case 'repo':
+        inboxState.pendingRepoNav = {
+          owner: picker.owner,
+          repo: picker.repo,
+          section: 'pulls'
+        };
+        setView('githubApp');
+        return true;
+      case 'jira-board':
+        updateJiraTabFilters({ boardIds: [picker.boardId] });
+        setView('jiraApp');
+        return true;
+      case 'jira-project':
+        updateJiraTabFilters({ projectKey: picker.projectKey });
+        setView('jiraApp');
+        return true;
+      case 'sentry-project':
+        inboxState.sentryTabProjects = [picker.slug];
+        scheduleSentryTabFilterRefresh();
+        setView('sentryApp');
+        return true;
+      case 'github-item':
+        selectInboxItem(picker.itemId);
+        setView('githubApp');
+        return true;
+      case 'jira-issue':
+        inboxState.jiraFocusKey = picker.jiraKey;
+        setView('jiraApp');
+        return true;
+      case 'sentry-issue':
+        openSentryFocus(picker.issueId);
+        setView('sentryApp');
+        return true;
+      case 'action': {
+        const a = actions.find((x) => x.id === picker.actionId);
+        if (!a) return false;
+        a.pick();
+        return true;
+      }
+    }
+  }
+
+  /* Human-friendly "X ago" for the Recent row's right-edge hint.
+   * Bucketed at a coarse resolution — the palette closes / reopens
+   * faster than the buckets advance, so we don't bother with a
+   * 1Hz refresh. */
+  function timeAgo(ts: number): string {
+    const diff = Date.now() - ts;
+    if (diff < 30_000) return 'just now';
+    if (diff < 60_000) return `${Math.floor(diff / 1000)}s`;
+    if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m`;
+    if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h`;
+    if (diff < 7 * 86_400_000) return `${Math.floor(diff / 86_400_000)}d`;
+    return new Date(ts).toLocaleDateString();
   }
 
   /* Fuzzy score against any of the supplied fields, plus a small
@@ -150,7 +246,82 @@
       for (const res of rankAndCap(sectionResults)) r.push(res);
     };
 
-    // 0. Actions (top-level verbs — Connect / Disconnect / Open settings /
+    // 0. Recent — top of the stack in both modes. When the palette
+    //    opened via ⌘E we show up to 15 entries (Cmd-Tab feel);
+    //    otherwise we keep it short (5) so it doesn't shove the other
+    //    sections off-screen. Each entry knows how to re-execute its
+    //    nav even when the original source data hasn't loaded yet.
+    {
+      const rows: Result[] = [];
+      const recentCap = recentsOnly ? 15 : 5;
+      let idx = 0;
+      for (const snap of paletteMruState.entries) {
+        if (rows.length >= recentCap) break;
+        /* Skip dead `action:` rows so the user doesn't click on a verb
+         * whose closure is no longer mounted (e.g. "Disconnect GitHub"
+         * after the user disconnects). */
+        if (snap.picker.kind === 'action') {
+          const actionId = snap.picker.actionId;
+          const stillMounted = actions.some((a) => a.id === actionId);
+          if (!stillMounted) continue;
+        }
+        /* When there's a query, fuzzy-match within recents so the
+         * Recent section also serves as "recent things matching X" —
+         * narrows nicely without losing chronological intent. */
+        let score: number;
+        if (query.trim()) {
+          const f = fuzzyScoreAny(query.trim(), [snap.title, snap.subtitle]);
+          if (f === null) continue;
+          score = f;
+        } else {
+          /* No query: score by recency so within-section sort is
+           * temporal. The Recent section itself is always pushed
+           * first below, so global ordering is "Recent first" regardless
+           * of these numbers. */
+          score = 1000 - idx;
+        }
+        rows.push({
+          key: `recent:${snap.key}`,
+          badge: snap.badge,
+          badgeKind: snap.badgeKind,
+          title: snap.title,
+          subtitle: snap.subtitle,
+          section: 'Recent',
+          score,
+          pick: () => {
+            /* Re-bump on click so a re-pick stays on top. */
+            recordPalettePick({
+              key: snap.key,
+              title: snap.title,
+              subtitle: snap.subtitle,
+              badge: snap.badge,
+              badgeKind: snap.badgeKind,
+              picker: snap.picker
+            });
+            const ok = dispatchPicker(snap.picker);
+            if (ok) close();
+            else forgetPalettePick(snap.key);
+          },
+          meta: { ts: snap.ts, originalKey: snap.key }
+        });
+        idx++;
+      }
+      /* Push directly — the section already enforces its own cap
+       * (`recentCap`), and the per-section sort by descending score
+       * matters even when the cap is 15 (e.g. when a typed query
+       * narrows the set, fuzzy scores beat recency). */
+      rows.sort((a, b) => b.score - a.score);
+      for (const res of rows) r.push(res);
+    }
+
+    /* If the palette was opened in `recents` mode AND we have at least
+     * one recent row to show, suppress the rest of the sections — that
+     * keeps ⌘E's UI tight and Cmd-Tab-like. Empty results auto-falls
+     * through to the full palette so the shortcut never feels broken. */
+    const recentHits = r.length;
+    if (recentsOnly && recentHits > 0) return r;
+
+    // 1. Actions (top-level verbs — Connect / Disconnect / Open settings /
     //    Show cheatsheet / etc.). Always rendered before content rows so
     //    the user types "conn" and immediately sees the connect verbs.
     {
@@ -167,7 +338,14 @@
           section: 'Actions',
           score: s,
           pick: () => {
-            recordPalettePick(`action:${a.id}`);
+            recordPalettePick({
+              key: `action:${a.id}`,
+              title: a.label,
+              subtitle: a.sub,
+              badge: '⚡',
+              badgeKind: 'action',
+              picker: { kind: 'action', actionId: a.id }
+            });
             a.pick();
             close();
           }
@@ -176,7 +354,7 @@
       push(rows);
     }
 
-    // 1. Views
+    // 2. Views
     push(
       VIEWS.flatMap((v) => {
         const s = scoreFor(`view:${v.key}`, v.title, v.sub, v.key);
@@ -190,7 +368,14 @@
           section: 'Views',
           score: s,
           pick: () => {
-            recordPalettePick(`view:${v.key}`);
+            recordPalettePick({
+              key: `view:${v.key}`,
+              title: v.title,
+              subtitle: v.sub || undefined,
+              badge: '↗',
+              badgeKind: 'view',
+              picker: { kind: 'view', view: v.key }
+            });
             setView(v.key);
             close();
           }
@@ -198,7 +383,7 @@
       })
     );
 
-    // 2. Editor — show folder + link status (singleton)
+    // 3. Editor — show folder + link status (singleton)
     {
       const editorId = 'editor-solo';
       const ed = sessionsState.editorInstanceState[editorId];
@@ -221,7 +406,14 @@
           section: 'Apps',
           score,
           pick: () => {
-            recordPalettePick('view:editor');
+            recordPalettePick({
+              key: 'view:editor',
+              title: 'Editor',
+              subtitle: `${folder} · ${linkSub}`,
+              badge: 'Ed',
+              badgeKind: 'editor',
+              picker: { kind: 'app-editor' }
+            });
             setView('editorApp');
             close();
           }
@@ -243,7 +435,14 @@
           section: 'GitHub repos',
           score,
           pick: () => {
-            recordPalettePick(`repo:${repo.full_name}`);
+            recordPalettePick({
+              key: `repo:${repo.full_name}`,
+              title: repo.full_name,
+              subtitle: 'Repository',
+              badge: 'GH',
+              badgeKind: 'github',
+              picker: { kind: 'repo', owner: repo.owner, repo: repo.name }
+            });
             inboxState.pendingRepoNav = {
               owner: repo.owner,
               repo: repo.name,
@@ -270,7 +469,14 @@
           section: 'Jira boards',
           score,
           pick: () => {
-            recordPalettePick(`jboard:${b.id}`);
+            recordPalettePick({
+              key: `jboard:${b.id}`,
+              title: b.name,
+              subtitle: `Board · ${b.project_key ?? 'no project'}`,
+              badge: 'J',
+              badgeKind: 'jira',
+              picker: { kind: 'jira-board', boardId: b.id }
+            });
             /* Picking a board / project from the palette lands on the
                Jira tab, so we update the tab's filter slice (not the
                column's — those are independent now). */
@@ -296,7 +502,14 @@
           section: 'Jira projects',
           score,
           pick: () => {
-            recordPalettePick(`jproj:${p.key}`);
+            recordPalettePick({
+              key: `jproj:${p.key}`,
+              title: p.name,
+              subtitle: `Project · ${p.key}`,
+              badge: 'J',
+              badgeKind: 'jira',
+              picker: { kind: 'jira-project', projectKey: p.key }
+            });
             updateJiraTabFilters({ projectKey: p.key });
             setView('jiraApp');
             close();
@@ -319,7 +532,14 @@
           section: 'Sentry projects',
           score,
           pick: () => {
-            recordPalettePick(`sproj:${p.slug}`);
+            recordPalettePick({
+              key: `sproj:${p.slug}`,
+              title: p.name,
+              subtitle: `Sentry project · ${p.slug}`,
+              badge: 'St',
+              badgeKind: 'sentry',
+              picker: { kind: 'sentry-project', slug: p.slug }
+            });
             inboxState.sentryTabProjects = [p.slug];
             scheduleSentryTabFilterRefresh();
             setView('sentryApp');
@@ -354,7 +574,14 @@
             section: 'GitHub items',
             score,
             pick: () => {
-              recordPalettePick(`gh:${item.id}`);
+              recordPalettePick({
+                key: `gh:${item.id}`,
+                title: item.title,
+                subtitle: externalId(item),
+                badge: 'GH',
+                badgeKind: 'github',
+                picker: { kind: 'github-item', itemId: item.id }
+              });
               selectInboxItem(item.id);
               setView('githubApp');
               close();
@@ -394,7 +621,14 @@
             section: 'Jira issues',
             score,
             pick: () => {
-              recordPalettePick(`j:${item.id}`);
+              recordPalettePick({
+                key: `j:${item.id}`,
+                title: item.summary,
+                subtitle: item.key,
+                badge: 'J',
+                badgeKind: 'jira',
+                picker: { kind: 'jira-issue', jiraKey: item.key }
+              });
               inboxState.jiraFocusKey = item.key;
               setView('jiraApp');
               close();
@@ -434,7 +668,14 @@
             section: 'Sentry issues',
             score,
             pick: () => {
-              recordPalettePick(`s:${item.id}`);
+              recordPalettePick({
+                key: `s:${item.id}`,
+                title: item.title,
+                subtitle: item.short_id,
+                badge: 'St',
+                badgeKind: 'sentry',
+                picker: { kind: 'sentry-issue', issueId: item.id }
+              });
               openSentryFocus(item.id);
               setView('sentryApp');
               close();
@@ -506,7 +747,9 @@
       <input
         class="palette-input"
         bind:value={query}
-        placeholder="Search anywhere — solos, repos, boards, issues…"
+        placeholder={recentsOnly
+          ? 'Jump to recent — type to filter, ↵ to open'
+          : 'Search anywhere — solos, repos, boards, issues…'}
         autofocus
       />
       {#if results.length === 0}
@@ -534,15 +777,31 @@
                       <span class="row-id mono">{r.subtitle}</span>
                     {/if}
                     <span class="row-title">{r.title}</span>
+                    {#if r.meta?.ts}
+                      <span class="row-ts mono">{timeAgo(r.meta.ts)}</span>
+                    {/if}
                   </button>
-                  <button
-                    class="palette-pin"
-                    class:pinned={isPalettePinned(r.key)}
-                    onclick={(e) => { e.stopPropagation(); togglePalettePin(r.key); }}
-                    title={isPalettePinned(r.key) ? 'Unpin from top' : 'Pin to top'}
-                    aria-label={isPalettePinned(r.key) ? 'Unpin' : 'Pin'}
-                    type="button"
-                  >★</button>
+                  {#if r.meta?.originalKey}
+                    <button
+                      class="palette-pin"
+                      onclick={(e) => {
+                        e.stopPropagation();
+                        forgetPalettePick(r.meta!.originalKey!);
+                      }}
+                      title="Forget this entry"
+                      aria-label="Forget this entry"
+                      type="button"
+                    >✕</button>
+                  {:else}
+                    <button
+                      class="palette-pin"
+                      class:pinned={isPalettePinned(r.key)}
+                      onclick={(e) => { e.stopPropagation(); togglePalettePin(r.key); }}
+                      title={isPalettePinned(r.key) ? 'Unpin from top' : 'Pin to top'}
+                      aria-label={isPalettePinned(r.key) ? 'Unpin' : 'Pin'}
+                      type="button"
+                    >★</button>
+                  {/if}
                 </div>
               {/each}
             </div>
@@ -583,7 +842,7 @@
     -webkit-backdrop-filter: blur(22px) saturate(1.1);
     display: flex; align-items: flex-start; justify-content: center;
     padding-top: 12vh; z-index: 200;
-    animation: fadeIn 180ms ease-out;
+    animation: fadeIn var(--dur-base) var(--ease-out);
   }
   .palette {
     width: 720px; max-width: 92vw;
@@ -597,7 +856,7 @@
       var(--shadow-3),
       0 0 0 1px var(--border-accent-2),
       inset 0 1px 0 rgba(255, 240, 220, 0.04);
-    animation: slideDown 220ms cubic-bezier(0.2, 0.9, 0.3, 1.2);
+    animation: slideDown var(--dur-slow) var(--ease-spring);
   }
   .palette-input {
     width: 100%; padding: 18px 22px;
@@ -670,6 +929,17 @@
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     color: var(--text-0);
   }
+  /* Trailing "X ago" hint on Recent rows — quiet, monospaced so the
+     column edge stays tidy across multiple rows of varying length. */
+  .row-ts {
+    flex-shrink: 0;
+    font-family: 'JetBrains Mono', monospace;
+    font-feature-settings: 'tnum';
+    font-size: 10.5px;
+    color: var(--text-mute);
+    opacity: 0.7;
+  }
+  .palette-item.highlight .row-ts { opacity: 1; }
 
   /* Source-themed badges — share the rest of the palette's --src-*
      family so the palette and column stripes feel like the same

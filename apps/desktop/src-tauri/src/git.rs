@@ -290,14 +290,35 @@ pub fn checkout(repo: &str, branch: &str) -> Result<(), String> {
     run(cmd).map(|_| ())
 }
 
-pub fn create_branch(repo: &str, name: &str, checkout: bool) -> Result<(), String> {
+pub fn create_branch(
+    repo: &str,
+    name: &str,
+    checkout: bool,
+    start_point: Option<&str>,
+) -> Result<(), String> {
     let mut cmd = git(repo);
     if checkout {
         cmd.args(["checkout", "-b", name]);
     } else {
         cmd.args(["branch", name]);
     }
+    // `start_point` is optional. When the user picks "from <other branch>"
+    // (local OR `origin/foo`), git will fork the new branch off that ref.
+    // Omitting it preserves the original behaviour (fork off HEAD).
+    if let Some(sp) = start_point.filter(|s| !s.is_empty()) {
+        cmd.arg(sp);
+    }
     run(cmd).map(|_| ())
+}
+
+/// Fetch all remotes with `--prune` so deleted remote branches disappear
+/// from `for-each-ref` output. Used to refresh the branch picker before
+/// listing — otherwise `origin/feat-old` lingers for hours after another
+/// dev deletes it server-side.
+pub fn fetch(repo: &str) -> Result<String, String> {
+    let mut cmd = git(repo);
+    cmd.args(["fetch", "--all", "--prune"]);
+    run(cmd)
 }
 
 pub fn stage(repo: &str, paths: &[String]) -> Result<(), String> {
@@ -403,7 +424,42 @@ pub fn commit(repo: &str, message: &str) -> Result<String, String> {
 pub fn push(repo: &str) -> Result<String, String> {
     let mut cmd = git(repo);
     cmd.arg("push");
-    run(cmd)
+    match run(cmd) {
+        Ok(out) => Ok(out),
+        Err(err) => {
+            // Fresh local branch (no upstream yet) → git's first push fails
+            // with "fatal: The current branch <name> has no upstream branch.
+            // To push the current branch and set the remote as upstream, use
+            // git push --set-upstream origin <name>". Retrying with
+            // `--set-upstream origin HEAD` does exactly that and is the
+            // behaviour every editor (VS Code, Cursor, GitHub Desktop)
+            // ships by default. We do it transparently so the propose_commit
+            // action card and the GitPanel push button "just work" on a
+            // brand-new branch instead of bouncing back the raw fatal.
+            //
+            // Match on git's wording (case-insensitive — older git localises
+            // some messages but the english phrase is stable since 2.x):
+            // "no upstream branch" OR "--set-upstream" both appear in the
+            // exact failure mode we care about, and nowhere else.
+            let lower = err.to_lowercase();
+            if !(lower.contains("no upstream branch") || lower.contains("--set-upstream")) {
+                return Err(err);
+            }
+            let branch = current_branch(repo).unwrap_or_default();
+            if branch.is_empty() {
+                // Detached HEAD — `--set-upstream` would be meaningless. Bubble up
+                // the original error so the user knows to checkout a branch first.
+                return Err(err);
+            }
+            let mut retry = git(repo);
+            retry.args(["push", "--set-upstream", "origin", &branch]);
+            let retry_out = run(retry)?;
+            Ok(format!(
+                "Set upstream to origin/{branch} and pushed.\n{}",
+                retry_out.trim()
+            ))
+        }
+    }
 }
 
 pub fn pull(repo: &str) -> Result<String, String> {

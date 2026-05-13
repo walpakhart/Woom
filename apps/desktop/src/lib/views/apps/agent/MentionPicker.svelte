@@ -119,21 +119,36 @@
     const out: Suggestion[] = [];
     const seen = new Set<string>();
 
-    /* Editor's open tabs — the user is most likely to mention these. */
-    let tabs: string[] = [];
-    try {
-      const raw = localStorage.getItem('woom:editor:tabs');
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) tabs = parsed.filter((p) => typeof p === 'string');
-      }
-    } catch { /* ignore corrupted cache */ }
-
     /* The open repo root, surfaced as a folder mention so users can say
        "look at the whole project". */
     const editorActive = layoutState.activeInstance.editor;
     const repoPath =
       sessionsState.editorInstanceState[editorActive]?.repoPath ?? '';
+
+    /* Editor's open tabs — the user is most likely to mention these.
+       v8: read the per-instance cache (`woom:editor:tabs:<id>`) instead
+       of the legacy single-key (`woom:editor:tabs`) which never gets
+       written today. Fallback to the legacy key for sessions saved
+       before the per-instance migration so an upgrade window still
+       surfaces tabs. The currently-active file is read from a sibling
+       per-instance key and pinned to the top with a "current" sub-label
+       so "@" + Enter just mentions whatever the editor is showing. */
+    let tabs: string[] = [];
+    let activeTab = '';
+    try {
+      const rawScoped = localStorage.getItem(`woom:editor:tabs:${editorActive}`);
+      if (rawScoped) {
+        const parsed = JSON.parse(rawScoped);
+        if (Array.isArray(parsed)) tabs = parsed.filter((p) => typeof p === 'string');
+      } else {
+        const rawLegacy = localStorage.getItem('woom:editor:tabs');
+        if (rawLegacy) {
+          const parsed = JSON.parse(rawLegacy);
+          if (Array.isArray(parsed)) tabs = parsed.filter((p) => typeof p === 'string');
+        }
+      }
+      activeTab = localStorage.getItem(`woom:editor:active:${editorActive}`) || '';
+    } catch { /* ignore corrupted cache */ }
 
     function shortRel(abs: string): string {
       if (repoPath && abs.startsWith(repoPath + '/')) return abs.slice(repoPath.length + 1);
@@ -141,7 +156,28 @@
       return slash >= 0 ? abs.slice(slash + 1) : abs;
     }
 
-    if (repoPath) {
+    /* Pin the active editor file FIRST so a quick "@" + Enter on an
+       empty query mentions whatever the user is reading right now. */
+    if (activeTab && !seen.has(activeTab)) {
+      const rel = shortRel(activeTab);
+      out.push({
+        display: '@' + rel + ' ',
+        mention: {
+          source: 'file',
+          externalId: rel,
+          title: rel.split('/').pop() || rel,
+          body: activeTab,
+          isDir: false
+        },
+        section: 'Files',
+        tone: 'var(--src-editor)',
+        title: rel.split('/').pop() || rel,
+        sub: 'current'
+      });
+      seen.add(activeTab);
+    }
+
+    if (repoPath && !seen.has(repoPath)) {
       const name = repoPath.slice(repoPath.lastIndexOf('/') + 1) || repoPath;
       out.push({
         display: '@' + name + '/ ',

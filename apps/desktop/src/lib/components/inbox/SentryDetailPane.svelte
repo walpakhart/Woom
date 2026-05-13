@@ -528,7 +528,7 @@
   }
   .sdp-icon-btn:disabled { opacity: 0.45; cursor: default; }
   .sdp-icon-btn .i-sm { width: 13px; height: 13px; }
-  .sdp-chevron { transition: transform 140ms ease; }
+  .sdp-chevron { transition: transform var(--dur-base) var(--ease-spring); }
   .sdp-chevron--open { transform: rotate(90deg); }
 
   .sdp-body {

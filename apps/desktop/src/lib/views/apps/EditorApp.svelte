@@ -12,12 +12,15 @@
   import ActivityBar from './editor/ActivityBar.svelte';
   import InlineClaude from './editor/InlineClaude.svelte';
   import Splitter from '$lib/components/ui/Splitter.svelte';
-  import { sessionsState } from '$lib/state/sessions.svelte';
+  import SidePaneRail from '$lib/components/ui/SidePaneRail.svelte';
+  import { sessionsState, getPendingEditEvents } from '$lib/state/sessions.svelte';
   import { kindForInstanceId, APP_INSTANCE_IDS, layoutState } from '$lib/state/layout.svelte';
-  import { untrack } from 'svelte';
+  import { onMount, untrack } from 'svelte';
+  import { fly } from 'svelte/transition';
+  import { cubicOut } from 'svelte/easing';
 
-  type ActivityTab = 'explorer' | 'search' | 'git' | 'debug' | 'tests' | 'claude';
-  type SidebarTab = 'explorer' | 'search' | 'git' | 'debug' | 'tests';
+  type ActivityTab = 'explorer' | 'search' | 'git' | 'review' | 'debug' | 'tests';
+  type SidebarTab = ActivityTab;
 
   interface Props {
     instanceId: string;
@@ -42,13 +45,48 @@
   let p: Props = $props();
 
   let activityTab = $state<ActivityTab>('explorer');
-  let claudeSideOpen = $state(true);
 
-  /** The activity bar exposes 6 buttons; the editor sidebar only needs
-   *  5 panels (claude is handled by toggling the right-hand pane). */
-  const sidebarTab = $derived<SidebarTab>(
-    activityTab === 'claude' ? 'explorer' : activityTab
-  );
+  /** Inline-Claude pane open state. Persisted per editor instance —
+   *  Vermeer/Hopper/etc remember whether the user prefers the pane
+   *  hidden (more chrome for code) or shown (one-glance to chat).
+   *  Default = true so first-run users discover the pane exists. */
+  // svelte-ignore state_referenced_locally
+  const sideStorageKey = `editor-claude-side-open:${p.instanceId}`;
+  let claudeSideOpen = $state(true);
+  onMount(() => {
+    const v = localStorage.getItem(sideStorageKey);
+    if (v === '0' || v === '1') claudeSideOpen = v === '1';
+  });
+  $effect(() => {
+    localStorage.setItem(sideStorageKey, claudeSideOpen ? '1' : '0');
+  });
+
+  const sidebarTab = $derived<SidebarTab>(activityTab);
+
+  /** Fire when EditorView's pending-edits banner asks to jump to the
+   *  Review tab. Toggling activityTab is enough — sidebarTab follows. */
+  function focusReviewTab() {
+    activityTab = 'review';
+  }
+
+  /* Editor-scoped keyboard shortcuts. Mounted on window only while
+     EditorApp is in the DOM (i.e. the user is actually looking at
+     the editor solo) so they don't leak into other surfaces.
+       - ⇧⌘R → Review tab. Mirrors VS Code's "Show Source Control"
+                rhythm; we picked R because Review starts with R and
+                ⇧⌘G is already taken by Source Control. */
+  onMount(() => {
+    function handler(e: KeyboardEvent) {
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'R' || e.key === 'r') && !e.altKey) {
+        e.preventDefault();
+        focusReviewTab();
+      }
+    }
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  });
 
   /** Curated label of the currently-mounted editor instance — flows
    *  down to EditorView's sidebar head as a small italic-serif mark
@@ -58,13 +96,6 @@
   );
 
   function pickActivity(t: ActivityTab) {
-    if (t === 'claude') {
-      /* Toggle the right-hand inline-claude panel; keep whatever
-         sidebar pane was active before. */
-      claudeSideOpen = !claudeSideOpen;
-      activityTab = claudeSideOpen ? 'claude' : 'explorer';
-      return;
-    }
     activityTab = t;
   }
 
@@ -141,7 +172,21 @@
   /** Problems count → badge на activity-bar Tests + bottom Problems
    *  tab. На MVP — 0 (typecheck integration в следующем milestone). */
   const problemsCount = 0;
-  const claudeCount = $derived(linkedAgents.length);
+
+  /** Pending agent edits across every linked session — drives the
+   *  Review tab's badge + pulse. We touch sessionsState.list inside
+   *  the derived so $derived recomputes on any session-state mutation
+   *  (new edit appended, status flipped, etc.). Cheap: one
+   *  getPendingEditEvents call per linked agent, and the array length
+   *  is the answer. */
+  const reviewCount = $derived.by(() => {
+    void sessionsState.list;
+    let total = 0;
+    for (const la of linkedAgents) {
+      total += getPendingEditEvents(la.sessionId).length;
+    }
+    return total;
+  });
 </script>
 
 <section
@@ -156,7 +201,7 @@
       onOpenSettings={p.onOpenSettings}
       {gitCount}
       {problemsCount}
-      {claudeCount}
+      {reviewCount}
     />
   </div>
 
@@ -185,12 +230,14 @@
               instanceId={p.instanceId}
               onLinkToAgent={p.onLinkToAgent}
               onUnlinkAgent={unlinkSession}
+              onRequestReviewTab={focusReviewTab}
+              onQuickSend={p.onQuickSend}
             />
           </div>
         </section>
       {/snippet}
       {#snippet end()}
-        <aside class="app-pane se-inline">
+        <aside class="app-pane se-inline" in:fly={{ x: 24, duration: 220, easing: cubicOut }}>
           <InlineClaude
             instanceId={p.instanceId}
             linkKind="editor"
@@ -214,19 +261,39 @@
           instanceId={p.instanceId}
           onLinkToAgent={p.onLinkToAgent}
           onUnlinkAgent={unlinkSession}
+          onRequestReviewTab={focusReviewTab}
+          onQuickSend={p.onQuickSend}
         />
       </div>
     </section>
+    <!-- Skinny rail (52px). Shows expand-button + one square per
+         linked agent so the user always knows which chats are
+         attached AND can pop straight to one without expanding the
+         whole pane first. -->
+    <div class="se-rail-slot" in:fly={{ x: 24, duration: 220, easing: cubicOut }}>
+      <SidePaneRail
+        linkedAgents={linkedAgents.map((la) => ({
+          sessionId: la.sessionId,
+          agentInstanceId: la.agentInstanceId,
+          kind: la.kind,
+          title: la.name
+        }))}
+        {reviewCount}
+        onExpand={() => (claudeSideOpen = true)}
+      />
+    </div>
   {/if}
 </section>
 
 <style>
-  /* Two grid layouts: with the InlineClaude pane open we put the
-     Splitter (which carries center + inline) in the second column;
-     without it the center occupies the rest. Both keep the activity
-     bar at 44px so the rail's vertical rhythm is consistent. */
+  /* Two grid layouts:
+     - open: 44px ActivityBar + Splitter cell (editor + inline pane).
+     - rail-collapsed: 44px ActivityBar + editor (1fr) + 52px rail-mini.
+     The rail-mini holds linked-agent icons so the user can see at a
+     glance WHO's attached even when the chat pane is hidden. */
   .se-shell {
-    grid-template-columns: 44px 1fr;
+    grid-template-columns: 44px 1fr 52px;
+    transition: grid-template-columns var(--dur-base) var(--ease-out);
   }
   .se-shell--with-side {
     grid-template-columns: 44px minmax(0, 1fr);
@@ -263,7 +330,14 @@
     display: flex; flex-direction: column;
     min-height: 0;
     height: 100%;
+    position: relative;
   }
+
+  /* Slot for the shared SidePaneRail when the InlineClaude pane is
+     collapsed. Width matches the rail itself (52px) — sized in the
+     `.se-shell` grid template. */
+  .se-rail-slot { height: 100%; min-width: 0; }
+  .se-rail-slot :global(.spr) { width: 100%; }
   .se-editor-area {
     flex: 1;
     display: flex;

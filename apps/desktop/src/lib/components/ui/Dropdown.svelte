@@ -9,8 +9,7 @@
   // absolute positioning inside the component itself (not a true portal —
   // keeps things simple and avoids z-index wrestling with modals).
   import type { Snippet } from 'svelte';
-  import { slide, fade } from 'svelte/transition';
-  import { cubicOut } from 'svelte/easing';
+  import { fade } from 'svelte/transition';
 
   export interface DropdownOption<V = unknown> {
     value: V;
@@ -95,6 +94,12 @@
     top: number;
     minWidth: number;
   } | null>(null);
+  /** Flipped to `true` after the first `computeAlignment` resolves
+   *  against the panel's measured height — until then the panel is
+   *  rendered with `visibility: hidden` so the user doesn't see the
+   *  seed coords (which can't know the panel's height yet and would
+   *  flicker for one frame when `forceUp` is set). */
+  let measured = $state(false);
   /** Accumulated type-to-search buffer, cleared 650 ms after the last key. */
   let typeahead = $state('');
   let typeaheadTimer: ReturnType<typeof setTimeout> | null = null;
@@ -152,6 +157,7 @@
     open = false;
     activeIndex = -1;
     panelCoords = null;
+    measured = false;
     typeahead = '';
     if (typeaheadTimer) {
       clearTimeout(typeaheadTimer);
@@ -193,6 +199,7 @@
       top: flipUp ? tRect.top - pRect.height - 4 : tRect.bottom + 4,
       minWidth: tRect.width
     };
+    measured = true;
   }
 
   /* Re-anchor on scroll / resize so the panel stays glued to the
@@ -354,9 +361,10 @@
       style:left="{panelCoords.left}px"
       style:top="{panelCoords.top}px"
       style:min-width="{panelCoords.minWidth}px"
-      transition:slide={{ duration: 140, easing: cubicOut, axis: 'y' }}
+      style:visibility={measured ? 'visible' : 'hidden'}
+      transition:fade={{ duration: 120 }}
     >
-      <div class="dd-panel-inner" in:fade={{ duration: 120 }}>
+      <div class="dd-panel-inner">
         {#if options.length === 0}
           <div class="dd-empty">No options</div>
         {/if}

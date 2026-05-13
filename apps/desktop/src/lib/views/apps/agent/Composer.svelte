@@ -87,6 +87,20 @@
         return;
       }
     }
+    /* Bash-style prompt history. ↑/↓ on the textarea cycle through
+       previously-sent prompts when (a) we're already in history mode,
+       or (b) the composer is empty / the caret sits on the first
+       physical line. Mid-message ↑/↓ stays as normal cursor movement
+       so multi-line editing isn't hijacked. */
+    if (
+      (e.key === 'ArrowUp' || e.key === 'ArrowDown') &&
+      !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey &&
+      shouldNavigateHistory(e.key)
+    ) {
+      e.preventDefault();
+      navigateHistory(e.key === 'ArrowUp' ? 1 : -1);
+      return;
+    }
     if (e.key === 'Enter' && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
       e.preventDefault();
       doSend();
@@ -105,6 +119,7 @@
        short-circuit here on `sending` anymore — we let the parent
        decide whether to dispatch or queue. */
     p.onSend();
+    resetHistoryCursor();
     queueMicrotask(autoGrow);
   }
 
@@ -121,6 +136,95 @@
     e.preventDefault();
     await p.onPasteImages(p.kind, blobs);
   }
+
+  /* ─── Prompt history (↑/↓ on textarea) ────────────────────────────
+   * Bash-style recall of previously-sent user messages in THIS session.
+   * Persists across restarts for free because we read straight off
+   * `sess.messages` — which is already on disk.
+   *
+   * `historyPos`:
+   *   -1 → not navigating (composer holds whatever the user typed)
+   *    0 → showing newest past prompt (history[0])
+   *    N → showing the (N+1)-th from the end
+   *
+   * `historyDraft`: text the user had typed BEFORE entering history mode.
+   * Restored when ↓ exits at the bottom (historyPos → -1) so a hijacked
+   * ↑ never destroys an in-flight draft. */
+  let historyPos = $state(-1);
+  let historyDraft = $state('');
+
+  /* Derived view of past user prompts — newest first, empty content
+   * dropped (e.g. attachment-only turns) so ↑ doesn't show blank slots. */
+  const userHistory = $derived.by((): string[] => {
+    if (!sess) return [];
+    const out: string[] = [];
+    for (let i = sess.messages.length - 1; i >= 0; i--) {
+      const m = sess.messages[i];
+      if (m.role !== 'user') continue;
+      const t = m.content?.trim();
+      if (!t) continue;
+      out.push(m.content);
+    }
+    return out;
+  });
+
+  function shouldNavigateHistory(direction: 'ArrowUp' | 'ArrowDown'): boolean {
+    if (userHistory.length === 0) return false;
+    /* Already in history mode → always intercept. */
+    if (historyPos >= 0) return true;
+    /* Empty composer → both arrows are free for history. */
+    const v = sess?.input ?? '';
+    if (v.length === 0) return true;
+    /* Otherwise, only hijack ↑ on the first physical line (caret has
+     * no newline before it) and ↓ on the last line — matches what
+     * users expect from a multiline shell prompt. */
+    if (!ta) return false;
+    const caret = ta.selectionStart ?? v.length;
+    if (direction === 'ArrowUp') {
+      return v.slice(0, caret).indexOf('\n') === -1;
+    }
+    return v.slice(caret).indexOf('\n') === -1;
+  }
+
+  function navigateHistory(step: 1 | -1) {
+    if (!sess) return;
+    const len = userHistory.length;
+    if (len === 0) return;
+    /* First entry into history mode: stash the live draft so we can
+     * restore it on the way back out. */
+    if (historyPos === -1 && step === 1) {
+      historyDraft = sess.input ?? '';
+    }
+    const next = historyPos + step;
+    if (next < -1) return;
+    if (next >= len) return; /* Already at the oldest — clamp. */
+    historyPos = next;
+    const text = next === -1 ? historyDraft : userHistory[next];
+    setSessionInput(sess.id, text);
+    /* Move caret to the end + autoGrow on next tick so the textarea
+     * resizes to fit the recalled prompt. */
+    queueMicrotask(() => {
+      if (!ta) return;
+      ta.value = text;
+      ta.setSelectionRange(text.length, text.length);
+      autoGrow();
+    });
+  }
+
+  /* Send / submit resets the cursor so the next ↑ starts fresh from
+   * the latest prompt (which is the one we just sent). */
+  function resetHistoryCursor() {
+    historyPos = -1;
+    historyDraft = '';
+  }
+
+  /* Switching sessions resets the cursor — otherwise position 2 in
+   * session A would carry over to session B and load whatever lives
+   * there at index 2 (probably nothing remotely related). */
+  $effect(() => {
+    sess?.id;
+    resetHistoryCursor();
+  });
 
   /* ─── Queue panel ──────────────────────────────────────────────── */
 
@@ -583,6 +687,9 @@
                   ? 'Ask Claude anything…  Drop a Jira card / PR / file to attach context.'
                   : 'Ask Cursor…  Drop a Jira card / PR / file to attach context.')}
             rows="1"
+            spellcheck="false"
+            autocomplete="off"
+            {...{ autocorrect: 'off', autocapitalize: 'off' }}
           ></textarea>
         </div>
 
@@ -887,11 +994,20 @@
     font-family: inherit;
     font-size: 14px; line-height: 1.55;
     color: var(--text-0);
+    /* CRITICAL: textarea и backdrop должны wrap ИДЕНТИЧНО.
+       WebKit textarea НЕ умеет `overflow-wrap: anywhere` — там
+       соблюдается word-boundary wrap (`break-word` semantics).
+       Поэтому оба используют тот же mild-набор: `pre-wrap` +
+       `break-word` + дефолтный word-break. Длинные слова
+       переносятся по необходимости одинаково в обоих. */
     white-space: pre-wrap;
-    word-break: break-word;
+    word-break: normal;
+    overflow-wrap: break-word;
     overflow: hidden;
     pointer-events: none;
     user-select: none;
+    box-sizing: border-box;
+    border: 0;
   }
   /* Inline @-mention chip — soft accent tint, no border (would shift
      glyph metrics out of sync with the textarea). */
@@ -917,6 +1033,17 @@
     min-height: 24px;
     overflow: hidden;
     scrollbar-width: none;
+    /* Те же wrapping rules что у backdrop — pre-wrap + break-word.
+       WebKit-textarea НЕ обрабатывает `overflow-wrap: anywhere`
+       так же как div: для textarea оно даёт word-boundary wrap
+       (effectively `break-word`). Раньше backdrop был на
+       `anywhere`, textarea — фактически на `break-word`, отсюда
+       расхождение позиции каретки vs glyphов при длинных русских
+       словах. Теперь оба явно на `break-word` — wrap идентичен. */
+    white-space: pre-wrap;
+    word-break: normal;
+    overflow-wrap: break-word;
+    box-sizing: border-box;
   }
   .cmp-area::-webkit-scrollbar { display: none; }
   .cmp-area::placeholder {

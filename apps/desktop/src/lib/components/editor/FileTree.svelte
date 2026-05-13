@@ -289,15 +289,37 @@
   async function ctxDelete(it: Item) {
     closeContextMenu();
     if (it.is_dir) {
-      /* Directory delete needs a recursive command; not in 1.0
-       * scope. Surface a hint instead of attempting a partial
-       * delete. */
-      window.alert(`Delete a directory from Finder — Woom's tree only deletes files in 1.0.`);
+      /* Directory delete is recursive — call it out explicitly in
+       * the confirm so the user can't muscle-memory through "yes"
+       * and lose a whole subtree. The Rust side has a depth guard
+       * that blocks anything shallower than `/Users/<name>/x` so
+       * a misclick can't wipe a system folder. */
+      if (
+        !window.confirm(
+          `Delete the folder "${it.name}" and ALL its contents? This cannot be undone.`
+        )
+      )
+        return;
+      try {
+        await invoke('fs_remove_dir', { path: it.path });
+        // Notify open editors so they can close any tabs that lived
+        // inside the deleted subtree. The fs watcher will refresh
+        // the tree itself a moment later via smartRefresh().
+        window.dispatchEvent(
+          new CustomEvent('woom:fs:path-deleted', { detail: { path: it.path, isDir: true } })
+        );
+      } catch (e) {
+        console.warn('fs_remove_dir', e);
+        window.alert(`Couldn't delete folder: ${e instanceof Error ? e.message : String(e)}`);
+      }
       return;
     }
     if (!window.confirm(`Delete ${it.name}? This cannot be undone.`)) return;
     try {
       await invoke('fs_remove_file', { path: it.path });
+      window.dispatchEvent(
+        new CustomEvent('woom:fs:path-deleted', { detail: { path: it.path, isDir: false } })
+      );
     } catch (e) {
       console.warn('fs_remove_file', e);
     }
@@ -424,7 +446,13 @@
     align-items: center; justify-content: center; flex-shrink: 0;
     color: var(--text-2);
   }
-  .tree-chevron :global(svg) { width: 11px; height: 11px; transition: transform 120ms ease; }
+  .tree-chevron :global(svg) {
+    width: 11px; height: 11px;
+    /* Spring-out easing gives the chevron rotate a tiny snap on expand
+       — much more satisfying than a flat ease for repeated clicks
+       while exploring the tree. */
+    transition: transform var(--dur-base) var(--ease-spring);
+  }
   .tree-chevron-pad { width: 11px; height: 11px; }
   /* Type icon — drawn from `fileIcons.ts` SVG paths. Stroke-only,
      monochrome, takes its colour from the row text so dimmed /

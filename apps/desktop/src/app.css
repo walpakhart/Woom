@@ -130,12 +130,29 @@
   --bg-1: #E5EDE7;
   --bg-2: #D5E2D8;
   --bg-3: #BFD3C6;
+  --bg-4: #A8C0B2;
+  /* Cream-glass — used by ActivityBar / Rail / popovers. The dark
+     theme defines a near-black `rgba(20,24,26,0.70)` for this token;
+     without an override every glass surface in the light theme would
+     fall back to that and punch a black bar on cream (the bug that
+     made the ActivityBar look like a dark sliver). */
+  --bg-glass: rgba(241, 245, 242, 0.78);
+  /* Elevation tint for hover backgrounds on cream — a translucent
+     SAGE wash so the underlying mint shows through. The dark theme
+     uses a translucent cream wash; we invert it for light. */
+  --bg-elev: rgba(20, 38, 30, 0.06);
 
   --border: rgba(20, 38, 30, 0.14);
   --border-hi: rgba(20, 38, 30, 0.32);
   --border-hi2: rgba(20, 38, 30, 0.50);
   --border-neutral: rgba(20, 38, 30, 0.10);
   --border-neutral-hi: rgba(20, 38, 30, 0.20);
+  /* Sage-tinted accent borders. Mirror the structure of the dark
+     theme (`rgba(166,212,194,0.42)` / `0.22`) but flip the hue to
+     deep sage so they read on cream. Without these the active
+     ActivityBar tab loses its inset 1px ring entirely. */
+  --border-accent:   rgba(46, 90, 74, 0.42);
+  --border-accent-2: rgba(46, 90, 74, 0.22);
 
   --text-0: #0E1B16;
   --text-1: #234A3C;
@@ -144,8 +161,18 @@
 
   --accent: #2E5A4A;
   --accent-bright: #0E1B16;
+  /* Pressed / gradient-end accent. Used by ActivityBar's active tab
+     stripe (`linear-gradient(--accent-bright, --accent-deep)`) and a
+     handful of buttons. Pick a darker sage so the gradient reads as
+     "deep ↘ deeper", not "deep ↘ undefined → invalid". */
+  --accent-deep: #1A3328;
   --accent-soft: rgba(46, 90, 74, 0.10);
   --accent-glow: rgba(46, 90, 74, 0.22);
+
+  /* Sage halo for hero cards (HomeApp tiles, command-palette pop).
+     Dark theme's `--shadow-glow-clay` uses warm-clay; on cream we
+     swap to deep-sage so it doesn't read as a peach smear. */
+  --shadow-glow-clay: 0 0 0 1px rgba(46, 90, 74, 0.10), 0 12px 32px rgba(46, 90, 74, 0.18);
 
   --blue: #2E5A4A;
   --blue-bright: #0E1B16;
@@ -167,6 +194,48 @@
   --shadow-1: 0 1px 2px rgba(20, 38, 30, 0.10), 0 2px 6px rgba(20, 38, 30, 0.10);
   --shadow-2: 0 2px 4px rgba(20, 38, 30, 0.14), 0 8px 22px rgba(20, 38, 30, 0.12);
   --shadow-3: 0 4px 10px rgba(20, 38, 30, 0.18), 0 22px 50px rgba(20, 38, 30, 0.18);
+
+  /* Source tokens default to the dark-theme pastels (`--src-claude:
+     #E89B7D`, `--src-canvas: #7DC2D5`, …) which look fine on a deep
+     surface but read as pale washes on cream. Override each with a
+     deeper, saturated cousin in the same hue family — same vocabulary
+     ("Claude is warm rust", "Canvas is teal"), enough contrast to
+     stay legible against `--bg-0` / `--bg-1`.
+
+     The `*-2` variant stays close to the base so callers that mix
+     the two (e.g. column glow) still get a continuous gradient. */
+  --src-jira:    #2A5FCC;
+  --src-jira-2:  #4A7FE6;
+  --src-github:  #6B3FCC;
+  --src-github-2:#8458D9;
+  --src-sentry:  #4A2E70;
+  --src-sentry-2:#6E4A99;
+  --src-claude:  #B85A35;
+  --src-claude-2:#D4754D;
+  --src-cursor:  #555E5A;
+  --src-canvas:  #2A6F85;
+  --src-canvas-2:#4690A6;
+  --src-editor:  #8B3F22;
+  --src-term:    #3A4A42;
+
+  /* Vivid IDE syntax palette — re-tuned for cream surface. The dark
+     palette uses high-luminance pastels; on light bg we need
+     mid-luminance saturated tones (otherwise `string` and `keyword`
+     pastel-green vanish into the mint background). */
+  --tk-key:    #6B3FCC;
+  --tk-fn:     #2E5A4A;
+  --tk-str:    #2E6B3A;
+  --tk-num:    #2A5FCC;
+  --tk-type:   #8B5A1A;
+  --tk-prop:   #3A6B5A;
+  --tk-cmt:    #7A938A;
+
+  /* Bump the mid-tone text colors one notch toward `--text-0` so
+     they don't blend into `--bg-1`. `--text-2` was tuned for the
+     dark theme's contrast budget — on cream, the same hex reads as
+     "almost background". */
+  --text-2: #345A4C;
+  --text-mute: #5C7A6F;
 }
 
 /* (The previous separate `:root[data-theme='dark']` block has been
@@ -256,6 +325,32 @@ kbd {
   border-radius: 6px;
 }
 
+/* ============================================================
+   Motion tokens — used app-wide so durations and easing read as
+   one product instead of 30 components each rolling their own.
+
+   Pick at the source:
+     --ease-out      neutral material out — overlays, hover lifts,
+                     fade-in. Use as default for "appears / settles".
+     --ease-spring   slight overshoot (bezier crests above 1) —
+                     overlays/popovers entry, chevron rotation. Adds
+                     "snap" without being bouncy.
+     --ease-in-out   symmetric — for transforms that have to go BOTH
+                     ways smoothly (hover scale, expand/collapse).
+   Durations:
+     --dur-quick     hover/feedback, color shifts (≤120ms)
+     --dur-base      open/close fade, chevron rotate (≈180ms)
+     --dur-slow      slide-in / popover entry (≈220ms)
+   ============================================================ */
+:root {
+  --ease-out:    cubic-bezier(0.2, 0.7, 0.3, 1);
+  --ease-spring: cubic-bezier(0.2, 0.9, 0.3, 1.15);
+  --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+  --dur-quick:   120ms;
+  --dur-base:    180ms;
+  --dur-slow:    220ms;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;
@@ -265,37 +360,11 @@ kbd {
 }
 
 /* ============================================================
-   Shared styles consumed by multiple workbench/child components.
+   Shared styles consumed across solos / app shells.
    Child components' own scoped CSS takes precedence where it exists;
    these rules fill in the gaps and keep the styling consistent across
-   GitHub app, JiraColumn, AgentColumn, EditorColumn, Modals, etc.
+   GitHub app, Jira solo, Agent solo, Editor solo, Modals, etc.
    ============================================================ */
-
-/* Workbench columns — v6 floating cards.
-   Each column is its own panel: raised bg, subtle border on all sides,
-   medium radius, soft shadow. The .wb-columns container provides the
-   gap + side padding. App shell wraps a single column at full
-   width (without changing the column's interior styling) so the
-   composite workbench and solo modes share the same visual language. */
-.wb-column {
-  flex: 1 1 360px;
-  min-width: 280px;
-  min-height: 0;
-  display: flex; flex-direction: column;
-  background: var(--bg-1);
-  border: 1px solid var(--border);
-  border-radius: var(--r-pane, 14px);
-  position: relative;
-  overflow: hidden;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 240, 220, 0.025),
-    var(--shadow-2);
-  transition: border-color 200ms;
-}
-.wb-column:hover { border-color: var(--border-hi); }
-.wb-column.inbox { background: var(--bg-1); }
-.wb-column--editor { min-width: 420px; }
-.wb-column--editor .ev { height: 100%; }
 
 /* Per-app tonal accents.
    Each full-screen `.app-shell` re-points the global `--accent-*`
@@ -370,88 +439,78 @@ kbd {
   --accent-fg: #0A1A20;
 }
 
-/* Per-source brand stripe — 3px on the left edge, glows in the
-   source's brand colour. Uses the column's existing `data-kind`
-   attr so no component-side changes are needed. The stripe sits
-   inside the rounded corner and clips with the column. */
-.wb-column[data-kind] {
-  --col-tone: var(--accent);
-  --col-glow: var(--accent-glow);
+/* Per-shell accent overrides for the LIGHT theme.
+ *
+ * On dark theme, `--accent-bright` is the PASTEL flavour of the
+ * source's hue (peach for Claude, lavender for GitHub, …) — that's
+ * the right call when the bright accent sits as text on a deep
+ * surface. On cream, the same pastel reads as a wash: dropdown row
+ * with `color: var(--accent-bright); background: var(--accent-soft)`
+ * becomes "pale peach on pale peach" and the label vanishes until
+ * you scroll past the highlighted row.
+ *
+ * Each block here pushes `--accent-bright` DOWN the value scale
+ * (towards the deep-saturated end of the same hue) so accent text
+ * has real contrast against `--bg-0` / `--bg-1`. The translucent
+ * `--accent-soft` follows so highlight rows still read as "tinted",
+ * not opaque. `--accent-fg` flips to a light tone so primary buttons
+ * (filled with `--accent-bright`) still have readable foreground.
+ */
+:root[data-theme='light'] .app-shell.sj-shell {
+  --accent: #2A5FCC;
+  --accent-bright: #1A3D85;
+  --accent-deep: #0D245C;
+  --accent-soft: rgba(42, 95, 204, 0.12);
+  --accent-glow: rgba(42, 95, 204, 0.30);
+  --accent-fg: #F1F5F2;
 }
-.wb-column[data-kind="github"]   { --col-tone: var(--src-github);  --col-glow: rgba(181, 132, 255, 0.32); }
-.wb-column[data-kind="jira"]     { --col-tone: var(--src-jira);    --col-glow: rgba(79, 142, 255, 0.32); }
-.wb-column[data-kind="sentry"]   { --col-tone: var(--src-sentry);  --col-glow: rgba(110, 80, 155, 0.32); }
-.wb-column[data-kind="claude"]   { --col-tone: var(--src-claude);  --col-glow: rgba(232, 155, 125, 0.32); }
-.wb-column[data-kind="cursor"]   { --col-tone: var(--src-cursor);  --col-glow: rgba(220, 220, 220, 0.20); }
-.wb-column[data-kind="canvas"]   { --col-tone: var(--src-canvas);  --col-glow: rgba(125, 201, 176, 0.30); }
-.wb-column[data-kind="editor"]   { --col-tone: var(--src-editor);  --col-glow: rgba(204, 120, 92, 0.32); }
-.wb-column[data-kind="terminal"] { --col-tone: var(--src-term);    --col-glow: rgba(245, 240, 234, 0.20); }
-.wb-column[data-kind]::before {
-  content: '';
-  position: absolute;
-  left: 0; top: 0; bottom: 0;
-  width: 2.5px;
-  z-index: 4;
-  pointer-events: none;
-  background: var(--col-tone);
-  box-shadow: 0 0 12px var(--col-glow);
-  /* The column itself has overflow: hidden, so the stripe inherits the
-     column's rounded corners on the left edge. */
+:root[data-theme='light'] .app-shell.sg-shell {
+  --accent: #6B3FCC;
+  --accent-bright: #4A2A99;
+  --accent-deep: #2E195F;
+  --accent-soft: rgba(107, 63, 204, 0.12);
+  --accent-glow: rgba(107, 63, 204, 0.30);
+  --accent-fg: #F1F5F2;
 }
-
-.wb-col-controls {
-  position: absolute;
-  bottom: 12px;
-  right: 14px;
-  display: flex;
-  gap: 2px;
-  z-index: 6;
-  opacity: 0;
-  transform: translateY(4px);
-  transition: opacity 120ms ease, transform 120ms ease;
-  background: color-mix(in srgb, var(--bg-2) 92%, transparent);
-  border: 1px solid var(--border-hi);
-  border-radius: 6px;
-  padding: 2px;
-  backdrop-filter: blur(6px);
-  box-shadow: var(--shadow-1);
+:root[data-theme='light'] .app-shell.ssn-shell {
+  --accent: #6E4A99;
+  --accent-bright: #4A2E70;
+  --accent-deep: #2E1B4A;
+  --accent-soft: rgba(110, 74, 153, 0.12);
+  --accent-glow: rgba(110, 74, 153, 0.30);
+  --accent-fg: #F1F5F2;
 }
-.wb-column:hover .wb-col-controls,
-.wb-col-controls:focus-within {
-  opacity: 1;
-  transform: translateY(0);
+:root[data-theme='light'] .app-shell.sa[data-kind="claude"] {
+  --accent: #B85A35;
+  --accent-bright: #7A3D24;
+  --accent-deep: #4D2614;
+  --accent-soft: rgba(184, 90, 53, 0.12);
+  --accent-glow: rgba(184, 90, 53, 0.30);
+  --accent-fg: #FCF7F0;
 }
-.wb-col-ctl {
-  width: 20px; height: 20px;
-  display: inline-flex; align-items: center; justify-content: center;
-  border-radius: 3px;
-  color: var(--text-1);
+:root[data-theme='light'] .app-shell.sa[data-kind="cursor"] {
+  --accent: #555E5A;
+  --accent-bright: #2A302E;
+  --accent-deep: #15191A;
+  --accent-soft: rgba(85, 94, 90, 0.12);
+  --accent-glow: rgba(85, 94, 90, 0.30);
+  --accent-fg: #F1F5F2;
 }
-.wb-col-ctl:hover { background: var(--bg-3); color: var(--text-0); }
-.wb-col-ctl--close:hover { color: var(--error); }
-.wb-col-ctl svg { width: 11px; height: 11px; }
-
-.wb-col-resize {
-  position: absolute;
-  top: 0; bottom: 0; right: 0;
-  width: 6px;
-  cursor: col-resize;
-  z-index: 5;
-  user-select: none;
+:root[data-theme='light'] .app-shell.se-shell {
+  --accent: #8B3F22;
+  --accent-bright: #5A2A18;
+  --accent-deep: #3A1B0F;
+  --accent-soft: rgba(139, 63, 34, 0.12);
+  --accent-glow: rgba(139, 63, 34, 0.30);
+  --accent-fg: #FCF7F0;
 }
-.wb-col-resize::before {
-  content: '';
-  position: absolute; inset: 0;
-  margin: 0 2px;
-  background: transparent;
-  transition: background 100ms ease;
-}
-.wb-col-resize:hover::before,
-.wb-col-resize:active::before { background: var(--accent); }
-.wb-col-resize.snap-flash::before {
-  background: var(--accent-bright);
-  box-shadow: 0 0 14px var(--accent-glow);
-  transition: none;
+:root[data-theme='light'] .app-shell.sc-shell {
+  --accent: #2A6F85;
+  --accent-bright: #1B4A5A;
+  --accent-deep: #102E3A;
+  --accent-soft: rgba(42, 111, 133, 0.12);
+  --accent-glow: rgba(42, 111, 133, 0.30);
+  --accent-fg: #F1F5F2;
 }
 
 .claude-col {
@@ -1813,7 +1872,7 @@ img.chat-avatar { padding: 0; }
   -webkit-backdrop-filter: blur(22px) saturate(1.1);
   display: flex; align-items: center; justify-content: center;
   z-index: 210;
-  animation: fadeIn 180ms ease-out;
+  animation: fadeIn var(--dur-base) var(--ease-out);
 }
 .modal {
   width: 480px; max-width: 90vw;
@@ -1825,7 +1884,7 @@ img.chat-avatar { padding: 0; }
     0 0 0 1px var(--border-accent-2),
     inset 0 1px 0 rgba(245, 240, 234, 0.04);
   overflow: hidden;
-  animation: slideDown 220ms cubic-bezier(0.2, 0.9, 0.3, 1.2);
+  animation: slideDown var(--dur-slow) var(--ease-spring);
   display: flex; flex-direction: column;
   max-height: 90vh;
 }

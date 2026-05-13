@@ -1,0 +1,72 @@
+{
+  "version": 1,
+  "updated": "2026-05-11",
+  "entries": [
+    {
+      "id": "conventional-commits",
+      "kind": "skill",
+      "name": "Conventional Commits",
+      "description": "Force commit messages to follow the Conventional Commits spec (feat:, fix:, chore:, BREAKING CHANGE:).",
+      "tags": ["git", "style", "commits"],
+      "author": "Woom defaults",
+      "source": {
+        "type": "inline",
+        "slug": "conventional-commits",
+        "content": "---\nname: conventional-commits\ndescription: When the user asks for a git commit, ALWAYS format the message using Conventional Commits. Subject line: <type>(<scope>): <description>. type ∈ {feat, fix, chore, refactor, docs, test, perf, build, ci, revert}. Use \"!\" or a `BREAKING CHANGE:` footer for breaking changes. Body wraps at 72 cols and explains *why*, not *what*.\n---\n\n# Conventional Commits\n\nApply this skill whenever you draft a git commit message. Reject one-liner messages like \"updated stuff\" — restate the change in the required shape:\n\n```\n<type>(<scope>): <subject in imperative present tense>\n\n<body — wrap at 72 cols, explain motivation>\n\n<footers — Closes #123, BREAKING CHANGE: ...>\n```\n\n## Type quick-ref\n\n- **feat** — new user-facing feature\n- **fix** — bug fix\n- **chore** — tooling, deps, no production impact\n- **refactor** — code change without behaviour change\n- **docs** — documentation only\n- **test** — tests only\n- **perf** — performance work\n- **build** — build system / packaging\n- **ci** — CI pipeline config\n- **revert** — reverts a previous commit\n\nIf the change crosses multiple types, pick the dominant one and mention the others in the body.\n"
+      }
+    },
+    {
+      "id": "no-trailing-summary",
+      "kind": "skill",
+      "name": "No trailing summary",
+      "description": "Stop ending responses with a recap of what was just changed — the diff already says it.",
+      "tags": ["style", "responses"],
+      "author": "Woom defaults",
+      "source": {
+        "type": "inline",
+        "slug": "no-trailing-summary",
+        "content": "---\nname: no-trailing-summary\ndescription: After making code changes, do NOT end the response with a paragraph that recaps every file you touched. The user can read the diff. One short sentence stating what changed (or just \"done\") is enough. Skip section headers like \"## Summary\" / \"## Changes\" in chat replies.\n---\n\n# No trailing summary\n\nWhen you finish a task:\n- ✅ \"Done — `auth.ts:42` now retries on 5xx.\"\n- ❌ \"## Summary\\n- Added retry logic to auth.ts\\n- Updated tests\\n- ...\\n\\n## Files changed\\n- ...\"\n\nThe diff IS the summary. Reserve recaps for PR descriptions, not chat turns.\n"
+      }
+    },
+    {
+      "id": "migration-safety",
+      "kind": "skill",
+      "name": "DB Migration Safety Check",
+      "description": "Before approving any SQL migration, audit it for lock-heavy operations, missing indexes, and irreversible changes.",
+      "tags": ["database", "sql", "safety"],
+      "author": "Woom defaults",
+      "source": {
+        "type": "inline",
+        "slug": "migration-safety",
+        "content": "---\nname: migration-safety\ndescription: When you see a SQL migration file (e.g. `*.sql` under `migrations/`, `db/migrate/`, `prisma/migrations/`, alembic, etc.), run a safety pass BEFORE proposing it. Flag: (1) `ALTER TABLE … NOT NULL` on large tables without a default + backfill plan; (2) `CREATE INDEX` without `CONCURRENTLY` on Postgres; (3) renaming or dropping columns referenced by application code; (4) anything that takes ACCESS EXCLUSIVE on a hot table mid-traffic.\n---\n\n# Migration safety pass\n\nFor every migration you author or review, walk this checklist explicitly:\n\n1. **Locks** — does this take ACCESS EXCLUSIVE / SHARE ROW EXCLUSIVE on a table with concurrent writes? On Postgres prefer `CREATE INDEX CONCURRENTLY`, `ALTER TABLE … ADD COLUMN` with a constant default (Postgres ≥11 fast-path), and split renames into add-new + backfill + drop-old across two deploys.\n2. **Backfill** — if a column is becoming NOT NULL or gaining a non-constant default, the migration MUST ship with a backfill step. Don't rely on row-by-row UPDATE in the same transaction.\n3. **Reversibility** — for irreversible ops (DROP TABLE, DROP COLUMN, type narrowing) confirm the user understands rollback is impossible without a restore. Suggest a soft-delete or rename-to-_deprecated step instead.\n4. **App coupling** — if the migration drops or renames a column, grep the repo for references first. Mention any caller still using the old name in your review.\n\nReport findings as a numbered list and propose concrete fixes; don't just say \"this might be risky\".\n"
+      }
+    },
+    {
+      "id": "test-before-claim-done",
+      "kind": "skill",
+      "name": "Test before claiming done",
+      "description": "Don't say \"all good / done\" until you've actually run tests or exercised the feature. Code that compiles isn't code that works.",
+      "tags": ["quality", "discipline"],
+      "author": "Woom defaults",
+      "source": {
+        "type": "inline",
+        "slug": "test-before-claim-done",
+        "content": "---\nname: test-before-claim-done\ndescription: When you finish a code change, before reporting it as complete, RUN the test suite OR exercise the feature manually. Typechecking / build passing is not the same as the feature working. If you cannot run tests in this environment, SAY SO explicitly — don't bluff with \"should work\".\n---\n\n# Test before claiming done\n\nNever end a task with \"all good!\" / \"done!\" / \"this should work\" unless one of the following is true:\n\n1. You ran the relevant test command and it passed.\n2. You exercised the feature end-to-end (CLI invocation, UI click-through, API request).\n3. You explicitly state: \"I haven't run tests because <reason>. The change typechecks but is unverified.\"\n\nType-checks and builds pass for many broken programs. The user is the one whose time gets wasted when you bluff.\n"
+      }
+    },
+    {
+      "id": "anthropic-skills-examples",
+      "kind": "skill",
+      "name": "Anthropic example skills",
+      "description": "Cookbook-style example skills from Anthropic's public repo. Browse what's in the repo and pick what you need.",
+      "tags": ["examples", "anthropic", "git"],
+      "author": "Anthropic",
+      "source": {
+        "type": "git",
+        "slug": "anthropic-examples",
+        "url": "https://github.com/anthropics/claude-cookbooks"
+      },
+      "note": "This installs the whole cookbooks repo into ~/.claude/skills/anthropic-examples. It's not a single skill — treat it as a reference folder. Delete and replace with a tighter ref once you know what you want."
+    }
+  ]
+}

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
   import { EditorView, basicSetup } from 'codemirror';
   import { EditorState, Compartment } from '@codemirror/state';
   import { keymap } from '@codemirror/view';
@@ -11,6 +11,12 @@
 
   interface Props {
     path: string;
+    /** Editor solo instance id this buffer belongs to. Used to filter
+     *  cross-component navigation events (`woom:editor:goto`) so the
+     *  symbol picker can target the right buffer when the user has
+     *  multiple editor instances open at once. Defaults to
+     *  `'default'` to match EditorView's prop default. */
+    instanceId?: string;
     onDirty?: (dirty: boolean) => void;
     onSaved?: (path: string) => void;
     /** Fires whenever the user's selection or the editor geometry
@@ -48,8 +54,29 @@
         bytes: number;
       } | null
     ) => void;
+    /** Toggle CodeMirror's `EditorView.lineWrapping`. Defaults to off
+     *  (matches every IDE I know — wrapping interferes with reading
+     *  long log lines / tables). The status bar exposes a one-click
+     *  toggle so the user can flip per-buffer when a Markdown / poem
+     *  benefits from wrapping. */
+    wordWrap?: boolean;
+    /** Fires when the user changes the editor's text — exposes the
+     *  in-memory contents so the parent can mirror it (e.g. a
+     *  Markdown live preview). Cheap to add: a single `u.state.doc`
+     *  call. Skipped when not provided so most call sites pay
+     *  nothing. */
+    onTextChange?: (text: string) => void;
   }
-  let { path, onDirty, onSaved, onSelectionChange, onCursorChange }: Props = $props();
+  let {
+    path,
+    instanceId = 'default',
+    onDirty,
+    onSaved,
+    onSelectionChange,
+    onCursorChange,
+    wordWrap = false,
+    onTextChange
+  }: Props = $props();
 
   let editorEl: HTMLDivElement;
   let view: EditorView | null = null;
@@ -65,6 +92,10 @@
      $effect below dispatches a `reconfigure` whenever the user flips
      the app palette in Settings. */
   const themeCompartment = new Compartment();
+  /* Word-wrap toggle compartment — `EditorView.lineWrapping` is a
+     facet (a fixed extension), so we stash it behind a Compartment
+     to flip it at runtime via `dispatch({effects: reconfigure(…)})`. */
+  const wrapCompartment = new Compartment();
 
   async function load(p: string) {
     if (!p || p === lastLoadedPath) return;
@@ -111,6 +142,7 @@
             basicSetup,
             themeCompartment.of(editorThemeExtension(themeState.name)),
             languageCompartment.of(languageFor(p)),
+            wrapCompartment.of(wordWrap ? EditorView.lineWrapping : []),
             keymap.of([
               { key: 'Mod-s', run: (v) => { void save(v); return true; } }
             ]),
@@ -122,6 +154,10 @@
                   dirty = d;
                   onDirty?.(d);
                 }
+                /* Stream the buffer text up so the Markdown live-
+                   preview can re-render. Only fired when the parent
+                   wired a callback — no cost otherwise. */
+                onTextChange?.(cur);
               }
               // Selection-change OR geometry-change → recompute the
               // popover anchor so it tracks the end of the selection
@@ -247,6 +283,45 @@
     if (view) await save(view);
   }
 
+  /** Move the caret to the start of `line` (1-based) and scroll it
+   *  into the centre of the viewport. Used by the symbol picker —
+   *  also exported so other call sites (jump-to-error, follow-link)
+   *  can land on the same surface without re-implementing the
+   *  CodeMirror dispatch dance. Clamped so an out-of-range line
+   *  number from a stale picker entry doesn't throw. */
+  export function goToLine(line1: number) {
+    if (!view) return;
+    const doc = view.state.doc;
+    const safe = Math.max(1, Math.min(doc.lines, line1 | 0));
+    const lineInfo = doc.line(safe);
+    view.dispatch({
+      selection: { anchor: lineInfo.from, head: lineInfo.from },
+      effects: EditorView.scrollIntoView(lineInfo.from, { y: 'center' })
+    });
+    /* Steal focus so the next keystroke lands in the editor, not in
+       whatever overlay-input the user just dismissed. */
+    view.focus();
+  }
+
+  /* Cross-component goto bus — the symbol picker (and any future
+     jump-here surface) fires `woom:editor:goto` with the editor
+     instance id + file + 1-based line. We filter by both instance
+     and path so every Editor component can listen safely without
+     two buffers fighting for the jump. */
+  function onGoto(ev: Event) {
+    const e = ev as CustomEvent<{ editorId?: string; filePath?: string; line?: number }>;
+    if (!e.detail) return;
+    if (e.detail.editorId && e.detail.editorId !== instanceId) return;
+    if (e.detail.filePath && e.detail.filePath !== lastLoadedPath) return;
+    const line = e.detail.line;
+    if (typeof line !== 'number' || line < 1) return;
+    goToLine(line);
+  }
+  onMount(() => {
+    window.addEventListener('woom:editor:goto', onGoto as EventListener);
+    return () => window.removeEventListener('woom:editor:goto', onGoto as EventListener);
+  });
+
   $effect(() => {
     void load(path);
   });
@@ -261,6 +336,25 @@
       effects: themeCompartment.reconfigure(editorThemeExtension(name))
     });
   });
+
+  /* Same compartment dance for word-wrap: dispatch a reconfigure
+     when the prop flips so the user can toggle without losing their
+     scroll / selection. */
+  $effect(() => {
+    const wrap = wordWrap;
+    if (!view) return;
+    view.dispatch({
+      effects: wrapCompartment.reconfigure(wrap ? EditorView.lineWrapping : [])
+    });
+  });
+
+  /** Snapshot the current buffer text. Useful for parents that want
+   *  to seed a preview without subscribing to every keystroke via
+   *  onTextChange — call once when opening the preview, then rely
+   *  on the callback for incremental updates. */
+  export function getText(): string {
+    return view?.state.doc.toString() ?? '';
+  }
 
   onDestroy(() => {
     /* Last-chance flush of the current cursor so a quit (or column

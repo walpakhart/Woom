@@ -8,9 +8,19 @@
   import GitPanel from '$lib/components/editor/GitPanel.svelte';
   import HistoryPanel from '$lib/components/editor/HistoryPanel.svelte';
   import DiffView from '$lib/components/editor/DiffView.svelte';
+  import ReviewPane from '$lib/components/editor/ReviewPane.svelte';
+  import MarkdownPreview from '$lib/components/editor/MarkdownPreview.svelte';
+  import ImagePreview from '$lib/components/editor/ImagePreview.svelte';
   import Splitter from '$lib/components/ui/Splitter.svelte';
   import { notifyError } from '$lib/state/toaster.svelte';
   import { applyRangeToAgent } from '$lib/services/applyToAgent';
+  import {
+    sessionsState,
+    consumeEditorOpenFile,
+    getPendingEditEvents,
+    updateEditEvent
+  } from '$lib/state/sessions.svelte';
+  import { revertEditEvent } from '$lib/services/diffActions';
 
   /* Storage keys are computed per `instanceId` so every editor
      instance (Vermeer, Hokusai, …) gets its own tab list and root.
@@ -22,15 +32,25 @@
   function tabsKey(id: string): string {
     return `woom:editor:tabs:${id}`;
   }
+  /* The currently-focused buffer for this editor instance. Lives in
+     localStorage (not in `editorInstanceState`) because we only read
+     it from a sibling surface — the @-mention picker — that doesn't
+     need the round-trip through reactive state. Keeping it here means
+     the picker can read synchronously without subscribing to a slice
+     of `sessionsState`. Updated by an effect on `activePath` below. */
+  function activeKey(id: string): string {
+    return `woom:editor:active:${id}`;
+  }
 
   /* Sidebar mode is now driven from the parent's ActivityBar, not from
-     a tab strip at the bottom of the explorer (v7). Six tabs total —
+     a tab strip at the bottom of the explorer (v7). Seven tabs total —
      `explorer` is the file tree, `git` is the staging / history pane,
+     `review` is the agent-edits review board (Multi-Agent Diff Review),
      and the remaining three (`search`, `debug`, `tests`) render their
      own focused panes inside the same sidebar slot. The parent passes
      the active tab in via `sidebarTab` and we keep our own fallback
      when running outside an EditorApp shell. */
-  type SidebarTab = 'explorer' | 'search' | 'git' | 'debug' | 'tests';
+  type SidebarTab = 'explorer' | 'search' | 'git' | 'review' | 'debug' | 'tests';
 
   /* Bumped after every commit / push / pull / branch switch so the
      HistoryPanel inside the Git tab re-fetches automatically. */
@@ -71,6 +91,18 @@
         cache so two open editors don't share state. Required for
         multi-instance correctness; legacy callers can pass `default`. */
     instanceId?: string;
+    /** Switch the parent's ActivityBar to the Review tab. Wired up by
+     *  EditorApp; legacy callers leave it undefined and the file-level
+     *  "Open Review" affordance becomes a no-op (other Review entry
+     *  points still work). */
+    onRequestReviewTab?: () => void;
+    /** Quick-send a message to a linked session. Used by the inline
+     *  "Edit selection" composer popover so the user can write +
+     *  send a prompt without leaving the editor. Mirrors the same
+     *  contract InlineClaude has for its mini-composer; if not
+     *  provided, the inline composer falls back to "pin mention,
+     *  user finishes the prompt elsewhere". */
+    onQuickSend?: (sessionId: string, text: string) => void;
   }
   let {
     repoPath = $bindable(''),
@@ -80,7 +112,9 @@
     onUnlinkAgent,
     sidebarTab = 'explorer',
     instanceLabel,
-    instanceId = 'default'
+    instanceId = 'default',
+    onRequestReviewTab,
+    onQuickSend
   }: Props = $props();
 
   // Pick which linked agent the AI commit-message button routes to. Claude
@@ -212,6 +246,56 @@
     }, 280);
   });
 
+  /** Lower-cased extension (without dot) of an absolute file path,
+   *  empty string when the path has no extension. Used by the
+   *  preview-routing logic below + a few other places. */
+  function extOf(p: string): string {
+    const dot = p.lastIndexOf('.');
+    if (dot < 0) return '';
+    return p.slice(dot + 1).toLowerCase();
+  }
+
+  /* Image vs Markdown vs text routing for the right-pane render.
+     Bitmap formats land on ImagePreview (asset:// URL through
+     convertFileSrc); .svg too — it renders the same way. Markdown
+     opens in the text editor by default but the user can flip to a
+     side-by-side or full preview via the toolbar / ⇧⌘V.
+     Anything else falls through to CodeMirror. */
+  const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico', 'svg', 'avif']);
+  const MARKDOWN_EXTS = new Set(['md', 'mdx', 'markdown']);
+  const isImagePath = $derived(activePath ? IMAGE_EXTS.has(extOf(activePath)) : false);
+  const isMarkdownPath = $derived(activePath ? MARKDOWN_EXTS.has(extOf(activePath)) : false);
+
+  /* Markdown preview is per-instance state, not per-file — keeps the
+     muscle memory consistent: hit ⇧⌘V on README, then open
+     CONTRIBUTING, the preview is still on. `'off' | 'split' | 'only'`
+     so users with a wide screen can keep both panes visible while
+     users on a laptop can flip to preview-only mode. */
+  let mdPreviewMode = $state<'off' | 'split' | 'only'>('off');
+  function cycleMdPreview() {
+    mdPreviewMode = mdPreviewMode === 'off' ? 'split'
+      : mdPreviewMode === 'split' ? 'only'
+      : 'off';
+  }
+
+  /* Word-wrap is also per-instance (same reasoning). Off by default —
+     users opening logs / CSV-ish text don't want wrap helping them
+     misread columns. */
+  let wordWrap = $state(false);
+
+  /* Live mirror of the editor's text — fed into MarkdownPreview when
+     in split / only mode so the preview tracks edits without us
+     re-reading the file from disk on every keystroke. Only the MD
+     case actually consumes it; for non-MD files the callback is a
+     no-op (we don't even attach it). */
+  let liveBuffer = $state<string | null>(null);
+  $effect(() => {
+    activePath; diffTarget;
+    /* Reset on file swap so a stale buffer doesn't bleed into the
+       new file's preview before its first onTextChange fires. */
+    liveBuffer = null;
+  });
+
   /** Map a file extension to a friendly language label for the status
    *  bar. Falls back to "Plain text" — keeping the bar honest about
    *  what CodeMirror can't syntax-highlight rather than guessing. */
@@ -319,6 +403,190 @@
        just leave the user staring at a stale popover until they click
        elsewhere. */
     selection = null;
+  }
+
+  /* ── Inline "Composer here" — `compose` mode of the same selection
+     popover. Click the ✨ chip on the regular pick popover and the
+     same anchor expands into a textarea + agent switcher. Pressing
+     Enter pins `@<file>:<start>-<end>` to the chosen session and fires
+     `onQuickSend` so the agent picks up the request immediately —
+     same plumbing the InlineClaude mini-composer uses. The popover
+     position is frozen on entry (`composerAnchor`) so a CodeMirror
+     dispatch that nulls `selection.anchor` (caret moved while typing
+     inside the popover) doesn't yank the floater back home. */
+  let composerMode = $state<{
+    sessionId: string;
+    agentInstanceId: string;
+    kind: 'claude' | 'cursor';
+    label: string;
+    /** Frozen popover position the moment the user opened compose
+     *  mode. Keeping it pinned means the textarea doesn't drift if
+     *  the editor briefly loses geometry / scrolls slightly. */
+    anchor: { x: number; y: number };
+    /** Frozen selection range — same reason as `anchor` above; we
+     *  send the lines the user originally highlighted, not whatever
+     *  CodeMirror reports when Enter fires. */
+    range: { startLine: number; endLine: number };
+    filePath: string;
+  } | null>(null);
+  let composerText = $state('');
+  let composerEl: HTMLTextAreaElement | null = $state(null);
+
+  function openComposer(btn?: ApplyBtn) {
+    if (!selection || !selection.anchor || !activePath) return;
+    /* Default to the first applyButton when called without an
+       explicit target — gives the keyboard / icon-click flow a
+       sensible single-tap entry. */
+    const target = btn ?? applyButtons[0];
+    if (!target) return;
+    composerMode = {
+      sessionId: target.sessionId,
+      agentInstanceId: target.agentInstanceId,
+      kind: target.kind,
+      label: target.label,
+      anchor: { x: selection.anchor.x, y: selection.anchor.y },
+      range: { startLine: selection.startLine, endLine: selection.endLine },
+      filePath: activePath
+    };
+    composerText = '';
+    /* Focus the textarea after the DOM has it. queueMicrotask is
+       enough — Svelte mounts the element in this same task. */
+    queueMicrotask(() => composerEl?.focus());
+  }
+
+  function closeComposer() {
+    composerMode = null;
+    composerText = '';
+  }
+
+  function switchComposerTarget(btn: ApplyBtn) {
+    if (!composerMode) return;
+    composerMode = {
+      ...composerMode,
+      sessionId: btn.sessionId,
+      agentInstanceId: btn.agentInstanceId,
+      kind: btn.kind,
+      label: btn.label
+    };
+  }
+
+  function sendComposer() {
+    if (!composerMode) return;
+    const text = composerText.trim();
+    if (!text) return;
+    /* Pin the range mention first — this puts `@<file>:<a>-<b>` into
+       the session's input. If a sender callback was passed, append
+       our text right after and fire it immediately; otherwise the
+       mention sits in the composer and the user finishes typing in
+       the InlineClaude pane (the requestInlineExpandFor signal
+       above expands that pane automatically). */
+    const result = applyRangeToAgent({
+      sessionId: composerMode.sessionId,
+      agentInstanceId: composerMode.agentInstanceId,
+      filePath: composerMode.filePath,
+      startLine: composerMode.range.startLine,
+      endLine: composerMode.range.endLine
+    });
+    if (!result.ok || !result.token) {
+      closeComposer();
+      return;
+    }
+    if (onQuickSend) {
+      const stamped = `@${result.token} ${text}`;
+      onQuickSend(composerMode.sessionId, stamped);
+    }
+    /* Drop selection so the popover dismisses; without this the
+       `pick` popover would re-render under the composer until the
+       user clicks elsewhere. */
+    selection = null;
+    closeComposer();
+  }
+
+  function onComposerKey(e: KeyboardEvent) {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      closeComposer();
+      return;
+    }
+    if (e.key === 'Enter' && !e.shiftKey && !e.altKey && !e.isComposing) {
+      e.preventDefault();
+      sendComposer();
+    }
+  }
+
+  /* ── Pending-edits banner for the current file.
+     Drives the inline strip above CodeMirror that reads
+     "N pending edits from <agent> · Keep · Revert · Open Review".
+     The strip lets the user resolve a single file's worth of agent
+     edits without leaving the buffer; bulk verdicts across files
+     happen in the Review pane. */
+  type PendingEditEvent = ReturnType<typeof getPendingEditEvents>[number];
+  type PendingForFile = {
+    sessionId: string;
+    sessionTitle: string;
+    sessionKind: 'claude' | 'cursor';
+    event: PendingEditEvent;
+  };
+  const pendingEditsForActiveFile = $derived.by<PendingForFile[]>(() => {
+    void sessionsState.list;
+    const path = activePath;
+    if (!path) return [];
+    const out: PendingForFile[] = [];
+    for (const la of linkedAgents) {
+      for (const ev of getPendingEditEvents(la.sessionId)) {
+        if (ev.filePath !== path) continue;
+        out.push({
+          sessionId: la.sessionId,
+          sessionTitle: la.name || (la.kind === 'claude' ? 'Claude' : 'Cursor'),
+          sessionKind: la.kind,
+          event: ev
+        });
+      }
+    }
+    return out;
+  });
+
+  /** Aggregate label for the banner — "2 from Claude" /
+   *  "3 (Claude · Cursor)". Hand-built rather than via a join because
+   *  the user reads "from <agent>" as a hint for "whose changes am
+   *  I about to keep / revert", and that voice changes shape with
+   *  the count. */
+  const pendingBannerLabel = $derived.by(() => {
+    const list = pendingEditsForActiveFile;
+    if (list.length === 0) return '';
+    const titles = new Set<string>();
+    for (const p of list) titles.add(p.sessionTitle);
+    const sources = Array.from(titles).join(' · ');
+    const count = list.length;
+    return count === 1 ? `1 pending edit from ${sources}` : `${count} pending edits from ${sources}`;
+  });
+
+  let bannerBusy = $state(false);
+
+  function keepActiveFileEdits() {
+    for (const p of pendingEditsForActiveFile) {
+      updateEditEvent(p.sessionId, p.event.toolId, { status: 'kept', note: undefined });
+    }
+  }
+
+  async function revertActiveFileEdits() {
+    if (bannerBusy) return;
+    bannerBusy = true;
+    try {
+      /* Newest-first within the file — same dependency-ordering reason
+         as `revertAllPendingEdits`: stacked edits on the same file
+         only revert cleanly if the latest one goes back first. */
+      const ordered = pendingEditsForActiveFile.slice().reverse();
+      for (const p of ordered) {
+        const r = await revertEditEvent(p.sessionId, p.event);
+        if (!r.ok) {
+          notifyError(r.error, { title: `Couldn't revert ${p.event.filePath}` });
+          break;
+        }
+      }
+    } finally {
+      bannerBusy = false;
+    }
   }
 
   interface FileStatus { path: string; code: string; staged: boolean; unstaged: boolean; }
@@ -440,6 +708,48 @@
     if (repoPath) void invoke('fs_watch_stop').catch(() => {});
   });
 
+  /* ⇧⌘V — Markdown preview cycle. The shortcut is registered globally
+     in +page.svelte (so it can be scoped to the editor solo), then
+     fan-outs to every EditorView via a window event. We only react
+     when the active file is actually Markdown — otherwise the
+     keystroke is a harmless no-op. */
+  function onTogglePreview() {
+    if (!isMarkdownPath) return;
+    cycleMdPreview();
+  }
+  onMount(() => {
+    window.addEventListener('woom:editor:toggle-md-preview', onTogglePreview);
+    return () => window.removeEventListener('woom:editor:toggle-md-preview', onTogglePreview);
+  });
+
+  /* The FileTree fires `woom:fs:path-deleted` after a successful
+     rm — close any open tab that lived inside the deleted subtree
+     so we don't keep a phantom buffer pointing at a missing file.
+     The fs watcher would eventually surface the error on next save,
+     but proactive closing matches what VSCode does (and avoids the
+     "save failed: no such file" surprise minutes later). */
+  function onFsDeleted(e: Event) {
+    const detail = (e as CustomEvent<{ path: string; isDir: boolean }>).detail;
+    if (!detail?.path) return;
+    const dead = detail.path;
+    const prefix = dead + '/';
+    const survivors = tabs.filter((p) => p !== dead && !p.startsWith(prefix));
+    if (survivors.length === tabs.length) return;
+    const wasActiveGone = !survivors.includes(activePath);
+    tabs = survivors;
+    /* Drop dirty markers for closed tabs so we don't carry stale
+       "unsaved" badges. */
+    const nextDirty: Record<string, boolean> = {};
+    for (const p of survivors) if (dirtyByPath[p]) nextDirty[p] = true;
+    dirtyByPath = nextDirty;
+    if (wasActiveGone) activePath = survivors[0] ?? '';
+    persistTabs();
+  }
+  onMount(() => {
+    window.addEventListener('woom:fs:path-deleted', onFsDeleted);
+    return () => window.removeEventListener('woom:fs:path-deleted', onFsDeleted);
+  });
+
   async function pickFolder() {
     let picked: string | string[] | null;
     try {
@@ -490,6 +800,20 @@
     persistTabs();
   }
 
+  /** Pull `pendingOpenFile` off the instance's slot whenever it appears
+   *  and route through `openFile`. Lets external code (mention pills,
+   *  diff cards, MCP open requests) drive the editor without reaching
+   *  in via `bind:this`. Consume in a microtask so reading and clearing
+   *  the same reactive proxy don't trip a self-write warning. */
+  $effect(() => {
+    const pending = sessionsState.editorInstanceState[instanceId]?.pendingOpenFile;
+    if (!pending) return;
+    queueMicrotask(() => {
+      const next = consumeEditorOpenFile(instanceId);
+      if (next) openFile(next);
+    });
+  });
+
   function openDiff(relPath: string, staged: boolean) {
     diffTarget = { path: relPath, staged };
   }
@@ -533,6 +857,17 @@
   function persistTabs() {
     localStorage.setItem(tabsKey(instanceId), JSON.stringify(tabs));
   }
+
+  /* Mirror the active path into localStorage so the agent's @-mention
+     picker can pin "current" first without subscribing to reactive
+     state. Cleared when the editor has no open file so a stale path
+     doesn't survive across "close all tabs". */
+  $effect(() => {
+    try {
+      if (activePath) localStorage.setItem(activeKey(instanceId), activePath);
+      else localStorage.removeItem(activeKey(instanceId));
+    } catch { /* ignore quota errors — non-essential */ }
+  });
 
   function onDirty(d: boolean) {
     if (!activePath) return;
@@ -672,6 +1007,7 @@
             {#if sidebarTab === 'explorer'}Explorer
             {:else if sidebarTab === 'search'}Search
             {:else if sidebarTab === 'git'}Source control
+            {:else if sidebarTab === 'review'}Agent edits
             {:else if sidebarTab === 'debug'}Debug
             {:else if sidebarTab === 'tests'}Tests{/if}
           </div>
@@ -769,6 +1105,12 @@
                   </div>
                 {/if}
               </div>
+            {:else if sidebarTab === 'review'}
+              <ReviewPane
+                linkedAgents={linkedAgents}
+                instanceId={instanceId}
+                repoPath={repoPath}
+              />
             {:else if sidebarTab === 'debug'}
               <div class="ev-sidebar-pane">
                 <div class="ev-sidebar-empty">
@@ -841,23 +1183,208 @@
                 <DiffView repo={repoPath} path={diffTarget.path} staged={diffTarget.staged} />
               {/key}
             {:else if activePath}
-              {#key activePath}
-                <Editor
-                  bind:this={editor}
-                  path={activePath}
-                  {onDirty}
-                  onSaved={onFileSaved}
-                  onSelectionChange={(sel) => (selection = sel)}
-                  onCursorChange={(info) => (cursorInfo = info)}
-                />
-              {/key}
+              {#if pendingEditsForActiveFile.length > 0}
+                <!-- Pending agent-edits banner. Surfaces "agent wrote
+                     N things in THIS file" right where the user is
+                     reading the file, with one-tap Keep / Revert
+                     scoped to this buffer. The full Multi-Agent Diff
+                     Review lives in the sidebar's Review tab; the
+                     "Open Review" affordance jumps the user there. -->
+                <div class="ev-pending-bar" role="status" aria-live="polite">
+                  <span class="ev-pending-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
+                      <path d="M5 6l5.5 5.5L5 17"/>
+                      <path d="M13 17h6"/>
+                    </svg>
+                  </span>
+                  <span class="ev-pending-label">{pendingBannerLabel}</span>
+                  <span class="ev-pending-spacer"></span>
+                  {#if onRequestReviewTab}
+                    <button
+                      class="ev-pending-btn"
+                      onclick={() => onRequestReviewTab?.()}
+                      title="Open Review pane to step through every hunk"
+                    >Open Review</button>
+                  {/if}
+                  <button
+                    class="ev-pending-btn"
+                    disabled={bannerBusy}
+                    onclick={() => void revertActiveFileEdits()}
+                    title="Undo every agent edit on this file"
+                  >Revert</button>
+                  <button
+                    class="ev-pending-btn ev-pending-btn--primary"
+                    disabled={bannerBusy}
+                    onclick={keepActiveFileEdits}
+                    title="Mark every agent edit on this file as kept"
+                  >Keep</button>
+                </div>
+              {/if}
+              {#if isImagePath}
+                <!-- Bitmap / vector image — render via the asset://
+                     protocol instead of dumping bytes into CodeMirror.
+                     Bypasses the text editor entirely for this file
+                     since "edit a PNG" isn't a real workflow. -->
+                {#key activePath}
+                  <ImagePreview path={activePath} />
+                {/key}
+              {:else if isMarkdownPath}
+                <!-- Markdown bar exposes the preview toggle. Three
+                     modes (off / split / only) cycle on click; ⇧⌘V
+                     does the same. -->
+                <div class="ev-md-toolbar">
+                  <span class="ev-md-toolbar-label mono">Markdown</span>
+                  <span class="ev-md-toolbar-spacer"></span>
+                  <div class="ev-md-toolbar-tabs" role="tablist" aria-label="Preview mode">
+                    <button
+                      class="ev-md-tab" class:ev-md-tab--active={mdPreviewMode === 'off'}
+                      onclick={() => (mdPreviewMode = 'off')}
+                      role="tab" aria-selected={mdPreviewMode === 'off'}
+                      title="Editor only"
+                    >Edit</button>
+                    <button
+                      class="ev-md-tab" class:ev-md-tab--active={mdPreviewMode === 'split'}
+                      onclick={() => (mdPreviewMode = 'split')}
+                      role="tab" aria-selected={mdPreviewMode === 'split'}
+                      title="Editor + preview side by side"
+                    >Split</button>
+                    <button
+                      class="ev-md-tab" class:ev-md-tab--active={mdPreviewMode === 'only'}
+                      onclick={() => (mdPreviewMode = 'only')}
+                      role="tab" aria-selected={mdPreviewMode === 'only'}
+                      title="Preview only"
+                    >Preview</button>
+                  </div>
+                  <span class="ev-md-toolbar-kbd mono" title="Cycle preview modes">⇧⌘V</span>
+                </div>
+                {#if mdPreviewMode === 'only'}
+                  {#key activePath}
+                    <MarkdownPreview path={activePath} />
+                  {/key}
+                {:else if mdPreviewMode === 'split'}
+                  <div class="ev-md-split">
+                    <div class="ev-md-split-pane">
+                      {#key activePath}
+                        <Editor
+                          bind:this={editor}
+                          path={activePath}
+                          {instanceId}
+                          {wordWrap}
+                          {onDirty}
+                          onSaved={onFileSaved}
+                          onSelectionChange={(sel) => (selection = sel)}
+                          onCursorChange={(info) => (cursorInfo = info)}
+                          onTextChange={(t) => (liveBuffer = t)}
+                        />
+                      {/key}
+                    </div>
+                    <div class="ev-md-split-divider" aria-hidden="true"></div>
+                    <div class="ev-md-split-pane ev-md-split-pane--preview">
+                      {#key activePath}
+                        <MarkdownPreview path={activePath} liveSource={liveBuffer ?? undefined} />
+                      {/key}
+                    </div>
+                  </div>
+                {:else}
+                  {#key activePath}
+                    <Editor
+                      bind:this={editor}
+                      path={activePath}
+                      {instanceId}
+                      {wordWrap}
+                      {onDirty}
+                      onSaved={onFileSaved}
+                      onSelectionChange={(sel) => (selection = sel)}
+                      onCursorChange={(info) => (cursorInfo = info)}
+                    />
+                  {/key}
+                {/if}
+              {:else}
+                {#key activePath}
+                  <Editor
+                    bind:this={editor}
+                    path={activePath}
+                    {instanceId}
+                    {wordWrap}
+                    {onDirty}
+                    onSaved={onFileSaved}
+                    onSelectionChange={(sel) => (selection = sel)}
+                    onCursorChange={(info) => (cursorInfo = info)}
+                  />
+                {/key}
+              {/if}
               <!-- The "Apply to <agent>" floating popover sits ABOVE
                    the status bar in z-order; the status bar lives
                    inside `.ev-editor-wrap` so it's anchored to the
                    bottom of the right pane regardless of how the
                    user resizes the splitter or toggles the bottom
                    problems panel. -->
-              {#if selection && selection.anchor && !diffTarget && applyButtons.length > 0}
+              {#if composerMode && !diffTarget}
+                <!-- "Composer here" — Cursor-style inline composer
+                     anchored to the highlighted lines. Same surface
+                     the pick popover sits on; we use the frozen
+                     `composerMode.anchor` so a CodeMirror dispatch
+                     during typing doesn't drag the textarea away. -->
+                <div
+                  class="ev-apply-pop ev-apply-pop--compose"
+                  style:left="{composerMode.anchor.x}px"
+                  style:top="{composerMode.anchor.y}px"
+                  role="dialog"
+                  aria-label="Compose inline edit prompt"
+                >
+                  <div class="ev-compose-head">
+                    <span class="ev-compose-tag mono">@{relToRepo(composerMode.filePath)}:{composerMode.range.startLine === composerMode.range.endLine ? composerMode.range.startLine : `${composerMode.range.startLine}-${composerMode.range.endLine}`}</span>
+                    <span class="ev-compose-spacer"></span>
+                    <button
+                      class="ev-compose-x"
+                      onmousedown={(e) => e.preventDefault()}
+                      onclick={closeComposer}
+                      title="Close (Esc)"
+                      aria-label="Close composer"
+                    >
+                      <svg class="i i-sm" viewBox="0 0 24 24"><path d="M6 6l12 12M6 18L18 6" /></svg>
+                    </button>
+                  </div>
+                  <textarea
+                    class="ev-compose-input"
+                    bind:this={composerEl}
+                    bind:value={composerText}
+                    onkeydown={onComposerKey}
+                    placeholder="Edit selection… (⏎ to send, ⇧⏎ newline)"
+                    rows="2"
+                  ></textarea>
+                  <div class="ev-compose-foot">
+                    {#if applyButtons.length > 1}
+                      <div class="ev-compose-targets">
+                        {#each applyButtons as btn (btn.sessionId)}
+                          <button
+                            class="ev-compose-target"
+                            class:active={btn.sessionId === composerMode.sessionId}
+                            class:claude={btn.kind === 'claude'}
+                            class:cursor={btn.kind === 'cursor'}
+                            onmousedown={(e) => e.preventDefault()}
+                            onclick={() => switchComposerTarget(btn)}
+                            title="Send to {btn.label}"
+                          >{btn.label}</button>
+                        {/each}
+                      </div>
+                    {:else}
+                      <span class="ev-compose-target-single">→ {composerMode.label}</span>
+                    {/if}
+                    <span class="ev-compose-spacer"></span>
+                    <button
+                      class="ev-compose-send"
+                      onmousedown={(e) => e.preventDefault()}
+                      disabled={!composerText.trim() || !onQuickSend}
+                      onclick={sendComposer}
+                      title={onQuickSend ? 'Send (⏎)' : 'No quick-send wired up — pin the mention only'}
+                    >
+                      {onQuickSend ? 'Send' : 'Pin only'}
+                      <svg class="i i-sm" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h12M13 6l6 6-6 6"/></svg>
+                    </button>
+                  </div>
+                </div>
+              {:else if selection && selection.anchor && !diffTarget && applyButtons.length > 0}
                 <!-- Floating popover anchored at the right edge of the
                      last selected line — same place Cursor/Copilot
                      drop their inline action chips, so the action
@@ -879,6 +1406,18 @@
                   role="toolbar"
                   aria-label="Apply selection to agent"
                 >
+                  <button
+                    class="ev-apply-pop-btn ev-apply-pop-btn--edit"
+                    onmousedown={(e) => e.preventDefault()}
+                    onclick={() => openComposer()}
+                    title="Open inline composer to write a prompt about this selection"
+                  >
+                    <svg class="i i-sm" viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M12 20h9"/>
+                      <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/>
+                    </svg>
+                    <span>Edit…</span>
+                  </button>
                   {#each applyButtons as btn (btn.sessionId)}
                     <button
                       class="ev-apply-pop-btn"
@@ -920,6 +1459,41 @@
                 <span class="ev-status-seg ev-status-dim">UTF-8</span>
               {/if}
               <span class="ev-status-spacer"></span>
+              {#if activePath && !diffTarget && !isImagePath}
+                <button
+                  class="ev-status-action"
+                  class:ev-status-action--on={wordWrap}
+                  onclick={() => (wordWrap = !wordWrap)}
+                  title={wordWrap ? 'Word wrap on — click to turn off' : 'Word wrap off — click to turn on'}
+                  aria-pressed={wordWrap}
+                >
+                  <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M3 6h18"/><path d="M3 12h13a3 3 0 0 1 0 6h-3"/><path d="M3 18h6"/><path d="M16 15l-3 3 3 3"/>
+                  </svg>
+                  Wrap
+                </button>
+                <span class="ev-status-sep">·</span>
+              {/if}
+              {#if activePath && !diffTarget}
+                <button
+                  class="ev-status-action"
+                  onclick={async () => {
+                    try { await navigator.clipboard.writeText(activePath); }
+                    catch { /* clipboard may be denied — silent */ }
+                  }}
+                  title="Copy absolute path of the active file"
+                >Copy path</button>
+                <span class="ev-status-sep">·</span>
+                <button
+                  class="ev-status-action"
+                  onclick={async () => {
+                    try { await invoke('fs_reveal_in_finder', { path: activePath }); }
+                    catch { /* reveal isn't critical — silent */ }
+                  }}
+                  title="Reveal active file in Finder"
+                >Reveal</button>
+                <span class="ev-status-sep">·</span>
+              {/if}
               <span class="ev-status-seg ev-status-ok" title="No diagnostics">✓ no problems</span>
               <span class="ev-status-sep">·</span>
               <span class="ev-status-seg ev-status-branch" title="Current git branch">
@@ -1403,7 +1977,52 @@
     flex-shrink: 0;
   }
 
-  .ev-editor-wrap { flex: 1; min-height: 0; position: relative; }
+  .ev-editor-wrap { flex: 1; min-height: 0; position: relative; display: flex; flex-direction: column; }
+
+  /* Pending agent-edits banner — sits between the tab strip and the
+     CodeMirror surface for a file that has unresolved agent edits.
+     Slim, brand-tinted, never absolute (so the editor surface
+     shrinks to fit instead of having content go behind it). The
+     `flex-direction: column` on `.ev-editor-wrap` above lets this
+     row + the editor below stack cleanly. */
+  .ev-pending-bar {
+    display: flex; align-items: center; gap: 10px;
+    padding: 6px 12px;
+    background: linear-gradient(180deg,
+      color-mix(in srgb, var(--accent) 14%, var(--bg-1)),
+      var(--bg-1));
+    border-bottom: 1px solid var(--border-accent-2, var(--border));
+    color: var(--text-1);
+    font-size: 11.5px;
+    flex-shrink: 0;
+  }
+  .ev-pending-icon {
+    width: 18px; height: 18px;
+    display: inline-grid; place-items: center;
+    color: var(--accent-bright);
+  }
+  .ev-pending-label {
+    color: var(--text-0);
+    font-weight: 500;
+  }
+  .ev-pending-spacer { flex: 1; }
+  .ev-pending-btn {
+    padding: 3px 9px;
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    color: var(--text-1);
+    border-radius: 5px;
+    font-size: 11.5px;
+    cursor: pointer;
+    transition: color 120ms, border-color 120ms, background 120ms;
+  }
+  .ev-pending-btn:hover { color: var(--text-0); border-color: var(--border-strong, var(--border)); }
+  .ev-pending-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .ev-pending-btn--primary {
+    background: var(--accent-soft);
+    border-color: var(--border-accent-2);
+    color: var(--accent-bright);
+  }
 
   /* Status bar — single horizontal strip pinned to the bottom of
      the editor pane. Mono throughout, brand-dot for the git branch
@@ -1433,6 +2052,99 @@
   .ev-status-branch :global(svg) {
     width: 11px; height: 11px;
     color: var(--accent-bright);
+  }
+
+  /* Status-bar action button — share the bar's monospace + small
+     size, but feel clickable: subtle background on hover, an active
+     tint when toggled on (used by Word-wrap). Doesn't try to look
+     like a heavy CTA — the bar is dense and these need to read as
+     "you can click this" without pulling focus. */
+  .ev-status-action {
+    display: inline-flex; align-items: center; gap: 4px;
+    background: transparent;
+    border: 0;
+    padding: 0 5px;
+    height: 18px;
+    color: var(--text-2);
+    font: inherit;
+    font-size: 10.5px;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: background 120ms, color 120ms;
+  }
+  .ev-status-action:hover { background: var(--bg-3); color: var(--text-0); }
+  .ev-status-action--on {
+    color: var(--accent-bright);
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+  }
+  .ev-status-action :global(svg) { width: 11px; height: 11px; }
+
+  /* ── Markdown preview toolbar + split layout ──────── */
+  .ev-md-toolbar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 5px 12px;
+    height: 28px;
+    background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 5%, var(--bg-1)), var(--bg-1));
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .ev-md-toolbar-label {
+    font-size: 9.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--text-mute);
+    font-weight: 700;
+  }
+  .ev-md-toolbar-spacer { flex: 1; }
+  .ev-md-toolbar-tabs {
+    display: inline-flex;
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 2px;
+    gap: 2px;
+  }
+  .ev-md-tab {
+    background: transparent;
+    border: 0;
+    padding: 2px 10px;
+    border-radius: 4px;
+    color: var(--text-2);
+    font-size: 11px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 120ms, color 120ms;
+  }
+  .ev-md-tab:hover { color: var(--text-0); }
+  .ev-md-tab--active {
+    background: var(--bg-0);
+    color: var(--accent-bright);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 28%, var(--border));
+  }
+  .ev-md-toolbar-kbd {
+    font-size: 9.5px;
+    color: var(--text-mute);
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 5px;
+  }
+
+  .ev-md-split {
+    flex: 1; min-height: 0;
+    display: grid;
+    grid-template-columns: 1fr 1px 1fr;
+  }
+  .ev-md-split-pane {
+    min-width: 0; min-height: 0;
+    overflow: hidden;
+    display: flex; flex-direction: column;
+  }
+  .ev-md-split-pane--preview {
+    background: var(--bg-0);
+  }
+  .ev-md-split-divider {
+    background: var(--border);
   }
 
   /* Floating "Apply to <agent>" popover, anchored to the right end
@@ -1482,6 +2194,113 @@
      "which agent does this go to" without reading the label. */
   .ev-apply-pop-btn.claude { border-left: 2px solid var(--accent); padding-left: 8px; }
   .ev-apply-pop-btn.cursor { border-left: 2px solid var(--text-1); padding-left: 8px; }
+  .ev-apply-pop-btn--edit {
+    color: var(--accent-bright);
+  }
+  .ev-apply-pop-btn--edit:hover {
+    background: var(--accent-soft);
+    border-color: var(--border-accent-2);
+  }
+
+  /* Compose mode — the same popover, expanded into a textarea + send
+     row. Wider and not nowrap so the user can actually type into it.
+     We keep the brand-tinted border + shadow so the surface still
+     reads as the "selection action" widget, just bigger. */
+  .ev-apply-pop--compose {
+    flex-direction: column;
+    align-items: stretch;
+    width: 360px;
+    max-width: 60vw;
+    padding: 8px;
+    gap: 6px;
+    white-space: normal;
+  }
+  .ev-compose-head {
+    display: flex; align-items: center; gap: 8px;
+    color: var(--text-1);
+    font-size: 11px;
+  }
+  .ev-compose-tag {
+    color: var(--accent-bright);
+    font-size: 10.5px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .ev-compose-spacer { flex: 1; }
+  .ev-compose-x {
+    width: 18px; height: 18px;
+    display: inline-grid; place-items: center;
+    color: var(--text-mute);
+    background: transparent; border: 0; border-radius: 4px;
+    cursor: pointer;
+  }
+  .ev-compose-x:hover { color: var(--text-0); background: var(--bg-elev, var(--bg-2)); }
+  .ev-compose-x :global(svg) { width: 11px; height: 11px; }
+  .ev-compose-input {
+    width: 100%;
+    box-sizing: border-box;
+    resize: vertical;
+    min-height: 56px;
+    max-height: 200px;
+    padding: 8px 10px;
+    background: var(--bg-1);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-0);
+    font-family: inherit;
+    font-size: 12.5px;
+    line-height: 1.5;
+    outline: none;
+    transition: border-color 120ms;
+  }
+  .ev-compose-input:focus { border-color: var(--border-accent-2); }
+  .ev-compose-input::placeholder { color: var(--text-mute); }
+  .ev-compose-foot {
+    display: flex; align-items: center; gap: 6px;
+  }
+  .ev-compose-targets {
+    display: inline-flex; gap: 3px;
+    padding: 2px;
+    background: var(--bg-1);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    flex-wrap: wrap;
+  }
+  .ev-compose-target {
+    padding: 2px 8px;
+    background: transparent;
+    border: 0;
+    color: var(--text-2);
+    font-size: 11px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: color 100ms, background 100ms;
+  }
+  .ev-compose-target:hover { color: var(--text-0); }
+  .ev-compose-target.active { background: var(--bg-3); color: var(--text-0); }
+  .ev-compose-target.claude.active { color: var(--src-claude); }
+  .ev-compose-target.cursor.active { color: var(--src-cursor); }
+  .ev-compose-target-single {
+    font-size: 11px;
+    color: var(--text-2);
+    padding: 2px 6px;
+  }
+  .ev-compose-send {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 12px;
+    background: var(--accent);
+    border: 1px solid var(--accent);
+    color: var(--accent-fg);
+    border-radius: 6px;
+    font-size: 12px; font-weight: 600;
+    cursor: pointer;
+    transition: opacity 100ms, transform 100ms;
+  }
+  .ev-compose-send:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+  .ev-compose-send:not(:disabled):hover { transform: translateY(-1px); }
+  .ev-compose-send :global(svg) { width: 12px; height: 12px; }
 
   .ev-error {
     position: absolute;

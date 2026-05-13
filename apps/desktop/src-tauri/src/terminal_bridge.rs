@@ -76,13 +76,19 @@ struct ListResp {
 
 #[derive(Serialize)]
 struct InstanceLite {
-    /// Human-readable column name from the workbench (`Vermeer`,
-    /// `Notre-Dame`). This is what should be passed as `id` to all
-    /// terminal_* tools. First field on purpose so the agent picks
-    /// it as the canonical reference. Optional only because legacy
-    /// spawns predating the column-naming feature might have null.
+    /// Human-readable instance art-name (`Vermeer`, `Notre-Dame`).
+    /// This is what should be passed as `id` to all terminal_* tools.
+    /// First field on purpose so the agent picks it as the canonical
+    /// reference. Optional only because legacy spawns predating the
+    /// instance-naming feature might have null.
     #[serde(skip_serializing_if = "Option::is_none")]
     name: Option<String>,
+    /// Layout-instance id (e.g. `terminal-solo`, `terminal:vermeer`).
+    /// Same handle that appears in the agent's preamble as
+    /// `id=terminal-solo`; resolving by it lets the agent skip a
+    /// `terminal_list` round-trip when only the layout id is known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    instance_id: Option<String>,
     /// Per-spawn uuid. Useful only for disambiguation if two columns
     /// share a name (rare). Renamed from `id` so the agent doesn't
     /// reflexively grab the uuid as the canonical identifier.
@@ -161,7 +167,7 @@ async fn list(State(s): State<BridgeState>) -> Json<ListResp> {
     let instances = reg
         .list()
         .into_iter()
-        .map(|(id, name)| InstanceLite { name, uuid: id })
+        .map(|(uuid, name, instance_id)| InstanceLite { name, instance_id, uuid })
         .collect();
     Json(ListResp { instances })
 }

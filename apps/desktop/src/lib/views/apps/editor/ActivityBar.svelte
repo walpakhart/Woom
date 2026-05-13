@@ -1,9 +1,15 @@
 <script lang="ts">
   /* ActivityBar — узкая вертикальная полоса слева в EditorApp.
-     Кнопки: Explorer / Search / Git / Debug / Tests / Inline Claude.
-     На MVP большинство — переключатели side-panel'a (visual только).
-     Bottom: Settings. */
-  type Tab = 'explorer' | 'search' | 'git' | 'debug' | 'tests' | 'claude';
+     Кнопки: Explorer / Search / Git / Review / Debug / Tests.
+     На MVP debug / tests — переключатели side-panel'a (visual только);
+     review — реальная фича (страница с pending agent edits).
+     Bottom: Settings.
+
+     Inline Claude pane TOGGLED по своей кнопке-«ушку» внутри pane'а
+     (см. InlineClaude.svelte → ic-x / collapsed rail) — не через
+     ActivityBar, чтобы один и тот же интерфейс открытия/закрытия
+     был и в редакторе, и в терминале, и в канвасе. */
+  type Tab = 'explorer' | 'search' | 'git' | 'review' | 'debug' | 'tests';
 
   interface Props {
     activeTab: Tab;
@@ -14,10 +20,13 @@
     onOpenSettings?: () => void;
     /** Number of unresolved problems — displayed as a badge on Tests. */
     problemsCount?: number;
-    /** Linked agent count → claude badge. */
-    claudeCount?: number;
     /** Git change count → git badge. */
     gitCount?: number;
+    /** Pending agent edits across every linked session → Review badge.
+     *  Goes accent-bright + pulses when > 0 so users can spot "agent
+     *  wrote something I haven't looked at yet" without opening the
+     *  pane. */
+    reviewCount?: number;
   }
   let p: Props = $props();
 </script>
@@ -35,16 +44,25 @@
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="M6 8.5V14a4 4 0 0 0 4 4h6"/></svg>
     {#if p.gitCount && p.gitCount > 0}<span class="ab-badge">{p.gitCount}</span>{/if}
   </button>
+  <button
+    class="ab-btn"
+    class:active={p.activeTab === 'review'}
+    class:ab-btn--pulse={(p.reviewCount ?? 0) > 0}
+    onclick={() => p.onPick('review')}
+    title="Review agent edits · ⇧⌘R"
+  >
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M5 6l5.5 5.5L5 17"/>
+      <path d="M13 17h6"/>
+    </svg>
+    {#if p.reviewCount && p.reviewCount > 0}<span class="ab-badge ab-badge--review">{p.reviewCount}</span>{/if}
+  </button>
   <button class="ab-btn" class:active={p.activeTab === 'debug'} onclick={() => p.onPick('debug')} title="Debug">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="13" r="6"/><path d="M12 7v-3M9 4h6M5 11l-2 1M19 11l2 1M5 17l-2 1M19 17l2 1"/></svg>
   </button>
   <button class="ab-btn" class:active={p.activeTab === 'tests'} onclick={() => p.onPick('tests')} title="Tests">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
     {#if p.problemsCount && p.problemsCount > 0}<span class="ab-badge ab-badge--err">{p.problemsCount}</span>{/if}
-  </button>
-  <button class="ab-btn" class:active={p.activeTab === 'claude'} onclick={() => p.onPick('claude')} title="Inline Claude · ⇧⌘L">
-    <svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M5 4h14a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H8l-5 4V6a2 2 0 0 1 2-2z"/></svg>
-    {#if p.claudeCount && p.claudeCount > 0}<span class="ab-badge ab-badge--claude">{p.claudeCount}</span>{/if}
   </button>
   <span class="ab-spacer"></span>
   <button
@@ -102,6 +120,26 @@
     box-shadow: 0 0 0 2px var(--bg-1);
   }
   .ab-badge--err { background: var(--error); color: var(--bg-0); }
-  .ab-badge--claude { background: var(--src-claude); color: var(--accent-fg); }
+  .ab-badge--review {
+    background: var(--accent-bright);
+    color: var(--accent-fg);
+  }
+  /* Subtle pulse so the user notices "agent wrote something" without
+     a hard ping. Only fires while the count is > 0; the keyframe is
+     short enough to read as breathing, not blinking. */
+  .ab-btn--pulse::after {
+    content: '';
+    position: absolute;
+    inset: -1px;
+    border-radius: 8px;
+    pointer-events: none;
+    box-shadow: 0 0 0 0 var(--accent-glow, rgba(204, 120, 92, 0.6));
+    animation: ab-pulse 2.4s ease-out infinite;
+  }
+  @keyframes ab-pulse {
+    0%   { box-shadow: 0 0 0 0 var(--accent-glow, rgba(204, 120, 92, 0.55)); }
+    70%  { box-shadow: 0 0 0 10px rgba(204, 120, 92, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(204, 120, 92, 0); }
+  }
   .ab-spacer { flex: 1; }
 </style>

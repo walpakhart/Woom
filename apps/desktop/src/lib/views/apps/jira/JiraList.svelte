@@ -485,7 +485,6 @@
             ondragend={p.onDragEnd}
             onclick={(e) => clickItem(it, e)}
             ondblclick={() => p.onOpenBrowser(it.url)}
-            title={`${it.key} · ${it.summary}`}
           >
             <div class="jl-card-top">
               <span class="jl-card-status {jiraStatusClass(it.status_category)}" title={it.status}></span>
@@ -499,9 +498,18 @@
               {/if}
               <span class="type {typeClass(it.issue_type)}">{it.issue_type}</span>
               {#if it.assignee}
-                <span class="ava" title={it.assignee.display_name}>
-                  {(it.assignee.display_name || '?').slice(0, 1).toUpperCase()}
-                </span>
+                {#if it.assignee.avatar_url}
+                  <img
+                    class="ava ava-img"
+                    src={it.assignee.avatar_url}
+                    alt={it.assignee.display_name}
+                    title={it.assignee.display_name}
+                  />
+                {:else}
+                  <span class="ava" title={it.assignee.display_name}>
+                    {(it.assignee.display_name || '?').slice(0, 1).toUpperCase()}
+                  </span>
+                {/if}
               {/if}
               {#if it.labels.length > 0}
                 {#each it.labels.slice(0, 2) as l (l)}
@@ -755,13 +763,17 @@
   .jl-card.active {
     background: var(--bg-2);
     border-color: var(--border-hi);
+    /* Use color-mix on the source brand var so the inset ring and the
+       lift shadow re-paint with the theme. Hardcoded `rgba(0,0,0,0.28)`
+       drops a black halo on cream; `var(--shadow-2)` is sage-on-cream
+       in light and black in dark — same depth, right hue. */
     box-shadow:
-      0 0 0 1px rgba(79, 142, 255, 0.32),
-      0 12px 24px rgba(0, 0, 0, 0.28);
+      0 0 0 1px color-mix(in srgb, var(--src-jira) 32%, transparent),
+      var(--shadow-2);
   }
   .jl-card.active::before {
     opacity: 1;
-    box-shadow: 0 0 10px rgba(79, 142, 255, 0.40);
+    box-shadow: 0 0 10px color-mix(in srgb, var(--src-jira) 40%, transparent);
   }
 
   .jl-card-top { display: flex; align-items: center; gap: 7px; }
@@ -826,6 +838,14 @@
     font-size: 9px; font-weight: 700;
     display: grid; place-items: center;
     flex-shrink: 0;
+  }
+  .ava-img {
+    /* When Jira returns an avatar URL we render an <img> on top of the
+       .ava chassis — drop the gradient/letter chrome and let the photo
+       fill the circle. */
+    background: var(--bg-2);
+    object-fit: cover;
+    display: block;
   }
 
   .label {

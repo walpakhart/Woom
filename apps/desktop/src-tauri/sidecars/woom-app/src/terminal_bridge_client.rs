@@ -46,12 +46,18 @@ pub struct ListResp {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct InstanceLite {
-    /// Workbench column display name (e.g. "Notre-Dame"). This is
-    /// what should be used to address terminals — first field on
-    /// purpose so the agent picks it as canonical. Optional only
-    /// because legacy sessions predating column-naming have no name.
+    /// Instance display name (e.g. "Notre-Dame"). This is what should
+    /// be used to address terminals — first field on purpose so the
+    /// agent picks it as canonical. Optional only because legacy
+    /// sessions predating instance-naming have no name.
     #[serde(default)]
     pub name: Option<String>,
+    /// Layout-instance id (e.g. `terminal-solo`, `terminal:vermeer`)
+    /// — the same handle the agent's preamble shows. Also accepted
+    /// by terminal_run / terminal_write / terminal_buffer as a
+    /// fallback if the art-name isn't handy.
+    #[serde(default)]
+    pub instance_id: Option<String>,
     /// Per-spawn uuid. Useful only for disambiguation when two
     /// columns share a name (rare). Renamed from `id` so the agent
     /// doesn't reflexively grab the uuid.

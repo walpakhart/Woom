@@ -2,9 +2,12 @@
   import CanvasSurface from './canvas/CanvasSurface.svelte';
   import InlineClaude from './editor/InlineClaude.svelte';
   import Splitter from '$lib/components/ui/Splitter.svelte';
+  import SidePaneRail from '$lib/components/ui/SidePaneRail.svelte';
   import { canvasState } from '$lib/state/canvas.svelte';
-  import { layoutState, APP_INSTANCE_IDS } from '$lib/state/layout.svelte';
+  import { layoutState, APP_INSTANCE_IDS, kindForInstanceId } from '$lib/state/layout.svelte';
   import { sessionsState, updateSession } from '$lib/state/sessions.svelte';
+  import { fly } from 'svelte/transition';
+  import { cubicOut } from 'svelte/easing';
   import type { Shape } from '$lib/state/canvas.svelte';
 
   interface Props {
@@ -48,10 +51,31 @@
   function handleUnlinkSession(sessionId: string) {
     updateSession(sessionId, { linkedCanvasId: null });
   }
+
+  /** Sessions linked to the active canvas — feeds the collapsed
+   *  rail-mini so the user sees which agents are attached even
+   *  with the side pane closed. Only Claude can link to canvases
+   *  (Cursor doesn't have canvas-linking yet) — kindForInstanceId
+   *  filters that for us. */
+  const linkedAgents = $derived.by(() => {
+    if (!activeCanvasId) return [] as { sessionId: string; agentInstanceId: string; kind: 'claude' | 'cursor'; title: string }[];
+    const out: { sessionId: string; agentInstanceId: string; kind: 'claude' | 'cursor'; title: string }[] = [];
+    for (const s of sessionsState.list) {
+      if (s.linkedCanvasId !== activeCanvasId) continue;
+      const aid = s.agentInstanceId
+        ?? (s.agentKind === 'claude' || s.agentKind === 'cursor' ? APP_INSTANCE_IDS[s.agentKind] : null);
+      if (!aid) continue;
+      const k = kindForInstanceId(aid);
+      if (k !== 'claude' && k !== 'cursor') continue;
+      out.push({ sessionId: s.id, agentInstanceId: aid, kind: k, title: s.title || 'Untitled chat' });
+    }
+    return out;
+  });
 </script>
 
 <section
   class="app-shell sc-shell"
+  class:sc-shell--rail={!sideOpen}
   style="--app-tone: var(--src-canvas); --app-glow: rgba(125,201,176,0.40);"
 >
   {#if sideOpen}
@@ -69,12 +93,12 @@
         </section>
       {/snippet}
       {#snippet end()}
-        <aside class="app-pane sc-side">
+        <aside class="app-pane sc-side" in:fly={{ x: 24, duration: 220, easing: cubicOut }}>
           <header class="app-pane-head">
             <span class="app-pane-head-h">{instanceLabel}</span>
             <span class="sc-kind-tag mono">Canvas</span>
-            <button class="app-iconbtn" title="Hide" onclick={() => (sideOpen = false)}>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M18 6 6 18M6 6l12 12"/></svg>
+            <button class="app-iconbtn" title="Collapse pane" aria-label="Collapse pane" onclick={() => (sideOpen = false)}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M10 6l6 6-6 6"/></svg>
             </button>
           </header>
           <div class="sc-stats">
@@ -104,17 +128,31 @@
       {/snippet}
     </Splitter>
   {:else}
-    <section class="app-pane sc-canvas sc-canvas--full">
+    <section class="app-pane sc-canvas">
       <CanvasSurface instanceId={p.instanceId} onCardOpen={p.onCardOpen} />
-      <button class="sc-show-side" title="Show canvas info" onclick={() => (sideOpen = true)}>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M14 6l-6 6 6 6"/></svg>
-      </button>
     </section>
+    <div class="sc-rail-slot" in:fly={{ x: 24, duration: 220, easing: cubicOut }}>
+      <SidePaneRail
+        {linkedAgents}
+        onExpand={() => (sideOpen = true)}
+      />
+    </div>
   {/if}
 </section>
 
 <style>
   .sc-shell { display: block; padding: var(--app-pad, 14px); }
+  /* When collapsed: 2-column grid (canvas + 52px rail). The grid
+     transition makes the canvas reflow smoothly when the user
+     toggles the pane. */
+  .sc-shell.sc-shell--rail {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 52px;
+    gap: 0;
+    transition: grid-template-columns var(--dur-base) var(--ease-out);
+  }
+  .sc-rail-slot { height: 100%; min-width: 0; }
+  .sc-rail-slot :global(.spr) { width: 100%; }
   .sc-shell :global(.s-start),
   .sc-shell :global(.s-end) {
     height: 100%;
@@ -136,26 +174,11 @@
     overflow: hidden;
     background: var(--bg-0);
     position: relative;
-  }
-  .sc-canvas--full {
     height: 100%;
   }
   .sc-canvas :global(.canvas-surface) {
     background: var(--bg-0) !important;
   }
-  .sc-show-side {
-    position: absolute;
-    top: 14px; right: 14px;
-    width: 26px; height: 26px;
-    display: grid; place-items: center;
-    border-radius: 6px;
-    background: var(--bg-2);
-    border: 1px solid var(--border);
-    color: var(--text-2);
-    cursor: pointer;
-  }
-  .sc-show-side:hover { color: var(--text-0); border-color: var(--border-hi); }
-  .sc-show-side svg { width: 13px; height: 13px; }
 
   .sc-side {
     display: flex;

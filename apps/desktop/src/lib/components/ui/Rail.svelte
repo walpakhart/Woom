@@ -26,6 +26,7 @@
     | 'canvasApp'
     | 'terminalApp'
     | 'rules'
+    | 'library'
     | 'connections'
     | 'settings';
 
@@ -344,6 +345,16 @@
 
   <button
     class="rail-btn"
+    class:active={view === 'library'}
+    data-tooltip="Library — skills & plugins"
+    onclick={() => (view = 'library')}
+    aria-label="Library"
+  >
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h6v16H4z"/><path d="M14 4h2v16h-2z"/><path d="M18 5l2 .5L22 19l-2 .5z"/></svg>
+  </button>
+
+  <button
+    class="rail-btn"
     class:active={view === 'settings'}
     data-tooltip="Settings"
     onclick={() => (view = 'settings')}
@@ -577,7 +588,9 @@
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
     opacity: 0;
     transform: translateY(4px) scale(0.98);
-    transition: opacity 120ms ease, transform 120ms ease;
+    transition:
+      opacity var(--dur-quick) var(--ease-out),
+      transform var(--dur-quick) var(--ease-out);
     pointer-events: none;
     z-index: 20;
     text-align: left;
@@ -589,7 +602,10 @@
     pointer-events: auto;
   }
   @media (prefers-reduced-motion: reduce) {
-    .rail-identity { transition: opacity 80ms linear; transform: none; }
+    /* Even with motion off, fade should still feel intentional —
+       80ms linear reads as a flicker. Keep the same easing as the
+       default just shrink the duration. */
+    .rail-identity { transition: opacity 80ms var(--ease-out); transform: none; }
     .rail-avatar:hover .rail-identity,
     .rail-avatar:focus-visible .rail-identity { transform: none; }
   }

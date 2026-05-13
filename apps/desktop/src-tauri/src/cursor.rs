@@ -154,7 +154,7 @@ pub async fn ask(
     // prompt cache (Anthropic-flavour, prefix-keyed): static-est blocks
     // first so the cache hit survives layout changes between turns.
     //   1. User rules — only changes when the user edits the Rules tab.
-    //   2. App context — workbench layout snapshot, mutates per turn;
+    //   2. App context — app-instance map snapshot, mutates per turn;
     //      its OWN structure is also static-first / variable-last (see
     //      `buildAgentAppContext`).
     //   3. The user message itself.
@@ -696,7 +696,7 @@ impl StreamNormalizer {
             // tool_call: cursor-agent fires `started` (immediately on
             // dispatch) and `completed` (with the result) for every tool.
             //
-            //   - For edit/write tools we want the COMPLETED event so we
+            //   - For edit/write/delete tools we want the COMPLETED event so we
             //     can read `result.success.afterFullFileContent` — the
             //     actual final file contents. The `args.streamContent` on
             //     a `started` event is a partial / streamed edit-spec
@@ -705,10 +705,17 @@ impl StreamNormalizer {
             //     file). Rendering a diff card on started would show the
             //     wrong content.
             //
-            //   - For all other tools (read, grep, bash, mcp, …) we keep
-            //     the original behavior: emit on STARTED so the user gets
-            //     immediate "_using …_" feedback. The completed event is
-            //     dropped to avoid double-pills.
+            //   - For other tools (read, grep, bash, glob, mcp, …) we emit
+            //     the synthesized `tool_use` on STARTED so the user gets
+            //     immediate "_using …_" feedback. We THEN also emit a
+            //     synthesized `user`-role event with a `tool_result` block
+            //     on COMPLETED so the captured output (file body, grep
+            //     matches, bash stdout, …) flows through Woom's existing
+            //     `attachOutputToLastTrace` path — same UX Claude has
+            //     where every step gets a collapsible `output · N lines`
+            //     card. Pre-fix this completed event was dropped, which
+            //     is why Cursor's steps drawer showed only commands and
+            //     never any output.
             "tool_call" => {
                 self.close_message();
                 let subtype = v.get("subtype").and_then(|s| s.as_str()).unwrap_or("");
@@ -727,12 +734,29 @@ impl StreamNormalizer {
                             || o.contains_key("writeToolCall")
                             || o.contains_key("deleteToolCall")
                     });
-                let want = if is_file_mutation { "completed" } else { "started" };
-                if subtype == want {
-                    normalize_tool_call(&v).into_iter().collect()
-                } else {
-                    Vec::new()
+                if is_file_mutation {
+                    if subtype == "completed" {
+                        return normalize_tool_call(&v).into_iter().collect();
+                    }
+                    return Vec::new();
                 }
+                /* Read/grep/bash/glob/mcp/… : emit `started` as the
+                   tool_use, then emit `completed` as a tool_result so
+                   the output card lands beside the call in the trace
+                   pill. Both events carry the same `call_id`, which
+                   `attachOutputToLastTrace` matches on indirectly via
+                   trace-segment ordering — the output goes onto the
+                   last open `‹toolcall›` envelope, which is the one
+                   we just synthesized for the same call. */
+                if subtype == "started" {
+                    return normalize_tool_call(&v).into_iter().collect();
+                }
+                if subtype == "completed" {
+                    if let Some(result_event) = synth_tool_result(&v) {
+                        return vec![result_event];
+                    }
+                }
+                Vec::new()
             }
             _ => Vec::new(),
         }
@@ -933,11 +957,154 @@ fn collapse_doubled(text: &str) -> String {
     }
 }
 
+/// Take a `tool_call.completed` event for a non-mutation tool and turn it
+/// into a Claude-shaped `user`-role event whose content is a single
+/// `tool_result` block. The frontend's `agentStream.ts` reads exactly this
+/// shape (`extractToolResultText` + `attachOutputToLastTrace`) to glue
+/// the output card onto the matching toolcall envelope, so going through
+/// the same path means cursor-agent steps render with the same
+/// "command + output · N lines" UX Claude already has.
+///
+/// Output extraction is best-effort across the shapes cursor-agent has
+/// shipped:
+///   - `result.success.contents` / `content` / `output` / `stdout` —
+///     plain string body for read/grep/bash/glob/mcp.
+///   - `result.success.matches[]` — grep can return structured matches;
+///     we join them as `path:line: text` lines.
+///   - `result.error.message` (or just `error`) — surface failures so
+///     the user sees "command failed: …" instead of an empty drawer.
+/// Returns `None` when no usable text could be salvaged — falls back to
+/// the pre-fix behavior (no output card, just the tool_use pill).
+fn synth_tool_result(v: &serde_json::Value) -> Option<serde_json::Value> {
+    let call_id = v.get("call_id").and_then(|c| c.as_str()).unwrap_or("");
+    let session_id = v.get("session_id").cloned().unwrap_or(json!(null));
+    let tc = v.get("tool_call");
+    let result = tc.and_then(|t| t.as_object()).and_then(|o| {
+        // `result` lives one level deeper: tool_call: { fooToolCall: { result: { success | error } } }
+        // Some shapes also bury it as tool_call: { result: … } directly.
+        for (_, payload) in o.iter() {
+            if let Some(r) = payload.get("result") {
+                return Some(r.clone());
+            }
+        }
+        o.get("result").cloned()
+    });
+    let result = result.unwrap_or_else(|| json!(null));
+    let success = result.get("success");
+    let error = result.get("error");
+
+    // Pull a text body. Prefer the most explicit field cursor-agent
+    // produces for the kind of tool, then fall back to anything
+    // string-shaped on success.
+    let mut body: String = String::new();
+    if let Some(s) = success {
+        let candidates = [
+            "contents", "content", "output", "stdout", "result", "text",
+            "matches",
+        ];
+        for key in candidates {
+            if let Some(v) = s.get(key) {
+                if let Some(s) = v.as_str() {
+                    body = s.to_string();
+                    break;
+                }
+                if let Some(arr) = v.as_array() {
+                    /* Grep matches: try `{path, line, text}` records,
+                       then fall back to flat strings, then JSON. */
+                    let mut lines: Vec<String> = Vec::new();
+                    for item in arr {
+                        if let Some(obj) = item.as_object() {
+                            let path = obj
+                                .get("path")
+                                .or_else(|| obj.get("file"))
+                                .and_then(|p| p.as_str())
+                                .unwrap_or("");
+                            let line = obj
+                                .get("line")
+                                .or_else(|| obj.get("lineNumber"))
+                                .and_then(|n| n.as_u64())
+                                .unwrap_or(0);
+                            let text = obj
+                                .get("text")
+                                .or_else(|| obj.get("match"))
+                                .or_else(|| obj.get("preview"))
+                                .and_then(|t| t.as_str())
+                                .unwrap_or("");
+                            if !path.is_empty() {
+                                lines.push(format!("{path}:{line}: {text}"));
+                            } else if !text.is_empty() {
+                                lines.push(text.to_string());
+                            } else {
+                                lines.push(serde_json::to_string(item).unwrap_or_default());
+                            }
+                        } else if let Some(s) = item.as_str() {
+                            lines.push(s.to_string());
+                        } else {
+                            lines.push(serde_json::to_string(item).unwrap_or_default());
+                        }
+                    }
+                    if !lines.is_empty() {
+                        body = lines.join("\n");
+                        break;
+                    }
+                }
+            }
+        }
+        // Bash: cursor-agent reports an `exitCode` we can surface alongside.
+        if let (Some(code), false) = (s.get("exitCode").and_then(|n| n.as_i64()), body.is_empty()) {
+            if code != 0 {
+                body = format!("{body}\n(exit {code})");
+            }
+        }
+    }
+    if body.is_empty() {
+        if let Some(e) = error {
+            let msg = e
+                .get("message")
+                .or_else(|| e.get("text"))
+                .and_then(|m| m.as_str())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| serde_json::to_string(e).unwrap_or_default());
+            body = format!("error: {msg}");
+        }
+    }
+    if body.is_empty() {
+        return None;
+    }
+    /* Cap the length here — `attachOutputToLastTrace` does its own
+       truncation but we shouldn't ship megabytes through the IPC
+       channel just to immediately throw it away. 16 KiB is generous
+       enough for typical reads/greps and small enough to keep the
+       sidecar → renderer hop cheap. */
+    const MAX: usize = 16 * 1024;
+    if body.len() > MAX {
+        let mut end = MAX;
+        while !body.is_char_boundary(end) {
+            end -= 1;
+        }
+        body.truncate(end);
+        body.push_str("\n…(truncated)");
+    }
+    Some(json!({
+        "type": "user",
+        "message": {
+            "role": "user",
+            "content": [{
+                "type": "tool_result",
+                "tool_use_id": call_id,
+                "content": [{ "type": "text", "text": body }],
+            }],
+        },
+        "session_id": session_id,
+    }))
+}
+
 /// Cursor's `tool_call` event carries a discriminated-union payload; pick out
 /// the readable tool name + args and re-emit as a Claude-style `tool_use`
 /// content block. We only handle the `started` subtype (tool *invocation*) —
-/// `completed` carries the tool *result*, which Woom already surfaces via
-/// action cards or inline bash output, so rendering it again would duplicate.
+/// `completed` carries the tool *result*, which `synth_tool_result` above
+/// converts to a Claude `tool_result` envelope so the trace pill gets an
+/// output card.
 ///
 /// Two-pass extraction. cursor-agent has shipped at least three layouts for
 /// where the tool name lives: inside `tool_call` as a discriminated union

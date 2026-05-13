@@ -123,18 +123,14 @@ pub(crate) fn build_mcp_config(
         allowed.push("mcp__app__open_jira_issue".into());
         allowed.push("mcp__app__open_sentry_issue".into());
         allowed.push("mcp__app__switch_view".into());
-        allowed.push("mcp__app__add_editor_instance".into());
         allowed.push("mcp__app__open_connect_modal".into());
-        allowed.push("mcp__app__add_workbench_instance".into());
-        allowed.push("mcp__app__new_workbench".into());
-        allowed.push("mcp__app__switch_workbench".into());
-        allowed.push("mcp__app__focus_workbench_instance".into());
+        allowed.push("mcp__app__add_app_instance".into());
         allowed.push("mcp__app__open_github_repo".into());
         allowed.push("mcp__app__open_jira_tab".into());
         allowed.push("mcp__app__open_sentry_tab".into());
-        allowed.push("mcp__app__set_github_column".into());
-        allowed.push("mcp__app__set_jira_column".into());
-        allowed.push("mcp__app__set_sentry_column".into());
+        allowed.push("mcp__app__set_github_instance".into());
+        allowed.push("mcp__app__set_jira_instance".into());
+        allowed.push("mcp__app__set_sentry_instance".into());
         allowed.push("mcp__app__set_editor_repo_path".into());
         allowed.push("mcp__app__set_agent_cwd".into());
         allowed.push("mcp__app__list_instances".into());
@@ -150,6 +146,7 @@ pub(crate) fn build_mcp_config(
         allowed.push("mcp__app__canvas_update_shape".into());
         allowed.push("mcp__app__canvas_delete_shape".into());
         allowed.push("mcp__app__canvas_add_edge".into());
+        allowed.push("mcp__app__canvas_add_edges".into());
         allowed.push("mcp__app__canvas_delete_edge".into());
         allowed.push("mcp__app__canvas_arrange".into());
         allowed.push("mcp__app__canvas_focus".into());
@@ -163,6 +160,16 @@ pub(crate) fn build_mcp_config(
         allowed.push("mcp__app__canvas_distribute".into());
         allowed.push("mcp__app__canvas_set_viewport".into());
         allowed.push("mcp__app__canvas_upload_image".into());
+        // Terminal tools — drive the user-visible PTY column. These
+        // are no more privileged than the Bash tool (same shell, same
+        // env) so they belong in the always-allowed set; without
+        // them Claude CLI prompts the user on every `terminal_run`,
+        // which is exactly the "endless permission prompts" symptom.
+        allowed.push("mcp__app__ensure_terminal".into());
+        allowed.push("mcp__app__terminal_list".into());
+        allowed.push("mcp__app__terminal_run".into());
+        allowed.push("mcp__app__terminal_write".into());
+        allowed.push("mcp__app__terminal_buffer".into());
         allowed.push("mcp__app__propose_bash".into());
         allowed.push("mcp__app__propose_switch_cwd".into());
     }
