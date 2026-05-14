@@ -131,28 +131,23 @@
     <section class="app-pane sc-canvas">
       <CanvasSurface instanceId={p.instanceId} onCardOpen={p.onCardOpen} />
     </section>
-    <div class="sc-rail-slot" in:fly={{ x: 24, duration: 220, easing: cubicOut }}>
-      <SidePaneRail
-        {linkedAgents}
-        onExpand={() => (sideOpen = true)}
-      />
-    </div>
+    <SidePaneRail
+      {linkedAgents}
+      onExpand={() => (sideOpen = true)}
+    />
   {/if}
 </section>
 
 <style>
   .sc-shell { display: block; padding: var(--app-pad, 14px); }
-  /* When collapsed: 2-column grid (canvas + 52px rail). The grid
-     transition makes the canvas reflow smoothly when the user
-     toggles the pane. */
+  /* When the side pane is collapsed, switch to a 2-col grid:
+     canvas pane (1fr) + 44px rail. Splitter mode keeps `display:
+     block` so it can manage its own layout. */
   .sc-shell.sc-shell--rail {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 52px;
-    gap: 0;
+    grid-template-columns: minmax(0, 1fr) 44px;
     transition: grid-template-columns var(--dur-base) var(--ease-out);
   }
-  .sc-rail-slot { height: 100%; min-width: 0; }
-  .sc-rail-slot :global(.spr) { width: 100%; }
   .sc-shell :global(.s-start),
   .sc-shell :global(.s-end) {
     height: 100%;

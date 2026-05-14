@@ -994,12 +994,12 @@
     font-family: inherit;
     font-size: 14px; line-height: 1.55;
     color: var(--text-0);
-    /* CRITICAL: textarea и backdrop должны wrap ИДЕНТИЧНО.
-       WebKit textarea НЕ умеет `overflow-wrap: anywhere` — там
-       соблюдается word-boundary wrap (`break-word` semantics).
-       Поэтому оба используют тот же mild-набор: `pre-wrap` +
-       `break-word` + дефолтный word-break. Длинные слова
-       переносятся по необходимости одинаково в обоих. */
+    /* CRITICAL: textarea and backdrop must wrap IDENTICALLY.
+       WebKit textarea doesn't honour `overflow-wrap: anywhere` —
+       it falls back to word-boundary wrapping (`break-word`
+       semantics). So both sides use the same mild combo: `pre-wrap`
+       + `break-word` + default word-break. Long tokens break only
+       when they must, the same way on both sides. */
     white-space: pre-wrap;
     word-break: normal;
     overflow-wrap: break-word;
@@ -1009,14 +1009,25 @@
     box-sizing: border-box;
     border: 0;
   }
-  /* Inline @-mention chip — soft accent tint, no border (would shift
-     glyph metrics out of sync with the textarea). */
+  /* Inline @-mention chip — soft accent tint. CRITICAL: padding and
+     margin MUST be zero. The previous `padding: 0 2px; margin: 0 -1px`
+     added +2px of horizontal width to every @-token. The WebKit
+     textarea renders the same token WITHOUT that padding (it's just
+     plain text in there), so the wrapping diverged: a long line with
+     an @-token could break to the next row in the backdrop but stay
+     on the same row in the textarea — and the caret (rendered by the
+     textarea) ended up on one line while the visible glyph sat on
+     another. That's exactly the "caret jumps far from where it
+     should" symptom users reported. If a tighter chip look is
+     desired, use `background` + `border-radius` only (no padding) so
+     the fill lands exactly on the glyph box and layout shift stays
+     at zero. */
   .cmp-area-backdrop :global(.cmp-area-mention) {
     background: color-mix(in srgb, var(--accent) 18%, transparent);
     color: var(--accent-bright);
-    border-radius: 4px;
-    padding: 0 2px;
-    margin: 0 -1px;
+    border-radius: 3px;
+    padding: 0;
+    margin: 0;
     font-weight: 500;
   }
   .cmp-area {
@@ -1033,13 +1044,14 @@
     min-height: 24px;
     overflow: hidden;
     scrollbar-width: none;
-    /* Те же wrapping rules что у backdrop — pre-wrap + break-word.
-       WebKit-textarea НЕ обрабатывает `overflow-wrap: anywhere`
-       так же как div: для textarea оно даёт word-boundary wrap
-       (effectively `break-word`). Раньше backdrop был на
-       `anywhere`, textarea — фактически на `break-word`, отсюда
-       расхождение позиции каретки vs glyphов при длинных русских
-       словах. Теперь оба явно на `break-word` — wrap идентичен. */
+    /* Same wrapping rules as the backdrop — pre-wrap + break-word.
+       WebKit textarea doesn't honour `overflow-wrap: anywhere` like
+       a div does: inside a textarea it falls back to word-boundary
+       wrap (effectively `break-word`). The backdrop used to be
+       `anywhere` while the textarea was effectively `break-word`,
+       which is exactly why caret vs glyph positions drifted apart
+       on long unbreakable words. Both sides now spell out
+       `break-word` so the wrap is identical. */
     white-space: pre-wrap;
     word-break: normal;
     overflow-wrap: break-word;

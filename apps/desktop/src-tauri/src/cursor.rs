@@ -1651,7 +1651,12 @@ fn canonicalize_tool_name(name: &str) -> String {
         "ls" | "list_dir" | "listdir" => "LS".into(),
         "webfetch" | "web_fetch" => "WebFetch".into(),
         "websearch" | "web_search" => "WebSearch".into(),
-        "todowrite" | "todo_write" => "TodoWrite".into(),
+        // `UpdateTodos` is cursor-agent's name for the same todo-list
+        // tool Claude calls `TodoWrite`. Without this alias the trace
+        // pill falls into the generic `_using UpdateTodos…_` branch and
+        // dumps the raw tool name instead of rendering the per-tool
+        // compact "Update todos · N items" summary.
+        "todowrite" | "todo_write" | "updatetodos" | "update_todos" => "TodoWrite".into(),
         "notebookedit" | "notebook_edit" => "NotebookEdit".into(),
         _ => name.to_string(),
     }

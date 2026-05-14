@@ -290,30 +290,26 @@
         </div>
       {/if}
     </section>
-    <div class="st-rail-slot" in:fly={{ x: 24, duration: 220, easing: cubicOut }}>
-      <SidePaneRail
-        linkedAgents={linkedAgents.map((la) => ({
-          sessionId: la.sessionId,
-          agentInstanceId: la.agentInstanceId,
-          kind: la.kind,
-          title: la.title
-        }))}
-        onExpand={() => (sideOpen = true)}
-      />
-    </div>
+    <SidePaneRail
+      linkedAgents={linkedAgents.map((la) => ({
+        sessionId: la.sessionId,
+        agentInstanceId: la.agentInstanceId,
+        kind: la.kind,
+        title: la.title
+      }))}
+      onExpand={() => (sideOpen = true)}
+    />
   {/if}
 </section>
 
 <style>
   .st-shell { display: block; padding: var(--app-pad, 14px); }
+  /* Rail-collapsed: 2-col grid (terminal pane + 44px rail). */
   .st-shell.st-shell--rail {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 52px;
-    gap: 0;
+    grid-template-columns: minmax(0, 1fr) 44px;
     transition: grid-template-columns var(--dur-base) var(--ease-out);
   }
-  .st-rail-slot { height: 100%; min-width: 0; }
-  .st-rail-slot :global(.spr) { width: 100%; }
   .st-shell :global(.s-start),
   .st-shell :global(.s-end) {
     height: 100%;

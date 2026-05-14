@@ -17,7 +17,17 @@
     setActiveInstance,
     type AppKind
   } from '$lib/state/layout.svelte';
+  import { sessionsState } from '$lib/state/sessions.svelte';
   import type { Snippet } from 'svelte';
+
+  /** Just the base folder name — best inline label for "what repo is
+   *  this editor showing". Falls back to empty when the instance has
+   *  no path bound yet. */
+  function folderName(path: string | null | undefined): string {
+    if (!path) return '';
+    const parts = path.replace(/\/$/, '').split('/');
+    return parts[parts.length - 1] || '';
+  }
 
   interface Props {
     kind: AppKind;
@@ -44,6 +54,33 @@
   const primaryInst = $derived(instances.find((i) => i.primary) ?? instances[0]);
   const nonPrimary = $derived(instances.filter((i) => !i.primary));
   const hasExtras = $derived(instances.length > 1);
+
+  /** Compose tooltip text for one instance — editor instances enrich
+   *  the curated name with the folder they're currently bound to so
+   *  hover reveals the repo at a glance ("Editor · Klimt · woom").
+   *  Non-editor kinds keep the base "<Label> · <name>" pattern. */
+  function tooltipFor(inst: { id: string; name: string } | undefined): string {
+    if (!inst) return p.tooltip;
+    if (p.kind === 'editor') {
+      const repoPath = sessionsState.editorInstanceState[inst.id]?.repoPath ?? '';
+      const folder = folderName(repoPath);
+      if (folder) {
+        // `data-tooltip` is rendered single-line by `.rail-btn[data-tooltip]:hover::before`;
+        // keep it compact — folder name only ("Editor · Klimt · woom").
+        return `${p.label} · ${inst.name} · ${folder}`;
+      }
+    }
+    return `${p.label} · ${inst.name}`;
+  }
+
+  /** Folder-name suffix for the primary icon's tooltip. Empty string
+   *  when the editor isn't bound to a folder so the template renders
+   *  the base tooltip unchanged. */
+  function primaryFolderSuffix(): string {
+    if (p.kind !== 'editor' || !primaryInst) return '';
+    const f = folderName(sessionsState.editorInstanceState[primaryInst.id]?.repoPath ?? '');
+    return f ? ` · ${f}` : '';
+  }
 
   /** Whether the secondary instance icons are visible inline. Collapses
    *  automatically when extras drop back to 0 (e.g. user × the last
@@ -119,7 +156,9 @@
       class:kind-active={p.active && activeId !== primaryInst?.id}
       class:has-extras={hasExtras}
       style="--rail-tone: {p.tone}; --rail-glow: {p.glow};"
-      data-tooltip={hasExtras ? `${p.tooltip} · ${primaryInst?.name}` : p.tooltip}
+      data-tooltip={hasExtras
+        ? `${p.tooltip} · ${primaryInst?.name}${primaryFolderSuffix()}`
+        : `${p.tooltip}${primaryFolderSuffix()}`}
       aria-label={p.label}
       onclick={onClickPrimary}
       oncontextmenu={onContextMenu}
@@ -154,7 +193,7 @@
             class="rail-btn rab-btn rab-sub-btn"
             class:active={isActive}
             style="--rail-tone: {p.tone}; --rail-glow: {p.glow};"
-            data-tooltip="{p.label} · {inst.name}"
+            data-tooltip={tooltipFor(inst)}
             aria-label="{p.label} {inst.name}"
             onclick={() => activate(inst.id)}
             oncontextmenu={onContextMenu}

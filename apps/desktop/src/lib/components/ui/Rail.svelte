@@ -175,9 +175,53 @@
       connected: true
     };
   }
+
+  /* Floating tooltip — JS-positioned, rendered as a fixed-position
+     sibling of `.rail-scroll`. The CSS pseudo-element approach used
+     until now lived inside the scrollable middle column, and CSS
+     doesn't allow `overflow-y: scroll` together with
+     `overflow-x: visible` (both axes are forced to a non-visible
+     value as soon as one is). That clipped every tooltip on a
+     rail-btn inside `.rail-scroll`. A `position: fixed` element
+     escapes ALL ancestor clip contexts, so it's the cleanest way
+     to keep the hover affordance while preserving the scroll. */
+  let tooltipText = $state('');
+  let tooltipX = $state(0);
+  let tooltipY = $state(0);
+  let tooltipVisible = $state(false);
+
+  function showTooltip(target: HTMLElement) {
+    const text = target.getAttribute('data-tooltip');
+    if (!text) return;
+    const rect = target.getBoundingClientRect();
+    tooltipText = text;
+    /* Position: 8px to the right of the button, vertically centered.
+       The `.rail-tooltip` itself uses `transform: translateY(-50%)`
+       so we anchor on the button's vertical midpoint. */
+    tooltipX = rect.right + 8;
+    tooltipY = rect.top + rect.height / 2;
+    tooltipVisible = true;
+  }
+  function hideTooltip() {
+    tooltipVisible = false;
+  }
+  /* Event delegation: any descendant button carrying `data-tooltip`
+     opts in. Mouseover/mouseout bubble up to the rail root unlike
+     mouseenter/mouseleave — exactly what we want for delegation. */
+  function onRailMouseOver(e: MouseEvent) {
+    const t = (e.target as HTMLElement | null)?.closest?.('[data-tooltip]') as HTMLElement | null;
+    if (t) showTooltip(t);
+  }
+  function onRailMouseOut(e: MouseEvent) {
+    const t = (e.target as HTMLElement | null)?.closest?.('[data-tooltip]') as HTMLElement | null;
+    const related = e.relatedTarget as HTMLElement | null;
+    if (!t) return;
+    if (related && t.contains(related)) return;
+    hideTooltip();
+  }
 </script>
 
-<aside class="rail">
+<aside class="rail" onmouseover={onRailMouseOver} onmouseout={onRailMouseOut} role="navigation">
   <!-- v8 brand mark = "go home" affordance. Click takes the user to
        the dashboard view (HomeApp.svelte) so the W is the always-
        reachable anchor of the workspace, mirroring how the system
@@ -193,6 +237,14 @@
     <img src="/woom-mark-transparent.png" alt="Woom" />
   </button>
 
+  <!-- Scrollable middle column. Sources / agents / tools live here so
+       the system cluster + avatar at the bottom stay anchored even
+       when the user has accumulated 10+ canvas / editor / terminal
+       instances. Scrollbar is hidden via `scrollbar-width: none` +
+       `::-webkit-scrollbar { display: none }` — the gradient masks
+       below telegraph "there's more above / below" without painting
+       a chrome track. -->
+  <div class="rail-scroll">
   <!-- Source solos -->
   <button
     class="rail-btn"
@@ -315,8 +367,13 @@
     {/snippet}
   </RailAppButton>
 
-  <div class="rail-spacer"></div>
+  </div>
+  <!-- /rail-scroll -->
 
+  <!-- Foot cluster: system shortcuts + identity avatar. Sits outside
+       the scroll area so it stays pinned to the bottom regardless of
+       how many tool instances live above. -->
+  <div class="rail-foot">
   <!-- System cluster -->
   <button
     class="rail-btn"
@@ -382,7 +439,28 @@
       </ul>
     </div>
   </button>
+  </div>
+  <!-- /rail-foot -->
 </aside>
+
+{#if tooltipVisible}
+  <!-- Floating tooltip — MUST be rendered OUTSIDE `<aside class="rail">`
+       so it isn't trapped by the rail's containing block. The rail has
+       `backdrop-filter: blur(12px)` which (per CSS spec) creates a new
+       containing block for fixed-positioned descendants. That, combined
+       with the rail's `overflow: hidden`, was clipping the tooltip even
+       though it was `position: fixed`. Placed at the component root
+       (sibling of `<aside>`), the tooltip's containing block is the
+       viewport again — math (`rect.right + 8`, `rect.top + h/2`) lines
+       up cleanly. -->
+  <div
+    class="rail-tooltip"
+    role="tooltip"
+    style="left: {tooltipX}px; top: {tooltipY}px;"
+  >
+    {tooltipText}
+  </div>
+{/if}
 
 <style>
   .rail {
@@ -394,6 +472,56 @@
     backdrop-filter: blur(12px);
     position: relative;
     z-index: 5;
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  /* Scrollable middle column for source / agent / tool buttons. Hides
+     the scrollbar chrome on every engine — `scrollbar-width: none`
+     covers Firefox, `::-webkit-scrollbar { display:none }` covers
+     WebKit / Chromium. The container itself remains a flex column so
+     dividers + RailAppButton stacks inherit the same 6px gap the rail
+     used to set on its top-level flex. Soft fade masks at the top /
+     bottom edges hint at the overflow without a visible track. */
+  .rail-scroll {
+    flex: 1 1 auto;
+    min-height: 0;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    overflow-y: auto;
+    overflow-x: hidden;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+    /* Top + bottom fade so the user reads "there's more" when the
+       column overflows, without a chrome track. The mask is symmetric
+       so it works whether the user scrolls up or down. */
+    mask-image: linear-gradient(180deg,
+      transparent 0,
+      #000 14px,
+      #000 calc(100% - 14px),
+      transparent 100%);
+    -webkit-mask-image: linear-gradient(180deg,
+      transparent 0,
+      #000 14px,
+      #000 calc(100% - 14px),
+      transparent 100%);
+    /* Hide the scrollbar even when content overflows. */
+  }
+  .rail-scroll::-webkit-scrollbar { width: 0; height: 0; display: none; }
+
+  /* Foot cluster — pinned to the bottom of the rail; mirrors the flex
+     gap of the scroll column so the visual rhythm stays continuous. */
+  .rail-foot {
+    flex: 0 0 auto;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    padding-top: 6px;
   }
 
   /* Brand mark = home button in the same 44×44 footprint as the
@@ -441,7 +569,6 @@
     background: var(--border);
     margin: 4px 0;
   }
-  .rail-spacer { flex: 1; }
 
   :global(.rail-btn) {
     position: relative;
@@ -630,12 +757,14 @@
   }
   .rail-identity-sub { color: var(--text-mute); font-size: 10.5px; }
 
-  /* Tooltip on hover (right side) — global so RailAppButton's nested
-     button picks it up too. */
-  :global(.rail-btn[data-tooltip]:hover::before) {
-    content: attr(data-tooltip);
-    position: absolute;
-    left: 52px; top: 50%; transform: translateY(-50%);
+  /* Floating tooltip — JS-positioned via `tooltipX/tooltipY` so it
+     escapes every ancestor clip context (including `.rail-scroll`'s
+     `overflow-y: auto`, which until now silently clipped every
+     rail-btn pseudo-tooltip). Anchored to the right of the button
+     at vertical midpoint via `translateY(-50%)`. `pointer-events:
+     none` so the tooltip itself never intercepts hover. */
+  .rail-tooltip {
+    position: fixed;
     padding: 4px 10px;
     background: var(--bg-3);
     border: 1px solid var(--border-neutral-hi);
@@ -644,7 +773,18 @@
     color: var(--text-0);
     white-space: nowrap;
     pointer-events: none;
-    z-index: 10;
+    z-index: 9999;
     box-shadow: var(--shadow-1);
+    transform: translateY(-50%);
+    /* Subtle entrance — gives the user a visual cue the tooltip
+       isn't a stuck-from-the-last-hover relic. */
+    animation: rail-tooltip-in 120ms var(--ease-out, ease-out);
+  }
+  @keyframes rail-tooltip-in {
+    from { opacity: 0; transform: translate(-2px, -50%); }
+    to   { opacity: 1; transform: translate(0, -50%); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .rail-tooltip { animation: none; }
   }
 </style>

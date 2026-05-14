@@ -443,53 +443,65 @@ pub struct BashResult {
     pub ok: bool,
 }
 
+/// Hard upper bound for `bash_run`. Approval-card commands (commit,
+/// push, install, migration) can legitimately take minutes — 60s
+/// was killing valid `git push` and `npm install` runs mid-flight,
+/// which the user saw as "card hangs and freezes the UI" (the JS
+/// invoke() future stays pending until the kill). 10 minutes covers
+/// every realistic interactive workflow without letting a runaway
+/// process eat a thread forever.
+pub const BASH_RUN_TIMEOUT_SECS: u64 = 600;
+
 /// Run a shell command in `cwd` via `sh -c`. Captures stdout and stderr
 /// separately and returns the exit code. Never panics; command failures
 /// are reflected in `ok=false, code≠0`.
 ///
-/// The 60-second timeout is the hard ceiling; long-running commands
-/// (e.g. `npm install`) will be killed. Revisit if needed.
-pub fn bash_run(cwd: &str, command: &str) -> Result<BashResult, String> {
-    use std::process::{Command, Stdio};
-    use std::thread;
+/// Async + tokio-based: we previously had a sync sibling that
+/// busy-polled `try_wait()` every 50 ms on a Tauri worker thread. That
+/// pinned a whole Tauri command thread for the duration of the call —
+/// fire 4 approve-cards in parallel and the IPC queue stalled, which
+/// users saw as the entire app lagging. Switching to tokio's process
+/// API means the future yields cleanly between OS notifications and
+/// the JS side's pending `invoke()` future never blocks anything.
+/// `kill_on_drop` guarantees that timeout / cancellation leaves no
+/// orphaned children behind.
+pub async fn bash_run(cwd: &str, command: &str) -> Result<BashResult, String> {
+    use std::process::Stdio;
     use std::time::Duration;
-    let mut child = Command::new("sh")
+    use tokio::process::Command;
+    use tokio::time::timeout;
+
+    let child = Command::new("sh")
         .arg("-c")
         .arg(command)
         .current_dir(cwd)
         .env("PATH", enriched_path())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .kill_on_drop(true)
         .spawn()
         .map_err(|e| format!("spawn sh: {}", e))?;
 
-    let timeout = Duration::from_secs(60);
-    let start = std::time::Instant::now();
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                let mut stdout = String::new();
-                let mut stderr = String::new();
-                if let Some(mut out) = child.stdout.take() {
-                    use std::io::Read;
-                    let _ = out.read_to_string(&mut stdout);
-                }
-                if let Some(mut err) = child.stderr.take() {
-                    use std::io::Read;
-                    let _ = err.read_to_string(&mut stderr);
-                }
-                let code = status.code().unwrap_or(-1);
-                return Ok(BashResult { stdout, stderr, code, ok: status.success() });
-            }
-            Ok(None) => {
-                if start.elapsed() > timeout {
-                    let _ = child.kill();
-                    return Err("command timed out after 60s".into());
-                }
-                thread::sleep(Duration::from_millis(50));
-            }
-            Err(e) => return Err(format!("wait: {}", e)),
-        }
+    match timeout(
+        Duration::from_secs(BASH_RUN_TIMEOUT_SECS),
+        child.wait_with_output(),
+    )
+    .await
+    {
+        Ok(Ok(out)) => Ok(BashResult {
+            stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+            code: out.status.code().unwrap_or(-1),
+            ok: out.status.success(),
+        }),
+        Ok(Err(e)) => Err(format!("wait: {}", e)),
+        // Future drop → `kill_on_drop` reaps the child. Surface the
+        // partial timeout fact so the agent / user know it wasn't a
+        // success-with-empty-output.
+        Err(_) => Err(format!(
+            "command timed out after {}s",
+            BASH_RUN_TIMEOUT_SECS
+        )),
     }
 }
 

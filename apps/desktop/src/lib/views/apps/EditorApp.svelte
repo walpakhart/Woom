@@ -266,33 +266,31 @@
         />
       </div>
     </section>
-    <!-- Skinny rail (52px). Shows expand-button + one square per
-         linked agent so the user always knows which chats are
-         attached AND can pop straight to one without expanding the
-         whole pane first. -->
-    <div class="se-rail-slot" in:fly={{ x: 24, duration: 220, easing: cubicOut }}>
-      <SidePaneRail
-        linkedAgents={linkedAgents.map((la) => ({
-          sessionId: la.sessionId,
-          agentInstanceId: la.agentInstanceId,
-          kind: la.kind,
-          title: la.name
-        }))}
-        {reviewCount}
-        onExpand={() => (claudeSideOpen = true)}
-      />
-    </div>
+    <!-- Rail mirrors the left ActivityBar — same width (44px),
+         same flat background, sits as a sibling column in the
+         outer grid (NOT inside .se-center). So the editor pane
+         keeps its own .app-pane chrome and tabs/scrollbars stop
+         at its right edge instead of bleeding under the rail. -->
+    <SidePaneRail
+      linkedAgents={linkedAgents.map((la) => ({
+        sessionId: la.sessionId,
+        agentInstanceId: la.agentInstanceId,
+        kind: la.kind,
+        title: la.name
+      }))}
+      {reviewCount}
+      onExpand={() => (claudeSideOpen = true)}
+    />
   {/if}
 </section>
 
 <style>
   /* Two grid layouts:
-     - open: 44px ActivityBar + Splitter cell (editor + inline pane).
-     - rail-collapsed: 44px ActivityBar + editor (1fr) + 52px rail-mini.
-     The rail-mini holds linked-agent icons so the user can see at a
-     glance WHO's attached even when the chat pane is hidden. */
+     - open: 44px ActivityBar + Splitter cell (editor + InlineClaude).
+     - rail-collapsed: 44px ActivityBar + editor pane (1fr) + 44px
+       rail (mirror of the ActivityBar on the right edge). */
   .se-shell {
-    grid-template-columns: 44px 1fr 52px;
+    grid-template-columns: 44px minmax(0, 1fr) 44px;
     transition: grid-template-columns var(--dur-base) var(--ease-out);
   }
   .se-shell--with-side {
@@ -331,13 +329,8 @@
     min-height: 0;
     height: 100%;
     position: relative;
+    overflow: hidden;
   }
-
-  /* Slot for the shared SidePaneRail when the InlineClaude pane is
-     collapsed. Width matches the rail itself (52px) — sized in the
-     `.se-shell` grid template. */
-  .se-rail-slot { height: 100%; min-width: 0; }
-  .se-rail-slot :global(.spr) { width: 100%; }
   .se-editor-area {
     flex: 1;
     display: flex;

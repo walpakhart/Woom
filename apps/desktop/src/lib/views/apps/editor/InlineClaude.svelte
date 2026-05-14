@@ -72,7 +72,11 @@
       } else {
         if (!p.activeCanvasId) continue;
         if (s.linkedCanvasId !== p.activeCanvasId) continue;
-        if (s.agentKind !== 'claude') continue;
+        // Canvas mode shows BOTH Claude and Cursor chats — historically
+        // we filtered to Claude only because cursor-canvas wiring lagged
+        // Claude's, but link semantics (linkedCanvasId) are identical
+        // for both agents now and the pane already renders Cursor rows
+        // correctly via the per-row data-agent treatment.
       }
       /* Floating sessions (no agentInstanceId yet) fall back to the
          singleton app id for their kind so the row can still render
@@ -113,11 +117,11 @@
       return tb.localeCompare(ta);
     };
     for (const s of [...sessionsState.list].sort(sortByActivity)) {
-      if (linkKind === 'canvas') {
-        if (s.agentKind !== 'claude') continue;
-      } else {
-        if (s.agentKind !== 'claude' && s.agentKind !== 'cursor') continue;
-      }
+      // Picker surfaces both Claude и Cursor chats across all link
+      // kinds — there's no longer a reason to scope canvas-pickers to
+      // Claude only (the canvas pane displays Cursor rows just fine
+      // and the link semantic is symmetric per `linkedCanvasId`).
+      if (s.agentKind !== 'claude' && s.agentKind !== 'cursor') continue;
       const linkedHere =
         linkKind === 'editor'
           ? s.linkedToEditor && s.linkedToEditorInstanceId === p.instanceId

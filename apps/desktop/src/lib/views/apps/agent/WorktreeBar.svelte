@@ -1,12 +1,26 @@
 <script lang="ts">
-  /* WorktreeBar — узкая полоска под ChatHeader.
+  /* WorktreeBar — thin strip under ChatHeader.
      cwd chip + clear button + editor-link chip / picker + worktree
-     menu. По сути это новая версия cwd-bar из AgentApp, но
-     самостоятельная. */
+     menu. Effectively the standalone successor to the old cwd-bar
+     that used to live inside AgentApp. */
   import { sessionsState, focusSession } from '$lib/state/sessions.svelte';
   import { APP_INSTANCE_IDS, layoutState } from '$lib/state/layout.svelte';
   import { canvasState } from '$lib/state/canvas.svelte';
   import Dropdown from '$lib/components/ui/Dropdown.svelte';
+  import { cubicOut } from 'svelte/easing';
+
+  /** Custom slide-down + fade transition for the mismatch menu. Pure
+   *  CSS keyframes would do the trick visually, but using a Svelte
+   *  transition lets us match enter and exit symmetrically (out:
+   *  collapses back into the chip on dismiss instead of popping out). */
+  function slideFade(_: Element, { duration = 160 }: { duration?: number } = {}) {
+    return {
+      duration,
+      easing: cubicOut,
+      css: (t: number) =>
+        `opacity: ${t}; transform: translateY(${(1 - t) * -6}px) scaleY(${0.96 + t * 0.04}); transform-origin: top left;`
+    };
+  }
 
   type Kind = 'claude' | 'cursor';
 
@@ -17,6 +31,12 @@
     onClearCwd: () => void;
     onToggleEditorLink: () => void;
     onLinkToEditorInstance: (id: string) => void;
+    /** Move agent cwd onto the linked editor's repoPath — one of the
+     *  two choices in the orange "Folder mismatch" menu. */
+    onSyncAgentToEditor?: () => void;
+    /** Move the linked editor's repoPath onto the agent cwd/worktree
+     *  — the other choice in the same menu. */
+    onSyncEditorToAgent?: () => void;
     /** Drop the active session's terminal link (sets
      *  `linkedTerminalInstanceId` to null). Same shape as
      *  `onToggleEditorLink` for consistency — the bar handles the chip
@@ -42,11 +62,28 @@
     sessionsState.list.find((s) => s.id === sessionsState.activeIds[p.kind]) ?? null
   );
 
+  /** Last path segment from an absolute repo path. Drives the
+   *  "Link to Vermeer (woom)" picker label and the linked-chip suffix
+   *  so the user can spot at a glance which repo each editor instance
+   *  currently has open. */
+  function folderName(p: string | null | undefined): string {
+    if (!p) return '';
+    const trimmed = p.replace(/\/+$/, '');
+    const slash = trimmed.lastIndexOf('/');
+    return slash >= 0 ? trimmed.slice(slash + 1) : trimmed;
+  }
+
   /** All editor instances currently open — pulled live from
    *  `layoutState` so the picker reflects every Vermeer / Rothko
-   *  spawned via the rail's long-press menu. */
+   *  spawned via the rail's long-press menu. Each entry carries the
+   *  open folder name so the picker reads "Link to <editor> (<folder>)"
+   *  and the user picks the right one without bouncing through the
+   *  editor solo. */
   const editorInstances = $derived(
-    layoutState.instances.editor.map((i) => ({ id: i.id, name: i.name }))
+    layoutState.instances.editor.map((i) => {
+      const repoPath = sessionsState.editorInstanceState[i.id]?.repoPath ?? '';
+      return { id: i.id, name: i.name, repoPath, folder: folderName(repoPath) };
+    })
   );
 
   /** The chip shown on the cwd bar when the active session is linked
@@ -57,8 +94,57 @@
     const inst = layoutState.instances.editor.find(
       (i) => i.id === sess.linkedToEditorInstanceId
     );
-    return inst ? { id: inst.id, name: inst.name } : null;
+    if (!inst) return null;
+    const repoPath = sessionsState.editorInstanceState[inst.id]?.repoPath ?? '';
+    return { id: inst.id, name: inst.name, repoPath, folder: folderName(repoPath) };
   });
+
+  /** Active agent's "owned" folder — worktree wins over cwd. This is
+   *  what the "Folder mismatch" menu will offer to push onto the
+   *  editor side. */
+  const agentFolder = $derived(sess?.worktreePath || sess?.cwd || '');
+
+  /** Mismatch: link is active, both sides have a non-empty folder, but
+   *  they differ. If one side is empty we don't show the pulse —
+   *  that's a "not configured yet" state and the link itself will
+   *  have already adopted the populated side. */
+  const folderMismatch = $derived(
+    !!linkedEditor &&
+    !!linkedEditor.repoPath &&
+    !!agentFolder &&
+    linkedEditor.repoPath !== agentFolder
+  );
+
+  /** Whether the mismatch resolution menu is open. */
+  let mismatchOpen = $state(false);
+  let mismatchWrapEl = $state<HTMLDivElement | null>(null);
+
+  $effect(() => {
+    if (!mismatchOpen) return;
+    function onDown(e: MouseEvent) {
+      if (mismatchWrapEl && !mismatchWrapEl.contains(e.target as Node)) {
+        mismatchOpen = false;
+      }
+    }
+    window.addEventListener('mousedown', onDown);
+    return () => window.removeEventListener('mousedown', onDown);
+  });
+
+  // Auto-close the menu when the mismatch resolves (right after one
+  // of the two options is picked) so it doesn't linger with stale
+  // paths.
+  $effect(() => {
+    if (!folderMismatch) mismatchOpen = false;
+  });
+
+  function pickUseEditor() {
+    mismatchOpen = false;
+    p.onSyncAgentToEditor?.();
+  }
+  function pickUseAgent() {
+    mismatchOpen = false;
+    p.onSyncEditorToAgent?.();
+  }
 
   /** All terminal instances currently open — used for the "Link
    *  terminal…" picker. Mirror of `editorInstances` above. */
@@ -132,16 +218,60 @@
     {/if}
 
     {#if sess.linkedToEditor && linkedEditor}
-      <button class="wb-link" onclick={() => { focusLocal(); p.onToggleEditorLink(); }} title="Linked to Editor — click to unlink">
+      <button
+        class="wb-link"
+        onclick={() => { focusLocal(); p.onToggleEditorLink(); }}
+        title={linkedEditor.repoPath
+          ? `Linked to ${linkedEditor.name} — ${linkedEditor.repoPath}\nClick to unlink`
+          : `Linked to ${linkedEditor.name} — click to unlink`}
+      >
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M16 18l6-6-6-6M8 6l-6 6 6 6"/></svg>
         <span>{linkedEditor.name}</span>
+        {#if linkedEditor.folder}
+          <span class="wb-link-folder mono">({linkedEditor.folder})</span>
+        {/if}
         <svg class="wb-link-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
       </button>
+
+      {#if folderMismatch}
+        <div class="wb-mismatch-wrap" bind:this={mismatchWrapEl}>
+          <button
+            class="wb-mismatch"
+            class:wb-mismatch--open={mismatchOpen}
+            onclick={() => (mismatchOpen = !mismatchOpen)}
+            title={`Folder mismatch:\n  agent: ${agentFolder}\n  editor: ${linkedEditor.repoPath}`}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><circle cx="12" cy="17" r="0.6" fill="currentColor"/><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg>
+            <span>Folder mismatch</span>
+          </button>
+          {#if mismatchOpen}
+            <div class="wb-mismatch-menu" role="menu" transition:slideFade={{ duration: 160 }}>
+              <div class="wb-mismatch-head">
+                Pick which side to keep:
+              </div>
+              <button class="wb-mismatch-opt" role="menuitem" onclick={pickUseEditor}>
+                <div class="wb-mismatch-opt-side">Use editor's folder</div>
+                <div class="wb-mismatch-opt-path mono">{linkedEditor.folder || linkedEditor.repoPath}</div>
+                <div class="wb-mismatch-opt-hint">agent moves here</div>
+              </button>
+              <button class="wb-mismatch-opt" role="menuitem" onclick={pickUseAgent}>
+                <div class="wb-mismatch-opt-side">Use agent's folder</div>
+                <div class="wb-mismatch-opt-path mono">{folderName(agentFolder) || agentFolder}</div>
+                <div class="wb-mismatch-opt-hint">editor opens it</div>
+              </button>
+            </div>
+          {/if}
+        </div>
+      {/if}
     {:else if editorInstances.length > 0}
       <div class="wb-link-picker">
         <Dropdown
           value=""
-          options={editorInstances.map((e) => ({ value: e.id, label: `Link to ${e.name}` }))}
+          options={editorInstances.map((e) => ({
+            value: e.id,
+            label: e.folder ? `Link to ${e.name} (${e.folder})` : `Link to ${e.name}`,
+            hint: e.repoPath || undefined
+          }))}
           onChange={(id) => { focusLocal(); p.onLinkToEditorInstance(id); }}
           placeholder="Link editor…"
           ariaLabel="Link to editor"
@@ -264,10 +394,142 @@
     font-size: 11px;
     cursor: pointer;
   }
-  .wb-link:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+  .wb-link {
+    transition: background 160ms, border-color 160ms, transform 120ms;
+  }
+  .wb-link:hover {
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    transform: translateY(-0.5px);
+  }
+  .wb-link:active { transform: translateY(0); }
   .wb-link svg { width: 11px; height: 11px; }
-  .wb-link-x { opacity: 0; transition: opacity 120ms; }
-  .wb-link:hover .wb-link-x { opacity: 0.7; }
+  .wb-link-x { opacity: 0; transition: opacity 160ms; }
+  .wb-link:hover .wb-link-x { opacity: 0.75; }
+  .wb-link-folder {
+    /* Folder name inside the chip — slightly muted vs the editor
+       name so the eye anchors on "Vermeer" first and reads "(woom)"
+       as the secondary hint. */
+    color: color-mix(in srgb, var(--accent-bright) 65%, var(--text-mute));
+    font-size: 10.5px;
+    opacity: 0.85;
+  }
+
+  /* "Folder mismatch" button — orange, pulsing so it stands out among
+     the other chips in the bar. The pulse animates background +
+     border-color + box-shadow only, so the chip's box doesn't shift
+     and surrounding layout stays stable. Hover and open states cut the
+     pulse — once the user is engaging with the menu the chip stops
+     drawing attention to itself. */
+  .wb-mismatch-wrap { position: relative; }
+  .wb-mismatch {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 4px 9px;
+    border-radius: 7px;
+    background: color-mix(in srgb, #f0a050 18%, transparent);
+    border: 1px solid color-mix(in srgb, #f0a050 50%, transparent);
+    color: #f0a050;
+    font-size: 11px; font-weight: 500;
+    cursor: pointer;
+    box-shadow: 0 0 0 0 rgba(240, 160, 80, 0.0);
+    animation: wb-mismatch-pulse 1.6s ease-in-out infinite;
+    transition: background 140ms, border-color 140ms, transform 120ms;
+  }
+  .wb-mismatch:hover,
+  .wb-mismatch--open {
+    background: color-mix(in srgb, #f0a050 28%, transparent);
+    border-color: color-mix(in srgb, #f0a050 75%, transparent);
+    /* While the menu is engaged or hovered, kill the pulse. */
+    animation: none;
+    box-shadow: 0 0 0 3px rgba(240, 160, 80, 0.18);
+  }
+  .wb-mismatch svg { width: 12px; height: 12px; flex-shrink: 0; }
+
+  @keyframes wb-mismatch-pulse {
+    0%, 100% {
+      background: color-mix(in srgb, #f0a050 14%, transparent);
+      border-color: color-mix(in srgb, #f0a050 42%, transparent);
+      box-shadow: 0 0 0 0 rgba(240, 160, 80, 0.0);
+    }
+    50% {
+      background: color-mix(in srgb, #f0a050 28%, transparent);
+      border-color: color-mix(in srgb, #f0a050 78%, transparent);
+      box-shadow: 0 0 0 4px rgba(240, 160, 80, 0.22);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    /* Honour the OS-level "reduce motion" preference — drop the
+       pulse but keep the orange accent so the alert is still visible. */
+    .wb-mismatch { animation: none; }
+  }
+
+  .wb-mismatch-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    width: 280px;
+    background: var(--bg-1);
+    border: 1px solid var(--border-hi);
+    border-radius: 9px;
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.40), 0 0 0 1px rgba(0,0,0,0.18);
+    overflow: hidden;
+    z-index: 220;
+  }
+  .wb-mismatch-head {
+    padding: 9px 12px 6px;
+    font-size: 11px;
+    color: var(--text-2);
+    border-bottom: 1px solid var(--border);
+  }
+  .wb-mismatch-opt {
+    position: relative;
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: 9px 12px 9px 14px;
+    border: none;
+    background: transparent;
+    color: var(--text-0);
+    cursor: pointer;
+    transition: background 160ms ease, padding-left 160ms ease;
+    overflow: hidden;
+  }
+  .wb-mismatch-opt + .wb-mismatch-opt {
+    border-top: 1px solid var(--border);
+  }
+  /* Accent stripe slides in on hover — same motif we use elsewhere
+     (option rows, list items) so the menu feels in-system. */
+  .wb-mismatch-opt::before {
+    content: '';
+    position: absolute;
+    left: 0; top: 6px; bottom: 6px;
+    width: 2px;
+    border-radius: 0 2px 2px 0;
+    background: #f0a050;
+    transform: scaleY(0);
+    transform-origin: center;
+    transition: transform 200ms ease;
+  }
+  .wb-mismatch-opt:hover {
+    background: var(--bg-2);
+    padding-left: 18px;
+  }
+  .wb-mismatch-opt:hover::before { transform: scaleY(1); }
+  .wb-mismatch-opt:active { background: var(--bg-3); }
+  .wb-mismatch-opt-side {
+    font-size: 12px; font-weight: 600;
+    color: var(--text-0);
+  }
+  .wb-mismatch-opt-path {
+    font-size: 11px;
+    color: #f0a050;
+    margin-top: 2px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .wb-mismatch-opt-hint {
+    font-size: 10.5px;
+    color: var(--text-mute);
+    margin-top: 2px;
+  }
 
   /* Terminal-link variant — uses the terminal source token so the
      chip reads as a different beat from the (mint) editor-link

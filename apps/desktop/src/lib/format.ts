@@ -55,27 +55,38 @@ export function formatToolUse(name: string, input: Record<string, unknown>): str
     return cmd ? mdInlineCode(`$ ${truncInline(cmd, 400)}`) : `_using Bash…_`;
   }
   if (name === 'Read') {
-    const fp = s('file_path');
+    // Accept Claude's `file_path` AND cursor-agent's raw `path` /
+    // `target_file` aliases. Earlier we'd render `_read_` (no target)
+    // when the cursor-side flattening in `cursor.rs` missed a freshly
+    // shipped variant — surfacing a row labeled "READ" with NO file
+    // beside it. Falling through to the alternate keys + a last-ditch
+    // string scan keeps the row informative until the canonical key
+    // wins again.
+    const fp = s('file_path') || s('path') || s('target_file') || s('filePath');
     const range = input.offset || input.limit ? ` (L${input.offset ?? 1}–)` : '';
-    return fp ? `_read_ ${mdInlineCode(toolPathLabel(fp))}${range}` : `_read_`;
+    return fp ? `_read_ ${mdInlineCode(toolPathLabel(fp))}${range}` : `_read_ \`(args pending)\``;
   }
   if (name === 'Edit' || name === 'Write') {
-    const fp = s('file_path');
+    const fp = s('file_path') || s('path') || s('target_file') || s('filePath');
     return fp
       ? `_${name.toLowerCase()}_ ${mdInlineCode(toolPathLabel(fp))}`
-      : `_${name.toLowerCase()}_`;
+      : `_${name.toLowerCase()}_ \`(args pending)\``;
   }
   if (name === 'Grep') {
-    const pattern = s('pattern');
-    const path = s('path');
+    // Cursor's grep variant has shipped both `query` and `regex` over
+    // time; accept either alongside the canonical `pattern`.
+    const pattern = s('pattern') || s('query') || s('regex');
+    const path = s('path') || s('include') || s('glob');
     const inPath = path ? ` in ${mdInlineCode(toolPathLabel(path))}` : '';
     return pattern
       ? `_grep_ ${mdInlineCode(truncInline(pattern, 120))}${inPath}`
-      : `_grep_`;
+      : `_grep_ \`(args pending)\``;
   }
   if (name === 'Glob') {
-    const pattern = s('pattern');
-    return pattern ? `_glob_ ${mdInlineCode(pattern)}` : `_glob_`;
+    // Same defensive aliasing — different cursor builds have used
+    // `pattern`, `glob`, and `glob_pattern` interchangeably.
+    const pattern = s('pattern') || s('glob') || s('glob_pattern');
+    return pattern ? `_glob_ ${mdInlineCode(pattern)}` : `_glob_ \`(args pending)\``;
   }
   if (name === 'WebFetch' || name === 'WebSearch') {
     const q = s('url') || s('query') || s('prompt');
@@ -125,24 +136,44 @@ export function formatToolUse(name: string, input: Record<string, unknown>): str
   return `_using ${name}…_`;
 }
 
-/** Render a TodoWrite call as a markdown list with status glyphs. */
+/** Render a TodoWrite / UpdateTodos call as a single compact summary
+ *  line — "Update todos · 5 items · 2 done · 1 in progress". Earlier
+ *  this dumped the whole bullet list into the trace, which pushed every
+ *  meaningful step below the fold every time the agent rebalanced its
+ *  todo list. The label that ends up rendered by `parseToolHint` (verb
+ *  = "todos") shows the count + the active-form of the currently
+ *  in-progress item so the user still gets a hint of "what is the
+ *  agent doing right now" without scrolling past the entire plan. */
 export function formatTodos(input: Record<string, unknown>): string {
   const todos = Array.isArray(input.todos) ? (input.todos as Array<Record<string, unknown>>) : [];
-  if (todos.length === 0) return '_todos_';
-  const glyph = (status: string) => {
-    if (status === 'completed') return '☑';
-    if (status === 'in_progress') return '▸';
-    if (status === 'cancelled') return '✗';
-    return '☐';
-  };
-  const lines = todos.map((t) => {
-    const content = typeof t.content === 'string' ? t.content : '';
-    const activeForm = typeof t.activeForm === 'string' ? t.activeForm : '';
+  if (todos.length === 0) return `_todos_`;
+  let done = 0;
+  let active = 0;
+  let cancelled = 0;
+  let activeLabel = '';
+  for (const t of todos) {
     const status = typeof t.status === 'string' ? t.status : 'pending';
-    const label = status === 'in_progress' && activeForm ? activeForm : content;
-    return `- ${glyph(status)} ${label}`;
-  });
-  return `**Todos**\n\n${lines.join('\n')}`;
+    if (status === 'completed') done += 1;
+    else if (status === 'in_progress') {
+      active += 1;
+      if (!activeLabel) {
+        const af = typeof t.activeForm === 'string' ? t.activeForm : '';
+        const c = typeof t.content === 'string' ? t.content : '';
+        activeLabel = af || c;
+      }
+    } else if (status === 'cancelled') cancelled += 1;
+  }
+  const parts: string[] = [`${todos.length} item${todos.length === 1 ? '' : 's'}`];
+  if (done) parts.push(`${done} done`);
+  if (active) parts.push(`${active} in progress`);
+  if (cancelled) parts.push(`${cancelled} cancelled`);
+  // Compact, single-line trace pill. `parseToolHint`'s `todos` branch
+  // (added in ChatThread.svelte) gives this a checklist icon + brand
+  // tint so the summary still reads as a todo step at a glance.
+  const summary = parts.join(' · ');
+  return activeLabel
+    ? `_todos_ ${mdInlineCode(truncInline(summary, 80))} — ${truncInline(activeLabel, 80)}`
+    : `_todos_ ${mdInlineCode(truncInline(summary, 80))}`;
 }
 
 export function truncInline(s: string, max: number): string {

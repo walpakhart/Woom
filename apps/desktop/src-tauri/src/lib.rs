@@ -2040,8 +2040,8 @@ fn fs_path_exists(path: String) -> bool {
 }
 
 #[tauri::command]
-fn fs_bash_run(cwd: String, command: String) -> Result<BashResult, String> {
-    fs::bash_run(&cwd, &command)
+async fn fs_bash_run(cwd: String, command: String) -> Result<BashResult, String> {
+    fs::bash_run(&cwd, &command).await
 }
 
 // ---------- Git ----------
@@ -2106,19 +2106,35 @@ fn git_discard(repo: String, paths: Vec<String>) -> Result<(), String> {
     git::discard(&repo, &paths)
 }
 
+// Network-touching git commands run through `spawn_blocking` so a slow
+// remote (push to GitHub, pull through a VPN, etc.) doesn't park a
+// Tauri worker thread for the whole round-trip. Previously these were
+// sync `fn` commands — under the hood Tauri scheduled them on its
+// blocking pool, but every concurrent commit/push card stole one of
+// that pool's threads, and a stack of approve-cards could starve the
+// IPC queue. Symptom: action card stuck on "executing" and the UI
+// freezing while waiting on `invoke()`. Wrapping the existing sync
+// impl in `spawn_blocking` keeps the behaviour identical but
+// guarantees the Tokio runtime isn't pinned.
 #[tauri::command]
-fn git_commit(repo: String, message: String) -> Result<String, String> {
-    git::commit(&repo, &message)
+async fn git_commit(repo: String, message: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || git::commit(&repo, &message))
+        .await
+        .map_err(|e| format!("git_commit join: {}", e))?
 }
 
 #[tauri::command]
-fn git_push(repo: String) -> Result<String, String> {
-    git::push(&repo)
+async fn git_push(repo: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || git::push(&repo))
+        .await
+        .map_err(|e| format!("git_push join: {}", e))?
 }
 
 #[tauri::command]
-fn git_pull(repo: String) -> Result<String, String> {
-    git::pull(&repo)
+async fn git_pull(repo: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || git::pull(&repo))
+        .await
+        .map_err(|e| format!("git_pull join: {}", e))?
 }
 
 #[tauri::command]
@@ -2213,10 +2229,18 @@ fn git_show(repo: String, revision: String, path: String) -> Result<String, Stri
 }
 
 #[tauri::command]
-fn git_commit_and_push(repo: String, message: String) -> Result<String, String> {
-    let sha = git::commit(&repo, &message)?;
-    let push_out = git::push(&repo)?;
-    Ok(format!("{}\n{}", sha, push_out.trim()))
+async fn git_commit_and_push(repo: String, message: String) -> Result<String, String> {
+    // Same threading rationale as `git_commit` / `git_push`: keep the
+    // commit+push pair off the Tokio runtime so a slow `git push` to
+    // origin doesn't starve sibling action cards waiting for their own
+    // `invoke()` to resolve.
+    tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
+        let sha = git::commit(&repo, &message)?;
+        let push_out = git::push(&repo)?;
+        Ok(format!("{}\n{}", sha, push_out.trim()))
+    })
+    .await
+    .map_err(|e| format!("git_commit_and_push join: {}", e))?
 }
 
 #[tauri::command]

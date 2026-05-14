@@ -1603,38 +1603,53 @@
     deleteClaudeSession(sessionId);
   }
 
-  /** Bidirectional link. When the AI side initiates and the session already
-      has a concrete folder (cwd or worktreePath), the Editor adopts *its*
-      folder — "whoever clicks Link pushes their folder to the other side".
-      Only when the AI has no folder yet do we fall back to pulling the
-      Editor's folder in (the old one-way behavior). */
+  /** Link the active chat session to an editor instance WITHOUT touching
+      either side's folder. If the agent's cwd and the editor's repoPath
+      diverge, the WorktreeBar shows an orange mismatch button — the user
+      explicitly chooses which side wins. This avoids the old "auto-push"
+      surprise where picking an editor silently overwrote either side.
+      When the agent has no folder of its own (first link, no worktree),
+      we still pull the editor's folder in so the session has something
+      to work with. */
   function linkActiveSessionToEditor(editorInstanceId: string) {
     if (!activeSession) return;
     const editorPath =
       sessionsState.editorInstanceState[editorInstanceId]?.repoPath ?? '';
-    // Decide what counts as the chat's "owned" folder — the thing that
-    // actually deserves to flow into the target editor:
-    //   - worktreePath: explicit isolated worktree, always owned.
-    //   - cwd while NOT currently linked to another editor: user picked
-    //     this via pickCwd; treat as owned.
-    //   - cwd while linked to a DIFFERENT editor: this is just a mirror
-    //     of that other editor's folder, not a deliberate choice — do NOT
-    //     push it onto the new target (that's the cross-overwrite bug).
-    const aiWorktree = activeSession.worktreePath || '';
-    const cwdIsMirror =
-      activeSession.linkedToEditor &&
-      !!activeSession.linkedToEditorInstanceId &&
-      activeSession.linkedToEditorInstanceId !== editorInstanceId;
-    const ownedCwd = cwdIsMirror ? '' : (activeSession.cwd || '');
-    const ownedPath = aiWorktree || ownedCwd;
-    if (ownedPath && ownedPath !== editorPath) {
-      setEditorRepoPath(ownedPath, editorInstanceId);
-    }
-    updateSession(activeSession.id, {
+    const hasOwnFolder = !!(activeSession.worktreePath || activeSession.cwd);
+    const patch: Partial<typeof activeSession> = {
       linkedToEditor: true,
-      linkedToEditorInstanceId: editorInstanceId,
-      cwd: ownedPath || editorPath || null
-    });
+      linkedToEditorInstanceId: editorInstanceId
+    };
+    // First-time link with no agent cwd yet → adopt the editor's folder
+    // (zero-config UX). Otherwise leave both sides alone; mismatch UI
+    // surfaces a deliberate sync choice.
+    if (!hasOwnFolder && editorPath) {
+      patch.cwd = editorPath;
+    }
+    updateSession(activeSession.id, patch);
+  }
+
+  /** Sync the active session's cwd to its linked editor's repoPath.
+      Wired to the "Use editor folder" choice in WorktreeBar's mismatch
+      menu. Uses `applySessionCwd` (not raw updateSession) so the CLI
+      uuid rotates and the next turn's prompt gets a cwd-switch recap. */
+  function syncAgentToLinkedEditor() {
+    if (!activeSession?.linkedToEditorInstanceId) return;
+    const editorPath =
+      sessionsState.editorInstanceState[activeSession.linkedToEditorInstanceId]?.repoPath ?? '';
+    if (!editorPath) return;
+    applySessionCwd(activeSession.id, editorPath);
+    void dropPrewarm(activeSession.id);
+  }
+
+  /** Sync the linked editor's repoPath to the active session's cwd /
+      worktree. Wired to the "Use agent folder" choice in WorktreeBar's
+      mismatch menu. */
+  function syncLinkedEditorToAgent() {
+    if (!activeSession?.linkedToEditorInstanceId) return;
+    const agentPath = activeSession.worktreePath || activeSession.cwd || '';
+    if (!agentPath) return;
+    setEditorRepoPath(agentPath, activeSession.linkedToEditorInstanceId);
   }
 
   function toggleSessionEditorLink() {
@@ -1746,14 +1761,22 @@
     const explicit = sessionId
       ? sessionsState.list.find((s) => s.id === sessionId) ?? null
       : null;
-    if (explicit) {
-      setActiveSessionInInstance(agentInstanceId, explicit.id);
-      updateSession(explicit.id, {
-        cwd: editorPath,
+    // The session's folder must NOT change automatically. Only when
+    // the session has no folder of its own (first-link) do we pull
+    // editorPath in — otherwise we leave the divergence in place
+    // and let WorktreeBar surface the mismatch chip.
+    function patchForLink(sess: { worktreePath?: string | null; cwd?: string | null }) {
+      const hasOwn = !!(sess.worktreePath || sess.cwd);
+      const base = {
         linkedToEditor: true,
         linkedToEditorInstanceId: editorInstanceId,
-        agentInstanceId: agentInstanceId
-      });
+        agentInstanceId
+      } as const;
+      return hasOwn ? base : { ...base, cwd: editorPath };
+    }
+    if (explicit) {
+      setActiveSessionInInstance(agentInstanceId, explicit.id);
+      updateSession(explicit.id, patchForLink(explicit));
       return;
     }
     const currentId = sessionsState.activeByInstance[agentInstanceId] ?? null;
@@ -1761,12 +1784,7 @@
       ? sessionsState.list.find((s) => s.id === currentId) ?? null
       : null;
     if (current) {
-      updateSession(current.id, {
-        cwd: editorPath,
-        linkedToEditor: true,
-        linkedToEditorInstanceId: editorInstanceId,
-        agentInstanceId: agentInstanceId
-      });
+      updateSession(current.id, patchForLink(current));
     } else {
       newClaudeSession({
         agentKind: kind,
@@ -1887,30 +1905,21 @@
     newClaudeSession({ agentKind: kind, agentInstanceId: APP_INSTANCE_IDS[kind] });
   }
 
-  /** Keep every linked session's cwd in sync with whichever editor
-   *  instance it's bound to. Each session has its OWN
-   *  `linkedToEditorInstanceId` — chat A can follow Vermeer while chat
-   *  B follows Hokusai — so we mirror the path from THAT instance, not
-   *  from the primary. Sessions without an explicit instance id fall
-   *  back to the primary so legacy data stays linked.
-   *
-   *  (Earlier this effect forced every session onto `APP_INSTANCE_IDS.editor`
-   *  on the assumption that there was only one editor; with multi-instance
-   *  editors that overwrote per-session pointers to secondary instances.) */
+  /** Backfill `linkedToEditorInstanceId` for legacy sessions that
+   *  have `linkedToEditor=true` but no instance id stored (pre
+   *  multi-instance-editor data). No cwd ↔ repoPath syncing happens
+   *  here any more: previously this effect rewrote a session's `cwd`
+   *  to the editor's `repoPath` every time they diverged, which is
+   *  exactly why the orange "Folder mismatch" chip never appeared —
+   *  it lit up for one tick and the effect snuffed it. All forced
+   *  syncing is now opt-in: either the user picks a side from the
+   *  mismatch menu (syncAgentToLinkedEditor / syncLinkedEditorToAgent)
+   *  or the MCP `set_editor_repo_path` handler does it deliberately. */
   $effect(() => {
     for (const s of sessionsState.list) {
       if (!s.linkedToEditor) continue;
-      const editorId = s.linkedToEditorInstanceId ?? APP_INSTANCE_IDS.editor;
-      const editorPath = sessionsState.editorInstanceState[editorId]?.repoPath ?? null;
-      const patch: Partial<ClaudeSession> = {};
       if (!s.linkedToEditorInstanceId) {
-        patch.linkedToEditorInstanceId = editorId;
-      }
-      if (s.cwd !== editorPath) {
-        patch.cwd = editorPath;
-      }
-      if (Object.keys(patch).length > 0) {
-        updateSession(s.id, patch);
+        updateSession(s.id, { linkedToEditorInstanceId: APP_INSTANCE_IDS.editor });
       }
     }
   });
@@ -2945,16 +2954,14 @@
         if (!editor) return;
         view = 'editorApp';
         setEditorRepoPath(repoPath, editor.id);
-        // Linked agents follow. `applySessionCwd` rotates the agent's
-        // claudeUuid + resets `claudeResumable` when the new cwd actually
-        // differs — necessary because Claude CLI scopes conversations by
-        // project (cwd-derived); resuming an old uuid in a new project
-        // fails with "No conversation found".
-        for (const s of sessionsState.list) {
-          if (s.linkedToEditor && s.linkedToEditorInstanceId === editor.id) {
-            applySessionCwd(s.id, repoPath, { breakLink: false });
-          }
-        }
+        // Linked sessions are NO LONGER auto-synced from here. We
+        // used to run `applySessionCwd(s.id, repoPath)` for every
+        // linked session — that's exactly why changing the editor's
+        // folder yanked the chat along and the mismatch chip never
+        // got a chance to render. Now the pulsing orange "Folder
+        // mismatch" button lights up in the agent's WorktreeBar and
+        // the user explicitly picks which side wins through the
+        // syncAgentToLinkedEditor / syncLinkedEditorToAgent menu.
         return;
       }
       case 'mcp__app__set_agent_cwd': {
@@ -4835,6 +4842,8 @@
           onClearCwd={clearCwd}
           onToggleEditorLink={toggleSessionEditorLink}
           onLinkToEditorInstance={linkActiveSessionToEditor}
+          onSyncAgentToEditor={syncAgentToLinkedEditor}
+          onSyncEditorToAgent={syncLinkedEditorToAgent}
           onToggleTerminalLink={toggleSessionTerminalLink}
           onLinkToTerminalInstance={linkActiveSessionToTerminal}
           onToggleCanvasLink={toggleSessionCanvasLink}
@@ -4875,6 +4884,8 @@
           onClearCwd={clearCwd}
           onToggleEditorLink={toggleSessionEditorLink}
           onLinkToEditorInstance={linkActiveSessionToEditor}
+          onSyncAgentToEditor={syncAgentToLinkedEditor}
+          onSyncEditorToAgent={syncLinkedEditorToAgent}
           onToggleTerminalLink={toggleSessionTerminalLink}
           onLinkToTerminalInstance={linkActiveSessionToTerminal}
           onToggleCanvasLink={toggleSessionCanvasLink}

@@ -1433,7 +1433,14 @@ export function truncateSessionAt(sessionId: string, index: number) {
 }
 
 export function setSessionInput(sessionId: string, value: string) {
-  sessionsState.list = sessionsState.list.map((s) =>
-    s.id === sessionId ? { ...s, input: value } : s
-  );
+  // Direct mutation instead of `list.map(...)`. We used to rebuild
+  // the entire sessions array on EVERY keystroke, which invalidated
+  // every $derived that reads `sessionsState.list` (and there are
+  // dozens — active session, sidebar, badge counters, …) and
+  // produced noticeable typing lag plus caret drift, because Svelte
+  // then re-applied `textarea.value` on the re-render. The deep
+  // $state proxy reacts to a single field change on a single item
+  // without disturbing other derived state.
+  const sess = sessionsState.list.find((s) => s.id === sessionId);
+  if (sess) sess.input = value;
 }

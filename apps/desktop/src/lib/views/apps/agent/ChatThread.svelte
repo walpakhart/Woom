@@ -155,7 +155,7 @@
   type ToolKind =
     | 'read' | 'edit' | 'write' | 'create' | 'delete'
     | 'bash' | 'grep' | 'glob' | 'webfetch' | 'websearch'
-    | 'todo' | 'switch_cwd' | 'commit' | 'pr'
+    | 'todo' | 'todos' | 'switch_cwd' | 'commit' | 'pr'
     | 'mcp' | 'unknown';
 
   type ToolHint = {
@@ -212,6 +212,21 @@
     if (verb === 'write') return { kind: 'write', label: 'Write', target: primary, scope };
     if (verb === 'grep') return { kind: 'grep', label: 'Grep', target: primary, scope };
     if (verb === 'glob') return { kind: 'glob', label: 'Glob', target: primary, scope };
+    if (verb === 'todos') {
+      // `formatTodos` ships either "_todos_ \`N items · k done · …\`"
+      // or "_todos_ \`…\` — Active label". The label-after-em-dash is
+      // captured into `rest` past the first inline-code, so reconstruct
+      // it here as the row's scope (rendered to the right of the
+      // summary by the trace template).
+      const afterCode = rest.replace(/`[^`]+`/, '').trim();
+      const trailing = afterCode.startsWith('—') ? afterCode.slice(1).trim() : '';
+      return {
+        kind: 'todos',
+        label: 'Update todos',
+        target: primary,
+        scope: trailing,
+      };
+    }
     if (verb === 'webfetch') return { kind: 'webfetch', label: 'Fetch', target: primary, scope };
     if (verb === 'websearch') return { kind: 'websearch', label: 'Search', target: primary, scope };
     if (verb === 'switch cwd') return { kind: 'switch_cwd', label: 'Switch cwd', target: primary, scope };
@@ -404,6 +419,10 @@
                           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="M6 8.5V14a4 4 0 0 0 4 4h6"/></svg>
                         {:else if kind === 'switch_cwd'}
                           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v11a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-7L10 5H5a2 2 0 0 0-2 2z"/><path d="M16 14l3-3-3-3M9 11h10"/></svg>
+                        {:else if kind === 'todos'}
+                          <!-- Three-line checklist with a tick on the first
+                               row — telegraphs "agent's plan" at a glance. -->
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 11 8 15 4"/><line x1="3" y1="6" x2="6" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
                         {:else if kind === 'mcp'}
                           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5 12 2"/><line x1="12" y1="22" x2="12" y2="12"/><line x1="22" y1="8.5" x2="12" y2="12"/><line x1="2" y1="8.5" x2="12" y2="12"/></svg>
                         {:else}

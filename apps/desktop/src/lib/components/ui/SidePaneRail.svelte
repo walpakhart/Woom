@@ -1,15 +1,16 @@
 <script lang="ts">
-  /* SidePaneRail — shared 52px rail that replaces a full side pane
-     when collapsed. Same shape across EditorApp / CanvasApp /
-     TerminalApp / AgentApp's worktree slot:
+  /* SidePaneRail — 44px vertical strip that mirrors the editor's
+     ActivityBar on the right edge when a side pane is collapsed.
+     Single source of truth across EditorApp / CanvasApp /
+     TerminalApp / AgentApp.
+
        - top: expand-button («‹»)
        - middle: one square per linked agent (BrandIcon)
-       - bottom: optional caller-supplied snippet (e.g. "+ link")
+       - empty state: a muted dash so the rail doesn't look broken
 
-     Keeps a light visual identity to the pane it replaces — caller
-     passes `tone` so the rail tints accent shadows / hover glow.
-     Animates in via parent's `transition:fly`; the rail itself
-     doesn't own a transition so the caller can choose the easing. */
+     Visual identity matches `.eab` ActivityBar — same width, same
+     hover treatment, same plain background. NOT a glass / floating
+     pane — sits flush as a column in the parent grid. */
   import BrandIcon from './BrandIcon.svelte';
   import { setActiveSessionInInstance } from '$lib/state/sessions.svelte';
 
@@ -25,15 +26,7 @@
     linkedAgents: LinkedAgent[];
     reviewCount?: number;
     onExpand: () => void;
-    /** Auto-expand when an agent icon is clicked? Default true.
-     *  The caller is responsible for actually showing the chat for
-     *  the activated session — we just flip its activeId so the
-     *  pane has something to show. */
     expandOnAgentClick?: boolean;
-    /** Optional override — what to do when an agent icon is clicked.
-     *  Default: setActiveSessionInInstance + onExpand. Use this when
-     *  the caller wants to also focus a different solo (e.g. open
-     *  the agent app instead of just expanding the pane). */
     onAgentClick?: (a: LinkedAgent) => void;
   }
   let p: Props = $props();
@@ -49,10 +42,9 @@
   }
 </script>
 
-<aside class="spr">
+<aside class="spr app-pane">
   <button
     class="spr-btn spr-btn--expand"
-    title="Expand pane · {p.linkedAgents.length} linked"
     aria-label="Expand pane"
     onclick={p.onExpand}
   >
@@ -66,68 +58,69 @@
     <button
       class="spr-btn spr-btn--agent"
       data-agent={la.kind}
-      title="{la.kind === 'claude' ? 'Claude' : 'Cursor'}: {la.title ?? la.name ?? 'chat'}"
       aria-label="Open {la.kind} chat: {la.title ?? la.name ?? 'chat'}"
       onclick={() => handleAgentClick(la)}
     >
-      <BrandIcon kind={la.kind} size={20} />
+      <BrandIcon kind={la.kind} size={18} />
     </button>
   {/each}
   {#if p.linkedAgents.length === 0}
-    <span class="spr-empty mono" title="No agents linked here">—</span>
+    <span class="spr-empty mono" aria-hidden="true">—</span>
   {/if}
 </aside>
 
 <style>
+  /* 44px-wide rail that mirrors `.eab` (editor ActivityBar) but
+     wears the standard `.app-pane` chrome (border + radius + shadow)
+     so it floats as a proper rounded panel — same chassis as every
+     other side panel in the app. */
   .spr {
     display: flex; flex-direction: column;
     align-items: center;
-    gap: 6px;
-    padding: 8px 6px;
+    gap: 4px;
+    padding: 8px 0;
+    width: 44px;
     height: 100%;
-    background: var(--bg-glass, rgba(20, 24, 26, 0.66));
-    border-left: 1px solid var(--border);
-    backdrop-filter: blur(14px);
-    -webkit-backdrop-filter: blur(14px);
-    overflow: hidden;
-    box-sizing: border-box;
   }
   .spr-btn {
     position: relative;
-    width: 36px; height: 36px;
+    width: 32px; height: 32px;
     display: grid; place-items: center;
     border-radius: 8px;
     color: var(--text-2);
-    background: transparent; border: 1px solid transparent;
+    background: transparent;
+    border: 1px solid transparent;
     cursor: pointer;
     flex-shrink: 0;
     transition:
       color var(--dur-quick) var(--ease-out),
       background var(--dur-quick) var(--ease-out),
-      border-color var(--dur-quick) var(--ease-out),
-      transform var(--dur-quick) var(--ease-spring);
+      border-color var(--dur-quick) var(--ease-out);
   }
   .spr-btn:hover {
     color: var(--text-0);
-    background: var(--bg-elev, var(--bg-2));
+    background: var(--bg-2);
     border-color: var(--border-hi);
-    transform: scale(1.04);
   }
   .spr-btn--expand svg { width: 14px; height: 14px; }
   .spr-btn--agent { padding: 4px; }
-  .spr-btn--agent[data-agent='claude'] { border-color: color-mix(in srgb, var(--src-claude) 28%, transparent); }
-  .spr-btn--agent[data-agent='cursor'] { border-color: color-mix(in srgb, var(--src-cursor) 28%, transparent); }
-  .spr-btn--agent[data-agent='claude']:hover { background: color-mix(in srgb, var(--src-claude) 14%, var(--bg-2)); }
-  .spr-btn--agent[data-agent='cursor']:hover { background: color-mix(in srgb, var(--src-cursor) 14%, var(--bg-2)); }
+  .spr-btn--agent[data-agent='claude']:hover {
+    background: color-mix(in srgb, var(--src-claude) 14%, var(--bg-2));
+    border-color: color-mix(in srgb, var(--src-claude) 32%, var(--border));
+  }
+  .spr-btn--agent[data-agent='cursor']:hover {
+    background: color-mix(in srgb, var(--src-cursor) 14%, var(--bg-2));
+    border-color: color-mix(in srgb, var(--src-cursor) 32%, var(--border));
+  }
   .spr-divider {
-    width: 28px; height: 1px;
+    width: 22px; height: 1px;
     background: var(--border);
-    margin: 4px 0;
+    margin: 2px 0;
     flex-shrink: 0;
   }
   .spr-empty {
     color: var(--text-mute);
-    font-size: 14px;
+    font-size: 12px;
     margin-top: 2px;
   }
   .spr-badge {
