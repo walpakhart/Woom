@@ -45,12 +45,22 @@ always sees what's about to happen.
    don't read keychain themselves.
 7. MCP server discovery for the user's Cursor IDE through descriptor
    JSON files in the user's MCPs folder.
+8. **Third-party MCP pass-through.** Any server the user installs via
+   `claude mcp add ...` (recorded in `~/.claude.json`) is merged into
+   the Claude session's MCP config alongside Woom's bundled sidecars.
+   Allowed-tools list grants server-wide access (`mcp__<name>`) so we
+   don't need to hard-code each third-party server's tool surface. Name
+   collisions resolve to Woom's built-in (we never spin up two of the
+   same server). See `claude_mcp.rs::user_mcp_servers`.
 
 ### 1.3 Non-Goals (v1)
 
 - **Multi-tenant credentials.** One token per source per app instance.
-- **Custom user-defined MCP tools.** The catalog is closed; adding a
-  tool is a code change in Woom.
+- **Per-tool curation for third-party MCPs.** We don't enumerate each
+  third-party server's tool list at config time, and we don't promise
+  the bot-vs-human approval gating (`propose_*` flow) for them. Users
+  who add their own servers via `claude mcp add` get a server-wide
+  grant or nothing.
 - **Streaming / progress callbacks** beyond stdio. MCP doesn't have a
   rich progress model and we don't simulate one.
 - **Tool result attachments** beyond text + image. No binary blobs in

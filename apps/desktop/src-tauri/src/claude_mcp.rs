@@ -1,8 +1,13 @@
 //! MCP-config plumbing for the Claude CLI adapter. Owns:
 //!   - `build_mcp_config`: writes the temp `--mcp-config` JSON and the
-//!     `--allowedTools` list for all available sidecars.
+//!     `--allowedTools` list for all available sidecars AND any
+//!     third-party MCP servers the user installed via `claude mcp add`.
 //!   - per-server builders that pull creds from Keychain and locate
 //!     the bundled sidecar binaries.
+//!   - `user_mcp_servers`: scans `~/.claude.json` so the merged config
+//!     stays consistent with the Claude CLI's own view of what's
+//!     installed, even though we pass `--strict-mcp-config` and the CLI
+//!     wouldn't load that file on its own.
 //!
 //! Lives in its own module because `claude.rs` was getting unwieldy
 //! and the MCP wiring is independent of the spawn / streaming / one-
@@ -33,14 +38,19 @@ impl Drop for TempFile {
     }
 }
 
-/// Build an MCP config file for this session by pulling creds from Keychain
-/// and wiring up available sidecars. Returns the temp config path and the
-/// list of tool names to allow (one entry per tool, explicit — wildcards are
-/// not universally supported by `claude -p --allowedTools`).
+/// Build an MCP config file for this session by pulling creds from Keychain,
+/// wiring up available bundled sidecars, AND merging in any third-party MCP
+/// servers the user registered via `claude mcp add` (see `user_mcp_servers`).
 ///
-/// Returns `None` when no sidecars can be configured (e.g. Jira is not
-/// connected or the sidecar binary isn't next to the main exe); in that case
-/// we run `claude` without MCP, preserving the old behavior.
+/// Returns the temp config path and the list of tool names to allow. For
+/// Woom's own sidecars we enumerate every tool explicitly so the surface is
+/// stable across CLI versions; for user-added servers we use the server-wide
+/// `mcp__<name>` form (Claude CLI accepts this as "every tool from this
+/// server") to avoid having to probe each third-party server's schema.
+///
+/// Returns `None` when no servers can be configured at all (e.g. fresh
+/// install, nothing connected, no user MCPs); in that case we run `claude`
+/// without MCP, preserving the old behavior.
 pub(crate) fn build_mcp_config(
     session_id: &str,
     ipc_socket: Option<&Path>,
@@ -174,6 +184,24 @@ pub(crate) fn build_mcp_config(
         allowed.push("mcp__app__propose_switch_cwd".into());
     }
 
+    // Merge in any third-party MCP servers the user has installed via
+    // `claude mcp add ...` — they live in `~/.claude.json` under top-level
+    // `mcpServers` and per-project `projects.<path>.mcpServers`. Woom's
+    // built-ins win on name collisions so we never instantiate two of the
+    // same server; everything else (godot, brave-search, filesystem, …)
+    // "just works" without per-server plumbing in this module.
+    //
+    // The allowed-tools entry is the server-wide form `mcp__<name>`, which
+    // Claude CLI accepts as "every tool from this server". That avoids
+    // having to enumerate a third-party server's tool list at config time.
+    for (name, def) in user_mcp_servers() {
+        if servers.contains_key(&name) {
+            continue;
+        }
+        servers.insert(name.clone(), def);
+        allowed.push(format!("mcp__{name}"));
+    }
+
     if servers.is_empty() {
         return None;
     }
@@ -294,4 +322,51 @@ fn find_sidecar(name: &str) -> Option<PathBuf> {
     } else {
         None
     }
+}
+
+/// Scan `~/.claude.json` for MCP servers the user has registered via
+/// `claude mcp add ...`. Pulls from both the top-level `mcpServers` map
+/// (user-scope) and any per-project map under `projects.<path>.mcpServers`
+/// (local-scope, which is the `claude mcp add` default). Server definitions
+/// are returned as raw JSON so they can be inserted straight into our temp
+/// config alongside Woom's bundled sidecars.
+///
+/// Deduplicated by name across both scopes — a server registered in both
+/// places only appears once. Caller is responsible for skipping names that
+/// already exist in Woom's own server map.
+fn user_mcp_servers() -> Vec<(String, serde_json::Value)> {
+    let Some(home) = claude::home_dir() else {
+        return Vec::new();
+    };
+    let path = home.join(".claude.json");
+    let Ok(body) = std::fs::read_to_string(&path) else {
+        return Vec::new();
+    };
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(&body) else {
+        return Vec::new();
+    };
+
+    let mut out: Vec<(String, serde_json::Value)> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    if let Some(map) = json.get("mcpServers").and_then(|v| v.as_object()) {
+        for (k, v) in map {
+            if seen.insert(k.clone()) {
+                out.push((k.clone(), v.clone()));
+            }
+        }
+    }
+    if let Some(projects) = json.get("projects").and_then(|v| v.as_object()) {
+        for pdata in projects.values() {
+            if let Some(map) = pdata.get("mcpServers").and_then(|v| v.as_object()) {
+                for (k, v) in map {
+                    if seen.insert(k.clone()) {
+                        out.push((k.clone(), v.clone()));
+                    }
+                }
+            }
+        }
+    }
+
+    out
 }
