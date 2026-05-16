@@ -18,8 +18,13 @@
     uninstallPlugin,
     isInstalled,
     pluginCategories,
+    sourceStats,
+    toggleSource,
+    removeSource,
+    addSource,
     type CatalogEntry,
-    type EntryKind
+    type EntryKind,
+    type SourceKind
   } from '$lib/state/library.svelte';
   import { notify } from '$lib/state/toaster.svelte';
 
@@ -31,16 +36,20 @@
   const filtered = $derived.by((): CatalogEntry[] => {
     const q = libraryState.query.trim().toLowerCase();
     const cat = libraryState.categoryFilter;
+    const src = libraryState.sourceFilter;
     return libraryState.entries.filter((e) => {
       if (libraryState.kindFilter && e.kind !== libraryState.kindFilter) return false;
       if (cat && e.kind === 'plugin' && (e.category ?? 'uncategorized') !== cat) return false;
+      if (src && e.sourceId !== src) return false;
       if (!q) return true;
-      const hay = [e.name, e.description, e.author, e.tags.join(' ')]
+      const hay = [e.name, e.description, e.author, e.tags.join(' '), e.origin]
         .join(' ')
         .toLowerCase();
       return hay.includes(q);
     });
   });
+
+  const sources = $derived(sourceStats());
 
   /** Surface plugin categories only when the user has narrowed to
    *  plugins (or shown All) — chips for "All" + 17+ categories
@@ -73,11 +82,12 @@
     }
   }
 
-  async function onUninstallPlugin(name: string) {
-    if (!confirm(`Uninstall plugin “${name}”?`)) return;
+  async function onUninstallPlugin(name: string, marketplace: string) {
+    const label = marketplace ? `${name}@${marketplace}` : name;
+    if (!confirm(`Uninstall plugin “${label}”?`)) return;
     try {
-      await uninstallPlugin(name);
-      notify({ kind: 'success', title: `Uninstalled ${name}` });
+      await uninstallPlugin(name, marketplace);
+      notify({ kind: 'success', title: `Uninstalled ${label}` });
     } catch (err) {
       notify({ kind: 'error', title: 'Uninstall failed', body: String(err) });
     }
@@ -89,6 +99,54 @@
   }
   function setCategory(c: string | null) {
     libraryState.categoryFilter = c;
+  }
+  function setSource(id: string | null) {
+    libraryState.sourceFilter = id;
+  }
+
+  let addKind = $state<SourceKind>('plugin-marketplace');
+  let addRepo = $state('');
+  let addLabel = $state('');
+  let addRoot = $state('');
+  let addBusy = $state(false);
+  let addError = $state('');
+
+  async function onAddSource(e: Event) {
+    e.preventDefault();
+    addError = '';
+    addBusy = true;
+    try {
+      const id = await addSource({
+        kind: addKind,
+        repo: addRepo,
+        label: addLabel,
+        rootPath: addRoot
+      });
+      notify({ kind: 'success', title: 'Source added', body: `${id} is now feeding the catalog.` });
+      addRepo = '';
+      addLabel = '';
+      addRoot = '';
+    } catch (err) {
+      addError = String(err);
+    } finally {
+      addBusy = false;
+    }
+  }
+
+  async function onToggleSource(id: string, enabled: boolean) {
+    try {
+      await toggleSource(id, enabled);
+    } catch (err) {
+      notify({ kind: 'error', title: 'Toggle failed', body: String(err) });
+    }
+  }
+  async function onRemoveSource(id: string, label: string) {
+    if (!confirm(`Remove source “${label}”? The catalog will reload without it.`)) return;
+    try {
+      await removeSource(id);
+    } catch (err) {
+      notify({ kind: 'error', title: 'Remove failed', body: String(err) });
+    }
   }
 </script>
 
@@ -141,6 +199,18 @@
         <button class:active={libraryState.kindFilter === 'plugin'} onclick={() => setKind('plugin')}>Plugins</button>
       </div>
     </div>
+
+    {#if sources.length > 1}
+      <div class="lib-cats lib-sources-row">
+        <span class="lib-cats-label">Source</span>
+        <button class:active={libraryState.sourceFilter === null} onclick={() => setSource(null)}>All <span class="mono lib-cat-count">{libraryState.entries.length}</span></button>
+        {#each sources as s (s.source.id)}
+          <button class:active={libraryState.sourceFilter === s.source.id} onclick={() => setSource(s.source.id)}>
+            {s.source.label} <span class="mono lib-cat-count">{s.count}</span>
+          </button>
+        {/each}
+      </div>
+    {/if}
 
     {#if showCategories && categories.length > 0}
       <div class="lib-cats">
@@ -243,19 +313,28 @@
       <p class="lib-empty">No plugins installed yet.</p>
     {:else}
       <ul class="lib-list">
-        {#each libraryState.installed.plugins as pl (pl.name)}
-          {@const busy = libraryState.busy.has(`plugin:${pl.name}`)}
+        {#each libraryState.installed.plugins as pl (pl.name + '@' + pl.marketplace)}
+          {@const ref = pl.marketplace ? `${pl.name}@${pl.marketplace}` : pl.name}
+          {@const busy = libraryState.busy.has(`plugin:${ref}`)}
           <li class="lib-row">
             <div class="lib-row-main">
-              <div class="lib-row-name">{pl.name}</div>
-              <div class="lib-row-path mono">{pl.path}</div>
+              <div class="lib-row-name">
+                {pl.name}
+                {#if pl.marketplace}
+                  <span class="lib-row-marketplace mono">@{pl.marketplace}</span>
+                {/if}
+                {#if pl.version}
+                  <span class="lib-row-version mono">v{pl.version}</span>
+                {/if}
+              </div>
+              {#if pl.path}<div class="lib-row-path mono">{pl.path}</div>{/if}
             </div>
             <button
               class="lib-row-x"
               disabled={busy}
-              onclick={() => onUninstallPlugin(pl.name)}
+              onclick={() => onUninstallPlugin(pl.name, pl.marketplace)}
               title="Uninstall"
-              aria-label="Uninstall {pl.name}"
+              aria-label="Uninstall {ref}"
             >
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M6 18 18 6"/></svg>
             </button>
@@ -266,14 +345,95 @@
 
   {:else}
     <div class="lib-sources">
-      <h3 class="lib-section">Catalog</h3>
+      <h3 class="lib-section">Active sources</h3>
       <p class="view-sub">
-        The catalog is bundled with Woom at <code>static/library.json</code>.
-        It lists skills you can install in one click. Anthropic doesn't run a
-        centralized store — public skills/plugins live in git repos.
-        Federation (point Woom at any catalog URL) is on the roadmap.
+        Each source contributes entries to Browse. Toggle a built-in off to hide
+        its contents; add your own plugin marketplaces or skill repos below.
       </p>
-      <button class="lib-install" onclick={() => ensureLibraryLoaded()}>Reload catalog</button>
+      <ul class="lib-src-list">
+        {#each libraryState.sources as s (s.id)}
+          {@const stat = libraryState.entries.filter((e) => e.sourceId === s.id).length}
+          <li class="lib-src-row" class:disabled={!s.enabled}>
+            <label class="lib-src-toggle">
+              <input
+                type="checkbox"
+                checked={s.enabled}
+                onchange={(e) => onToggleSource(s.id, (e.currentTarget as HTMLInputElement).checked)}
+              />
+              <span class="lib-src-toggle-track"></span>
+            </label>
+            <div class="lib-src-main">
+              <div class="lib-src-head">
+                <span class="lib-src-label">{s.label}</span>
+                <span class="lib-src-kind">{s.kind}</span>
+                {#if s.builtin}<span class="lib-src-pill">built-in</span>{/if}
+              </div>
+              <div class="lib-src-meta mono">
+                {#if s.repo}<span>github.com/{s.repo}</span>{/if}
+                {#if s.rootPath}<span>· {s.rootPath}/</span>{/if}
+                {#if s.marketplaceUrl}<span>{s.marketplaceUrl}</span>{/if}
+                <span>· {stat} entries</span>
+              </div>
+            </div>
+            {#if !s.builtin}
+              <button class="lib-row-x" onclick={() => onRemoveSource(s.id, s.label)} title="Remove" aria-label="Remove {s.label}">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M6 18 18 6"/></svg>
+              </button>
+            {/if}
+          </li>
+        {/each}
+      </ul>
+
+      <h3 class="lib-section">Add a source</h3>
+      <p class="view-sub">
+        Point Woom at any GitHub repo. For plugins, the repo needs
+        <code>.claude-plugin/marketplace.json</code> at its root. For skills,
+        a <code>skills/&lt;slug&gt;/SKILL.md</code> layout (or a custom root path).
+      </p>
+      <form class="lib-src-form" onsubmit={onAddSource}>
+        <div class="lib-src-form-row">
+          <select bind:value={addKind} class="lib-src-select">
+            <option value="plugin-marketplace">Plugin marketplace</option>
+            <option value="skill-repo">Skill repo</option>
+          </select>
+          <input
+            class="lib-src-input"
+            type="text"
+            placeholder="owner/repo  e.g. anthropics/skills"
+            bind:value={addRepo}
+            spellcheck="false"
+            required
+          />
+        </div>
+        <div class="lib-src-form-row">
+          <input
+            class="lib-src-input"
+            type="text"
+            placeholder="Display label (optional)"
+            bind:value={addLabel}
+            spellcheck="false"
+          />
+          {#if addKind === 'skill-repo'}
+            <input
+              class="lib-src-input lib-src-input--narrow"
+              type="text"
+              placeholder="root path (default: skills)"
+              bind:value={addRoot}
+              spellcheck="false"
+            />
+          {/if}
+          <button class="lib-install" type="submit" disabled={addBusy}>
+            {addBusy ? 'Adding…' : 'Add source'}
+          </button>
+        </div>
+        {#if addError}
+          <div class="lib-src-form-error">{addError}</div>
+        {/if}
+      </form>
+      <button class="lib-refresh lib-src-reload" onclick={() => loadCatalog()}>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/></svg>
+        Reload catalog
+      </button>
     </div>
   {/if}
 </section>
@@ -540,6 +700,17 @@
     color: var(--text-mute); font-size: 10.5px;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
+  .lib-row-marketplace {
+    color: var(--text-mute); font-size: 11px;
+    font-weight: 400;
+    margin-left: 4px;
+  }
+  .lib-row-version {
+    color: var(--accent-bright); font-size: 10.5px;
+    background: var(--accent-soft);
+    padding: 1px 5px; border-radius: 3px;
+    margin-left: 6px;
+  }
   .lib-row-x {
     width: 28px; height: 28px;
     display: grid; place-items: center;
@@ -562,4 +733,116 @@
   }
   .lib-sources .lib-section { margin-left: 0; margin-right: 0; }
   .lib-sources .lib-install { align-self: flex-start; }
+
+  /* Source filter row — sits ABOVE the category chips so the user reads
+     "Source → Category" left-to-right. The label tag distinguishes it
+     from the unlabeled category row below. */
+  .lib-sources-row { align-items: center; }
+  .lib-cats-label {
+    font-size: 10.5px;
+    color: var(--text-mute);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-right: 2px;
+  }
+
+  /* Sources tab — editable list + add form. */
+  .lib-src-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
+  .lib-src-row {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 12px;
+    background: var(--bg-1);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    transition: opacity 140ms, border-color 140ms;
+  }
+  .lib-src-row.disabled { opacity: 0.55; }
+  .lib-src-row.disabled .lib-src-main { color: var(--text-mute); }
+  .lib-src-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+  .lib-src-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .lib-src-label { color: var(--text-0); font-size: 13.5px; font-weight: 500; }
+  .lib-src-kind {
+    font-size: 9.5px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.06em;
+    padding: 2px 6px; border-radius: 4px;
+    background: var(--bg-3); color: var(--text-mute);
+  }
+  .lib-src-pill {
+    font-size: 9.5px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.06em;
+    padding: 2px 6px; border-radius: 4px;
+    background: var(--accent-soft);
+    color: var(--accent-bright);
+  }
+  .lib-src-meta {
+    font-size: 10.5px; color: var(--text-mute);
+    display: flex; flex-wrap: wrap; gap: 4px;
+    overflow: hidden; text-overflow: ellipsis;
+  }
+
+  /* Toggle — keeps the row visually quiet vs. a big switch. */
+  .lib-src-toggle {
+    position: relative;
+    width: 32px; height: 18px;
+    flex: 0 0 auto;
+    cursor: pointer;
+  }
+  .lib-src-toggle input {
+    position: absolute; inset: 0;
+    opacity: 0; cursor: pointer; margin: 0;
+  }
+  .lib-src-toggle-track {
+    position: absolute; inset: 0;
+    background: var(--bg-3);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    transition: background 140ms, border-color 140ms;
+  }
+  .lib-src-toggle-track::after {
+    content: '';
+    position: absolute;
+    top: 2px; left: 2px;
+    width: 12px; height: 12px;
+    background: var(--text-mute);
+    border-radius: 50%;
+    transition: left 140ms, background 140ms;
+  }
+  .lib-src-toggle input:checked ~ .lib-src-toggle-track {
+    background: color-mix(in srgb, var(--accent) 28%, var(--bg-3));
+    border-color: var(--border-accent-2);
+  }
+  .lib-src-toggle input:checked ~ .lib-src-toggle-track::after {
+    left: 16px;
+    background: var(--accent-bright);
+  }
+
+  .lib-src-form {
+    display: flex; flex-direction: column; gap: 8px;
+    padding: 12px;
+    background: var(--bg-1);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+  }
+  .lib-src-form-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .lib-src-select, .lib-src-input {
+    padding: 8px 10px;
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    color: var(--text-0);
+    font-size: 13px;
+  }
+  .lib-src-input { flex: 1; min-width: 0; }
+  .lib-src-input--narrow { flex: 0 0 220px; }
+  .lib-src-select { flex: 0 0 auto; }
+  .lib-src-input:focus, .lib-src-select:focus {
+    outline: none; border-color: var(--border-accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+  }
+  .lib-src-form-error {
+    color: var(--error);
+    font-size: 11.5px;
+    padding: 4px 2px;
+  }
+  .lib-src-reload { align-self: flex-start; margin-top: 6px; }
 </style>

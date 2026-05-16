@@ -1,5 +1,6 @@
 <script lang="ts">
   import RailAppButton from '$lib/components/ui/RailAppButton.svelte';
+  import { fade } from 'svelte/transition';
   /* Reuse the brand SVGs that ConnectionsView renders so the rail's
      vocabulary matches Connections — same Octocat for GitHub, same
      Atlassian Jira mark, same Sentry crown. Claude / Cursor still
@@ -219,9 +220,253 @@
     if (related && t.contains(related)) return;
     hideTooltip();
   }
+
+  /* Dynamic fade mask for `.rail-scroll`. The static gradient (always
+     fading the top 14px) made the first icon (Jira) look perpetually
+     dimmed even when the column wasn't actually overflowing. With
+     scroll-driven flags we paint:
+       - top fade only when the user has scrolled away from the top
+       - bottom fade only when there's more content below the viewport
+     When the column fits entirely, both flags stay false and no mask
+     is applied → every icon reads at full contrast. */
+  let scrollEl = $state<HTMLDivElement | null>(null);
+  let scrolledFromTop = $state(false);
+  let moreBelow = $state(false);
+
+  function recomputeFades() {
+    const el = scrollEl;
+    if (!el) return;
+    /* `>= 1` instead of `> 0` because some engines emit fractional
+       scrollTop values (e.g. 0.6 on hidpi macbook trackpads). A
+       sub-pixel offset shouldn't trip the fade. */
+    scrolledFromTop = el.scrollTop >= 1;
+    moreBelow = el.scrollTop + el.clientHeight < el.scrollHeight - 1;
+  }
+
+  $effect(() => {
+    const el = scrollEl;
+    if (!el) return;
+    recomputeFades();
+    el.addEventListener('scroll', recomputeFades, { passive: true });
+    /* Recompute when the column's children change height — new
+       instances added, popovers expanded — or when the rail itself
+       resizes (window vertical zoom). */
+    const ro = new ResizeObserver(() => recomputeFades());
+    ro.observe(el);
+    for (const child of Array.from(el.children)) ro.observe(child as Element);
+    return () => {
+      el.removeEventListener('scroll', recomputeFades);
+      ro.disconnect();
+    };
+  });
+
+  /* Active-button halo overlay.
+   *
+   * The button-attached `box-shadow: 0 0 22px ...` halo gets clipped
+   * at the right edge of `.rail-scroll` because that container's
+   * `overflow-y: auto` forces `overflow-x` to a clipped value too
+   * (CSS spec). The button is centered in a narrow rail, so the
+   * 22px outer glow can't fit. Painting it via a sibling overlay
+   * outside `.rail-scroll` escapes the clip — the overlay sits on
+   * top of any sibling content with its own `position: absolute`.
+   *
+   * We find the active button via `data-view="<view>"` attribute on
+   * every rail-btn, pull its `getBoundingClientRect`, and translate
+   * its center into a `top` offset relative to the rail. */
+  let railEl = $state<HTMLElement | null>(null);
+  let activeHaloY = $state(0);
+  let activeHaloW = $state(44);
+  let activeHaloH = $state(44);
+  let activeHaloR = $state(11);
+  let activeHaloGlow = $state('var(--accent-glow)');
+  let activeHaloVisible = $state(false);
+  /* Anchor box for the halo's CLIP container — matches the
+     `.rail-scroll`'s vertical bounds in rail coordinates, padded
+     by `HALO_BLUR_PAD` on top + bottom so the box-shadow's outer
+     blur (≈22px) doesn't get sliced when the active button sits
+     exactly at the scroll's top or bottom edge. The wrapper
+     mirrors the scroll's `.fade-top` / `.fade-bottom` flags and
+     applies a matching `mask-image` so the halo fades together
+     with the scroll content when the user scrolls past the
+     active item — outline and glow disappear in lockstep instead
+     of the glow leaking through the fade region.
+     Reading these from `scrollEl` keeps the clip in lockstep
+     with layout: foot cluster height changes, scroll repositions,
+     halo wrapper follows. */
+  const HALO_BLUR_PAD = 30;
+  let haloClipTop = $state(0);
+  let haloClipHeight = $state(0);
+  /* Whether the currently-haloed target sits inside `.rail-scroll`.
+     The Home sigil (`.rail-sigil`) lives ABOVE the scroll column, so
+     when it's active the halo wrapper must anchor to the sigil itself
+     and skip the scroll-driven fade masks — those masks fade in
+     wrapper-local coordinates calibrated for the scroll's top edge,
+     which doesn't line up with the sigil. */
+  let haloInScroll = $state(true);
+  /* Halo X anchor — center of the rail's button column (not the
+     clip wrapper, which extends past the rail's right edge). The
+     wrapper is wider than the rail so the box-shadow has room to
+     spread into the chat panel; the halo itself stays centered
+     above the active button. */
+  let haloAnchorX = $state(28);
+  /* Stable identity of the currently-haloed button. Drives the
+     `{#key}` block so the halo unmounts + remounts ONLY when the
+     active target changes (not when the user simply scrolls and
+     position shifts). Built from `aria-label` + `data-tooltip`
+     because both rail-btns AND RailAppButton sub-instances expose
+     them with stable per-instance content ("Editor Klimt" stays
+     identifiable across scrolls / reflows). */
+  let activeHaloKey = $state('');
+
+  function recomputeHalo() {
+    const rail = railEl;
+    const scroll = scrollEl;
+    if (!rail) {
+      activeHaloVisible = false;
+      return;
+    }
+    /* Center of the rail's button column — used as the halo's
+       horizontal anchor inside the (wider) clip wrapper. */
+    haloAnchorX = rail.clientWidth / 2;
+    /* Find any descendant that's currently `active`. We use a class
+       selector instead of `[data-view]` because RailAppButton (used
+       by Editor / Canvas / Terminal) renders the button internally
+       and doesn't carry a single `data-view` — its primary becomes
+       `.active` when both the kind and the primary instance are
+       selected, and a sub-instance becomes `.active` otherwise.
+       Either way the class identifies the right node. The rail-sigil
+       (Home) also flips `.active` so it's covered too. */
+    const target = rail.querySelector<HTMLElement>(
+      '.rail-btn.active, .rail-sigil.active'
+    );
+    if (!target) {
+      activeHaloVisible = false;
+      activeHaloKey = '';
+      return;
+    }
+    const railRect = rail.getBoundingClientRect();
+    const tRect = target.getBoundingClientRect();
+    /* Anchor the clip wrapper differently depending on whether the
+       active target lives inside `.rail-scroll` or above it (the
+       Home sigil). Inside the scroll, we snap to the scroll's bounds
+       padded by HALO_BLUR_PAD so the halo fades with scroll content
+       via mask-image. Outside (sigil), we snap to the target itself
+       padded by HALO_BLUR_PAD — anchoring to the scroll's bounds
+       clipped the sigil's halo at the top (the user-reported bug),
+       since the sigil sits above the scroll's top with less than
+       HALO_BLUR_PAD breathing room. */
+    haloInScroll = !!scroll && scroll.contains(target);
+    if (scroll && haloInScroll) {
+      const scrollRect = scroll.getBoundingClientRect();
+      haloClipTop = scrollRect.top - railRect.top - HALO_BLUR_PAD;
+      haloClipHeight = scrollRect.height + HALO_BLUR_PAD * 2;
+    } else {
+      haloClipTop = tRect.top - railRect.top - HALO_BLUR_PAD;
+      haloClipHeight = tRect.height + HALO_BLUR_PAD * 2;
+    }
+    activeHaloY = tRect.top + tRect.height / 2 - railRect.top;
+    /* Mirror the active button's exact size + corner radius so the
+       halo overlay traces the same chassis (44×44/11 for primary
+       rail-btns, 38×38/9 for RailAppButton's sub-instances). Reading
+       this from the DOM means we don't have to teach the overlay
+       about each kind's dimensions. */
+    activeHaloW = tRect.width;
+    activeHaloH = tRect.height;
+    const cs = getComputedStyle(target);
+    const radius = parseFloat(cs.borderTopLeftRadius || '11');
+    activeHaloR = Number.isFinite(radius) ? radius : 11;
+    /* Pull the glow tone from the active button's computed style so
+       each source keeps its branded hue (Jira blue / Sentry purple /
+       Editor terracotta / …) without the overlay component having
+       to know about every variable. The W sigil doesn't set
+       `--rail-glow` — fall back to the global `--accent-glow` so
+       Home gets the right accent tone too. */
+    const rawGlow = cs.getPropertyValue('--rail-glow').trim();
+    if (rawGlow) {
+      activeHaloGlow = rawGlow;
+    } else {
+      const accentGlow = cs.getPropertyValue('--accent-glow').trim();
+      activeHaloGlow = accentGlow || 'rgba(120, 200, 255, 0.45)';
+    }
+    /* Identity key — combines aria-label + data-tooltip + kind so
+       sub-instances of the same kind ("Editor Klimt" vs "Editor
+       Hilma") get distinct keys even though their CSS class set
+       is identical. Position is intentionally NOT in the key. */
+    const aria = target.getAttribute('aria-label') ?? '';
+    const tip = target.getAttribute('data-tooltip') ?? '';
+    activeHaloKey = `${aria}|${tip}`;
+    activeHaloVisible = true;
+  }
+
+  /* Batch recomputes via rAF so that bursts of scroll / mutation
+     events collapse into one DOM read per frame. Without this the
+     scroll handler + mutation observer + resize observer can fire
+     multiple times in a single frame and each call to
+     `getBoundingClientRect` triggers a layout flush — which is
+     exactly the "halo jitters with many instances" symptom users
+     reported when stacks were big enough to scroll. */
+  let _haloRaf: number | null = null;
+  function scheduleHaloRecompute() {
+    if (_haloRaf != null) return;
+    _haloRaf = requestAnimationFrame(() => {
+      _haloRaf = null;
+      recomputeHalo();
+    });
+  }
+
+  $effect(() => {
+    /* React to view changes — re-find the active button and reposition. */
+    void view;
+    /* Wait a frame so DOM reflects the new `class:active` after
+       Svelte's update. Without rAF the overlay would briefly point
+       at the previously-active button on every nav. */
+    scheduleHaloRecompute();
+  });
+
+  $effect(() => {
+    /* Track scroll, resize, AND DOM mutations so the halo follows
+       the active button when the user scrolls past it, the rail
+       reflows, or the user adds / removes / expands instance
+       stacks (which shifts every button below the change point).
+       The MutationObserver also covers `class:active` swaps —
+       e.g. activating a sub-instance flips `.active` on a sibling
+       without going through the `view` reactive path. */
+    const rail = railEl;
+    const scroll = scrollEl;
+    if (!rail) return;
+    scheduleHaloRecompute();
+    const onScroll = () => scheduleHaloRecompute();
+    scroll?.addEventListener('scroll', onScroll, { passive: true });
+    const ro = new ResizeObserver(scheduleHaloRecompute);
+    ro.observe(rail);
+    if (scroll) ro.observe(scroll);
+    const mo = new MutationObserver(scheduleHaloRecompute);
+    mo.observe(rail, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ['class']
+    });
+    return () => {
+      scroll?.removeEventListener('scroll', onScroll);
+      ro.disconnect();
+      mo.disconnect();
+      if (_haloRaf != null) {
+        cancelAnimationFrame(_haloRaf);
+        _haloRaf = null;
+      }
+    };
+  });
+
 </script>
 
-<aside class="rail" onmouseover={onRailMouseOver} onmouseout={onRailMouseOut} role="navigation">
+<aside
+  class="rail"
+  onmouseover={onRailMouseOver}
+  onmouseout={onRailMouseOut}
+  role="navigation"
+  bind:this={railEl}
+>
   <!-- v8 brand mark = "go home" affordance. Click takes the user to
        the dashboard view (HomeApp.svelte) so the W is the always-
        reachable anchor of the workspace, mirroring how the system
@@ -233,9 +478,45 @@
     onclick={() => (view = 'home')}
     aria-label="Home"
     data-tooltip="Home · ⌘0"
+    data-view="home"
   >
     <img src="/woom-mark-transparent.png" alt="Woom" />
   </button>
+
+  <!-- Active-button halo + its clip wrapper. Vertically the wrapper
+       matches `.rail-scroll`'s bounds (so the halo's box-shadow
+       gets clipped at the same top/bottom edges as the active
+       button's inset outline — they hide together when the user
+       scrolls past the active item). Horizontally the wrapper
+       extends 30px past the rail's right edge so the box-shadow's
+       blur can fully spread into the chat panel without being
+       clipped at the rail's right border. The wrapper sits BEFORE
+       `.rail-scroll` in DOM so the rail-btns naturally stack above
+       it (no z-index gymnastics).
+       `{#key activeHaloKey}` causes a clean unmount + remount each
+       time the active button changes — Svelte's `fade` transition
+       runs both old (out) and new (in) at the same time, giving the
+       "outline appears / disappears" feel the user asked for instead
+       of a slide between positions. Position changes from scroll /
+       reflow keep the same key, so they don't trigger the animation. -->
+  <div
+    class="rail-halo-clip"
+    class:fade-top={scrolledFromTop && haloInScroll}
+    class:fade-bottom={moreBelow && haloInScroll}
+    style="top: {haloClipTop}px; height: {haloClipHeight}px;"
+    aria-hidden="true"
+  >
+    {#key activeHaloKey}
+      {#if activeHaloVisible}
+        <div
+          class="rail-halo"
+          style="top: {activeHaloY - haloClipTop}px; left: {haloAnchorX}px; width: {activeHaloW}px; height: {activeHaloH}px; border-radius: {activeHaloR}px; --rail-glow: {activeHaloGlow};"
+          in:fade={{ duration: 160 }}
+          out:fade={{ duration: 120 }}
+        ></div>
+      {/if}
+    {/key}
+  </div>
 
   <!-- Scrollable middle column. Sources / agents / tools live here so
        the system cluster + avatar at the bottom stay anchored even
@@ -244,13 +525,19 @@
        `::-webkit-scrollbar { display: none }` — the gradient masks
        below telegraph "there's more above / below" without painting
        a chrome track. -->
-  <div class="rail-scroll">
+  <div
+    class="rail-scroll"
+    class:fade-top={scrolledFromTop}
+    class:fade-bottom={moreBelow}
+    bind:this={scrollEl}
+  >
   <!-- Source solos -->
   <button
     class="rail-btn"
     class:active={view === 'jiraApp'}
     style="--rail-tone: var(--src-jira); --rail-glow: rgba(79,142,255,0.40);"
     data-tooltip="Jira · ⌘1"
+    data-view="jiraApp"
     onclick={() => (view = 'jiraApp')}
     aria-label="Jira"
   >
@@ -262,6 +549,7 @@
     class:active={view === 'githubApp'}
     style="--rail-tone: var(--src-github); --rail-glow: rgba(181,132,255,0.40);"
     data-tooltip="GitHub · ⌘2"
+    data-view="githubApp"
     onclick={() => (view = 'githubApp')}
     aria-label="GitHub"
   >
@@ -273,6 +561,7 @@
     class:active={view === 'sentryApp'}
     style="--rail-tone: var(--src-sentry); --rail-glow: rgba(110, 80, 155, 0.42);"
     data-tooltip="Sentry · ⌘3"
+    data-view="sentryApp"
     onclick={() => (view = 'sentryApp')}
     aria-label="Sentry"
   >
@@ -288,6 +577,7 @@
     class:rail-dropping={dropOverKind === 'claude'}
     style="--rail-tone: var(--src-claude); --rail-glow: rgba(232,155,125,0.42);"
     data-tooltip="Claude · ⌘4 — drop to attach"
+    data-view="claudeApp"
     onclick={() => (view = 'claudeApp')}
     ondragenter={(e) => railDragEnter('claude', e)}
     ondragover={(e) => railDragOver('claude', e)}
@@ -308,6 +598,7 @@
     class:rail-dropping={dropOverKind === 'cursor'}
     style="--rail-tone: var(--src-cursor); --rail-glow: rgba(220,220,220,0.32);"
     data-tooltip="Cursor · ⌘5 — drop to attach"
+    data-view="cursorApp"
     onclick={() => (view = 'cursorApp')}
     ondragenter={(e) => railDragEnter('cursor', e)}
     ondragover={(e) => railDragOver('cursor', e)}
@@ -379,6 +670,7 @@
     class="rail-btn"
     class:active={view === 'connections'}
     data-tooltip={anyRetrying ? 'Connections — retrying…' : 'Connections'}
+    data-view="connections"
     onclick={() => (view = 'connections')}
     aria-label="Connections"
   >
@@ -394,6 +686,7 @@
     class="rail-btn"
     class:active={view === 'rules'}
     data-tooltip="Rules"
+    data-view="rules"
     onclick={() => (view = 'rules')}
     aria-label="Rules"
   >
@@ -404,6 +697,7 @@
     class="rail-btn"
     class:active={view === 'library'}
     data-tooltip="Library — skills & plugins"
+    data-view="library"
     onclick={() => (view = 'library')}
     aria-label="Library"
   >
@@ -414,6 +708,7 @@
     class="rail-btn"
     class:active={view === 'settings'}
     data-tooltip="Settings"
+    data-view="settings"
     onclick={() => (view = 'settings')}
     aria-label="Settings"
   >
@@ -474,7 +769,11 @@
     z-index: 5;
     height: 100%;
     min-height: 0;
-    overflow: hidden;
+    /* No `overflow: hidden` here — the active-button halo is rendered
+       as a sibling of `.rail-scroll` (absolute-positioned) and needs
+       room to bleed outside the scroll column's strict
+       `overflow-y: auto` clip. `.rail-scroll` handles its own scroll
+       clipping; the rail wrapper just hosts the layout + the halo. */
   }
 
   /* Scrollable middle column for source / agent / tool buttons. Hides
@@ -496,22 +795,44 @@
     overflow-x: hidden;
     scrollbar-width: none;
     -ms-overflow-style: none;
-    /* Top + bottom fade so the user reads "there's more" when the
-       column overflows, without a chrome track. The mask is symmetric
-       so it works whether the user scrolls up or down. */
+    /* No static mask: a permanent top/bottom fade dimmed the first
+       icon (Jira) even when the column wasn't overflowing. Fades
+       are now conditional — see `.fade-top` / `.fade-bottom` — and
+       only paint when there's actually hidden content in that
+       direction. The mask gradient transitions softly so adding /
+       removing one edge doesn't pop. */
+    transition: mask-image 180ms var(--ease-out, ease-out),
+                -webkit-mask-image 180ms var(--ease-out, ease-out);
+  }
+  .rail-scroll::-webkit-scrollbar { width: 0; height: 0; display: none; }
+
+  /* Edge fades — applied only when the matching direction has hidden
+     content. Combining both gives the original symmetric fade; one
+     alone gives an asymmetric hint. */
+  .rail-scroll.fade-top {
+    mask-image: linear-gradient(180deg,
+      transparent 0, #000 16px, #000 100%);
+    -webkit-mask-image: linear-gradient(180deg,
+      transparent 0, #000 16px, #000 100%);
+  }
+  .rail-scroll.fade-bottom {
+    mask-image: linear-gradient(180deg,
+      #000 0, #000 calc(100% - 16px), transparent 100%);
+    -webkit-mask-image: linear-gradient(180deg,
+      #000 0, #000 calc(100% - 16px), transparent 100%);
+  }
+  .rail-scroll.fade-top.fade-bottom {
     mask-image: linear-gradient(180deg,
       transparent 0,
-      #000 14px,
-      #000 calc(100% - 14px),
+      #000 16px,
+      #000 calc(100% - 16px),
       transparent 100%);
     -webkit-mask-image: linear-gradient(180deg,
       transparent 0,
-      #000 14px,
-      #000 calc(100% - 14px),
+      #000 16px,
+      #000 calc(100% - 16px),
       transparent 100%);
-    /* Hide the scrollbar even when content overflows. */
   }
-  .rail-scroll::-webkit-scrollbar { width: 0; height: 0; display: none; }
 
   /* Foot cluster — pinned to the bottom of the rail; mirrors the flex
      gap of the scroll column so the visual rhythm stays continuous. */
@@ -548,9 +869,11 @@
   }
   .rail-sigil.active {
     background: color-mix(in srgb, var(--accent) 16%, transparent);
+    /* Outer glow lives on `.rail-halo` overlay (same as `.rail-btn.active`)
+       so the W gets a halo of identical weight to every other rail icon.
+       Only the inset accent ring stays on the sigil itself. */
     box-shadow:
-      inset 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent),
-      0 0 12px var(--accent-glow);
+      inset 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent);
   }
   .rail-sigil img {
     /* The W is wider than tall, so we anchor to a fixed width and
@@ -632,9 +955,14 @@
     background: linear-gradient(180deg,
       color-mix(in srgb, var(--rail-tone) 20%, transparent),
       color-mix(in srgb, var(--rail-tone) 8%, transparent));
+    /* Only the inset 1px ring stays on the button — the 22px outer
+       halo lives on `.rail-halo` (rendered outside `.rail-scroll`
+       so it isn't clipped at the scroll container's right edge).
+       The overlay is positioned + sized to exactly match this
+       button, so visually it's the same as having the box-shadow
+       here. */
     box-shadow:
-      inset 0 0 0 1px color-mix(in srgb, var(--rail-tone) 35%, transparent),
-      0 0 22px color-mix(in srgb, var(--rail-glow) 60%, transparent);
+      inset 0 0 0 1px color-mix(in srgb, var(--rail-tone) 35%, transparent);
   }
   :global(.rail-btn.active::after) {
     content: '';
@@ -756,6 +1084,113 @@
     display: inline-flex; flex-direction: column; gap: 1px;
   }
   .rail-identity-sub { color: var(--text-mute); font-size: 10.5px; }
+
+  /* Active-button halo overlay.
+   *
+   * Mirrors the EXACT geometry of a 44×44 rail-btn (same width,
+   * height, border-radius) and re-applies the original
+   * `box-shadow: 0 0 22px var(--rail-glow)` that used to live on
+   * `.rail-btn.active`. Because this element is a sibling of
+   * `.rail-scroll` (not a descendant), the 22px outer blur can
+   * extend rightward without being clipped at the scroll
+   * container's right edge — that was the original "old was
+   * ideal, just clipping was broken" behavior the user wanted
+   * back.
+   *
+   * The element itself is transparent (no fill, no inset border —
+   * those still live on the button so the chassis renders inside
+   * the scroll area). It only paints the outer halo. */
+  /* Halo clip wrapper. `overflow: hidden` clips the halo's outer
+     blur at the wrapper's bounds:
+       - Vertically: starts 30px ABOVE the scroll's top and ends
+         30px BELOW the scroll's bottom (HALO_BLUR_PAD in JS).
+         That extra padding gives the 22px box-shadow blur room
+         to spread when the active button sits exactly at the
+         scroll's top / bottom edge — without the pad, the halo
+         was sliced flat at the scroll's top (the "the glow is
+         cut off at the top of the scrollable sidebar" complaint).
+       - Inside that padded vertical range, a `mask-image` mirrors
+         the `.rail-scroll`'s `.fade-top` / `.fade-bottom` masks
+         in WRAPPER-LOCAL coordinates: the gradient transitions
+         start at `30px` (= scroll's top in wrapper coords) and
+         finish at `46px` (= scroll y=16 = end of scroll's fade
+         transition). Above the wrapper-local 30px, when fade-top
+         is active, the mask is fully transparent — the halo
+         extending into "above-scroll" space is hidden, matching
+         the scroll's behavior of fading out content there. With
+         no fade, no mask is applied → halo extends freely and
+         the user sees the original "ideal" outer-glow look.
+       - Horizontally: `left: 0` and `right: -30px` extends the
+         wrapper 30px past the rail's right edge so the 22px outer
+         blur has room to fully render before being cut.
+     The wrapper itself paints nothing — just defines the clip box. */
+  .rail-halo-clip {
+    position: absolute;
+    left: 0;
+    right: -30px;            /* extend past rail's right edge */
+    pointer-events: none;
+    z-index: 0;
+    overflow: hidden;
+    transition: mask-image 180ms var(--ease-out, ease-out),
+                -webkit-mask-image 180ms var(--ease-out, ease-out);
+  }
+  .rail-halo-clip.fade-top {
+    mask-image: linear-gradient(180deg,
+      transparent 0,
+      transparent 30px,
+      #000 46px,
+      #000 100%);
+    -webkit-mask-image: linear-gradient(180deg,
+      transparent 0,
+      transparent 30px,
+      #000 46px,
+      #000 100%);
+  }
+  .rail-halo-clip.fade-bottom {
+    mask-image: linear-gradient(180deg,
+      #000 0,
+      #000 calc(100% - 46px),
+      transparent calc(100% - 30px),
+      transparent 100%);
+    -webkit-mask-image: linear-gradient(180deg,
+      #000 0,
+      #000 calc(100% - 46px),
+      transparent calc(100% - 30px),
+      transparent 100%);
+  }
+  .rail-halo-clip.fade-top.fade-bottom {
+    mask-image: linear-gradient(180deg,
+      transparent 0,
+      transparent 30px,
+      #000 46px,
+      #000 calc(100% - 46px),
+      transparent calc(100% - 30px),
+      transparent 100%);
+    -webkit-mask-image: linear-gradient(180deg,
+      transparent 0,
+      transparent 30px,
+      #000 46px,
+      #000 calc(100% - 46px),
+      transparent calc(100% - 30px),
+      transparent 100%);
+  }
+  .rail-halo {
+    position: absolute;
+    /* `left` is set inline in pixels (= rail's button-column center),
+       NOT 50% — the wrapper extends past the rail's right edge so
+       a percentage-based center would be off by half the extension.
+       `top` is also set inline relative to the wrapper. */
+    pointer-events: none;
+    transform: translate(-50%, -50%);
+    box-shadow: 0 0 22px color-mix(in srgb, var(--rail-glow) 60%, transparent);
+    /* No position transition — Svelte's `{#key}` + `fade` transition
+       in the template drives "fade out at old, fade in at new" so
+       the halo behaves like the inset border ring (appears /
+       disappears in place rather than skidding between buttons).
+       The only thing CSS still animates is the glow tone for
+       reduced-motion users where the JS transition is short-
+       circuited. */
+  }
 
   /* Floating tooltip — JS-positioned via `tooltipX/tooltipY` so it
      escapes every ancestor clip context (including `.rail-scroll`'s

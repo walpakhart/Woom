@@ -359,6 +359,7 @@ pub fn run() {
             library_install_skill_git,
             library_install_skill_inline,
             library_install_anthropic_skill,
+            library_install_skill_from_repo,
             library_plugin_install_anthropic,
             library_uninstall_skill,
             library_plugin_marketplace_add,
@@ -1611,6 +1612,16 @@ fn library_install_skill_inline(
 #[tauri::command]
 fn library_install_anthropic_skill(name: String) -> Result<library::InstalledSkill, String> {
     library::install_anthropic_skill(&name)
+}
+
+#[tauri::command]
+fn library_install_skill_from_repo(
+    repo: String,
+    slug: String,
+    root: Option<String>,
+) -> Result<library::InstalledSkill, String> {
+    let r = root.as_deref().unwrap_or("skills");
+    library::install_skill_from_repo(&repo, &slug, r)
 }
 
 #[tauri::command]

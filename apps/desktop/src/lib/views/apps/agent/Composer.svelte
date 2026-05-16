@@ -62,10 +62,18 @@
     ta.style.overflowY = ta.scrollHeight > cap ? 'auto' : 'hidden';
   }
 
-  function onInput(e: Event) {
+  function onInput(_e: Event) {
+    /* `bind:value={sess.input}` already pushes the new value into the
+       session state — calling `setSessionInput` here on top would do
+       a redundant assignment AND, more importantly, force Svelte to
+       re-apply the textarea's `value` on the next reactive flush.
+       That re-apply is exactly what made the caret jitter for cursor
+       sessions on fast typing: bind reads → state writes → reactive
+       update → DOM-write back → caret gets nudged to the end of the
+       value. With bind alone, Svelte tracks that the latest write
+       came FROM the input element and skips the echo, so the caret
+       stays exactly where the user left it. */
     if (!sess) return;
-    const v = (e.currentTarget as HTMLTextAreaElement).value;
-    setSessionInput(sess.id, v);
     autoGrow();
     detectMentionTrigger();
   }
@@ -672,7 +680,7 @@
           <textarea
             bind:this={ta}
             class="cmp-area"
-            value={sess.input}
+            bind:value={sess.input}
             oninput={onInput}
             onkeydown={onKey}
             onpaste={onPaste}
@@ -1028,7 +1036,18 @@
     border-radius: 3px;
     padding: 0;
     margin: 0;
-    font-weight: 500;
+    /* CRITICAL: weight must MATCH the textarea so the glyph widths
+       are identical. The textarea renders the @-token at the
+       inherited weight (400). If the backdrop bumps the same
+       glyphs to 500, every variable / hinted font widens them
+       slightly — and that width delta accumulates on each chip,
+       so by the end of the line the caret (rendered by the
+       textarea at the narrow weight) ends up several pixels to
+       the LEFT of where the bolder backdrop glyph appears.
+       The user reads this as "caret is too far / dancing".
+       Tinting the chip via background + color is enough to make
+       it stand out — no weight change needed. */
+    font-weight: inherit;
   }
   .cmp-area {
     position: relative;

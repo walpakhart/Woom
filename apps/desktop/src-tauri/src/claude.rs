@@ -101,6 +101,15 @@ pub fn detect() -> ClaudeStatus {
     }
 }
 
+/// Resolve the `claude` binary path using the same search strategy
+/// as `detect()`. Use this anywhere that needs to spawn `claude`
+/// from non-shell contexts (macOS GUI launches don't inherit the
+/// login shell's PATH, so bare `Command::new("claude")` fails with
+/// `No such file or directory` even when the user has it installed).
+pub(crate) fn resolve_bin() -> Option<PathBuf> {
+    which("claude")
+}
+
 fn which(name: &str) -> Option<PathBuf> {
     // Start with whatever PATH the process has (hydrated from the login shell
     // in `lib::run`), then fall back to the usual suspects in case the shell

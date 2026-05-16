@@ -30,6 +30,17 @@ export const EDITOR_STATE_STORAGE_KEY = 'woom:editor-state:v1';
 
 let _diskDir: string | null = null; // e.g. "…/Woom/sessions"
 let _diskWriteTimer: ReturnType<typeof setTimeout> | null = null;
+/* Wall-clock of the last write that actually hit the disk. The
+   debouncer below uses this to enforce a hard ceiling on how long
+   the trailing flush can be deferred during continuous streaming —
+   without it, a rapid succession of `appendAssistantDelta` calls
+   would keep resetting the 400ms timer indefinitely, and a force-
+   quit mid-stream would lose every message since the last natural
+   pause. With the ceiling, we flush at least every 2.5s even if
+   changes keep arriving. */
+let _diskLastFlushAt = 0;
+const DISK_DEBOUNCE_MS = 400;
+const DISK_MAX_DEFER_MS = 2_500;
 
 function sessionIndexPath(): string { return `${_diskDir}/index.json`; }
 function sessionFilePath(id: string): string { return `${_diskDir}/${id}.json`; }
@@ -67,18 +78,27 @@ function serializeSession(s: ClaudeSession): object {
 async function flushToDisk(sessions: ClaudeSession[], activeId: string | null) {
   if (!_diskDir) return;
   try {
-    const ids: string[] = [];
-    for (const s of sessions) {
-      await invoke('fs_write_file', {
-        path: sessionFilePath(s.id),
-        contents: JSON.stringify(serializeSession(s))
-      });
-      ids.push(s.id);
-    }
+    /* Parallel per-session writes — sequential `await invoke()` in a
+       for-loop was the dominant cost during a force-quit's grace
+       window. With Promise.all every session-file goes out
+       concurrently and we only await the slowest one before the
+       index gets written. The index write stays sequential so we
+       never persist an ids[] pointing at a file that hasn't landed
+       yet. */
+    const ids = sessions.map((s) => s.id);
+    await Promise.all(
+      sessions.map((s) =>
+        invoke('fs_write_file', {
+          path: sessionFilePath(s.id),
+          contents: JSON.stringify(serializeSession(s))
+        })
+      )
+    );
     await invoke('fs_write_file', {
       path: sessionIndexPath(),
       contents: JSON.stringify({ activeId, ids })
     });
+    _diskLastFlushAt = Date.now();
     if (persistError.sessions) persistError.sessions = null;
   } catch (e) {
     const msg = asMessage(e);
@@ -96,11 +116,53 @@ async function flushToDisk(sessions: ClaudeSession[], activeId: string | null) {
 }
 
 function scheduleDiskWrite() {
+  /* Two-phase debounce. The trailing 400ms timer coalesces bursts
+     of mutations (every assistant streaming delta retriggers this
+     function), and the `DISK_MAX_DEFER_MS` ceiling guarantees the
+     timer can't be pushed past 2.5s since the last flush. Without
+     that ceiling a continuous stream would reset the timer on every
+     tick and the file would never be written until streaming
+     ended — making the "I just sent a message and force-quit"
+     scenario lose every byte of the in-flight turn. */
+  const now = Date.now();
+  const sinceLastFlush = now - _diskLastFlushAt;
+  if (sinceLastFlush >= DISK_MAX_DEFER_MS) {
+    /* We've been deferring too long — flush right away on a microtask
+       so we don't block the current call site. The fresh write
+       resets `_diskLastFlushAt`, after which the trailing timer
+       below can debounce subsequent changes. */
+    if (_diskWriteTimer) {
+      clearTimeout(_diskWriteTimer);
+      _diskWriteTimer = null;
+    }
+    queueMicrotask(() =>
+      void flushToDisk(sessionsState.list, sessionsState.activeClaudeId)
+    );
+    return;
+  }
   if (_diskWriteTimer) clearTimeout(_diskWriteTimer);
+  /* Hard cap on the trailing wait: how much defer-budget we still
+     have until the ceiling kicks in. Min with the regular debounce
+     so short bursts still benefit from coalescing. */
+  const remainingDefer = Math.max(0, DISK_MAX_DEFER_MS - sinceLastFlush);
+  const wait = Math.min(DISK_DEBOUNCE_MS, remainingDefer);
   _diskWriteTimer = setTimeout(() => {
     _diskWriteTimer = null;
     void flushToDisk(sessionsState.list, sessionsState.activeClaudeId);
-  }, 1500);
+  }, wait);
+}
+
+/** Force an immediate, awaitable flush. Bypasses the debounce timer
+ *  so callers (window-close hook, manual "Save now" affordance, …)
+ *  can guarantee the on-disk copy reflects the in-memory state
+ *  before the next browser tick / quit. */
+export async function flushSessionsNow(): Promise<void> {
+  if (_diskWriteTimer) {
+    clearTimeout(_diskWriteTimer);
+    _diskWriteTimer = null;
+  }
+  if (!_diskDir) return;
+  await flushToDisk(sessionsState.list, sessionsState.activeClaudeId);
 }
 
 function loadStoredEditorState(): Record<

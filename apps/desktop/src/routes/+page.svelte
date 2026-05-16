@@ -91,6 +91,7 @@
     persistRulesEffect,
     persistEditorInstanceStateEffect,
     initSessionsFromDisk,
+    flushSessionsNow,
     newClaudeSession,
     deleteClaudeSession,
     updateSession,
@@ -620,6 +621,11 @@
    *  pending action card so its eventual resolution routes back to
    *  the sidecar via `resolve_action_wait`. */
   let actionIpcUnlisten: UnlistenFn | null = null;
+  /* Window-close lifecycle handles. Both are unlisten-style — see
+     the close-flush hook inside onMount for what they catch. */
+  let tauriCloseUnlisten: UnlistenFn | null = null;
+  let beforeUnloadHandler: (() => void) | null = null;
+  let closeFlushInProgress = false;
 
   type ActionRequestPayload = {
     session_id: string;
@@ -815,6 +821,66 @@
       'woom:action_request',
       (event) => handleActionRequest(event.payload)
     );
+    /* Window close / dev reload safety net.
+     *
+     * The session persister debounces writes (see scheduleDiskWrite
+     * in sessions.svelte.ts), which means a force-quit shortly
+     * after a message lands — or in the middle of a streaming
+     * answer — would drop the unflushed delta. We hook two
+     * complementary lifecycle events:
+     *
+     *   1. Tauri's onCloseRequested — preventDefault, await an
+     *      immediate flush, then explicitly destroy() the window.
+     *      This catches normal quit (⌘Q) and red-button close.
+     *   2. Browser beforeunload — best-effort sync flush trigger
+     *      for dev-server HMR reloads where Tauri's hook doesn't
+     *      run. We can't await async work here, but we can fire
+     *      the immediate write request; modern Tauri/IPC tends
+     *      to drain in-flight invoke calls before tear-down. */
+    try {
+      const { getCurrentWindow } = await import('@tauri-apps/api/window');
+      const win = getCurrentWindow();
+      const closeUnlisten = await win.onCloseRequested(async (event) => {
+        /* Intercept-flush-destroy. preventDefault stops the natural
+           close, we flush sessions, then `destroy()` tears the
+           window down without re-firing onCloseRequested (`close()`
+           would recurse). Both `allow-close` and `allow-destroy`
+           are listed in capabilities/default.json — without them
+           Tauri v2 silently refuses to close from JS and the
+           window hangs in "intercepted" state. */
+        if (closeFlushInProgress) return;
+        closeFlushInProgress = true;
+        event.preventDefault();
+        /* Hard cap on the flush so a stuck disk write can never
+           strand the user in a "won't quit" window. 2.5s is
+           generous — `flushToDisk` is parallel Promise.all over
+           N session files, in practice well under 100ms. */
+        const flushDeadline = new Promise<void>((resolve) =>
+          setTimeout(resolve, 2_500)
+        );
+        try {
+          await Promise.race([flushSessionsNow(), flushDeadline]);
+        } catch { /* best effort */ }
+        try {
+          await win.destroy();
+        } catch {
+          /* destroy() failed — fall back to close() so we don't
+             leave the user stuck with a "won't quit" window. The
+             flush already ran so persistence is safe either way. */
+          try { await win.close(); } catch { /* runtime tearing down */ }
+        }
+      });
+      tauriCloseUnlisten = closeUnlisten;
+    } catch {
+      /* Non-Tauri context (rare — only when /+page runs outside the
+         shell, e.g. unit tests with jsdom). Fall through to the
+         beforeunload listener which still gives best-effort cover. */
+    }
+    if (typeof window !== 'undefined') {
+      const unloadHandler = () => { void flushSessionsNow(); };
+      window.addEventListener('beforeunload', unloadHandler);
+      beforeUnloadHandler = unloadHandler;
+    }
     // Plan-usage snapshot for the chip. Fire-and-forget — the chip
     // shows "—" until the first response comes back, after which
     // refreshPlanUsage is debounced to MIN_REFRESH_MS (60s) so any
@@ -936,6 +1002,11 @@
     if (connectionRefreshInterval) clearInterval(connectionRefreshInterval);
     removeFocusListener?.();
     actionIpcUnlisten?.();
+    tauriCloseUnlisten?.();
+    if (beforeUnloadHandler && typeof window !== 'undefined') {
+      window.removeEventListener('beforeunload', beforeUnloadHandler);
+      beforeUnloadHandler = null;
+    }
   });
 
   $effect(() => {
