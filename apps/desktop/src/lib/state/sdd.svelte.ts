@@ -91,6 +91,14 @@ interface SddStoreShape {
    *  ~500ms of our own save — otherwise our own write round-trip
    *  would false-positive as "agent rewrote it". */
   lastSelfSaveAt: Record<string, number>;
+  /** Deferred silent SDD prompts, keyed by SESSION id. Populated when
+   *  the user clicks Approve/Continue while the chat session is still
+   *  mid-turn (e.g. agent's previous reply hasn't fully streamed in).
+   *  Drained by the post-turn cleanup in `+page.svelte` — fires the
+   *  pending prompt silently as soon as the session frees up. Avoids
+   *  the stuck-spinner bug where a clicked Approve would silently
+   *  bail because the session was busy at click-time. */
+  pendingSilentBySession: Record<string, string>;
 }
 
 export const sddState = $state<SddStoreShape>({
@@ -100,7 +108,22 @@ export const sddState = $state<SddStoreShape>({
   globalUnlisten: null,
   undoByWorkspace: {},
   lastSelfSaveAt: {},
+  pendingSilentBySession: {},
 });
+
+/** Park a silent SDD prompt that couldn't fire right now (session
+ *  busy). The post-turn drain in `+page.svelte` picks it up + fires
+ *  silently. One slot per session — a second click overwrites; the
+ *  newest stage-derived prompt is always the right one to send. */
+export function setPendingSilent(sessionId: string, prompt: string): void {
+  sddState.pendingSilentBySession[sessionId] = prompt;
+}
+export function popPendingSilent(sessionId: string): string | null {
+  const v = sddState.pendingSilentBySession[sessionId];
+  if (v === undefined) return null;
+  delete sddState.pendingSilentBySession[sessionId];
+  return v;
+}
 
 /** Stable key for the (target) addressed by a save action. Keeps
  *  spec/plan/phase routes pulling from the same record without

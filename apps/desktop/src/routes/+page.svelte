@@ -2544,14 +2544,19 @@
        are pending mentions we still queue but warn — the mentions
        stay attached for now and the next free moment uses them. */
     if (s.sending) {
-      /* SDD prompts are orchestrator-driven, not user-typed. Queuing
-       *  them while a turn is in flight would replay them later — at
-       *  which point the workspace stage has already advanced and the
-       *  prompt is stale (and worse: re-enters the visible chat). Bail
-       *  silently — the card's button is gated on `isInFlight` so the
-       *  user shouldn't have been able to trigger this anyway; this
-       *  is the defence-in-depth path. */
+      /* SDD silent prompts shouldn't go into the visible-chat queue
+       *  (would replay as user messages later) — but dropping them
+       *  outright caused a stuck-spinner bug when the user clicked
+       *  Approve milliseconds before the prior turn's `sending: false`
+       *  landed. Park the prompt in a dedicated single-slot store
+       *  keyed by session; the post-turn drain at the bottom of this
+       *  function picks it up as soon as the session frees up. */
       if (opts.silent) {
+        const promptText = s.input.trim();
+        if (promptText) {
+          const { setPendingSilent } = await import('$lib/state/sdd.svelte');
+          setPendingSilent(s.id, promptText);
+        }
         updateSession(s.id, { input: '' });
         return;
       }
@@ -3045,6 +3050,27 @@
          active-session flip is a feature, not a bug: the user is
          intentionally driving this session forward. */
       const sessAfterDrain = sessionsState.list.find((x) => x.id === id);
+      /* Drain any deferred silent SDD prompt for this session BEFORE
+       *  the visible queue. The user clicked Approve mid-turn; now
+       *  that the session is free, fire the silent send. Single slot,
+       *  so a sequence of clicks always lands on the most-recent
+       *  stage-derived prompt — the right one. Skip if a regular
+       *  visible message is also queued (shouldn't happen in practice
+       *  but rather lose the silent than collide with user intent). */
+      {
+        const { popPendingSilent } = await import('$lib/state/sdd.svelte');
+        const deferred = popPendingSilent(id);
+        if (deferred && (sessAfterDrain?.pendingQueue?.length ?? 0) === 0) {
+          updateSession(id, { input: deferred });
+          queueMicrotask(() => {
+            void sendClaudeMessage({ silent: true });
+          });
+          /* Skip the normal pendingQueue drain below — the silent send
+           *  we just fired will retrigger this whole `finally` block,
+           *  which will pick up the next queue entry (if any) then. */
+          return;
+        }
+      }
       /* Stripe SDD orchestrator templates out of the queue — they
        *  should never have been here (silent prompts now bail before
        *  enqueue) but historical sessions may have stuck copies, and
