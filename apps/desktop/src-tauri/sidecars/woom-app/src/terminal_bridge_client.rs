@@ -102,6 +102,84 @@ pub struct BufferResp {
     pub total_bytes: u64,
 }
 
+// ---- Background-task DTOs ------------------------------------------------
+// Mirror the shapes in `crate::bg_tasks::*` on the desktop side. We keep
+// these structurally identical to what `serde_json` emits there so a
+// version skew between sidecar + desktop only matters when a field is
+// added (deserialization stays forward-compatible — unknown fields are
+// dropped, missing optional fields default).
+
+#[derive(Debug, Serialize)]
+pub struct BgSpawnReq {
+    pub cmd: String,
+    pub cwd: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub env: Option<std::collections::HashMap<String, String>>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum BgStatus {
+    Running,
+    Exited { code: i32 },
+    Killed { reason: String },
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "lowercase")]
+pub enum BgStream {
+    Stdout,
+    Stderr,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct BgLine {
+    pub id: String,
+    pub at: u64,
+    pub stream: BgStream,
+    pub line: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct BgTask {
+    pub id: String,
+    pub label: String,
+    pub cmd: String,
+    pub cwd: String,
+    #[serde(default)]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub pid: Option<u32>,
+    pub started_at: u64,
+    pub status: BgStatus,
+    pub log_path: String,
+    #[serde(default)]
+    pub detected_urls: Vec<String>,
+    #[serde(default)]
+    pub detected_ports: Vec<u16>,
+    #[serde(default)]
+    pub recent_lines: Vec<BgLine>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BgWaitReq {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub contains: Option<String>,
+    pub timeout_ms: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BgStdinReq {
+    /// Plain UTF-8 text written to the child's stdin. The bridge
+    /// accepts either `data_b64` or `text`; we use `text` for the
+    /// simpler shape.
+    pub text: String,
+}
+
 impl BridgeClient {
     /// Resolve the desktop app's port file → build a base URL. We
     /// re-resolve on every call rather than caching because the
@@ -152,6 +230,78 @@ impl BridgeClient {
             url.push_str(&format!("?lines={n}"));
         }
         let resp = self.http.get(url).send().await?;
+        unpack(resp).await
+    }
+
+    // ---- Background tasks ------------------------------------------------
+
+    pub async fn bg_list(&self) -> Result<Vec<BgTask>, BridgeError> {
+        let url = format!("{}/v1/bg", self.base_url);
+        let resp = self.http.get(url).send().await?;
+        unpack(resp).await
+    }
+
+    #[allow(dead_code)]
+    pub async fn bg_get(&self, id: &str) -> Result<BgTask, BridgeError> {
+        let url = format!("{}/v1/bg/{id}", self.base_url);
+        let resp = self.http.get(url).send().await?;
+        unpack(resp).await
+    }
+
+    pub async fn bg_spawn(&self, req: BgSpawnReq) -> Result<BgTask, BridgeError> {
+        let url = format!("{}/v1/bg/spawn", self.base_url);
+        let resp = self.http.post(url).json(&req).send().await?;
+        unpack(resp).await
+    }
+
+    pub async fn bg_kill(&self, id: &str) -> Result<(), BridgeError> {
+        let url = format!("{}/v1/bg/{id}/kill", self.base_url);
+        let resp = self.http.post(url).send().await?;
+        unpack_unit(resp).await
+    }
+
+    pub async fn bg_stdin(&self, id: &str, req: BgStdinReq) -> Result<(), BridgeError> {
+        let url = format!("{}/v1/bg/{id}/stdin", self.base_url);
+        let resp = self.http.post(url).json(&req).send().await?;
+        unpack_unit(resp).await
+    }
+
+    pub async fn bg_logs(
+        &self,
+        id: &str,
+        tail: Option<usize>,
+    ) -> Result<String, BridgeError> {
+        let mut url = format!("{}/v1/bg/{id}/logs", self.base_url);
+        if let Some(n) = tail {
+            url.push_str(&format!("?tail={n}"));
+        }
+        let resp = self.http.get(url).send().await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(BridgeError::BadStatus(status.as_u16(), body));
+        }
+        let text = resp.text().await?;
+        Ok(text)
+    }
+
+    pub async fn bg_wait(
+        &self,
+        id: &str,
+        req: BgWaitReq,
+    ) -> Result<Option<BgLine>, BridgeError> {
+        let url = format!("{}/v1/bg/{id}/wait", self.base_url);
+        // The server caps at 600 s; client-side guard adds 10 s of
+        // slack so the bridge's own timeout always fires first and we
+        // get a clean `Ok(None)` back instead of a reqwest timeout.
+        let wait_timeout = Duration::from_millis(req.timeout_ms.min(600_000) + 10_000);
+        let resp = self
+            .http
+            .post(url)
+            .json(&req)
+            .timeout(wait_timeout)
+            .send()
+            .await?;
         unpack(resp).await
     }
 }

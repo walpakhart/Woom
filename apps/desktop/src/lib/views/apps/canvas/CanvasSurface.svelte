@@ -36,7 +36,7 @@
   import CanvasLibrary from '$lib/components/canvas/CanvasLibrary.svelte';
   import CanvasMinimap from '$lib/components/canvas/CanvasMinimap.svelte';
   import { applyLayout, type LayoutAlgorithm } from '$lib/services/canvasLayout';
-  import { dragState, type DragPayload } from '$lib/state/drag.svelte';
+  import { dragState, setDragPayload, type DragPayload } from '$lib/state/drag.svelte';
   import { sessionsState } from '$lib/state/sessions.svelte';
   import { layoutState } from '$lib/state/layout.svelte';
   import {
@@ -1097,6 +1097,34 @@
     return cssToCanvas(rect.width / 2, rect.height / 2);
   }
 
+  /* Drain rail-icon drop. The Rail's Canvas icon accepts drag payloads
+     outside the canvas DOM — there's no DragEvent we can use to compute
+     coords, so the rail handler queues the payload and we insert here
+     at viewport center once the surface mounts (or while it's already
+     mounted). `seq` ensures dropping the same payload object twice
+     still fires the effect. Clears via `setDragPayload(null)` + nulling
+     `pendingRailDrop` so the global safety net stays consistent. */
+  let lastDrainedSeq = -1;
+  $effect(() => {
+    const req = dragState.pendingRailDrop;
+    if (!req) return;
+    if (req.seq === lastDrainedSeq) return;
+    lastDrainedSeq = req.seq;
+    if (!activeCanvas) {
+      /* No canvas to insert into — drop the request so a future valid
+         drop isn't blocked behind a stale pending one. */
+      dragState.pendingRailDrop = null;
+      return;
+    }
+    /* Wait a frame so freshly-mounted surfaceEl has dimensions before
+       viewportCenterCanvas() reads its bounding rect. */
+    requestAnimationFrame(() => {
+      void insertLiveCard(req.payload, viewportCenterCanvas());
+      dragState.pendingRailDrop = null;
+      setDragPayload(null);
+    });
+  });
+
   function onPaste(e: ClipboardEvent) {
     if (!activeCanvas) return;
     if (isTypingTarget()) return;
@@ -1114,22 +1142,48 @@
     }
   }
 
-  function onDragOver(e: DragEvent) {
-    /* Accept on dragover when the payload is something we can handle:
-        - a file drop (image),
-        - or a Forge inbox payload (jira / github / sentry / file).
-       Anything else we ignore so the column-move drag (handled by the
-       rail) and other host-shell drags pass through cleanly. */
-    if (!e.dataTransfer) return;
-    const types = Array.from(e.dataTransfer.types ?? []);
-    const hasFile = types.includes('Files');
-    const hasForge = !!dragState.payload;
-    if (!hasFile && !hasForge) return;
+  /* Drop affordance — surface glows when a draggable payload is over
+     the canvas (matches rail-drop behaviour). Cleared on dragleave +
+     drop + dragend (window listener) so a cancelled drop doesn't keep
+     glow stuck. */
+  let dropActive = $state(false);
+  let outerEl: HTMLElement | null = $state(null);
+  function onDragEnterSurface(e: DragEvent) {
+    if (!canAccept(e)) return;
     e.preventDefault();
-    e.dataTransfer.dropEffect = 'copy';
+    dropActive = true;
+  }
+  function onDragLeaveSurface(e: DragEvent) {
+    /* Only clear when leaving the OUTER section itself, not a descendant.
+       `relatedTarget` is the element the pointer enters next; if it's
+       still inside `outerEl`, the leave was just a child boundary cross. */
+    const related = e.relatedTarget as Node | null;
+    if (related && outerEl && outerEl.contains(related)) return;
+    dropActive = false;
+  }
+  function canAccept(e: DragEvent): boolean {
+    /* Forge payloads live in module state because WKWebView hides
+       custom mimes during dragover. Always accept if a payload is
+       active — that's what the inbox / chat-msg drag installed. */
+    if (dragState.payload) return true;
+    if (!e.dataTransfer) return false;
+    const types = Array.from(e.dataTransfer.types ?? []);
+    if (types.includes('Files')) return true;
+    if (types.includes('application/x-woom-file')) return true;
+    if (types.includes('text/uri-list')) return true;
+    return false;
+  }
+  function onDragOver(e: DragEvent) {
+    /* Accept on dragover when payload is something we handle:
+        file drop (image) OR Forge inbox payload (jira/github/sentry/file/chat-message). */
+    if (!canAccept(e)) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+    if (!dropActive) dropActive = true;
   }
 
   function onDrop(e: DragEvent) {
+    dropActive = false;
     if (!activeCanvas) return;
 
     /* Forge inbox payload first — it lives in module state because
@@ -1632,6 +1686,9 @@
        gate so multiple canvas columns don't fight over the same
        paste). */
     window.addEventListener('paste', onPaste);
+    const clearDropAffordance = () => { dropActive = false; };
+    window.addEventListener('dragend', clearDropAffordance);
+    window.addEventListener('drop', clearDropAffordance);
     return () => {
       if (saveTickTimer) clearInterval(saveTickTimer);
       window.removeEventListener('keydown', onKeyDown);
@@ -1639,6 +1696,8 @@
       window.removeEventListener('keydown', onKeyDownGroup);
       window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('paste', onPaste);
+      window.removeEventListener('dragend', clearDropAffordance);
+      window.removeEventListener('drop', clearDropAffordance);
     };
   });
 
@@ -1807,9 +1866,15 @@
 </script>
 
 <section
-  class="canvas-surface"
+  bind:this={outerEl}
+  class="canvas-surface canvas-surface--outer"
+  class:canvas-surface--drop={dropActive}
   data-instance-id={instanceId}
   data-kind="canvas"
+  ondragenter={onDragEnterSurface}
+  ondragleave={onDragLeaveSurface}
+  ondragover={onDragOver}
+  ondrop={onDrop}
 >
 
   {#if !activeCanvas}
@@ -1830,8 +1895,6 @@
       onpointermove={onPointerMove}
       onpointerup={onPointerUp}
       onpointercancel={onPointerUp}
-      ondragover={onDragOver}
-      ondrop={onDrop}
       role="presentation"
       style="
         --cv-bg-size: {bgSize}px;
@@ -2096,6 +2159,29 @@
     background-position: var(--cv-bg-x) var(--cv-bg-y);
   }
   .canvas-surface[data-bg='plain'] { background-image: none; }
+
+  /* Drop affordance — accent ring + inner glow when draggable
+     payload over canvas. Matches rail-drop visual so interaction
+     feels uniform across solos. */
+  .canvas-surface--outer.canvas-surface--drop {
+    box-shadow:
+      inset 0 0 0 3px var(--accent),
+      inset 0 0 60px color-mix(in srgb, var(--accent) 28%, transparent);
+    transition: box-shadow 120ms ease;
+  }
+  .canvas-surface--outer.canvas-surface--drop::after {
+    content: 'Drop to add to canvas';
+    position: absolute;
+    top: 14px; left: 50%; transform: translateX(-50%);
+    padding: 6px 14px;
+    border-radius: 999px;
+    background: var(--accent);
+    color: #fff;
+    font-size: 12px; font-weight: 600;
+    pointer-events: none;
+    z-index: 2000;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+  }
 
   .stage {
     position: absolute;

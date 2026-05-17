@@ -213,6 +213,28 @@ export type ClaudeAction =
       result?: string;
       exitCode?: number;
       waitId?: string;
+    }
+  | {
+      id: string;
+      kind: 'question';
+      /** The literal question text — rendered as the card's header. */
+      question: string;
+      /** Short context blurb shown above the option list (optional). */
+      header?: string;
+      /** 2-4 mutually-exclusive options. Each rendered as a button.
+       *  Selecting one resolves the MCP tool with the chosen `label`. */
+      options: { label: string; description?: string }[];
+      /** True when the user may select multiple. Default false. */
+      multiSelect?: boolean;
+      status: 'pending' | 'executing' | 'done' | 'error';
+      /** Chosen label(s) — set on submit. Surfaces in the executed-card
+       *  history so the user can see what they picked. */
+      chosen?: string[];
+      /** Free-form note the user wrote in the "Other" field. Honoured
+       *  when present even if no option was clicked. */
+      other?: string;
+      result?: string;
+      waitId?: string;
     };
 
 export type ClaudeSession = {
@@ -283,6 +305,18 @@ export type ClaudeSession = {
       keeps continuity for the user without permanently inflating prompts.
       Cleared after the next turn ships. */
   cwdSwitchRecap: string | null;
+  /** Permission mode for the next turn (Claude Code parity §4). `plan`
+   *  tells the agent it may only read/inspect — no edits, no mutating
+   *  bash. `default` is the normal mode. Cycle via Shift+Tab in the
+   *  composer. The mode is appended to the system-prompt suffix so the
+   *  agent gates its own tool choice; we don't (yet) own tool dispatch
+   *  to enforce hard. Persisted per-session so a "plan mode" session
+   *  stays in plan after a window close. */
+  permissionMode?: 'default' | 'plan';
+  /** Manual pin from the agent-view dashboard. Pinned sessions sort to
+   *  the top of their group + survive in the dashboard's "Pinned"
+   *  bucket regardless of their working status. */
+  pinned?: boolean;
   /** Per-cwd CLI session ids. Key = cwd path (the actual string we passed
       as `--cwd`). Value = the claudeUuid that the CLI accepted for that
       project. Lets us *resume* an old conversation when the user moves
@@ -317,6 +351,25 @@ export type ClaudeSession = {
       `flushedToUI` flag to track UI-side delivery independently from
       agent-side delivery. */
   pendingActionResults: PendingActionResult[];
+  /** Crash-detection marker. Stamped at the start of every
+      `runAgentRequest` call (user pressed Send → user message has been
+      appended → CLI process is about to be invoked), cleared in the
+      `finally` block when that turn reaches a terminal state (success,
+      error, or normal stop). If the app dies mid-turn (force-quit, OS
+      crash, hardware failure, agent process killed without the JS
+      promise settling) this stays populated on disk. On the next boot
+      `hydrateSession` reads it, sets `interrupted=true`, and clears
+      the marker — the UI can then surface a "previous turn was
+      interrupted, continue?" affordance. The user message index lets
+      the recap reference the exact prompt that was in flight. Null
+      whenever no turn is running. */
+  pendingTurn: { startedAt: number; userMessageIndex: number } | null;
+  /** Derived (NOT persisted): true when this session was hydrated from
+      a disk record whose `pendingTurn` was non-null. Indicates the
+      prior app process died mid-turn. Reset to false when the user
+      either dismisses the recovery affordance or starts a new turn —
+      caller is responsible for that lifecycle. */
+  interrupted?: boolean;
 };
 
 /** One outcome from an action card. Lives on the session until both

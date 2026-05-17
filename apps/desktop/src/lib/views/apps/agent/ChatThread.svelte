@@ -6,10 +6,15 @@
      trace pills, edit cards (editor-stripe), and action cards (per-kind
      stripe — github for PR, etc.). */
   import { sessionsState } from '$lib/state/sessions.svelte';
-  import { convertFileSrc } from '@tauri-apps/api/core';
+  import { convertFileSrc, invoke } from '@tauri-apps/api/core';
   import Markdown from '$lib/components/ui/Markdown.svelte';
   import ClaudeActionCard from '$lib/components/agent/ClaudeActionCard.svelte';
-  import type { ClaudeAction } from '$lib/types';
+  import QuestionCard from '$lib/components/agent/QuestionCard.svelte';
+  import CardContextMenu, { type MenuItem } from '$lib/views/apps/_shared/CardContextMenu.svelte';
+  import { notify } from '$lib/state/toaster.svelte';
+  import { setDragPayload } from '$lib/state/drag.svelte';
+  import { attachDragChip } from '$lib/dragImage';
+  import type { ClaudeAction, ClaudeMessage } from '$lib/types';
 
   type Kind = 'claude' | 'cursor';
 
@@ -44,6 +49,123 @@
   });
 
   const repoCwd = $derived(sess?.worktreePath ?? sess?.cwd ?? null);
+
+  /* Right-click context menu on chat messages. Captures the message
+     + its index so action closures can address it after the menu
+     opens. Save-as-memory and Copy work on any message; Edit / Resend
+     route through the parent's existing user-message handlers. */
+  let ctxCoords = $state<{ x: number; y: number } | null>(null);
+  let ctxMsg = $state<{ msg: ClaudeMessage; index: number } | null>(null);
+
+  /* Drag a chat message → Canvas drop target. CanvasSurface already
+     accepts `source: 'chat-message'` payloads and turns them into a
+     `chat-message-card` shape (see CanvasSurface.svelte:1247). The
+     snapshot we attach is the same minimal shape the Canvas card
+     uses as a fallback when the live session disappears — title +
+     ~200-char excerpt + role + at. */
+  function onMsgDragStart(e: DragEvent, msg: ClaudeMessage, index: number): void {
+    if (!sess || !e.dataTransfer) return;
+    /* Stop the dragstart from bubbling to ancestor drag handlers
+       (e.g. composer / chat scroll). The handle itself is the source;
+       no parent should intercept. */
+    e.stopPropagation();
+    const excerpt = msg.content.replace(/\s+/g, ' ').trim().slice(0, 200);
+    setDragPayload({
+      source: 'chat-message',
+      sessionId: sess.id,
+      messageIndex: index,
+      snapshot: {
+        role: msg.role,
+        agentKind: sess.agentKind,
+        sessionTitle: sess.title || 'Untitled chat',
+        excerpt,
+        at: msg.at
+      }
+    });
+    /* setData is required for WebKit drag-over to even fire on
+       cross-solo drops; the actual payload is in dragState because
+       custom mimes get hidden behind whitelist filtering during
+       dragover (see drag.svelte for the rationale). */
+    e.dataTransfer.setData('text/plain', excerpt);
+    e.dataTransfer.effectAllowed = 'copy';
+    /* Custom drag chip — same compact pill the inbox sources use, so
+       dropping a chat message reads as "this is what I'm moving",
+       not "the entire article is following the cursor". Kind picked
+       by agent so tint matches the source's brand accent. */
+    const role = msg.role === 'user' ? '@you' : sess.agentKind;
+    const label = `${role} · ${excerpt.slice(0, 60)}${excerpt.length > 60 ? '…' : ''}`;
+    attachDragChip(e, sess.agentKind === 'cursor' ? 'cursor' : 'claude', label);
+  }
+  function onMsgDragEnd(): void {
+    setDragPayload(null);
+  }
+
+  function openMsgCtxMenu(e: MouseEvent, msg: ClaudeMessage, index: number) {
+    e.preventDefault();
+    e.stopPropagation();
+    /* Ignore on input/button targets — context menus inside
+       interactive children belong to them, not the message wrapper. */
+    const t = e.target as HTMLElement | null;
+    if (t?.closest('input, textarea, button, [contenteditable="true"]')) return;
+    ctxCoords = { x: e.clientX, y: e.clientY };
+    ctxMsg = { msg, index };
+  }
+  function closeMsgCtxMenu() {
+    ctxCoords = null;
+    ctxMsg = null;
+  }
+
+  const ctxItems = $derived.by<MenuItem[]>(() => {
+    const entry = ctxMsg;
+    if (!entry || !sess) return [];
+    const { msg, index } = entry;
+    const items: MenuItem[] = [];
+    /* Save the message body to long-term memory. Tagged so the user
+       can trace which session it came from + filter to "chat-saved"
+       entries in the Settings browser. */
+    items.push({
+      label: 'Save to memory',
+      icon: 'M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z',
+      onClick: async () => {
+        try {
+          await invoke<number>('memory_save_local', {
+            content: msg.content,
+            kind: 'note',
+            tags: [
+              'from-chat',
+              `session:${sess.id.slice(0, 8)}`,
+              `role:${msg.role}`
+            ]
+          });
+          notify({ kind: 'success', title: 'Saved to memory', ttlMs: 2200 });
+        } catch (err) {
+          notify({ kind: 'error', title: 'Memory save failed', body: String(err) });
+        }
+      }
+    });
+    items.push({
+      label: 'Copy text',
+      icon: 'M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2 M9 2h6a1 1 0 0 1 1 1v2H8V3a1 1 0 0 1 1-1z',
+      onClick: async () => {
+        try { await navigator.clipboard.writeText(msg.content); }
+        catch (e) { console.warn('clipboard', e); }
+      },
+      shortcut: '⌘C'
+    });
+    if (msg.role === 'user') {
+      items.push({
+        label: 'Edit + resend',
+        icon: 'M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7 M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4z',
+        onClick: () => p.onStartEditMessage(sess.id, index, msg.content)
+      });
+      items.push({
+        label: 'Resend',
+        icon: 'M21 12a9 9 0 1 1-3-6.7 M21 4v5h-5',
+        onClick: () => p.onResendMessage(sess.id, index, msg.content)
+      });
+    }
+    return items;
+  });
 
   let chatEl: HTMLDivElement | null = $state(null);
   $effect(() => {
@@ -348,7 +470,10 @@
 
     {#each sess.messages as msg, i (i)}
       {#if msg.role === 'user'}
-        <article class="msg msg--user">
+        <article
+          class="msg msg--user"
+          oncontextmenu={(e) => openMsgCtxMenu(e, msg, i)}
+        >
           <div class="msg-byline msg-byline--user">@you</div>
           <div class="msg-body">
             <Markdown source={msg.content} onOpenFile={p.onOpenFile} />
@@ -363,6 +488,25 @@
               </div>
             {/if}
             <div class="msg-actions">
+              <span
+                class="msg-act msg-drag"
+                draggable="true"
+                ondragstart={(e) => onMsgDragStart(e, msg, i)}
+                ondragend={onMsgDragEnd}
+                role="button"
+                tabindex="-1"
+                aria-label="Drag this message to Canvas or Editor"
+                title="Drag → Canvas pins as a card. Drag → another chat attaches as @mention."
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+                  <circle cx="9" cy="6" r="1.2" fill="currentColor"/>
+                  <circle cx="15" cy="6" r="1.2" fill="currentColor"/>
+                  <circle cx="9" cy="12" r="1.2" fill="currentColor"/>
+                  <circle cx="15" cy="12" r="1.2" fill="currentColor"/>
+                  <circle cx="9" cy="18" r="1.2" fill="currentColor"/>
+                  <circle cx="15" cy="18" r="1.2" fill="currentColor"/>
+                </svg>
+              </span>
               <button class="msg-act" onclick={() => p.onStartEditMessage(sess.id, i, msg.content)} title="Edit + resend">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
               </button>
@@ -373,7 +517,33 @@
           </div>
         </article>
       {:else if msg.role === 'assistant'}
-        <article class="msg msg--assistant">
+        <article
+          class="msg msg--assistant"
+          oncontextmenu={(e) => openMsgCtxMenu(e, msg, i)}
+        >
+          <!-- Floating drag handle. Pinned to the article's top-right
+               via .msg-drag--float; visible on hover so it doesn't
+               clutter the chat at rest. Pure dnd source — clicks on
+               the article body don't trigger drag, only the handle. -->
+          <span
+            class="msg-act msg-drag msg-drag--float"
+            draggable="true"
+            ondragstart={(e) => onMsgDragStart(e, msg, i)}
+            ondragend={onMsgDragEnd}
+            role="button"
+            tabindex="-1"
+            aria-label="Drag this message to Canvas or Editor"
+            title="Drag → Canvas pins as a card. Drag → another chat attaches as @mention."
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+              <circle cx="9" cy="6" r="1.2" fill="currentColor"/>
+              <circle cx="15" cy="6" r="1.2" fill="currentColor"/>
+              <circle cx="9" cy="12" r="1.2" fill="currentColor"/>
+              <circle cx="15" cy="12" r="1.2" fill="currentColor"/>
+              <circle cx="9" cy="18" r="1.2" fill="currentColor"/>
+              <circle cx="15" cy="18" r="1.2" fill="currentColor"/>
+            </svg>
+          </span>
           <div class="msg-byline msg-byline--assistant">{p.kind}</div>
           <div class="msg-body">
             {#if msg.thinking}
@@ -559,18 +729,28 @@
 
     {#each sess.actions as action (action.id)}
       <div class="action-wrap">
-        <ClaudeActionCard
-          {action}
-          onUpdate={(patch) => p.onUpdateAction(sess.id, action.id, patch)}
-          onDismiss={() => p.onRemoveAction(sess.id, action.id)}
-          onExecute={() => p.onExecuteAction(sess.id, action)}
-          onOpenPrInWoom={(url) => p.onOpenPrInWoom(url, action.kind === 'pr' ? action : null)}
-          {repoCwd}
-        />
+        {#if action.kind === 'question'}
+          <QuestionCard
+            {action}
+            onUpdate={(patch) => p.onUpdateAction(sess.id, action.id, patch)}
+            onDismiss={() => p.onRemoveAction(sess.id, action.id)}
+          />
+        {:else}
+          <ClaudeActionCard
+            {action}
+            onUpdate={(patch) => p.onUpdateAction(sess.id, action.id, patch)}
+            onDismiss={() => p.onRemoveAction(sess.id, action.id)}
+            onExecute={() => p.onExecuteAction(sess.id, action)}
+            onOpenPrInWoom={(url) => p.onOpenPrInWoom(url, action.kind === 'pr' ? action : null)}
+            {repoCwd}
+          />
+        {/if}
       </div>
     {/each}
   </div>
 {/if}
+
+<CardContextMenu coords={ctxCoords} items={ctxItems} onClose={closeMsgCtxMenu} />
 
 <style>
   .ct {
@@ -664,6 +844,51 @@
   }
   .msg-act:hover { color: var(--text-0); }
   .msg-act svg { width: 12px; height: 12px; }
+
+  /* Drag handle — `<span>` instead of `<button>` because Safari/
+     WebKit drag is more reliable on plain elements. cursor: grab tells
+     the user it's draggable; switching to grabbing on :active matches
+     macOS conventions. */
+  .msg-drag {
+    cursor: grab;
+    color: var(--text-mute);
+    /* Inline-flex with align-items: center so the SVG inside is
+       centered without the host needing exact width/height. */
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .msg-drag:active { cursor: grabbing; }
+  .msg-drag:hover { color: var(--accent-bright); }
+  /* SVG inside the handle shouldn't capture pointer events — otherwise
+     the dragstart fires on the path element, not the span, and some
+     WebKit builds refuse to start a drag from inside an inline SVG. */
+  .msg-drag svg { pointer-events: none; }
+
+  /* Floating handle for assistant messages — pinned to the article's
+     top-right. Anchored on .msg (which is `display: grid; position:
+     static`), so we need to make the article a positioning context.
+     Hidden at rest, revealed on hover. */
+  .msg--assistant { position: relative; }
+  .msg-drag--float {
+    position: absolute;
+    top: 0;
+    right: 4px;
+    width: 22px;
+    height: 22px;
+    display: grid;
+    place-items: center;
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    opacity: 0;
+    transition: opacity 140ms, color 120ms;
+    z-index: 2;
+  }
+  .msg-drag--float svg { width: 12px; height: 12px; }
+  .msg--assistant:hover .msg-drag--float,
+  .msg--assistant:focus-within .msg-drag--float {
+    opacity: 0.85;
+  }
+  .msg-drag--float:hover { opacity: 1; }
 
   /* External-file attachments (today: pasted/dropped images). Plain
      external file refs typed via @ live in the prompt text inline,

@@ -19,8 +19,10 @@
   import WorktreeBar from './agent/WorktreeBar.svelte';
   import ChatThread from './agent/ChatThread.svelte';
   import Composer from './agent/Composer.svelte';
+  import PreviewPane from './agent/PreviewPane.svelte';
   import Splitter from '$lib/components/ui/Splitter.svelte';
   import { onMount } from 'svelte';
+  import { bgTasksState } from '$lib/state/bgTasks.svelte';
   import type { ClaudeAction } from '$lib/types';
 
   type Kind = 'claude' | 'cursor';
@@ -104,13 +106,40 @@
   // svelte-ignore state_referenced_locally
   const wtStorageKey = `agent-worktree-side-open:${p.kind}`;
   let worktreeOpen = $state(true);
+  // svelte-ignore state_referenced_locally
+  const pvStorageKey = `agent-preview-side-open:${p.kind}`;
+  /** Preview pane open state. Defaults closed — opens via the rail icon,
+   *  the /preview slash command, or auto-opens when a task spawns from
+   *  this session (see effect below). */
+  let previewOpen = $state(false);
   onMount(() => {
     const v = localStorage.getItem(wtStorageKey);
     if (v === '0' || v === '1') worktreeOpen = v === '1';
+    const pv = localStorage.getItem(pvStorageKey);
+    if (pv === '0' || pv === '1') previewOpen = pv === '1';
+    /* `/preview` slash command fires this — only respond if the event
+     *  matches our kind so Cursor's pane doesn't open when the user
+     *  ran the command inside Claude. */
+    const onOpen = (e: Event) => {
+      const evt = e as CustomEvent<{ kind?: 'claude' | 'cursor' }>;
+      if (!evt.detail || evt.detail.kind === p.kind) previewOpen = true;
+    };
+    window.addEventListener('woom:open-preview', onOpen);
+    return () => window.removeEventListener('woom:open-preview', onOpen);
   });
   $effect(() => {
     localStorage.setItem(wtStorageKey, worktreeOpen ? '1' : '0');
   });
+  $effect(() => {
+    localStorage.setItem(pvStorageKey, previewOpen ? '1' : '0');
+  });
+
+  /* Per-kind unread-task badge — count of background tasks the user
+   *  hasn't acknowledged. For now: any running task while pane is
+   *  closed counts. Future: track per-task "seen" timestamp. */
+  const previewBadgeCount = $derived(
+    previewOpen ? 0 : bgTasksState.tasks.filter((t) => t.status.kind === 'running').length
+  );
 </script>
 
 <section
@@ -118,7 +147,7 @@
   data-kind={p.kind}
   style="--app-tone: {tone}; --app-glow: {glow};"
 >
-  <!-- Outer split: sessions sidebar (280, fixed) | chat + worktree (flex). -->
+  <!-- Outer split: sessions sidebar (280, fixed) | chat + worktree + preview (flex). -->
   <Splitter
     direction="horizontal"
     fixedSide="start"
@@ -131,7 +160,8 @@
       <SessionsSidebar kind={p.kind} instanceId={p.instanceId} now={p.now} />
     {/snippet}
     {#snippet end()}
-      {#if worktreeOpen}
+      {#snippet midStack()}
+        {#if worktreeOpen}
         <!-- Inner split: chat (flex) | worktree side (320, fixed). -->
         <Splitter
           direction="horizontal"
@@ -276,6 +306,57 @@
           </aside>
         </div>
       {/if}
+      {/snippet}
+      <!-- Preview pane: another collapsible right side. When open,
+           splits midStack ↔ preview; when closed, midStack + a 44px
+           preview-rail. Mirrors the worktree pattern so both sides
+           collapse independently. -->
+      {#if previewOpen}
+        <Splitter
+          direction="horizontal"
+          fixedSide="end"
+          persistKey="agent-{p.kind}-preview"
+          initial={360}
+          min={280}
+          max={600}
+        >
+          {#snippet start()}
+            {@render midStack()}
+          {/snippet}
+          {#snippet end()}
+            <PreviewPane
+              kind={p.kind}
+              instanceId={p.instanceId}
+              onCollapse={() => (previewOpen = false)}
+            />
+          {/snippet}
+        </Splitter>
+      {:else}
+        <div class="sa-outer-grid">
+          {@render midStack()}
+          <aside class="sa-rail sa-rail--preview app-pane">
+            <button
+              class="sa-rail-btn"
+              aria-label="Expand preview pane"
+              onclick={() => (previewOpen = true)}
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 6l-6 6 6 6"/></svg>
+              {#if previewBadgeCount > 0}
+                <span class="sa-rail-badge mono">{previewBadgeCount > 9 ? '9+' : previewBadgeCount}</span>
+              {/if}
+            </button>
+            <div class="sa-rail-divider" aria-hidden="true"></div>
+            <div class="sa-rail-glyph" aria-label="Preview">
+              <!-- "play-in-window" glyph — distinguishes the preview
+                   rail from the worktree rail's folder icon. -->
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="3" y="5" width="18" height="14" rx="2"/>
+                <polygon points="10,9 16,12 10,15" fill="currentColor" stroke="none"/>
+              </svg>
+            </div>
+          </aside>
+        </div>
+      {/if}
     {/snippet}
   </Splitter>
 </section>
@@ -310,6 +391,38 @@
     width: 100%; height: 100%;
     transition: grid-template-columns var(--dur-base) var(--ease-out);
   }
+  /* Outer grid wraps midStack + the 44px preview rail when preview
+     pane is collapsed. Same vocabulary as .sa-end-grid so the rail
+     reads as a sibling of the inner stack, not nested. */
+  .sa-outer-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 44px;
+    gap: var(--app-gap, 14px);
+    width: 100%; height: 100%;
+    transition: grid-template-columns var(--dur-base) var(--ease-out);
+  }
+  /* Discriminator class for future per-rail styling (e.g. tone shift).
+     Empty for now — keeps the selector in place so JS code that toggles
+     the class doesn't need a no-op fallback. */
+  .sa-rail--preview {
+    /* placeholder — extend with tone shift later */
+    background: transparent;
+  }
+  .sa-rail-badge {
+    position: absolute;
+    top: -3px; right: -3px;
+    min-width: 14px; height: 14px;
+    padding: 0 3px;
+    border-radius: 7px;
+    background: var(--accent-bright);
+    color: var(--accent-fg, #1a1f1c);
+    font-size: 9px; font-weight: 700;
+    line-height: 14px;
+    display: grid; place-items: center;
+    box-shadow: 0 0 0 2px var(--bg-1);
+    pointer-events: none;
+  }
+  .sa-rail-btn { position: relative; }
   .sa-rail {
     display: flex; flex-direction: column;
     align-items: center;

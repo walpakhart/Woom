@@ -11,6 +11,8 @@
 import { layoutState, APP_INSTANCE_IDS, DEFAULT_PANEL_ORDER, kindForInstanceId } from '$lib/state/layout.svelte';
 import { sessionsState } from '$lib/state/sessions.svelte';
 import { canvasState, ensureCanvasLoaded, type Shape, type Edge } from '$lib/state/canvas.svelte';
+import { getCachedClaudeMd } from '$lib/state/claudemd.svelte';
+import { getCachedAutoMemoryBlock } from '$lib/state/autoMemory.svelte';
 
 /** Build the per-turn app-context string we hand the agent as a
  *  system-prompt suffix. Lists each solo singleton (kind + id), the
@@ -112,6 +114,31 @@ export function buildAgentAppContext(callingSessionId: string): string {
   const calling = sessionsState.list.find((s) => s.id === callingSessionId);
   const callingInstanceId = calling?.agentInstanceId ?? null;
 
+  /* Auto-memory — long-term `user` + `feedback` entries from the
+     local SQLite store. Cheap, lives once per session prefix so
+     prompt-cache eats it. Refreshed on Settings save + app boot. */
+  const autoMem = getCachedAutoMemoryBlock();
+  if (autoMem.trim().length > 0) {
+    lines.push('');
+    lines.push('---');
+    lines.push(autoMem);
+  }
+
+  /* CLAUDE.md auto-load (mirrors Claude Code's session-memory pattern).
+     Pulls from the per-cwd cache populated by `loadClaudeMd` before
+     this builder runs — sync access here keeps the function pure.
+     Stamped BEFORE the layout snapshot so it reads as durable
+     project rules while the layout reads as live state. */
+  const cwd = calling?.worktreePath ?? calling?.cwd ?? null;
+  const claudemd = getCachedClaudeMd(cwd);
+  if (claudemd.content.trim().length > 0) {
+    lines.push('');
+    lines.push('---');
+    lines.push('Project memory (CLAUDE.md, auto-loaded):');
+    lines.push('');
+    lines.push(claudemd.content.trim());
+  }
+
   lines.push('');
   lines.push('---');
   lines.push('Current solo-mode layout (refreshed on every turn):');
@@ -121,6 +148,26 @@ export function buildAgentAppContext(callingSessionId: string): string {
   if (calling?.cwdSwitchRecap) {
     lines.push('');
     lines.push(calling.cwdSwitchRecap);
+  }
+
+  // Plan-mode discipline. When the user toggled the session into plan
+  // mode (⇧⇥), the agent should READ + INVESTIGATE only — no edits,
+  // no mutating bash, no MCP calls that change remote state. End the
+  // turn with a structured plan; the user reviews and clicks
+  // "Approve & switch to default" to flip mode and continue.
+  if (calling?.permissionMode === 'plan') {
+    lines.push('');
+    lines.push('---');
+    lines.push('Plan mode ACTIVE. Do NOT call tools that:');
+    lines.push('  - write or edit files (Edit / Write / NotebookEdit)');
+    lines.push('  - run mutating bash commands (rm, mv, git commit/push, npm install, sed -i, etc.)');
+    lines.push('  - mutate remote state via MCP (mcp__github__add_comment, mcp__jira__transition_issue, mcp__sentry__update_issue, propose_*, etc.)');
+    lines.push('Read tools (Read, Grep, Glob, terminal_buffer, mcp__*__get_*, mcp__*__search_*, mcp__*__list_*) ARE allowed.');
+    lines.push('');
+    lines.push(
+      'End the turn with a clear, ordered plan the user can review. '
+        + 'The user will switch you out of plan mode to begin execution.'
+    );
   }
 
   for (const kind of DEFAULT_PANEL_ORDER) {
@@ -137,6 +184,16 @@ export function buildAgentAppContext(callingSessionId: string): string {
     if (kind === 'editor') {
       const path = sessionsState.editorInstanceState[id]?.repoPath ?? layoutState.active.editor.repoPath ?? '';
       meta.push(`repo_path=${path || '(none)'}`);
+      /* Currently-open file in this editor instance. EditorView mirrors
+         `activePath` into localStorage under `woom:editor:active:<id>`
+         on every change. Reading that here means the agent's per-turn
+         layout snapshot always reflects what the user is actually
+         looking at, so requests like "fix this" can be grounded
+         without a separate question / tool call. */
+      try {
+        const openFile = localStorage.getItem(`woom:editor:active:${id}`);
+        if (openFile && openFile.trim()) meta.push(`open_file=${openFile}`);
+      } catch { /* localStorage access denied — non-essential */ }
       const linked = sessionsState.list
         .filter((s) => s.linkedToEditor && s.linkedToEditorInstanceId === id)
         .map((s) => s.title || s.id.slice(0, 6));

@@ -28,7 +28,7 @@ use rmcp::{
     transport::stdio,
 };
 use anyhow::Context;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 mod terminal_bridge_client;
 use terminal_bridge_client::BridgeClient;
@@ -2102,6 +2102,187 @@ impl App {
         ))]))
     }
 
+    // ---- Background tasks --------------------------------------------------
+    //
+    // Distinct from `terminal_run`: `terminal_run` BLOCKS until the command
+    // finishes and is hosted in a user-visible PTY. `bg_spawn` returns
+    // immediately, the process stays alive, and the user sees it in the
+    // Preview pane on the right of the Claude/Cursor solo. Use bg_* for
+    // dev servers, file watchers, test loops, anything long-running. The
+    // `bg_wait_line` tool turns the persistent stream into discrete
+    // "react when X appears" events without polling.
+
+    #[tool(
+        description = "Spawn a long-running background process tracked in the Preview pane. Returns the task `id` immediately — the process keeps running until `bg_kill` is called or it exits on its own. **Use for**: dev servers (`pnpm dev`, `python -m http.server`), file watchers (`cargo watch -x test`), tunneling tools (`ngrok`), any process whose primary value is staying alive and streaming output.\n\n**Do NOT use for** one-shot commands — those go through `terminal_run` (blocks, returns stdout + exit code).\n\nThe response is the freshly-tracked task: `id`, `pid`, `started_at`, `status=running`, `log_path` (rolling 10 MB file on disk). URLs like `http://localhost:5173` printed by the process auto-populate `detected_urls` / `detected_ports` so the Preview pane surfaces them as clickable chips.\n\nAfter spawning, call `bg_wait_line(id, contains=\"Ready\", timeout_ms=30000)` to wait for the readiness signal. Then move on to whatever next step depends on it (e.g. running tests against the server). Logs are reachable via `bg_logs(id, tail=N)` at any time.\n\n`cwd` MUST be absolute. The agent's session preamble shows the worktree path; use that. Spawning without an explicit `cwd` is not supported."
+    )]
+    async fn bg_spawn(
+        &self,
+        Parameters(BgSpawnParams { cmd, cwd, label, env }): Parameters<BgSpawnParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        if cmd.trim().is_empty() {
+            return Err(ErrorData::invalid_params("`cmd` is empty", None));
+        }
+        if cwd.trim().is_empty() {
+            return Err(ErrorData::invalid_params("`cwd` is empty", None));
+        }
+        let client = BridgeClient::discover().map_err(bridge_to_mcp)?;
+        let task = client
+            .bg_spawn(terminal_bridge_client::BgSpawnReq {
+                cmd: cmd.clone(),
+                cwd,
+                label,
+                session_id: None,
+                env,
+            })
+            .await
+            .map_err(bridge_to_mcp)?;
+        let url_hint = task
+            .detected_urls
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "(no URL detected yet)".to_string());
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "spawned bg task `{}` (label=`{}`, pid={}, status=running)\n\
+             url: {}\n\
+             cmd: {}\n\
+             call `bg_wait_line({}, contains=…, timeout_ms=…)` to react to lines, \
+             `bg_logs({}, tail=…)` to read scrollback, `bg_kill({})` when done.",
+            task.id,
+            task.label,
+            task.pid.map(|p| p.to_string()).unwrap_or_else(|| "?".to_string()),
+            url_hint,
+            cmd,
+            task.id,
+            task.id,
+            task.id,
+        ))]))
+    }
+
+    #[tool(
+        description = "List every background task tracked by the Preview pane. Each row shows id, label, status (running / exit code / killed), pid, primary URL if detected, and a tiny tail of recent output. Use this to confirm what's alive before calling `bg_kill`, or to find the `id` of a task you want to `bg_wait_line` on.\n\nReturns newest-first. Empty list = no tasks open (suggest the user spawn one with `bg_spawn` or `/preview <cmd>`)."
+    )]
+    async fn bg_list(&self) -> Result<CallToolResult, ErrorData> {
+        let client = BridgeClient::discover().map_err(bridge_to_mcp)?;
+        let tasks = client.bg_list().await.map_err(bridge_to_mcp)?;
+        if tasks.is_empty() {
+            return Ok(CallToolResult::success(vec![Content::text(
+                "no background tasks open. spawn one with `bg_spawn`.".to_string(),
+            )]));
+        }
+        let mut out = String::from("id            | label                 | status   | pid    | url\n");
+        out.push_str("--------------|-----------------------|----------|--------|----\n");
+        for t in &tasks {
+            let status = match &t.status {
+                terminal_bridge_client::BgStatus::Running => "running".to_string(),
+                terminal_bridge_client::BgStatus::Exited { code } => format!("exit {code}"),
+                terminal_bridge_client::BgStatus::Killed { reason } => format!("killed:{reason}"),
+            };
+            let url = t.detected_urls.first().cloned().unwrap_or_else(|| "—".to_string());
+            out.push_str(&format!(
+                "{:13} | {:21} | {:8} | {:6} | {}\n",
+                t.id,
+                truncate(&t.label, 21),
+                status,
+                t.pid.map(|p| p.to_string()).unwrap_or_else(|| "—".into()),
+                url
+            ));
+        }
+        Ok(CallToolResult::success(vec![Content::text(out)]))
+    }
+
+    #[tool(
+        description = "Read the rolling log of a background task. Returns up to the last `tail` lines (default 200) of merged stdout + stderr. Use this to inspect what a dev server / build watcher printed since spawn, or to dig into a crash after a `bg_kill`.\n\nFor LIVE reactions to new lines (e.g. \"wait until the server prints Ready\"), prefer `bg_wait_line` — it long-polls without burning tool round-trips."
+    )]
+    async fn bg_logs(
+        &self,
+        Parameters(BgLogsParams { id, tail }): Parameters<BgLogsParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        if id.trim().is_empty() {
+            return Err(ErrorData::invalid_params("`id` is empty", None));
+        }
+        let client = BridgeClient::discover().map_err(bridge_to_mcp)?;
+        let text = client.bg_logs(&id, tail).await.map_err(bridge_to_mcp)?;
+        Ok(CallToolResult::success(vec![Content::text(text)]))
+    }
+
+    #[tool(
+        description = "Long-poll for the next stdout/stderr line on a background task. Blocks up to `timeout_ms` (capped server-side at 600_000 = 10 min). Returns the matched `BgLine` JSON when a line appears, OR `null` on timeout.\n\nThis is the line-streaming primitive for reacting to a dev server / build / test loop without polling. Use it as: 1) `bg_spawn` the process, 2) `bg_wait_line(id, contains=\"Ready\", timeout_ms=30000)` until you see readiness, 3) move on. For \"watch the build, surface errors\" loops, call repeatedly with `contains=\"error\"` and a moderate timeout.\n\n`contains` is a case-insensitive substring. Pass `null` (or omit) to match the first new line of any content. The bridge filters server-side so you don't pay for irrelevant lines."
+    )]
+    async fn bg_wait_line(
+        &self,
+        Parameters(BgWaitLineParams { id, contains, timeout_ms }): Parameters<BgWaitLineParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        if id.trim().is_empty() {
+            return Err(ErrorData::invalid_params("`id` is empty", None));
+        }
+        let client = BridgeClient::discover().map_err(bridge_to_mcp)?;
+        let line = client
+            .bg_wait(
+                &id,
+                terminal_bridge_client::BgWaitReq { contains, timeout_ms },
+            )
+            .await
+            .map_err(bridge_to_mcp)?;
+        match line {
+            Some(l) => Ok(CallToolResult::success(vec![Content::text(format!(
+                "[{}] {}",
+                match l.stream {
+                    terminal_bridge_client::BgStream::Stdout => "stdout",
+                    terminal_bridge_client::BgStream::Stderr => "stderr",
+                },
+                l.line
+            ))])),
+            None => Ok(CallToolResult::success(vec![Content::text(
+                "(timeout — no matching line within the requested window)".to_string(),
+            )])),
+        }
+    }
+
+    #[tool(
+        description = "Send raw bytes to the stdin of a background task. Use for interactive dev tools that prompt mid-stream (vite hot-reload prompts, `cargo watch` re-run questions, REPLs). Append `\\n` to submit a line; omit to leave bytes in the line buffer.\n\nFor full pty-style interaction (TUI apps like `htop`, `vim`), use `terminal_run`/`terminal_write` instead — bg_* doesn't allocate a pty, so curses-style apps won't render."
+    )]
+    async fn bg_stdin(
+        &self,
+        Parameters(BgStdinParams { id, text }): Parameters<BgStdinParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        if id.trim().is_empty() {
+            return Err(ErrorData::invalid_params("`id` is empty", None));
+        }
+        let client = BridgeClient::discover().map_err(bridge_to_mcp)?;
+        client
+            .bg_stdin(&id, terminal_bridge_client::BgStdinReq { text })
+            .await
+            .map_err(bridge_to_mcp)?;
+        Ok(CallToolResult::success(vec![Content::text(
+            "stdin written".to_string(),
+        )]))
+    }
+
+    #[tool(
+        description = "Kill a background task (SIGKILL via tokio). Idempotent — calling on an already-exited task is a no-op. The task remains visible in `bg_list` with status `killed:user` so the user can see the lifecycle in the Preview pane."
+    )]
+    async fn bg_kill(
+        &self,
+        Parameters(BgIdParams { id }): Parameters<BgIdParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        if id.trim().is_empty() {
+            return Err(ErrorData::invalid_params("`id` is empty", None));
+        }
+        let client = BridgeClient::discover().map_err(bridge_to_mcp)?;
+        client.bg_kill(&id).await.map_err(bridge_to_mcp)?;
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "killed bg task `{id}`"
+        ))]))
+    }
+
+    #[tool(
+        description = "List every Woom-bundled MCP tool — categories, names, one-line summaries — for orientation when starting an unfamiliar task. Cheap reference call; use when you're not sure which tool surface fits the user's ask (e.g. \"do I have anything for Sentry?\", \"what's the right way to drive the editor?\"). Returns a fixed markdown overview of the 5 bundled sidecars (jira / github / sentry / memory / app) without their per-tool JSON schemas — call the specific tool once you've picked it.\n\nThis is a quick map, NOT lazy schema loading. The CLI already has every schema in context; consider this an index you can scan to avoid re-deriving \"does feature X exist\"."
+    )]
+    async fn woom_tools_overview(&self) -> Result<CallToolResult, ErrorData> {
+        let overview = include_str!("tools_overview.md");
+        Ok(CallToolResult::success(vec![Content::text(overview.to_string())]))
+    }
+
     #[tool(
         description = "Ensure a Terminal instance has a live PTY AND link it to the calling session — the one-shot setup the agent needs before driving `terminal_run` / `terminal_write` / `terminal_buffer`.\n\nWhen to call: your session preamble shows no `linked_to_terminal=…`, OR `terminal_list` came back empty, OR the user just asked you to \"run X in the terminal\" and there's no obvious target. This is your bootstrap — call once at the top of the turn, then drive the returned name in subsequent terminal_* tools.\n\nDefaults: with no args, picks the primary terminal instance (the one with `id=terminal-solo` in the preamble, art-name like \"Vermeer\") and links it to YOU (the calling session). The PTY spawns if it wasn't already, cwd inherits from your linked editor (if any) or $HOME.\n\nTargeting a specific instance: pass `instance_name` (the art-name shown in the rail popover — \"Vermeer\", \"Notre-Dame\") OR `instance_id` (e.g. `terminal-solo` or `terminal:vermeer`). Use this when the user already has multiple terminal instances open and named one explicitly.\n\nReturns the instance's art-name as the canonical `id` for follow-up tool calls. Idempotent — calling it twice doesn't spawn twice."
     )]
@@ -2145,6 +2326,35 @@ impl App {
     }
 
     #[tool(
+        description = "Ask the user a multiple-choice question and BLOCK until they pick. Surfaces a card in the chat with the question, optional header context, and 2-4 short options. The user clicks one (or selects several when `multi_select=true`) or types free-form text into the always-present 'Other' field; either resolves the tool with their answer in the SAME turn, so the agent reasons about the choice immediately and continues.\n\n**When to use**: any branch in your reasoning where the user's preference materially changes what you do next (architecture choice, lib pick, naming, scope). Use INSTEAD of finishing your turn with \"Which would you prefer? A, B, or C?\" — that ends the turn and forces a re-context on the next user message; this tool keeps the same turn alive AND renders interactive buttons the user can click without typing.\n\n**Schema**: `question` is the headline (rendered prominently). `header` is a 1-2 sentence context blurb above the options. `options` is an array of `{ label, description? }` — 2 to 4 entries; label is what shows on the button + comes back in the tool result; description is the muted explanation under the button. `multi_select=true` lets the user pick multiple; the result is comma-joined.\n\n**Don't use** for confirmations of destructive actions (use `propose_bash` / `propose_commit` / `propose_pr` — they have approval semantics + execute). Don't use for open-ended Q&A — write a regular question in chat for that."
+    )]
+    async fn ask_user_question(
+        &self,
+        Parameters(AskUserQuestionParams { question, header, options, multi_select }): Parameters<AskUserQuestionParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        if question.trim().is_empty() {
+            return Err(ErrorData::invalid_params("`question` is empty", None));
+        }
+        if options.len() < 2 || options.len() > 4 {
+            return Err(ErrorData::invalid_params(
+                "`options` must have 2-4 entries",
+                None,
+            ));
+        }
+        let params = serde_json::json!({
+            "question": question,
+            "header": header,
+            "options": options,
+            "multi_select": multi_select.unwrap_or(false),
+        });
+        let fallback = format!(
+            "Question posted (IPC unavailable, user can't click): {}",
+            question
+        );
+        run_or_fallback("question", params, fallback).await
+    }
+
+    #[tool(
         description = "Propose switching the current session's working directory. Surfaces an approval card in Woom and BLOCKS until the user approves (cwd switches) or dismisses. The tool's response is the actual outcome — react and continue in this same turn."
     )]
     async fn propose_switch_cwd(
@@ -2170,6 +2380,17 @@ impl App {
 /// Woom").
 fn bridge_to_mcp(err: terminal_bridge_client::BridgeError) -> ErrorData {
     ErrorData::internal_error(err.to_string(), None)
+}
+
+/// Cap a string to `max` chars, replacing the tail with `…` if it
+/// overflows. Used by `bg_list` to keep the ASCII table aligned. */
+fn truncate(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
+    out.push('…');
+    out
 }
 
 /// Resolve any of {instance name, instance_id, uuid} → the human-readable
@@ -2270,6 +2491,91 @@ struct TerminalBufferParams {
     /// How many trailing lines of the scrollback to return. Default
     /// 200. `0` = whole buffer (capped at ~64 KB by the desktop).
     lines: Option<usize>,
+}
+
+// ---- bg_* params ---------------------------------------------------------
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct BgSpawnParams {
+    /// Shell command to run (sh syntax). Single line — chain with `&&`
+    /// only when the steps are genuinely a single logical unit.
+    cmd: String,
+    /// Absolute working directory. The session's worktree path or repo
+    /// root is usually right. Spawning relative paths produces
+    /// unreliable behaviour because the bridge has no shell context.
+    cwd: String,
+    /// Short human-readable label shown in the Preview pane chip. Auto-
+    /// derived from the first word of `cmd` when omitted.
+    #[serde(default)]
+    label: Option<String>,
+    /// Optional environment variables layered on top of the parent.
+    /// Keys must be ASCII upper-snake. Values pass through verbatim.
+    #[serde(default)]
+    env: Option<std::collections::HashMap<String, String>>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct BgIdParams {
+    /// Task id from `bg_spawn` / `bg_list`. Format: `bg-` + 10 hex chars.
+    id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct BgLogsParams {
+    id: String,
+    /// Last N lines to return. Default: 200. `0` returns the whole
+    /// rolling file (capped at 10 MB).
+    tail: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct BgWaitLineParams {
+    id: String,
+    /// Case-insensitive substring the matched line must contain. Omit
+    /// to wait for ANY new line (useful for the first "is the server
+    /// printing anything yet" probe). Empty string also matches any
+    /// line.
+    #[serde(default)]
+    contains: Option<String>,
+    /// How long to block, in ms. Server caps at 600_000 (10 min). The
+    /// tool returns `null` on timeout — that's the natural "still
+    /// silent, give up" signal; loop with a larger timeout or retry.
+    timeout_ms: u64,
+}
+
+#[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
+struct AskUserQuestionOption {
+    /// Button label — what the user sees + what comes back in the tool
+    /// response. Keep short (1-4 words); the description goes below.
+    label: String,
+    /// Optional muted explanation rendered under the button. Use for
+    /// trade-off framing ("faster but uses more memory").
+    #[serde(default)]
+    description: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct AskUserQuestionParams {
+    /// The headline question. Rendered prominently at the card top.
+    question: String,
+    /// Optional 1-2 sentence context blurb above the option list.
+    #[serde(default)]
+    header: Option<String>,
+    /// 2-4 mutually-exclusive options (3-4 enabled via `multi_select`).
+    options: Vec<AskUserQuestionOption>,
+    /// When true, the card renders checkboxes instead of radio buttons
+    /// and the user may pick multiple. Default false.
+    #[serde(default)]
+    multi_select: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct BgStdinParams {
+    id: String,
+    /// Raw UTF-8 text to write to the child's stdin. Append `\n` to
+    /// submit a line; omit to leave bytes in the line buffer (the
+    /// child sees the partial input when it next reads).
+    text: String,
 }
 
 #[tool_handler]

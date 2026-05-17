@@ -355,14 +355,97 @@
               <div class="wo-cap" data-tone="memory">
                 <div class="wo-cap-h">
                   <span class="wo-cap-icon" aria-hidden="true">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2"/><rect x="9" y="9" width="6" height="6" rx="1"/><line x1="9" y1="6" x2="9" y2="3"/><line x1="15" y1="6" x2="15" y2="3"/><line x1="9" y1="21" x2="9" y2="18"/><line x1="15" y1="21" x2="15" y2="18"/><line x1="3" y1="9" x2="6" y2="9"/><line x1="3" y1="15" x2="6" y2="15"/><line x1="18" y1="9" x2="21" y2="9"/><line x1="18" y1="15" x2="21" y2="15"/></svg>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
                   </span>
                   <span>Memory</span>
                 </div>
                 <p class="wo-cap-p">
-                  Tell the agent "remember X" and it persists past the
-                  session. FTS-searchable, scoped by kind
-                  (user / project / feedback / reference).
+                  Persists past every chat. Agent recalls automatically
+                  at session start; deleting a chat auto-distills a
+                  snapshot. The 💾 chip in the chat header and the per-
+                  row badge in the sidebar show what's saved. Browse +
+                  edit + delete in Settings → Memory.
+                </p>
+              </div>
+              <div class="wo-cap" data-tone="recovery">
+                <div class="wo-cap-h">
+                  <span class="wo-cap-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 4v5h-5"/></svg>
+                  </span>
+                  <span>Crash recovery</span>
+                </div>
+                <p class="wo-cap-p">
+                  Force-quit mid-turn or lose the CLI process — the
+                  next send auto-injects a recap of the prior transcript
+                  and rotates the CLI uuid so the agent picks up
+                  exactly where it left off. An amber banner above the
+                  chat warns you it happened.
+                </p>
+              </div>
+              <div class="wo-cap" data-tone="canvas">
+                <div class="wo-cap-h">
+                  <span class="wo-cap-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><polygon points="10,9 16,12 10,15" fill="currentColor" stroke="none"/></svg>
+                  </span>
+                  <span>Preview pane</span>
+                </div>
+                <p class="wo-cap-p">
+                  Spawn dev servers, watchers, test loops without leaving
+                  the chat. Right-side collapsible rail on the Claude /
+                  Cursor solo. <span class="mono">/preview pnpm dev</span>
+                  starts a tracked task; agents can react to its output
+                  via the <span class="mono">bg_wait_line</span> tool.
+                  Detected <span class="mono">http://localhost:PORT</span>
+                  auto-opens an embedded webview.
+                </p>
+              </div>
+              <div class="wo-cap" data-tone="approval">
+                <div class="wo-cap-h">
+                  <span class="wo-cap-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+                  </span>
+                  <span>Plan mode</span>
+                </div>
+                <p class="wo-cap-p">
+                  <span class="mono">⇧⇥</span> in the composer flips the
+                  agent into read-only mode — no edits or mutating bash
+                  until you flip back. Useful before a big refactor: ask
+                  the agent to plan, review the plan, then approve to
+                  execute.
+                </p>
+              </div>
+              <div class="wo-cap" data-tone="memory">
+                <div class="wo-cap-h">
+                  <span class="wo-cap-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                  </span>
+                  <span>CLAUDE.md auto-load</span>
+                </div>
+                <p class="wo-cap-p">
+                  Drop a <span class="mono">CLAUDE.md</span> in any repo
+                  (or <span class="mono">~/.claude/CLAUDE.md</span> for
+                  user-global). Walked up to repo root; concatenated;
+                  HTML comments stripped; <span class="mono">@path</span>
+                  imports resolved. Auto-prepended to every agent turn's
+                  system prompt.
+                </p>
+              </div>
+              <div class="wo-cap" data-tone="source">
+                <div class="wo-cap-h">
+                  <span class="wo-cap-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="9" r="6"/><path d="M21 21l-7-7"/><path d="M3 17l3-3"/></svg>
+                  </span>
+                  <span>Skills + slash commands</span>
+                </div>
+                <p class="wo-cap-p">
+                  Custom skills under <span class="mono">~/.claude/skills/</span>
+                  and <span class="mono">&lt;repo&gt;/.claude/skills/</span>.
+                  Body supports <span class="mono">$ARGUMENTS</span> and
+                  inline <span class="mono">{`!`}</span><span class="mono">{`<cmd>`}</span> shell injection — the agent reads
+                  pre-resolved data, not commands. <span class="mono">/loop 5m
+                  &lt;prompt&gt;</span> schedules a recurring send.
+                  <span class="mono">⌘⇧A</span> opens the Agent View
+                  dashboard.
                 </p>
               </div>
             </div>

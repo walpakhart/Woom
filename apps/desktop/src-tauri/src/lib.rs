@@ -1,20 +1,25 @@
 mod action_ipc;
 mod agent;
+mod bg_tasks;
 mod biometry;
 mod claude;
 mod claude_mcp;
 mod claude_quota;
+mod claudemd;
 mod crash_reporting;
 mod cursor;
 mod cursor_mcp;
 mod fs;
 mod git;
 mod github;
+mod hooks;
 mod jira;
 mod keychain;
 mod library;
 mod memory_local;
 mod sentry;
+mod skills;
+mod statusline;
 mod terminal;
 mod terminal_bridge;
 mod watch;
@@ -270,6 +275,7 @@ pub fn run() {
         .manage(claude::new_warm_pool())
         .manage(watch::new_state())
         .manage(terminal::TerminalRegistry::default())
+        .manage(bg_tasks::BgRegistry::new())
         .manage(action_ipc_state())
         .invoke_handler(tauri::generate_handler![
             github_connect_pat,
@@ -424,6 +430,12 @@ pub fn run() {
             fs_reveal_in_finder,
             mcp_sidecar_health,
             memory_local::memory_save_local,
+            memory_local::memory_search_local,
+            memory_local::memory_stats_local,
+            memory_local::memory_list_local,
+            memory_local::memory_delete_local,
+            memory_local::memory_session_counts_local,
+            memory_local::memory_update_local,
             // Terminal app — PTY-backed shell per terminal instance.
             // Spawn returns a stable id; output streams over
             // `terminal:output:<id>` Tauri events; write/resize/kill
@@ -432,9 +444,52 @@ pub fn run() {
             terminal::terminal_write,
             terminal::terminal_resize,
             terminal::terminal_kill,
+            // Background tasks — long-running processes the agent (or
+            // user) spawns and wants to watch (dev servers, build
+            // loops, test runners). See `bg_tasks.rs`.
+            bg_tasks::bg_spawn,
+            bg_tasks::bg_list,
+            bg_tasks::bg_get,
+            bg_tasks::bg_kill,
+            bg_tasks::bg_send_stdin,
+            bg_tasks::bg_logs,
+            bg_tasks::bg_wait_line,
+            // User-defined hooks — agent-lifecycle scripts. See
+            // `hooks.rs` for the contract (stdin JSON / exit code /
+            // stdout JSON). `hooks_run` is called from the frontend
+            // at the SessionStart / UserPromptSubmit / Stop points
+            // wired in `+page.svelte`.
+            hooks::hooks_load_config,
+            hooks::hooks_save_config,
+            hooks::hooks_run,
+            // Skills — user-defined slash commands with `!`-shell
+            // injection (Claude Code parity §3). Discover walks
+            // `~/.claude/skills` + `<cwd>/.claude/skills` upward.
+            // Render expands `$ARGUMENTS` + ``!`<cmd>`` substitutions.
+            skills::skills_discover,
+            skills::skills_render,
+            skills::skills_install_bundled_defaults,
+            // Statusline — pipes session state JSON to a user shell
+            // script and renders stdout in a thin strip below the
+            // composer. Config at <app_data>/statusline.json.
+            statusline::statusline_load_config,
+            statusline::statusline_save_config,
+            statusline::statusline_run,
+            // CLAUDE.md auto-load — walks cwd up to root, prepends
+            // ~/.claude/CLAUDE.md, strips HTML comments, expands
+            // @path imports recursively (cap 5). Frontend caches
+            // per-cwd and stamps the content into the agent's
+            // system-prompt suffix on each turn.
+            claudemd::claudemd_load,
             resolve_action_wait,
         ])
         .setup(|app| {
+            // Hooks config — load at startup so the frontend's first
+            // `hooks_load_config` call doesn't pay a disk read. Failure
+            // modes (missing/malformed) fall through to an empty config
+            // inside `HookState::new` (see hooks.rs comments).
+            app.manage(hooks::HookState::new(app.handle()));
+            app.manage(statusline::StatusLineState::new(app.handle()));
             // Bring up the action-IPC Unix socket — sidecars use it
             // to make `propose_*` MCP tools BLOCKING (they hold the
             // MCP response open until the user resolves the card).

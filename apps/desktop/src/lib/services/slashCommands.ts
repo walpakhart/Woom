@@ -16,28 +16,92 @@
 import type { ClaudeSession } from '$lib/types';
 import { appendSessionMessage } from '$lib/state/sessions.svelte';
 import { contextWindowFor, costForUsage, formatCostUsd, formatTokens } from '$lib/usage';
+import {
+  bgTasksState,
+  findBgTaskByToken,
+  killBgTask,
+  spawnBgTask
+} from '$lib/state/bgTasks.svelte';
 
-export type SlashCommand = 'compact' | 'clear' | 'usage' | 'help';
+export type SlashCommand =
+  | 'compact'
+  | 'clear'
+  | 'usage'
+  | 'help'
+  | 'preview'
+  | 'kill'
+  | 'ps'
+  | 'loop'
+  | 'unloop';
 
 export const KNOWN_SLASH_COMMANDS: SlashCommand[] = [
   'compact',
   'clear',
   'usage',
-  'help'
+  'help',
+  'preview',
+  'kill',
+  'ps',
+  'loop',
+  'unloop'
 ];
 
-/** Parse a composer message; returns the matched command or null. */
+/** Commands that accept inline arguments after the slash (`/preview pnpm dev`).
+ *  Arg-less commands stay in the strict-exact-match path so they remain
+ *  unambiguous. */
+const ARG_BEARING: Set<SlashCommand> = new Set(['preview', 'kill', 'loop']);
+
+/** Display-shape for the inline slash-picker. Picker lives in
+ *  Composer.svelte and filters this list by prefix as the user types
+ *  past the leading `/`. Description renders right of the command in
+ *  the dropdown row — keep each line short. */
+export const SLASH_COMMAND_DESCRIPTIONS: Record<SlashCommand, string> = {
+  compact: 'Summarize the chat into a shorter prefix and start fresh',
+  clear:   'Drop all messages from this chat (keeps the session id)',
+  usage:   'Append a token / cost breakdown for this session',
+  help:    'Show the list of supported slash commands inline',
+  preview: 'Spawn a background task (dev server, watcher) in the Preview pane',
+  kill:    'Kill a tracked background task by id or label substring',
+  ps:      'List running background tasks inline',
+  loop:    'Re-send a prompt on a fixed cadence: /loop 5m check the deploy',
+  unloop:  'Stop the active loop on this chat'
+};
+
+/** Parse a composer message; returns the matched command or null.
+ *  Strict-exact-match for arg-less commands (compact / clear / usage /
+ *  help / ps) — a trailing argument hides the command from this path.
+ *  Use `parseSlashCommandWithArgs` for the arg-bearing commands. */
 export function parseSlashCommand(input: string): SlashCommand | null {
   const trimmed = input.trim();
   if (!trimmed.startsWith('/')) return null;
-  /* Exact match — the slash plus a single word, no args, nothing
-   * after. We may extend this to args later (`/checkout <branch>`)
-   * but for v1 the closed-set strict-match keeps the surface small
-   * and predictable. */
   const word = trimmed.slice(1);
   if (!/^[a-z]+$/i.test(word)) return null;
   const lower = word.toLowerCase() as SlashCommand;
-  return KNOWN_SLASH_COMMANDS.includes(lower) ? lower : null;
+  if (!KNOWN_SLASH_COMMANDS.includes(lower)) return null;
+  // Arg-bearing commands MUST have args (and so don't match the
+  // strict-exact path). `/preview` alone is still useful — it opens
+  // the pane composer — so we let that through.
+  if (ARG_BEARING.has(lower)) {
+    return lower === 'preview' ? lower : null;
+  }
+  return lower;
+}
+
+/** Args-bearing parse — matches `/cmd <rest of line>` where `cmd` is a
+ *  known arg-bearing command and `<rest>` is at least one character.
+ *  Returns null if the input is not arg-bearing OR doesn't match a
+ *  known command — caller falls back to the regular agent send. */
+export function parseSlashCommandWithArgs(
+  input: string
+): { name: SlashCommand; args: string } | null {
+  const trimmed = input.trim();
+  if (!trimmed.startsWith('/')) return null;
+  const m = /^\/([a-z]+)\s+(.+)$/i.exec(trimmed);
+  if (!m) return null;
+  const name = m[1].toLowerCase() as SlashCommand;
+  if (!KNOWN_SLASH_COMMANDS.includes(name)) return null;
+  if (!ARG_BEARING.has(name)) return null;
+  return { name, args: m[2].trim() };
 }
 
 /** Drop every existing message from a session, leaving the user with
@@ -115,8 +179,151 @@ export function appendSlashHelp(session: ClaudeSession): void {
     '- `/compact` — drop history, keep a summary in the next turn',
     '- `/clear` — wipe this session\'s messages and start fresh',
     '- `/usage` — print token + cost breakdown for this session',
+    '- `/preview [cmd]` — open the Preview pane; with args, spawn a background task',
+    '- `/kill <id|label>` — kill a tracked background task',
+    '- `/ps` — list running background tasks',
     '- `/help` — show this list'
   ];
+  appendSessionMessage(session.id, {
+    role: 'assistant',
+    content: lines.join('\n'),
+    at: new Date().toISOString()
+  });
+}
+
+/** Spawn a background task and append a confirmation line. Uses the
+ *  session's worktree (or cwd) as the working dir. */
+export async function spawnPreviewFromSlash(
+  session: ClaudeSession,
+  cmd: string
+): Promise<void> {
+  const cwd = session.worktreePath ?? session.cwd;
+  if (!cwd) {
+    appendSessionMessage(session.id, {
+      role: 'assistant',
+      content: '_Cannot spawn: this session has no cwd. Pick a folder first._',
+      at: new Date().toISOString()
+    });
+    return;
+  }
+  const task = await spawnBgTask({ cmd, cwd, session_id: session.id });
+  if (!task) {
+    appendSessionMessage(session.id, {
+      role: 'assistant',
+      content: `_Failed to spawn \`${cmd}\` — check the Preview pane for diagnostics._`,
+      at: new Date().toISOString()
+    });
+    return;
+  }
+  appendSessionMessage(session.id, {
+    role: 'assistant',
+    content: `_Spawned background task \`${task.label}\` (id \`${task.id}\`). Output streams in the Preview pane._`,
+    at: new Date().toISOString()
+  });
+}
+
+/** Resolve `<id|label-substr>` to a task and kill it. */
+export async function killTaskFromSlash(
+  session: ClaudeSession,
+  token: string
+): Promise<void> {
+  const task = findBgTaskByToken(token);
+  if (!task) {
+    appendSessionMessage(session.id, {
+      role: 'assistant',
+      content: `_No task matches \`${token}\`. Use \`/ps\` to list._`,
+      at: new Date().toISOString()
+    });
+    return;
+  }
+  await killBgTask(task.id);
+  appendSessionMessage(session.id, {
+    role: 'assistant',
+    content: `_Killed \`${task.label}\` (id \`${task.id}\`)._`,
+    at: new Date().toISOString()
+  });
+}
+
+/** Start a loop. `args` shape: `<duration> <prompt>`. The duration
+ *  parser accepts compound forms like `5m`, `2h30m`, `30s`. */
+export async function startLoopFromSlash(
+  session: ClaudeSession,
+  args: string
+): Promise<void> {
+  const m = /^(\S+)\s+(.+)$/s.exec(args.trim());
+  if (!m) {
+    appendSessionMessage(session.id, {
+      role: 'assistant',
+      content: '_Usage: `/loop <duration> <prompt>` — e.g. `/loop 5m check the deploy`._',
+      at: new Date().toISOString()
+    });
+    return;
+  }
+  const { parseDuration, startLoop } = await import('$lib/state/loops.svelte');
+  const ms = parseDuration(m[1]);
+  if (ms === null) {
+    appendSessionMessage(session.id, {
+      role: 'assistant',
+      content: `_Bad duration \`${m[1]}\`. Try \`30s\`, \`5m\`, \`2h\`, \`1d\` (or combinations: \`2h30m\`)._`,
+      at: new Date().toISOString()
+    });
+    return;
+  }
+  const task = startLoop(session.id, ms, m[2]);
+  if (!task) {
+    appendSessionMessage(session.id, {
+      role: 'assistant',
+      content: '_Failed to start loop — prompt was empty._',
+      at: new Date().toISOString()
+    });
+    return;
+  }
+  appendSessionMessage(session.id, {
+    role: 'assistant',
+    content: `_/loop started — re-sending every ${m[1]}. \`/unloop\` to stop. Auto-expires in 7 days._`,
+    at: new Date().toISOString()
+  });
+}
+
+export async function stopLoopFromSlash(session: ClaudeSession): Promise<void> {
+  const { stopLoop } = await import('$lib/state/loops.svelte');
+  const stopped = stopLoop(session.id);
+  appendSessionMessage(session.id, {
+    role: 'assistant',
+    content: stopped ? '_/loop stopped._' : '_No active loop on this session._',
+    at: new Date().toISOString()
+  });
+}
+
+/** Inline `ps` — print the task list as a markdown table. */
+export function appendBgTaskList(session: ClaudeSession): void {
+  const tasks = bgTasksState.tasks;
+  if (tasks.length === 0) {
+    appendSessionMessage(session.id, {
+      role: 'assistant',
+      content: '_No background tasks. Spawn one with `/preview <cmd>`._',
+      at: new Date().toISOString()
+    });
+    return;
+  }
+  const lines: string[] = [
+    '**Background tasks** (`/preview` pane):',
+    '',
+    '| id | label | status | pid | url |',
+    '| --- | --- | --- | --- | --- |'
+  ];
+  for (const t of tasks) {
+    const statusStr =
+      t.status.kind === 'running'
+        ? 'running'
+        : t.status.kind === 'exited'
+          ? `exit ${t.status.code}`
+          : 'killed';
+    const url = t.detected_urls[0] ?? '—';
+    lines.push(
+      `| \`${t.id}\` | ${t.label} | ${statusStr} | ${t.pid ?? '—'} | ${url} |`
+    );
+  }
   appendSessionMessage(session.id, {
     role: 'assistant',
     content: lines.join('\n'),

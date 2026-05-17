@@ -25,6 +25,7 @@
   import HomeApp from '$lib/views/apps/HomeApp.svelte';
   import BrandIcon from '$lib/components/ui/BrandIcon.svelte';
   import CommandPalette from '$lib/components/ui/CommandPalette.svelte';
+  import AgentDashboard from '$lib/views/AgentDashboard.svelte';
   import SearchInFilesOverlay from '$lib/components/editor/SearchInFilesOverlay.svelte';
   import QuickOpenOverlay from '$lib/components/editor/QuickOpenOverlay.svelte';
   import SymbolPickerOverlay from '$lib/components/editor/SymbolPickerOverlay.svelte';
@@ -65,13 +66,21 @@
   import { saveCanvasScreenshot } from '$lib/services/canvasScreenshot';
   import { buildAgentAppContext } from '$lib/services/agentContext';
   import { applySessionCwd, extractCompactSummary, buildContinuationRecap } from '$lib/services/sessionCwd';
+  import { buildFirstTurnPreamble, getActiveEditorFile } from '$lib/services/firstTurnContext';
   import { runCompactSession as runCompactSessionService } from '$lib/services/agentCompact';
   import { exportSessionMarkdown, exportSessionJson } from '$lib/services/sessionExport';
   import {
     parseSlashCommand,
+    parseSlashCommandWithArgs,
     clearSessionHistory,
     appendUsageBreakdown,
-    appendSlashHelp
+    appendSlashHelp,
+    appendBgTaskList,
+    spawnPreviewFromSlash,
+    killTaskFromSlash,
+    startLoopFromSlash,
+    stopLoopFromSlash,
+    KNOWN_SLASH_COMMANDS
   } from '$lib/services/slashCommands';
   import { openFileInEditor } from '$lib/services/editorNavigation';
   import { refreshPlanUsage } from '$lib/state/quota.svelte';
@@ -166,6 +175,21 @@
   } from '$lib/state/inbox.svelte';
   import { initTheme } from '$lib/state/theme.svelte';
   import { initScale } from '$lib/state/scale.svelte';
+  import { initDensity, toggleDensity } from '$lib/state/density.svelte';
+  import { initBgTasks } from '$lib/state/bgTasks.svelte';
+  import { loadHookConfig, runHook } from '$lib/state/hooks.svelte';
+  import { skillsState, refreshSkills, renderSkill } from '$lib/state/skills.svelte';
+  import { loadClaudeMd } from '$lib/state/claudemd.svelte';
+  import { refreshAutoMemory } from '$lib/state/autoMemory.svelte';
+  import {
+    loadStatusLineConfig,
+    runStatusLine,
+    installStatusLineTimer,
+    statuslineState,
+    type StatusLinePayload
+  } from '$lib/state/statusline.svelte';
+  import { costForUsage, contextWindowFor } from '$lib/usage';
+  import { badgeCount, markSourceSeen } from '$lib/state/railBadges.svelte';
   import {
     dragState,
     setDragPayload,
@@ -238,6 +262,51 @@
    * redirected to Connections by the rail if nothing is set up). */
   let view = $state<View>('claudeApp');
 
+  /* Browser-style back/forward stack for solo navigation. ⌘[ steps
+   * back through the user's view history, ⌘] redoes it. We capture
+   * the previous view via a `prevView` shadow + an effect that
+   * watches `view`; user-initiated changes push the prev onto
+   * `viewHistory` and clear `viewFuture`, while back/forward nav
+   * sets `viewNavigatingHistory = true` so the effect skips the
+   * push (otherwise back-stepping would itself add to history and
+   * trap the user in a cycle). Cap at 50 entries — anything older
+   * is realistically not useful and the unbounded list would slowly
+   * leak memory in a long-lived desktop process. */
+  let viewHistory = $state<View[]>([]);
+  let viewFuture = $state<View[]>([]);
+  let prevView: View = 'claudeApp';
+  let viewNavigatingHistory = false;
+  $effect(() => {
+    const cur = view;
+    if (cur === prevView) return;
+    if (viewNavigatingHistory) {
+      viewNavigatingHistory = false;
+    } else {
+      viewHistory.push(prevView);
+      if (viewHistory.length > 50) viewHistory.shift();
+      // User moved somewhere new — any "forward" path becomes stale,
+      // same as a browser's address-bar nav after pressing Back.
+      if (viewFuture.length) viewFuture = [];
+    }
+    prevView = cur;
+  });
+  function navBack() {
+    if (!viewHistory.length) return;
+    const target = viewHistory.pop()!;
+    viewFuture.push(prevView);
+    if (viewFuture.length > 50) viewFuture.shift();
+    viewNavigatingHistory = true;
+    view = target;
+  }
+  function navForward() {
+    if (!viewFuture.length) return;
+    const target = viewFuture.pop()!;
+    viewHistory.push(prevView);
+    if (viewHistory.length > 50) viewHistory.shift();
+    viewNavigatingHistory = true;
+    view = target;
+  }
+
   /* ⌘0..⌘8 → solo. Order matches the rail top-to-bottom so the digit
    * reads as "the icon at row N". Rail tooltips have advertised these
    * since v1; the keyboard binding lives in onKey below. */
@@ -263,7 +332,87 @@
   const isSourceApp = $derived(
     view === 'jiraApp' || view === 'githubApp' || view === 'sentryApp'
   );
+
+  /* Rail badge counts. Reads the primary-instance inbox list per source
+   * and asks `badgeCount` how many of those exceed the user's last-seen
+   * baseline (stored in localStorage by `railBadges`). The badge auto-
+   * hides while the user is viewing that solo — see Rail.svelte's
+   * `view !== '...App'` guard — and an effect below snapshots the
+   * current count as the new baseline on view entry. */
+  /* Per-agent-kind "is there an in-flight turn right now" signal.
+   * Drives the ambient pulse on the rail's Claude / Cursor icons so
+   * the user can tell at a glance that an agent is thinking even
+   * when they've switched out of the solo. We read the active
+   * session id per kind, then check its `sending` flag; an unknown
+   * id (`activeIds[kind]` is null on a fresh install before the
+   * first session) resolves to `false` cleanly. */
+  const claudeBusy = $derived.by(() => {
+    const id = sessionsState.activeIds['claude'];
+    if (!id) return false;
+    const s = sessionsState.list.find((x) => x.id === id);
+    return !!s?.sending;
+  });
+  const cursorBusy = $derived.by(() => {
+    const id = sessionsState.activeIds['cursor'];
+    if (!id) return false;
+    const s = sessionsState.list.find((x) => x.id === id);
+    return !!s?.sending;
+  });
+
+  /* Source-accent CSS var matching the current solo. Drives the
+   * brief brand-tinted flash painted across `.main` on every view
+   * change so the bigger-picture context switch reads as more than
+   * a content swap — the solo "lights up" in its own colour for a
+   * moment. Falls back to the global accent for non-source views
+   * (home / rules / library / connections / settings). */
+  const viewFlashTone = $derived.by(() => {
+    switch (view) {
+      case 'jiraApp': return 'var(--src-jira)';
+      case 'githubApp': return 'var(--src-github)';
+      case 'sentryApp': return 'var(--src-sentry)';
+      case 'claudeApp': return 'var(--src-claude)';
+      case 'cursorApp': return 'var(--src-cursor)';
+      case 'editorApp': return 'var(--src-editor)';
+      case 'canvasApp': return 'var(--src-canvas)';
+      case 'terminalApp': return 'var(--src-term)';
+      default: return 'var(--accent)';
+    }
+  });
+
+  const githubInboxCount = $derived(
+    (inboxState.itemsByInstance[APP_INSTANCE_IDS.github] ?? []).length
+  );
+  const jiraInboxCount = $derived(
+    (inboxState.jiraItemsByInstance[APP_INSTANCE_IDS.jira] ?? []).length
+  );
+  const sentryInboxCount = $derived(
+    (inboxState.sentryItemsByInstance[APP_INSTANCE_IDS.sentry] ?? []).length
+  );
+  const githubBadge = $derived(badgeCount('github', githubInboxCount));
+  const jiraBadge = $derived(badgeCount('jira', jiraInboxCount));
+  const sentryBadge = $derived(badgeCount('sentry', sentryInboxCount));
+
+  /* When the user opens a source solo, snapshot its current inbox
+   * count as the new "seen" baseline so the badge clears. Subsequent
+   * refreshes that add items will repopulate the delta. We watch the
+   * view AND the count: re-entering the solo while items arrive in
+   * the background should still clear, and arriving items while
+   * already inside the solo should re-snapshot (the user is
+   * actively looking — no "unread" is meaningful). */
+  $effect(() => {
+    if (view === 'githubApp') markSourceSeen('github', githubInboxCount);
+  });
+  $effect(() => {
+    if (view === 'jiraApp') markSourceSeen('jira', jiraInboxCount);
+  });
+  $effect(() => {
+    if (view === 'sentryApp') markSourceSeen('sentry', sentryInboxCount);
+  });
+
   let paletteOpen = $state(false);
+  /** Agent View dashboard — ⌘⇧A overlay listing every Claude/Cursor
+   *  session grouped by state. Pure overlay, no view change underneath. */
+  let agentDashboardOpen = $state(false);
   /* Which "flavour" of palette is currently open. `recents` is the
    * ⌘E quick-switcher mode (only Recent section, larger cap, Cmd-Tab
    * feel); `normal` is the full ⌘K palette. Bound to the palette so
@@ -630,7 +779,7 @@
   type ActionRequestPayload = {
     session_id: string;
     wait_id: string;
-    kind: 'bash' | 'commit' | 'pr' | 'switch_cwd';
+    kind: 'bash' | 'commit' | 'pr' | 'switch_cwd' | 'question';
     params: Record<string, unknown>;
   };
 
@@ -771,6 +920,26 @@
         waitId: p.wait_id
       };
     }
+    if (p.kind === 'question') {
+      const opts = Array.isArray(px.options) ? px.options : [];
+      return {
+        id,
+        kind: 'question',
+        question: String(px.question ?? ''),
+        header: typeof px.header === 'string' ? px.header : undefined,
+        options: opts
+          .map((o) => (typeof o === 'object' && o !== null
+            ? { label: String((o as Record<string, unknown>).label ?? ''),
+                description: typeof (o as Record<string, unknown>).description === 'string'
+                  ? String((o as Record<string, unknown>).description)
+                  : undefined }
+            : { label: String(o) }))
+          .filter((o) => o.label.length > 0),
+        multiSelect: px.multi_select === true,
+        status: 'pending',
+        waitId: p.wait_id
+      };
+    }
     return null;
   }
 
@@ -809,6 +978,47 @@
     // drag payload on any cancel — defense in depth against future
     // drag sources forgetting their own ondragend wiring.
     installGlobalDragSafetyNet();
+    // Background-task store — wires the global `bg:tasks-changed`
+    // listener so the Preview pane (right side of Claude/Cursor solo)
+    // refreshes when a process spawns / exits anywhere in the app.
+    void initBgTasks();
+    // Hooks — load the user's `hooks.json` config so the lifecycle
+    // call sites (UserPromptSubmit / Stop / SessionStart later) can
+    // dispatch without an IPC stall on the first invocation.
+    void loadHookConfig();
+    // Auto-memory — pull the latest `user` + `feedback` entries from
+    // the local SQLite store so the agent's system prompt suffix
+    // includes them on the very first turn (no cold-start gap).
+    void refreshAutoMemory();
+    /* Skills — install bundled SKILL.md defaults into ~/.claude/skills
+     * on first launch. Idempotent: never overwrites user edits. */
+    void invoke('skills_install_bundled_defaults').catch(() => {});
+    /* Statusline — load config + install refresh timer. The timer
+       calls `buildStatusLinePayload` against the active session so
+       script output reflects the currently-focused chat. */
+    void (async () => {
+      await loadStatusLineConfig();
+      installStatusLineTimer(() => buildStatusLinePayload());
+      const initial = buildStatusLinePayload();
+      if (initial) void runStatusLine(initial);
+    })();
+    /* Loop-tick fire — `loops.svelte.ts` schedules recurring sends via
+     * a setInterval; when one fires for an idle session it stamps the
+     * input + dispatches this event. We re-enter the normal send path
+     * so the loop's prompt goes through agentContext + mentions / cwd
+     * recap exactly like a manually-typed message. */
+    window.addEventListener('woom:loop-fire', (e: Event) => {
+      const evt = e as CustomEvent<{ sessionId: string }>;
+      const sid = evt.detail?.sessionId;
+      if (!sid) return;
+      const target = sessionsState.list.find((s) => s.id === sid);
+      if (!target) return;
+      const prev = sessionsState.activeIds[target.agentKind];
+      if (prev !== sid) {
+        sessionsState.activeIds[target.agentKind] = sid;
+      }
+      void sendClaudeMessage();
+    });
     // Subscribe to action-IPC requests from MCP sidecars. Each event
     // fires when woom-github's `propose_*` MCP tool wants the
     // user to approve a card. We attach the IPC `wait_id` to the
@@ -890,6 +1100,7 @@
     // <html> before first paint so the layout doesn't briefly flash
     // at 100% then jump.
     initScale();
+    initDensity();
     restorePanelState();
     /* Canvas state is persisted alongside layout state — index of canvases
        + per-column-instance tab strip. Hydrate after layout so instance ids
@@ -1628,6 +1839,41 @@
     return idx > 0 ? path.slice(0, idx) : null;
   }
 
+  /** Builds the JSON payload piped to the user's statusline script.
+   *  Reads from the currently-active session (across Claude / Cursor).
+   *  Returns null if no session is active — caller skips the run. */
+  function buildStatusLinePayload(): StatusLinePayload | null {
+    const cur = activeSession;
+    if (!cur) return null;
+    const kind = (cur.agentKind ?? 'claude') as 'claude' | 'cursor';
+    const model = kind === 'cursor' ? cur.cursorModel ?? null : cur.claudeModel ?? null;
+    const window = contextWindowFor(cur.claudeModel, kind);
+    const used = cur.lastContextSize ?? 0;
+    /* Cumulative cost summed across every assistant turn's usage
+     *  snapshot. costForUsage handles per-model rates. */
+    let costUsd = 0;
+    for (const m of cur.messages) {
+      if (m.role === 'assistant' && m.usage) costUsd += costForUsage(m.usage);
+    }
+    return {
+      model: { id: model, display_name: model },
+      cwd: cur.cwd ?? null,
+      session_id: cur.id,
+      session_title: cur.title ?? 'Untitled chat',
+      agent_kind: kind,
+      permission_mode: cur.permissionMode ?? 'default',
+      cost_usd: costUsd,
+      context_window: {
+        used_percentage: window > 0 ? Math.round((used / window) * 100) : 0,
+        size: window
+      },
+      worktree: {
+        path: cur.worktreePath ?? null,
+        branch: cur.worktreeBranch ?? null
+      }
+    };
+  }
+
   async function pickCwd() {
     if (!activeSession) return;
     try {
@@ -2120,6 +2366,60 @@
     text: string,
     session: ClaudeSession
   ): Promise<boolean> {
+    // Skill dispatch FIRST — `/<skill-name> [args]`. If the leading
+    // slash token matches a discovered skill name, we render its body
+    // (with $ARGUMENTS + `!`-shell injection) and stamp the resolved
+    // markdown as the next user message instead of routing to a
+    // built-in slash. Slash and skill names share a namespace; on
+    // collision a built-in wins (so a user can't accidentally shadow
+    // `/help` with a SKILL.md called `help`).
+    const skillMatch = /^\/([A-Za-z][\w-]*)(?:\s+([\s\S]*))?$/.exec(text.trim());
+    if (skillMatch) {
+      const tokenName = skillMatch[1].toLowerCase();
+      const args = skillMatch[2]?.trim() ?? '';
+      const isBuiltin = (KNOWN_SLASH_COMMANDS as string[]).includes(tokenName);
+      if (!isBuiltin) {
+        const sk = skillsState.list.find((s) => s.name.toLowerCase() === tokenName);
+        if (sk) {
+          setSessionInput(session.id, '');
+          const cwd = session.worktreePath ?? session.cwd ?? null;
+          const rendered = await renderSkill(sk.id, args, cwd);
+          if (!rendered) {
+            appendSessionMessage(session.id, {
+              role: 'assistant',
+              content: `_Skill \`${sk.name}\` failed to render — check the file at \`${sk.path}\`._`,
+              at: new Date().toISOString()
+            });
+            return true;
+          }
+          /* Stamp the rendered body into the composer + re-fire the
+           *  normal send pipeline. The rendered text is what the agent
+           *  sees; no further substitution happens. */
+          updateSession(session.id, { input: rendered.rendered });
+          /* Defer a microtask so the input update flushes before the
+           *  recursive send picks it up. */
+          await Promise.resolve();
+          await sendClaudeMessage();
+          return true;
+        }
+      }
+    }
+    // Args-bearing commands first — `/preview pnpm dev`, `/kill ID`.
+    const withArgs = parseSlashCommandWithArgs(text);
+    if (withArgs) {
+      setSessionInput(session.id, '');
+      if (withArgs.name === 'preview') {
+        await spawnPreviewFromSlash(session, withArgs.args);
+        void scrollChatBottom();
+      } else if (withArgs.name === 'kill') {
+        await killTaskFromSlash(session, withArgs.args);
+        void scrollChatBottom();
+      } else if (withArgs.name === 'loop') {
+        await startLoopFromSlash(session, withArgs.args);
+        void scrollChatBottom();
+      }
+      return true;
+    }
     const cmd = parseSlashCommand(text);
     if (!cmd) return false;
     /* Clear the composer + capture an `at` for any follow-up. The
@@ -2136,6 +2436,24 @@
     } else if (cmd === 'help') {
       appendSlashHelp(session);
       void scrollChatBottom();
+    } else if (cmd === 'ps') {
+      appendBgTaskList(session);
+      void scrollChatBottom();
+    } else if (cmd === 'unloop') {
+      await stopLoopFromSlash(session);
+      void scrollChatBottom();
+    } else if (cmd === 'preview') {
+      /* `/preview` with no args — just open the pane. The Composer
+       * inside PreviewPane handles spawn. We rely on the AgentApp's
+       * own `previewOpen` localStorage flag flipping by the time the
+       * user gets here, but since this dispatch is at +page level we
+       * can't directly poke that. Instead, fire a custom DOM event
+       * the AgentApp listens for. */
+      try {
+        window.dispatchEvent(new CustomEvent('woom:open-preview', {
+          detail: { kind: session.agentKind }
+        }));
+      } catch { /* noop */ }
     }
     return true;
   }
@@ -2194,6 +2512,34 @@
     if (await handleSlashCommand(text, s)) return;
     const id = s.id;
     const kind = (s.agentKind ?? 'claude') as 'claude' | 'cursor';
+    /* UserPromptSubmit hook — runs *before* the message is stamped
+       on the thread and sent upstream. Two outcomes we honor today:
+         - `blocked: true` → abort the send; surface feedback as a
+           muted system message so the user knows why.
+         - any other → continue. (Phase 2.1 wires `updated_prompt`
+           rewrite — would need to thread the rewritten text through
+           the mention-baker and prompt assembler below.) */
+    try {
+      const hookOut = await runHook('UserPromptSubmit', {
+        session_id: id,
+        agent_kind: kind,
+        prompt: text,
+        cwd: s.cwd ?? null,
+        worktree_path: s.worktreePath ?? null
+      });
+      if (hookOut.blocked) {
+        appendSessionMessage(id, {
+          role: 'assistant',
+          content: `_Blocked by hook: ${hookOut.feedback.join('; ') || '(no reason given)'}_`,
+          at: new Date().toISOString()
+        });
+        return;
+      }
+    } catch (err) {
+      /* Hook IPC failed — log + continue. Better to send the message
+         than to silently swallow it on a config glitch. */
+      console.warn('UserPromptSubmit hook failed', err);
+    }
     // Snapshot the mentions BEFORE clearing so we can still bake them into
     // the prompt below + stamp the image refs onto the user-message bubble
     // so the transcript still shows what was sent after the strip clears.
@@ -2225,6 +2571,82 @@
       updateSession(id, { title: autoTitle, input: '', sending: true, mentions: [], awaitingApproval: false });
     } else {
       updateSession(id, { input: '', sending: true, mentions: [], awaitingApproval: false });
+    }
+    /* Crash recovery: if the session was loaded from disk with an
+       interrupted prior turn (pendingTurn was non-null at hydration
+       time — a previous Woom process died mid-stream), stamp an
+       app_crash recap onto cwdSwitchRecap and rotate the CLI uuid.
+       buildAgentAppContext below folds the recap into the system
+       prompt; the rotated uuid avoids a "Session ID already in use"
+       error if the previous CLI's session-id lock survived the crash.
+       Cleared in a single shot — subsequent turns on this session
+       skip the branch because `interrupted` is now false. */
+    const crashedSess = sessionsState.list.find((x) => x.id === id);
+    if (crashedSess?.interrupted) {
+      const recap = buildContinuationRecap(crashedSess, 'app_crash');
+      updateSession(id, {
+        interrupted: false,
+        cwdSwitchRecap: recap,
+        claudeUuid: genUuid(),
+        claudeResumable: false
+      });
+      /* Visible breadcrumb in the chat thread so the user sees that a
+         silent rotation + recap happened. Without this the next
+         assistant reply seems to ignore the prior context, which
+         reads as "agent forgot" even though the recap is in the
+         system prompt. Inserted between the user's new message and
+         the assistant placeholder so the chronology stays correct. */
+      appendSessionMessage(id, {
+        role: 'system',
+        content: '↩ Recovered from interrupted turn — prior transcript folded into the system prompt.',
+        at: new Date().toISOString()
+      });
+    }
+    /* First-turn preamble: when no assistant turn has completed yet on
+       this session, the CLI has zero context about the working dir.
+       Without help the agent opens with `git status` / `pwd` / `ls`
+       tool calls before getting to the user's question. Build a
+       snapshot (branch / status / recent commits / CLAUDE.md presence)
+       and prepend it to cwdSwitchRecap so it lands in the system
+       prompt suffix on this turn. Composes cleanly with the crash
+       recap above (which already set cwdSwitchRecap for crashed
+       sessions). Runs async — adds ~50-150ms to the first send only.
+       Worktree wins over plain cwd because that's the dir the agent
+       actually operates in. */
+    const sessForFirstTurn = sessionsState.list.find((x) => x.id === id);
+    const priorAssistantTurns = (sessForFirstTurn?.messages ?? []).filter(
+      (m) => m.role === 'assistant' && m.content.trim().length > 0
+    ).length;
+    if (sessForFirstTurn && priorAssistantTurns === 0) {
+      const preambleCwd =
+        sessForFirstTurn.worktreePath
+        || sessForFirstTurn.cwd
+        || editorRepoPath
+        || null;
+      /* Surface the file the user has open in the linked editor (if
+         any) so the agent doesn't need a separate read just to know
+         what they're looking at. Falls back to null when the session
+         isn't linked — the preamble line drops out cleanly. */
+      const linkedEditorId = sessForFirstTurn.linkedToEditor
+        ? sessForFirstTurn.linkedToEditorInstanceId
+        : null;
+      const openFile = linkedEditorId ? getActiveEditorFile(linkedEditorId) : null;
+      /* Recall-bias terms: the just-sent user text (first 200 chars,
+         tokenized lazily) + @-mention titles. The Rust sanitizer
+         strips operators, so we don't have to be careful about
+         punctuation. Caps at 5 terms inside the helper. */
+      const recallTerms: string[] = [
+        ...text.slice(0, 200).split(/\s+/).filter((w) => w.length >= 4),
+        ...mentionsSnapshot.map((m) => m.title).filter(Boolean)
+      ];
+      const preamble = await buildFirstTurnPreamble(preambleCwd, openFile, recallTerms);
+      if (preamble) {
+        const existing = sessForFirstTurn.cwdSwitchRecap;
+        const composed = existing
+          ? `${preamble}\n\n---\n\n${existing}`
+          : preamble;
+        updateSession(id, { cwdSwitchRecap: composed });
+      }
     }
     // Append empty assistant message that streaming will fill.
     appendSessionMessage(id, {
@@ -2296,6 +2718,12 @@
     const agentKind = sess?.agentKind ?? 'claude';
     const cursorModel = agentKind === 'cursor' ? (sess?.cursorModel ?? null) : null;
     const claudeModel = agentKind === 'claude' ? (sess?.claudeModel ?? null) : null;
+    /* CLAUDE.md prefetch — populates the per-cwd cache so the sync
+       `buildAgentAppContext` below can stamp the merged project memory
+       into the system-prompt suffix. Cheap (Rust walker hits the same
+       dirs and returns from in-memory cache on subsequent calls); only
+       paying the IO once per cwd per session. */
+    await loadClaudeMd(sess?.worktreePath ?? sess?.cwd ?? null).catch(() => {});
     const appContext = buildAgentAppContext(id);
     // Image vision blocks are a Claude-only path (cursor-agent has no
     // equivalent input-format flag). For Cursor we already wove the
@@ -2494,6 +2922,25 @@
       (m, i) => i === finalSess.messages.length - 1 && m.role === 'assistant' && m.content.startsWith('**Claude failed:')
     );
     updateSession(id, { sending: false });
+    /* Stop hook — fires on every normal turn completion (errored OR
+       not). Hooks can use this for notifications, log archival, or
+       conditional `/loop`-style behavior. Failures swallow so a bad
+       hook can't break end-of-turn cleanup. */
+    void runHook('Stop', {
+      session_id: id,
+      agent_kind: kind,
+      errored: !!erroredOut,
+      duration_ms: Date.now() - runStartedAt,
+      message_count: finalSess?.messages.length ?? 0
+    }).catch(() => {});
+    /* Statusline refresh on turn end — picks up cost / context-window
+       deltas from the just-completed assistant turn. Cheap (one
+       sh -c spawn) and capped server-side, so a slow script can't
+       block the next turn. */
+    {
+      const payload = buildStatusLinePayload();
+      if (payload) void runStatusLine(payload);
+    }
     // Native notification on success, but only if the user has tabbed away —
     // the streaming reply is its own feedback when they're watching.
     if (!appHasFocus() && !erroredOut) {
@@ -4179,6 +4626,13 @@
       e.preventDefault();
       paletteMode = 'normal';
       paletteOpen = !paletteOpen;
+    } else if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'a' || e.key === 'A')) {
+      /* ⌘⇧A — Agent View dashboard. Mirrors Claude Code's `claude
+       * agents` table — every Claude / Cursor session grouped by
+       * lifecycle (Needs input / Working / Recent / Older + Pinned).
+       * Toggle so a second press dismisses. */
+      e.preventDefault();
+      agentDashboardOpen = !agentDashboardOpen;
     } else if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'f' || e.key === 'F')) {
       /* ⌘⇧F — project-wide find. Standard IDE shortcut every
        * dev coming from VSCode / Cursor / JetBrains expects.
@@ -4223,6 +4677,66 @@
        * on non-US layouts (Cmd-Shift remaps the printable char). */
       e.preventDefault();
       symbolPickerOpen = !symbolPickerOpen;
+    } else if (
+      (e.metaKey || e.ctrlKey) &&
+      !e.shiftKey && !e.altKey &&
+      (e.key === '[' || e.code === 'BracketLeft') &&
+      !isTextInput(e.target)
+    ) {
+      /* ⌘[ — solo-history back. Browser-style nav across solos so
+       * the user can jump GitHub PR → Jira ticket → Sentry issue
+       * and walk back through the trail without re-clicking icons.
+       * Skip when focus is in a text input (Composer / Editor / list
+       * search) so the binding doesn't fight the system's outdent /
+       * "previous word" Emacs binding. */
+      e.preventDefault();
+      navBack();
+    } else if (
+      (e.metaKey || e.ctrlKey) &&
+      !e.shiftKey && !e.altKey &&
+      (e.key === ']' || e.code === 'BracketRight') &&
+      !isTextInput(e.target)
+    ) {
+      /* ⌘] — solo-history forward. Mirror of ⌘[. Only meaningful
+       * after at least one ⌘[ press; idle no-op otherwise. */
+      e.preventDefault();
+      navForward();
+    } else if (
+      (e.metaKey || e.ctrlKey) &&
+      !e.shiftKey && !e.altKey &&
+      (e.key === '\\' || e.code === 'Backslash') &&
+      !isTextInput(e.target)
+    ) {
+      /* ⌘\ — toggle UI density (comfortable ↔ compact). Mirrors
+       * Slack's keyboard binding for the same toggle. Skipped when a
+       * text input has focus so the binding doesn't fight a literal
+       * `\` keystroke in the composer or editor. */
+      e.preventDefault();
+      toggleDensity();
+    } else if (
+      (e.metaKey || e.ctrlKey) &&
+      !e.shiftKey && !e.altKey &&
+      (e.key === '.' || e.code === 'Period')
+    ) {
+      /* ⌘. — interrupt the active agent run. Mirrors macOS's
+       * "Cancel" muscle memory (used to abort everything from a
+       * stuck Spotlight query to a print job). Scoped to whichever
+       * agent solo the user is currently looking at so the binding
+       * doesn't accidentally kill a Cursor turn while you're in
+       * Claude's column. No-op when there's no in-flight session;
+       * `stopAgentForKind` already guards with `if (!s) return`. */
+      const kind: 'claude' | 'cursor' | null =
+        view === 'claudeApp' ? 'claude'
+        : view === 'cursorApp' ? 'cursor'
+        : null;
+      if (kind) {
+        const activeId = sessionsState.activeIds[kind];
+        const s = activeId ? sessionsState.list.find((x) => x.id === activeId) : null;
+        if (s?.sending) {
+          e.preventDefault();
+          void stopAgentForKind(kind);
+        }
+      }
     } else if ((e.metaKey || e.ctrlKey) && e.key === 'e' && !e.shiftKey && !e.altKey) {
       /* ⌘E — quick switcher to most-recently-touched things. Open in
        * `recents` mode (other sections hidden until the typed query
@@ -4744,6 +5258,36 @@
   </div>
 {/if}
 
+<!-- Global drag hint banner — appears top-center while any payload is
+     in flight. The drag affordance into Claude / Cursor / Editor /
+     Canvas was previously silent (user only learned by experimentation),
+     so this banner names the valid drop targets up front. Source-tinted
+     to match the drag chip and reinforce "what is being dragged".
+     Auto-dismisses on dragend via the global safety net clearing
+     `dragState.payload`. -->
+{#if dragState.payload}
+  {@const src = dragState.payload.source}
+  {@const tone =
+    src === 'github' ? 'var(--src-github)'
+    : src === 'jira' ? 'var(--src-jira)'
+    : src === 'sentry' ? 'var(--src-sentry)'
+    : src === 'file' ? 'var(--src-editor)'
+    : src === 'chat-message' ? 'var(--src-claude)'
+    : 'var(--accent)'}
+  {@const srcLabel =
+    src === 'github' ? 'PR / issue'
+    : src === 'jira' ? 'Jira ticket'
+    : src === 'sentry' ? 'Sentry issue'
+    : src === 'file' ? 'file'
+    : src === 'chat-message' ? 'message'
+    : 'item'}
+  <div class="drag-hint" role="status" aria-live="polite" style="--hint-tone: {tone};">
+    <span class="drag-hint-dot"></span>
+    Dragging {srcLabel} — drop on
+    <strong>Claude</strong>, <strong>Cursor</strong>, or <strong>Canvas</strong>
+  </div>
+{/if}
+
 <div id="app" class:is-dragging={dragState.payload !== null}>
   <Rail
     bind:view
@@ -4755,6 +5299,12 @@
     {sentryStatus}
     {claudeStatus}
     {cursorStatus}
+    {githubBadge}
+    {jiraBadge}
+    {sentryBadge}
+    {claudeBusy}
+    {cursorBusy}
+    dragActive={dragState.payload !== null}
     onAgentDrop={(kind, e) => onAgentDrop(
       kind === 'claude' ? APP_INSTANCE_IDS.claude : APP_INSTANCE_IDS.cursor,
       kind,
@@ -4763,6 +5313,18 @@
   />
 
   <div class="main">
+
+    <!-- Solo-switch flash. A short brand-tinted radial gradient that
+         sweeps across `.main` on every `view` change so the user reads
+         the context-switch (GitHub → Jira → Claude → …) as more than
+         a content swap. `{#key view}` re-mounts the node on every nav,
+         which restarts the CSS animation; the node has `pointer-events:
+         none` so it never interferes with clicks/drag on the underlying
+         solo. Sits above content (`z-index: 50`) but under all modals
+         (which use 500+). -->
+    {#key view}
+      <div class="solo-flash" style="--flash-tone: {viewFlashTone};" aria-hidden="true"></div>
+    {/key}
 
     <!-- Themed empty card — shown when a solo view's source isn't
          connected yet. -->
@@ -5115,6 +5677,18 @@
   setView={(v) => (view = v)}
 />
 
+{#if agentDashboardOpen}
+  <AgentDashboard
+    onClose={() => (agentDashboardOpen = false)}
+    onActivate={(s) => {
+      /* Route to the agent solo (Claude / Cursor) for the activated
+         session. The dashboard already set the active session id; we
+         only switch the view here so the user lands inside the chat. */
+      view = s.agentKind === 'cursor' ? 'cursorApp' : 'claudeApp';
+    }}
+  />
+{/if}
+
 <style>
   .bg {
     position: fixed; inset: 0; pointer-events: none; z-index: 0;
@@ -5172,6 +5746,36 @@
   .main {
     min-height: 0; height: 100%;
     overflow: hidden; display: flex; flex-direction: column;
+    /* Anchor for the solo-flash overlay (absolute child). */
+    position: relative;
+  }
+
+  /* Solo-switch flash — brand-tinted radial gradient that scales in,
+     fades, and self-cleans. Keyed on `view` in the template so the
+     animation re-runs every nav. Pointer-events disabled so the
+     overlay can't interfere with clicks, drag handles, or text
+     selection in the underlying solo. */
+  .solo-flash {
+    position: absolute;
+    inset: 0;
+    z-index: 50;
+    pointer-events: none;
+    background:
+      radial-gradient(
+        ellipse 80% 70% at 50% 0%,
+        color-mix(in srgb, var(--flash-tone, var(--accent)) 22%, transparent),
+        transparent 60%
+      );
+    opacity: 0;
+    animation: solo-flash-anim 420ms var(--ease-out, cubic-bezier(0.2, 0.7, 0.3, 1));
+  }
+  @keyframes solo-flash-anim {
+    0%   { opacity: 0; transform: scaleY(0.6); }
+    35%  { opacity: 1; }
+    100% { opacity: 0; transform: scaleY(1.05); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .solo-flash { display: none; }
   }
   .full-center { flex: 1; display: flex; align-items: center; justify-content: center; padding: 40px; }
   .empty { display: flex; flex-direction: column; align-items: center; gap: 16px; text-align: center; max-width: 420px; }
@@ -5228,4 +5832,56 @@
     margin: 0 0 22px;
   }
   .app-stub-actions { display: flex; gap: 8px; justify-content: center; }
+
+  /* Global drag-affordance banner — sits above #app so it's never
+     occluded by a solo's own content. Source-tinted (Jira blue / GitHub
+     purple / Sentry plum / Editor terracotta / Claude rust) via the
+     inline `--hint-tone` set on render so the colour matches the chip
+     the user is dragging. */
+  .drag-hint {
+    position: fixed;
+    top: 14px; left: 50%;
+    transform: translateX(-50%);
+    z-index: 600;
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 16px;
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--text-0);
+    background: color-mix(in srgb, var(--bg-1) 92%, transparent);
+    border: 1px solid color-mix(in srgb, var(--hint-tone, var(--accent)) 40%, transparent);
+    border-radius: 999px;
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    box-shadow:
+      0 6px 24px rgba(0, 0, 0, 0.35),
+      0 0 0 4px color-mix(in srgb, var(--hint-tone, var(--accent)) 12%, transparent);
+    pointer-events: none;
+    animation: drag-hint-in 220ms var(--ease-out, ease-out);
+  }
+  .drag-hint strong {
+    color: var(--hint-tone, var(--accent-bright));
+    font-weight: 700;
+  }
+  .drag-hint-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--hint-tone, var(--accent));
+    box-shadow: 0 0 12px var(--hint-tone, var(--accent));
+    animation: drag-hint-pulse 1.4s ease-in-out infinite;
+  }
+  @keyframes drag-hint-in {
+    from { opacity: 0; transform: translate(-50%, -8px); }
+    to   { opacity: 1; transform: translate(-50%, 0); }
+  }
+  @keyframes drag-hint-pulse {
+    0%, 100% { opacity: 0.55; }
+    50%      { opacity: 1; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .drag-hint { animation: none; }
+    .drag-hint-dot { animation: none; opacity: 0.9; }
+  }
 </style>

@@ -62,6 +62,7 @@ use serde::{Deserialize, Serialize};
 use std::io::Write as _;
 use tauri::{AppHandle, Emitter, Manager};
 
+use crate::bg_tasks::{self, BgRegistry, BgTask, SpawnArgs};
 use crate::terminal::TerminalRegistry;
 
 #[derive(Clone)]
@@ -653,6 +654,17 @@ pub async fn start(app: AppHandle) -> Result<u16, String> {
         .route("/v1/terminals/{id}/write", post(write))
         .route("/v1/terminals/{id}/run", post(run))
         .route("/v1/terminals/{id}/buffer", get(buffer))
+        // Background tasks (long-running processes the agent supervises
+        // from the Preview pane). Distinct from terminal_run — these
+        // STAY ALIVE and stream lines back; the agent waits on lines via
+        // `/v1/bg/{id}/wait` rather than blocking on completion.
+        .route("/v1/bg", get(bg_list_handler))
+        .route("/v1/bg/spawn", post(bg_spawn_handler))
+        .route("/v1/bg/{id}", get(bg_get_handler))
+        .route("/v1/bg/{id}/kill", post(bg_kill_handler))
+        .route("/v1/bg/{id}/stdin", post(bg_stdin_handler))
+        .route("/v1/bg/{id}/logs", get(bg_logs_handler))
+        .route("/v1/bg/{id}/wait", post(bg_wait_handler))
         .with_state(state);
 
     let app_for_handle = app.clone();
@@ -673,4 +685,151 @@ pub fn clear_port_file(app: &AppHandle) {
     if let Some(path) = port_file_path(app) {
         let _ = std::fs::remove_file(path);
     }
+}
+
+// ---- Background-task bridge handlers ------------------------------------
+//
+// These mirror the public API in `bg_tasks.rs` over HTTP so the
+// woom-app sidecar (separate process) can drive the same registry the
+// frontend's PreviewPane is watching. AppHandle.state::<BgRegistry>()
+// gives us the live registry; failure to resolve = registry not
+// `.manage`'d (should never happen in practice — caller gets 500).
+
+fn registry_or_500(app: &AppHandle) -> Result<tauri::State<'_, BgRegistry>, (StatusCode, String)> {
+    app.try_state::<BgRegistry>().ok_or((
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "bg-task registry not initialised".into(),
+    ))
+}
+
+async fn bg_list_handler(State(s): State<BridgeState>) -> Json<Vec<BgTask>> {
+    let registry = match s.app.try_state::<BgRegistry>() {
+        Some(r) => r,
+        None => return Json(Vec::new()),
+    };
+    Json(registry.list())
+}
+
+async fn bg_get_handler(
+    State(s): State<BridgeState>,
+    Path(id): Path<String>,
+) -> Result<Json<BgTask>, (StatusCode, String)> {
+    let registry = registry_or_500(&s.app)?;
+    registry
+        .get(&id)
+        .map(Json)
+        .ok_or((StatusCode::NOT_FOUND, format!("no such task: {id}")))
+}
+
+async fn bg_spawn_handler(
+    State(s): State<BridgeState>,
+    Json(args): Json<SpawnArgs>,
+) -> Result<Json<BgTask>, (StatusCode, String)> {
+    let _ = registry_or_500(&s.app)?; // verify registry available
+    let registry = s
+        .app
+        .try_state::<BgRegistry>()
+        .ok_or((StatusCode::INTERNAL_SERVER_ERROR, "bg-task registry missing".into()))?;
+    bg_tasks::spawn(s.app.clone(), &registry, args)
+        .await
+        .map(Json)
+        .map_err(|e| (StatusCode::BAD_REQUEST, e))
+}
+
+async fn bg_kill_handler(
+    State(s): State<BridgeState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let registry = s
+        .app
+        .try_state::<BgRegistry>()
+        .ok_or((StatusCode::INTERNAL_SERVER_ERROR, "bg-task registry missing".into()))?;
+    bg_tasks::kill(s.app.clone(), &registry, &id)
+        .await
+        .map(|_| StatusCode::NO_CONTENT)
+        .map_err(|e| (StatusCode::NOT_FOUND, e))
+}
+
+#[derive(Deserialize)]
+struct BgStdinReq {
+    /// Base64-encoded bytes. UTF-8 wrappers are fine to send plain but
+    /// staying consistent with the terminal /write endpoint avoids
+    /// surprises for binary data. Decodes via the standard base64
+    /// engine.
+    #[serde(default)]
+    data_b64: Option<String>,
+    /// Convenience: a plain string. If both `data_b64` and `text` are
+    /// present, `data_b64` wins.
+    #[serde(default)]
+    text: Option<String>,
+}
+
+async fn bg_stdin_handler(
+    State(s): State<BridgeState>,
+    Path(id): Path<String>,
+    Json(req): Json<BgStdinReq>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let registry = s
+        .app
+        .try_state::<BgRegistry>()
+        .ok_or((StatusCode::INTERNAL_SERVER_ERROR, "bg-task registry missing".into()))?;
+    let bytes: Vec<u8> = if let Some(b64) = req.data_b64 {
+        STANDARD
+            .decode(b64.as_bytes())
+            .map_err(|e| (StatusCode::BAD_REQUEST, format!("base64: {e}")))?
+    } else if let Some(t) = req.text {
+        t.into_bytes()
+    } else {
+        return Err((StatusCode::BAD_REQUEST, "missing data_b64 or text".into()));
+    };
+    bg_tasks::send_stdin(&registry, &id, bytes)
+        .await
+        .map(|_| StatusCode::NO_CONTENT)
+        .map_err(|e| (StatusCode::NOT_FOUND, e))
+}
+
+#[derive(Deserialize)]
+struct BgLogsQuery {
+    tail: Option<usize>,
+}
+
+async fn bg_logs_handler(
+    State(s): State<BridgeState>,
+    Path(id): Path<String>,
+    Query(q): Query<BgLogsQuery>,
+) -> Result<String, (StatusCode, String)> {
+    let registry = s
+        .app
+        .try_state::<BgRegistry>()
+        .ok_or((StatusCode::INTERNAL_SERVER_ERROR, "bg-task registry missing".into()))?;
+    bg_tasks::logs(&registry, &id, q.tail).map_err(|e| (StatusCode::NOT_FOUND, e))
+}
+
+#[derive(Deserialize)]
+struct BgWaitReq {
+    /// Case-insensitive substring to match against incoming lines.
+    /// `None` matches the next line regardless of content (useful for
+    /// "tell me when ANYTHING new appears").
+    #[serde(default)]
+    contains: Option<String>,
+    /// Maximum time to wait in milliseconds. Capped server-side at
+    /// 600_000 (10 min) so a stuck wait can't block the agent
+    /// indefinitely.
+    timeout_ms: u64,
+}
+
+async fn bg_wait_handler(
+    State(s): State<BridgeState>,
+    Path(id): Path<String>,
+    Json(req): Json<BgWaitReq>,
+) -> Result<Json<Option<crate::bg_tasks::BgLine>>, (StatusCode, String)> {
+    let registry = s
+        .app
+        .try_state::<BgRegistry>()
+        .ok_or((StatusCode::INTERNAL_SERVER_ERROR, "bg-task registry missing".into()))?;
+    let timeout = req.timeout_ms.min(600_000);
+    bg_tasks::wait_line(&registry, &id, req.contains, timeout)
+        .await
+        .map(Json)
+        .map_err(|e| (StatusCode::NOT_FOUND, e))
 }

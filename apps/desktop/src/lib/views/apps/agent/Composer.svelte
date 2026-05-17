@@ -10,11 +10,19 @@
   import { sessionsState, setSessionInput, updateSession } from '$lib/state/sessions.svelte';
   import { quotaState, refreshPlanUsage } from '$lib/state/quota.svelte';
   import { isImagePath } from '$lib/format';
-  import { convertFileSrc } from '@tauri-apps/api/core';
+  import { convertFileSrc, invoke } from '@tauri-apps/api/core';
+  import { notify } from '$lib/state/toaster.svelte';
   import Dropdown from '$lib/components/ui/Dropdown.svelte';
   import MentionPicker from './MentionPicker.svelte';
   import { onMount } from 'svelte';
   import type { Mention } from '$lib/types';
+  import {
+    KNOWN_SLASH_COMMANDS,
+    SLASH_COMMAND_DESCRIPTIONS,
+    type SlashCommand
+  } from '$lib/services/slashCommands';
+  import { skillsState, refreshSkills, type Skill } from '$lib/state/skills.svelte';
+  import { statuslineState } from '$lib/state/statusline.svelte';
 
   type Kind = 'claude' | 'cursor';
 
@@ -95,6 +103,53 @@
         return;
       }
     }
+    /* Shift+Tab cycles permission mode (default ↔ plan). Matches the
+       Claude Code keybinding so muscle memory transfers. Only fires
+       when the picker isn't open (Tab is reserved for picker confirm)
+       and no IME composition is active. */
+    if (
+      e.key === 'Tab' &&
+      e.shiftKey &&
+      !e.metaKey && !e.ctrlKey && !e.altKey &&
+      !slashOpen && !mentionOpen && sess
+    ) {
+      e.preventDefault();
+      const next = (sess.permissionMode ?? 'default') === 'plan' ? 'default' : 'plan';
+      updateSession(sess.id, { permissionMode: next });
+      return;
+    }
+    /* Slash picker — when the input is a partial slash token, hijack
+       ↑/↓ navigation + Enter selection. Tab also confirms (Cmd-T-style
+       autocomplete). Escape hides the picker by clearing the input;
+       the user can also just type a space to dismiss naturally. */
+    if (slashOpen) {
+      const totalRows = slashMatches.length + skillMatches.length;
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        slashSelectedIdx = Math.min(slashSelectedIdx + 1, totalRows - 1);
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        slashSelectedIdx = Math.max(slashSelectedIdx - 1, 0);
+        return;
+      }
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        confirmPickerSelection();
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        if (sess) updateSession(sess.id, { input: '' });
+        return;
+      }
+      /* Enter falls through to the normal send path — `/foo` already
+         parses via parseSlashCommand on the parent side, so hitting
+         Enter on a fully-typed command both selects + sends in one
+         keystroke. Skipping the picker-side select keeps the muscle
+         memory of "type / and Enter" intact. */
+    }
     /* Bash-style prompt history. ↑/↓ on the textarea cycle through
        previously-sent prompts when (a) we're already in history mode,
        or (b) the composer is empty / the caret sits on the first
@@ -140,9 +195,68 @@
         if (f) blobs.push({ name: f.name || 'pasted.png', type: f.type, blob: f });
       }
     }
-    if (blobs.length === 0) return;
-    e.preventDefault();
-    await p.onPasteImages(p.kind, blobs);
+    if (blobs.length > 0) {
+      e.preventDefault();
+      await p.onPasteImages(p.kind, blobs);
+      return;
+    }
+    /* Long-text paste trap. When the user pastes a substantial block
+     * of text (session summary, error log, design doc, JSON dump),
+     * the content currently lives only in the composer — once they
+     * send the turn it's buried in this session's transcript and a
+     * NEW chat in this solo has no way to reach it. Surface an inline
+     * "save as memory" action so the user can capture the paste as a
+     * durable note without leaving the composer. Default text-paste
+     * behavior (insert into the textarea) is preserved — we just
+     * peek at clipboardData and fire a non-blocking toast.
+     *
+     * 500-char threshold picked to skip command-line one-liners,
+     * short snippets, and URLs while catching genuinely-context-laden
+     * blocks. The toast auto-dismisses; the user actively clicks the
+     * Save chip if they want it captured. */
+    const text = e.clipboardData.getData('text/plain');
+    if (text && text.length >= 500) {
+      const preview = text.slice(0, 60).replace(/\s+/g, ' ').trim();
+      const len = text.length;
+      notify({
+        kind: 'info',
+        title: `Long paste — save as memory?`,
+        body: `${len.toLocaleString()} chars · "${preview}…"`,
+        ttlMs: 8000,
+        actions: [
+          {
+            label: 'Save',
+            onClick: async () => {
+              try {
+                /* Tag with kind=note + a session-id breadcrumb so the
+                 * future user can grep "from session: foo" if they
+                 * need to trace the origin. The memory_local Tauri
+                 * command writes through the same SQLite store the
+                 * MCP sidecar serves, so subsequent memory_search
+                 * calls from any agent will find this row. */
+                const sessId = sess?.id ?? 'unknown';
+                await invoke<number>('memory_save_local', {
+                  content: text,
+                  kind: 'note',
+                  tags: ['pasted', `from-session:${sessId.slice(0, 8)}`]
+                });
+                notify({
+                  kind: 'success',
+                  title: 'Saved to memory',
+                  ttlMs: 2500
+                });
+              } catch (err) {
+                notify({
+                  kind: 'error',
+                  title: 'Memory save failed',
+                  body: String(err)
+                });
+              }
+            }
+          }
+        ]
+      });
+    }
   }
 
   /* ─── Prompt history (↑/↓ on textarea) ────────────────────────────
@@ -279,6 +393,102 @@
    *  the chosen mention back in cleanly. */
   let mentionFrom = $state(-1);
   const mentionOpen = $derived(mentionAnchor !== null);
+
+  /* ---------- Slash picker ---------- */
+  /** Selected index inside `slashMatches` when the picker is open.
+   *  Resets to 0 on every match-set change. */
+  let slashSelectedIdx = $state(0);
+
+  /** The set of slash commands that prefix-match the current input.
+   *  Empty when the input doesn't look like a slash trigger; the
+   *  picker is shown only when the array has at least one row. */
+  const slashMatches = $derived.by<SlashCommand[]>(() => {
+    if (!sess) return [];
+    const raw = sess.input ?? '';
+    if (!raw.startsWith('/')) return [];
+    /* Picker only when the whole input is a single in-progress
+       slash token — once the user adds a space (`/help me with X`)
+       it's no longer a command attempt, it's prose that happens to
+       start with `/`. Same restriction parseSlashCommand uses. */
+    const body = raw.slice(1);
+    if (/\s/.test(body)) return [];
+    const lower = body.toLowerCase();
+    return KNOWN_SLASH_COMMANDS.filter((c) => c.startsWith(lower));
+  });
+  /** Skill names that prefix-match the slash token. Project-scoped
+   *  skills sort first (they're already at the head of
+   *  `skillsState.list` because discovery walks cwd before user home). */
+  const skillMatches = $derived.by<Skill[]>(() => {
+    if (!sess) return [];
+    const raw = sess.input ?? '';
+    if (!raw.startsWith('/')) return [];
+    const body = raw.slice(1);
+    if (/\s/.test(body)) return [];
+    const lower = body.toLowerCase();
+    return skillsState.list.filter((sk) => sk.name.toLowerCase().startsWith(lower));
+  });
+  const slashOpen = $derived(slashMatches.length > 0 || skillMatches.length > 0);
+
+  /* Discover skills when the session's cwd changes. Cheap (Rust scans
+   *  a handful of dirs); `refreshSkills` no-ops if cwd hasn't moved. */
+  $effect(() => {
+    const cwd = sess?.worktreePath ?? sess?.cwd ?? null;
+    void refreshSkills(cwd);
+  });
+
+  $effect(() => {
+    /* Re-pin the highlight at the top of the list when the filter
+       narrows or widens — avoids the highlight pointing at a row
+       that's no longer in the matches array. */
+    void slashMatches.length;
+    slashSelectedIdx = 0;
+  });
+
+  function pickSlashCommand(cmd: SlashCommand): void {
+    if (!sess) return;
+    /* Replace the whole input with `/cmd` — exactly the shape
+       parseSlashCommand recognises. The user can hit Enter to send
+       (parent's onSend routes it through slashCommands.ts) or keep
+       typing if they want, but at that point the picker closes. */
+    updateSession(sess.id, { input: `/${cmd}` });
+    queueMicrotask(() => {
+      if (ta) {
+        ta.selectionStart = ta.value.length;
+        ta.selectionEnd = ta.value.length;
+        ta.focus();
+      }
+    });
+  }
+
+  function pickSkill(sk: Skill): void {
+    if (!sess) return;
+    /* Skills almost always want args (the hint says so) — leave a
+       trailing space so the user can start typing immediately. The
+       parent's send path will look up the skill by name and route
+       through `skills_render` instead of the regular slash dispatch. */
+    const trailing = sk.argument_hint ? ' ' : '';
+    updateSession(sess.id, { input: `/${sk.name}${trailing}` });
+    queueMicrotask(() => {
+      if (ta) {
+        ta.selectionStart = ta.value.length;
+        ta.selectionEnd = ta.value.length;
+        ta.focus();
+      }
+    });
+  }
+
+  /** Confirm the currently highlighted row — slash commands go first
+   *  in the visual order, then skills. Index N hits slash[N] if N <
+   *  slashMatches.length, else skill[N - slashMatches.length]. */
+  function confirmPickerSelection(): void {
+    const i = slashSelectedIdx;
+    if (i < slashMatches.length) {
+      pickSlashCommand(slashMatches[i]);
+      return;
+    }
+    const sk = skillMatches[i - slashMatches.length];
+    if (sk) pickSkill(sk);
+  }
 
   /** Re-evaluate whether the caret is currently inside an @-trigger
    *  span. Called on every input event. We treat the most recent
@@ -587,11 +797,38 @@
     let out = '';
     let i = 0;
     let m: RegExpExecArray | null;
+    /* Build a lookup so we can decorate inline tokens with the
+       matched mention's source + title. Each @token's first segment
+       (before `/`) is conventionally the source ("github", "jira",
+       "sentry"…) — fall back on that when the externalId match misses
+       (e.g. user typed the token but the picker resolution hasn't
+       landed yet). */
+    const byExternalId = new Map<string, Mention>();
+    for (const mn of sess?.mentions ?? []) {
+      byExternalId.set(mn.externalId, mn);
+    }
     while ((m = re.exec(text)) !== null) {
       const idx = m.index + m[1].length;
       out += escHtml(text.slice(i, idx));
-      out += `<span class="cmp-area-mention">@${escHtml(m[2])}</span>`;
-      i = idx + 1 + m[2].length;
+      const token = m[2];
+      const resolved = byExternalId.get(token);
+      const sourceFromToken = token.includes('/') ? token.split('/')[0] : '';
+      const source = resolved?.source ?? sourceFromToken;
+      /* Per-source tinted class. Falls back to the generic mention
+         class when the source isn't one we have brand color for —
+         keeps the highlight visible even for plain file mentions /
+         freshly-typed tokens whose source hasn't been classified. */
+      const sourceClass =
+        source === 'github' ? 'cmp-area-mention--github'
+        : source === 'jira' ? 'cmp-area-mention--jira'
+        : source === 'sentry' ? 'cmp-area-mention--sentry'
+        : source === 'chat' ? 'cmp-area-mention--chat'
+        : '';
+      const titleAttr = resolved?.title
+        ? ` title="${escHtml(resolved.title)}"`
+        : '';
+      out += `<span class="cmp-area-mention ${sourceClass}"${titleAttr}>@${escHtml(token)}</span>`;
+      i = idx + 1 + token.length;
     }
     out += escHtml(text.slice(i));
     if (text.endsWith('\n')) out += ' ';
@@ -653,8 +890,29 @@
                 </button>
               </span>
             {:else}
-              <span class="cmp-attach-file mono" title={a.mention.title}>
-                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+              <span
+                class="cmp-attach-file mono cmp-attach-file--{a.mention.source}"
+                title={a.mention.title}
+              >
+                {#if a.mention.source === 'github'}
+                  <!-- Octocat-style outline -->
+                  <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor" aria-hidden="true"><path d="M12 .5C5.65.5.5 5.65.5 12c0 5.09 3.29 9.4 7.86 10.93.58.11.79-.25.79-.56v-2.18c-3.2.7-3.88-1.36-3.88-1.36-.53-1.34-1.29-1.7-1.29-1.7-1.06-.72.08-.71.08-.71 1.17.08 1.79 1.2 1.79 1.2 1.04 1.78 2.73 1.26 3.4.96.1-.75.41-1.26.74-1.55-2.55-.29-5.24-1.28-5.24-5.68 0-1.26.45-2.28 1.19-3.08-.12-.29-.52-1.46.11-3.04 0 0 .97-.31 3.17 1.18a11 11 0 0 1 2.89-.39c.98 0 1.96.13 2.89.39 2.2-1.49 3.17-1.18 3.17-1.18.63 1.58.24 2.75.12 3.04.74.8 1.18 1.82 1.18 3.08 0 4.41-2.69 5.38-5.25 5.67.42.36.79 1.07.79 2.16v3.21c0 .31.21.68.8.56C20.21 21.4 23.5 17.09 23.5 12 23.5 5.65 18.35.5 12 .5z"/></svg>
+                {:else if a.mention.source === 'jira'}
+                  <!-- Stylised "J" pill -->
+                  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M9 8h7M13 8v6a2.5 2.5 0 0 1-5 0"/></svg>
+                {:else if a.mention.source === 'sentry'}
+                  <!-- Triangle alert -->
+                  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                {:else if a.mention.source === 'chat'}
+                  <!-- Speech bubble -->
+                  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                {:else if a.mention.source === 'terminal'}
+                  <!-- Terminal prompt -->
+                  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+                {:else}
+                  <!-- Generic file outline (default) -->
+                  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                {/if}
                 <span class="cmp-attach-name">{a.mention.title}</span>
                 <button class="cmp-attach-x cmp-attach-x--inline" type="button" onclick={() => removeAttachment(a.mention)} aria-label="Remove attachment" title="Remove">
                   <svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
@@ -732,6 +990,36 @@
                 </span>
               {/if}
             </span>
+          {/if}
+
+          <!-- Permission mode pill. `default` is implicit + hidden;
+               `plan` shows a yellow read-only banner that doubles as
+               the toggle. ⇧⇥ also cycles. Click to flip. -->
+          {#if (sess.permissionMode ?? 'default') === 'plan'}
+            <button
+              class="cmp-mode-pill cmp-mode-pill--plan"
+              onclick={() => updateSession(sess.id, { permissionMode: 'default' })}
+              title="Plan mode — agent should READ only, no edits or mutating bash. ⇧⇥ to toggle."
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <circle cx="12" cy="12" r="9"/>
+                <path d="M9 12l2 2 4-4"/>
+              </svg>
+              <span>plan</span>
+            </button>
+          {:else}
+            <button
+              class="cmp-mode-pill cmp-mode-pill--muted"
+              onclick={() => updateSession(sess.id, { permissionMode: 'plan' })}
+              title="Default mode — agent can read + write + run bash. ⇧⇥ for plan mode (read-only)."
+              aria-label="Switch to plan mode"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M9 11l3 3L22 4"/>
+                <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+              </svg>
+              <span class="cmp-mode-pill-label-faint">⇧⇥ plan</span>
+            </button>
           {/if}
 
           <span class="cmp-model">
@@ -836,7 +1124,68 @@
         </div>
       </div>
     </div>
+
+    {#if slashOpen}
+      <!-- Slash-command picker. Anchored to `.cmp` (position: relative)
+           via `position: absolute; bottom: 100%; left: 36px`. Lives
+           INSIDE the .cmp wrapper so the absolute positioning resolves
+           against the composer footer, not the viewport. Mouse-click
+           selects via onmousedown (preventDefault keeps the textarea
+           focused); ↑/↓ + Enter/Tab handled by the textarea's onKey
+           above. Picker stays open while the input is a single bare
+           slash token; a space or no-match dismisses. -->
+      <div class="slash-picker" role="listbox" aria-label="Slash command picker">
+        {#each slashMatches as cmd, idx (cmd)}
+          <button
+            type="button"
+            class="slash-item"
+            class:slash-item--active={idx === slashSelectedIdx}
+            onmousedown={(e) => { e.preventDefault(); pickSlashCommand(cmd); }}
+            role="option"
+            aria-selected={idx === slashSelectedIdx}
+          >
+            <span class="slash-item-cmd mono">/{cmd}</span>
+            <span class="slash-item-desc">{SLASH_COMMAND_DESCRIPTIONS[cmd]}</span>
+          </button>
+        {/each}
+        {#if skillMatches.length > 0}
+          {#if slashMatches.length > 0}
+            <div class="slash-picker-sep" aria-hidden="true">skills</div>
+          {/if}
+          {#each skillMatches as sk, i (sk.id)}
+            {@const idx = slashMatches.length + i}
+            <button
+              type="button"
+              class="slash-item slash-item--skill"
+              class:slash-item--active={idx === slashSelectedIdx}
+              onmousedown={(e) => { e.preventDefault(); pickSkill(sk); }}
+              role="option"
+              aria-selected={idx === slashSelectedIdx}
+              title={sk.path}
+            >
+              <span class="slash-item-cmd mono">/{sk.name}{sk.argument_hint ? ' ' + sk.argument_hint : ''}</span>
+              <span class="slash-item-desc">
+                <span class="slash-item-scope mono">{sk.scope}</span>
+                {sk.description ?? '(no description)'}
+              </span>
+            </button>
+          {/each}
+        {/if}
+      </div>
+    {/if}
   </div>
+
+  <!-- Statusline strip — renders the user's `statusline.json` script
+       output. Hidden when no script configured or output empty.
+       Multi-line stdout becomes multi-line (max 4 visible rows; the
+       rest scrolls within the strip's max-height). -->
+  {#if statuslineState.lastResult && statuslineState.lastResult.stdout.trim().length > 0}
+    <div
+      class="cmp-statusline"
+      class:cmp-statusline--err={!statuslineState.lastResult.ok}
+      title={statuslineState.lastResult.ok ? `last ran ${Math.round((Date.now() - statuslineState.lastRanAt) / 1000)}s ago` : (statuslineState.lastResult.stderr || 'statusline error')}
+    >{statuslineState.lastResult.stdout.trim()}</div>
+  {/if}
 
   {#if mentionOpen}
     <MentionPicker
@@ -854,11 +1203,117 @@
     padding: 14px 22px;
     background: linear-gradient(0deg, var(--bg-2) 30%, var(--bg-1));
     border-top: 1px solid var(--border);
+    /* Stack the composer + statusline strip vertically so the strip
+       sits as a sibling below the pill instead of overlapping it.
+       Centering is reapplied on the pill itself via margin: auto. */
+    display: flex; flex-direction: column; align-items: stretch;
     /* Centre the pill horizontally + vertically inside the footer
        container so the composer sits as a balanced bar instead of
        slumping toward the left edge under wide layouts. */
     display: flex; align-items: center; justify-content: center;
+    /* Anchor for absolute-positioned children — slash picker floats
+       above the composer pill, not over the chat thread. */
+    position: relative;
   }
+
+  /* Slash-command picker. Sits in the composer container, anchored
+     to its left edge + bottom + composer pill top. Caret-tracking
+     would be nicer but the picker only fires when the input starts
+     with `/`, so it always sits under "/", which is always the first
+     glyph of the first line — fixed anchor reads as natural. */
+  .slash-picker {
+    position: absolute;
+    left: 36px;
+    bottom: calc(100% + 6px);
+    min-width: 240px;
+    max-width: 380px;
+    padding: 4px;
+    background: var(--bg-3);
+    border: 1px solid var(--border-neutral-hi, var(--border));
+    border-radius: 8px;
+    box-shadow: var(--shadow-2, 0 12px 32px rgba(0, 0, 0, 0.32));
+    z-index: 50;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .slash-item {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    padding: 6px 10px;
+    background: transparent;
+    border: 0;
+    border-radius: 5px;
+    color: var(--text-0);
+    font-size: 12.5px;
+    text-align: left;
+    cursor: pointer;
+    transition: background 120ms;
+  }
+  .slash-item:hover,
+  .slash-item--active {
+    background: var(--bg-2);
+  }
+  .slash-item-cmd {
+    flex: 0 0 auto;
+    color: var(--accent-bright);
+    font-weight: 600;
+  }
+  .slash-item-desc {
+    flex: 1; min-width: 0;
+    color: var(--text-mute);
+    font-size: 11.5px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  /* Section separator between built-in commands and skills — small
+     all-caps label rendered between the two groups. */
+  .slash-picker-sep {
+    padding: 6px 10px 2px;
+    font-size: 9.5px; font-weight: 700;
+    letter-spacing: 0.10em;
+    text-transform: uppercase;
+    color: var(--text-mute);
+    border-top: 1px solid var(--border);
+    margin-top: 4px;
+  }
+  /* Skill items render the same chassis as built-in slash items but
+     get a small `user|project` scope chip next to the description. */
+  .slash-item-scope {
+    display: inline-block;
+    font-size: 9px; font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 1px 5px;
+    margin-right: 6px;
+    border-radius: 3px;
+    background: var(--bg-2);
+    color: var(--text-mute);
+    border: 1px solid var(--border);
+  }
+  .slash-item--skill .slash-item-cmd { color: var(--accent); }
+  /* Statusline strip — user's `statusline.json` script output. Lives
+     directly below the composer pill. Monospace, single-color tone,
+     hidden when no output. Vertical scroll if multi-line. */
+  .cmp-statusline {
+    margin-top: 8px;
+    padding: 4px 12px;
+    font: 10.5px / 1.5 'JetBrains Mono', ui-monospace, monospace;
+    color: var(--text-mute);
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 72px;
+    overflow-y: auto;
+    flex-shrink: 0;
+  }
+  .cmp-statusline--err {
+    color: #e0b16c;
+    border-color: color-mix(in srgb, #e0b16c 35%, var(--border));
+  }
+
   .cmp-shell {
     width: 100%;
     background: var(--bg-1);
@@ -917,6 +1372,33 @@
     max-width: 200px;
   }
   .cmp-attach-file svg { color: var(--text-mute); flex-shrink: 0; }
+  /* Per-source tinted chip variants. Background + 1px border are the
+     same width as the default, so swapping styles never reflows the
+     attachments row. Icon picks up the same color via `currentColor`. */
+  .cmp-attach-file--github {
+    background: color-mix(in srgb, var(--src-github, #8b5cf6) 14%, var(--bg-3));
+    border-color: color-mix(in srgb, var(--src-github, #8b5cf6) 35%, var(--border));
+    color: color-mix(in srgb, var(--src-github, #8b5cf6) 80%, var(--text-1));
+  }
+  .cmp-attach-file--github svg { color: var(--src-github, #8b5cf6); }
+  .cmp-attach-file--jira {
+    background: color-mix(in srgb, var(--src-jira, #4f8eff) 14%, var(--bg-3));
+    border-color: color-mix(in srgb, var(--src-jira, #4f8eff) 35%, var(--border));
+    color: color-mix(in srgb, var(--src-jira, #4f8eff) 80%, var(--text-1));
+  }
+  .cmp-attach-file--jira svg { color: var(--src-jira, #4f8eff); }
+  .cmp-attach-file--sentry {
+    background: color-mix(in srgb, var(--src-sentry, #b56af0) 14%, var(--bg-3));
+    border-color: color-mix(in srgb, var(--src-sentry, #b56af0) 35%, var(--border));
+    color: color-mix(in srgb, var(--src-sentry, #b56af0) 80%, var(--text-1));
+  }
+  .cmp-attach-file--sentry svg { color: var(--src-sentry, #b56af0); }
+  .cmp-attach-file--chat {
+    background: color-mix(in srgb, var(--src-claude, #d97757) 14%, var(--bg-3));
+    border-color: color-mix(in srgb, var(--src-claude, #d97757) 35%, var(--border));
+    color: color-mix(in srgb, var(--src-claude, #d97757) 80%, var(--text-1));
+  }
+  .cmp-attach-file--chat svg { color: var(--src-claude, #d97757); }
   .cmp-attach-name {
     color: var(--text-0);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -1016,6 +1498,16 @@
     user-select: none;
     box-sizing: border-box;
     border: 0;
+    /* Lock glyph geometry to match the textarea byte-for-byte —
+       ligatures off, no kerning, fixed tab width. Any of these
+       diverging caused the caret (rendered by the textarea) to
+       drift away from the visible glyph (rendered by the backdrop)
+       on tokens like `=>` / `->` / `==`. */
+    font-variant-ligatures: none;
+    font-feature-settings: "liga" 0, "clig" 0, "calt" 0;
+    font-kerning: none;
+    tab-size: 4;
+    -moz-tab-size: 4;
   }
   /* Inline @-mention chip — soft accent tint. CRITICAL: padding and
      margin MUST be zero. The previous `padding: 0 2px; margin: 0 -1px`
@@ -1049,6 +1541,29 @@
        it stand out — no weight change needed. */
     font-weight: inherit;
   }
+  /* Per-source tinting overrides — same width-preserving rules
+     (background + color only). Picks the canonical source accent
+     from --src-* tokens so a @github mention reads purple, @jira
+     reads blue, @sentry reads plum, @chat reads rust.
+
+     Falls through to the default .cmp-area-mention style when the
+     source isn't classified. */
+  .cmp-area-backdrop :global(.cmp-area-mention--github) {
+    background: color-mix(in srgb, var(--src-github, #8b5cf6) 22%, transparent);
+    color: color-mix(in srgb, var(--src-github, #8b5cf6) 90%, white 10%);
+  }
+  .cmp-area-backdrop :global(.cmp-area-mention--jira) {
+    background: color-mix(in srgb, var(--src-jira, #4f8eff) 20%, transparent);
+    color: color-mix(in srgb, var(--src-jira, #4f8eff) 90%, white 10%);
+  }
+  .cmp-area-backdrop :global(.cmp-area-mention--sentry) {
+    background: color-mix(in srgb, var(--src-sentry, #b56af0) 22%, transparent);
+    color: color-mix(in srgb, var(--src-sentry, #b56af0) 90%, white 10%);
+  }
+  .cmp-area-backdrop :global(.cmp-area-mention--chat) {
+    background: color-mix(in srgb, var(--src-claude, #d97757) 22%, transparent);
+    color: color-mix(in srgb, var(--src-claude, #d97757) 90%, white 10%);
+  }
   .cmp-area {
     position: relative;
     width: 100%;
@@ -1075,6 +1590,13 @@
     word-break: normal;
     overflow-wrap: break-word;
     box-sizing: border-box;
+    /* Mirror backdrop glyph geometry — see backdrop CSS for rationale.
+       Without these the caret drifts off ligated tokens. */
+    font-variant-ligatures: none;
+    font-feature-settings: "liga" 0, "clig" 0, "calt" 0;
+    font-kerning: none;
+    tab-size: 4;
+    -moz-tab-size: 4;
   }
   .cmp-area::-webkit-scrollbar { display: none; }
   .cmp-area::placeholder {
@@ -1146,6 +1668,43 @@
   .cmp-model {
     flex-shrink: 0;
     display: inline-flex; align-items: center; gap: 4px;
+  }
+
+  /* Permission-mode pill — sits left of the model picker. The "plan"
+     variant glows amber so the user can't miss they're in read-only
+     mode; the muted "default" variant just shows the shortcut hint
+     ⇧⇥ as an affordance to discover plan mode. */
+  .cmp-mode-pill {
+    display: inline-flex; align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
+    border-radius: 5px;
+    border: 1px solid var(--border);
+    background: var(--bg-2);
+    color: var(--text-mute);
+    font-size: 10.5px;
+    font-weight: 600;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: background 120ms, border-color 120ms, color 120ms;
+  }
+  .cmp-mode-pill svg { width: 11px; height: 11px; }
+  .cmp-mode-pill:hover {
+    background: var(--bg-3);
+    border-color: var(--border-hi);
+    color: var(--text-1);
+  }
+  .cmp-mode-pill--plan {
+    background: color-mix(in srgb, #e0b16c 14%, var(--bg-1));
+    border-color: color-mix(in srgb, #e0b16c 50%, var(--border-hi));
+    color: #e0b16c;
+  }
+  .cmp-mode-pill--plan:hover {
+    background: color-mix(in srgb, #e0b16c 22%, var(--bg-1));
+  }
+  .cmp-mode-pill-label-faint {
+    font-size: 10px;
+    letter-spacing: 0.02em;
   }
 
   .cmp-send {

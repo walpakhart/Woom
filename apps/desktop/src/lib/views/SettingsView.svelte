@@ -10,6 +10,7 @@
   import { notify, notifyError } from '$lib/state/toaster.svelte';
   import { themeState, applyTheme, type ThemeName } from '$lib/state/theme.svelte';
   import { scaleState, applyScale, SCALE_OPTIONS } from '$lib/state/scale.svelte';
+  import { densityState, applyDensity, type Density } from '$lib/state/density.svelte';
   import {
     connectionEventsState,
     clearConnectionEvents,
@@ -17,6 +18,13 @@
     type ConnectionEventSource
   } from '$lib/state/connectionEvents.svelte';
   import { relativeTime } from '$lib/data';
+  import {
+    hooksState,
+    loadHookConfig,
+    saveHookConfig,
+    enabledHookCount,
+    type HookConfig
+  } from '$lib/state/hooks.svelte';
 
   /* Theme picker. Each entry encodes a tiny preview swatch (bg, text,
      accent) so the user can eyeball the palette without applying.
@@ -66,6 +74,88 @@
   let worktreeDir = $state<string | null>(null);
   let worktreeStatLoading = $state(false);
   let cleanupBusy = $state(false);
+
+  // ---- Hooks editor -----------------------------------------------------
+  // Local draft so the user can edit + revert without writing every
+  // keystroke through `saveHookConfig`. `pristine` is the last successful
+  // load/save snapshot; the Save / Revert buttons disable when draft ==
+  // pristine (no unsaved changes). Parse error is shown inline; Save is
+  // gated on it.
+  let hooksDraft = $state('');
+  let hooksDraftPristine = $state('');
+  let hooksParseError = $state<string | null>(null);
+  let hooksLoading = $state(false);
+  const hookCount = $derived(enabledHookCount());
+  const hooksPlaceholder = `{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "matcher": "*",
+        "handler": { "type": "command", "command": "/path/to/script.sh" },
+        "timeout_ms": 5000,
+        "disabled": false
+      }
+    ],
+    "Stop": [],
+    "SessionStart": []
+  }
+}`;
+
+  /* Re-validate on every edit. Cheap (JSON.parse on a few KB). The
+   *  parser error message is surfaced inline below the textarea. */
+  $effect(() => {
+    if (hooksDraft.trim().length === 0) {
+      hooksParseError = null;
+      return;
+    }
+    try {
+      const parsed = JSON.parse(hooksDraft);
+      if (parsed && typeof parsed === 'object' && parsed.hooks && typeof parsed.hooks !== 'object') {
+        hooksParseError = '`hooks` must be an object keyed by event name';
+        return;
+      }
+      hooksParseError = null;
+    } catch (e) {
+      hooksParseError = `JSON parse error: ${(e as Error).message}`;
+    }
+  });
+
+  async function resetHooksDraft(): Promise<void> {
+    hooksDraft = hooksDraftPristine;
+  }
+
+  async function saveHooksDraft(): Promise<void> {
+    if (hooksParseError) return;
+    hooksLoading = true;
+    try {
+      const parsed = hooksDraft.trim() === ''
+        ? ({ hooks: {} } as HookConfig)
+        : (JSON.parse(hooksDraft) as HookConfig);
+      await saveHookConfig(parsed);
+      hooksDraftPristine = hooksDraft;
+      notify({ kind: 'success', title: 'Hooks saved', ttlMs: 2200 });
+    } catch (e) {
+      notifyError(e, { title: 'Hooks save failed' });
+    } finally {
+      hooksLoading = false;
+    }
+  }
+
+  /* On mount: pull the on-disk config + populate the draft. We do it
+   *  via the existing `loadHookConfig` so the reactive store stays in
+   *  sync with any other view that reads it. */
+  $effect(() => {
+    void (async () => {
+      hooksLoading = true;
+      try {
+        const cfg = hooksState.loaded ? hooksState.config : await loadHookConfig();
+        hooksDraftPristine = JSON.stringify(cfg, null, 2);
+        if (hooksDraft.length === 0) hooksDraft = hooksDraftPristine;
+      } finally {
+        hooksLoading = false;
+      }
+    })();
+  });
 
   async function refreshDiskStats() {
     worktreeStatLoading = true;
@@ -140,6 +230,188 @@
 
   // Probe on mount so the page lands populated.
   $effect(() => { void refreshDiskStats(); });
+
+  // ---- Long-term memory stats ------------------------------------------
+
+  /** Tuple of counters returned by `memory_stats_local`. Null until the
+   *  first refresh resolves — the panel renders "—" placeholders so
+   *  the layout doesn't reflow once data lands. */
+  interface MemStats {
+    total: number;
+    by_kind: Record<string, number>;
+    db_bytes: number;
+  }
+  let memStats = $state<MemStats | null>(null);
+  let memStatsBusy = $state(false);
+  /** Display order for the kind chips. Matches the canonical order
+   *  the sidecar's KINDS constant uses so the panel reads consistently
+   *  regardless of insertion order in `by_kind`. */
+  const memKinds = ['user', 'feedback', 'project', 'reference', 'note'] as const;
+
+  async function refreshMemStats(): Promise<void> {
+    if (memStatsBusy) return;
+    memStatsBusy = true;
+    try {
+      const stats = await invoke<MemStats>('memory_stats_local');
+      memStats = stats;
+    } catch (e) {
+      notifyError(e, { title: 'Could not read memory stats' });
+    } finally {
+      memStatsBusy = false;
+    }
+  }
+
+  $effect(() => { void refreshMemStats(); });
+
+  /* Memory browser. Shown beneath the stats panel when the user
+     clicks "Browse". List loads on first open + on Refresh; search
+     query debounced 250ms (matches inbox-search latency). Empty
+     query lists newest-first via memory_list_local; non-empty query
+     fans out to memory_search_local. */
+  interface MemRow {
+    id: number;
+    kind: string;
+    content: string;
+    tags: string;
+    created_at: number;
+  }
+  let memBrowserOpen = $state(false);
+  let memBrowserQuery = $state('');
+  let memBrowserKind = $state<string | null>(null);
+  let memBrowserRows = $state<MemRow[]>([]);
+  let memBrowserBusy = $state(false);
+  let memBrowserDebounce: ReturnType<typeof setTimeout> | null = null;
+
+  async function loadMemBrowser(): Promise<void> {
+    if (memBrowserBusy) return;
+    memBrowserBusy = true;
+    try {
+      const q = memBrowserQuery.trim();
+      if (q) {
+        memBrowserRows = await invoke<MemRow[]>('memory_search_local', {
+          query: q,
+          limit: 50
+        });
+      } else {
+        memBrowserRows = await invoke<MemRow[]>('memory_list_local', {
+          kind: memBrowserKind,
+          limit: 50,
+          offset: 0
+        });
+      }
+    } catch (e) {
+      notifyError(e, { title: 'Memory browser failed' });
+    } finally {
+      memBrowserBusy = false;
+    }
+  }
+
+  function scheduleMemReload(): void {
+    if (memBrowserDebounce) clearTimeout(memBrowserDebounce);
+    memBrowserDebounce = setTimeout(() => void loadMemBrowser(), 250);
+  }
+
+  /* Auto-load when the browser opens for the first time. Subsequent
+     opens reuse cached rows — Refresh button forces a re-fetch. */
+  $effect(() => {
+    if (memBrowserOpen && memBrowserRows.length === 0 && !memBrowserBusy) {
+      void loadMemBrowser();
+    }
+  });
+
+  /* Re-run query whenever the filter changes. Effect tracks the
+     relevant fields; debounce smooths typing storms. */
+  $effect(() => {
+    void memBrowserQuery;
+    void memBrowserKind;
+    if (memBrowserOpen) scheduleMemReload();
+  });
+
+  /* In-place editor state. Tracks at most one open editor at a time
+     keyed by row id; the textarea/kind/tags inputs bind to local
+     drafts so the user can cancel without persisting. */
+  let editingMemId = $state<number | null>(null);
+  let editDraftContent = $state('');
+  let editDraftKind = $state('note');
+  let editDraftTags = $state('');
+  let editBusy = $state(false);
+
+  function startEditMemRow(row: MemRow): void {
+    editingMemId = row.id;
+    editDraftContent = row.content;
+    editDraftKind = row.kind;
+    editDraftTags = row.tags;
+  }
+  function cancelEditMemRow(): void {
+    editingMemId = null;
+    editDraftContent = '';
+    editDraftKind = 'note';
+    editDraftTags = '';
+  }
+  async function saveEditMemRow(): Promise<void> {
+    if (editingMemId === null) return;
+    const id = editingMemId;
+    const content = editDraftContent.trim();
+    if (!content) {
+      notify({ kind: 'error', title: 'Content cannot be empty', ttlMs: 2200 });
+      return;
+    }
+    editBusy = true;
+    try {
+      const tagsArr = editDraftTags
+        .split(',')
+        .map((t) => t.trim())
+        .filter((t) => t.length > 0);
+      await invoke<number>('memory_update_local', {
+        id,
+        content,
+        kind: editDraftKind,
+        tags: tagsArr
+      });
+      /* Mutate the local row in-place so the row preview updates
+         without a full reload (full reload would re-fetch + lose
+         scroll position). */
+      memBrowserRows = memBrowserRows.map((r) =>
+        r.id === id
+          ? { ...r, content, kind: editDraftKind, tags: tagsArr.join(',') }
+          : r
+      );
+      cancelEditMemRow();
+      void refreshMemStats();
+      notify({ kind: 'success', title: 'Memory updated', ttlMs: 1800 });
+    } catch (e) {
+      notifyError(e, { title: 'Update failed' });
+    } finally {
+      editBusy = false;
+    }
+  }
+
+  async function deleteMemRow(id: number): Promise<void> {
+    if (!window.confirm(`Delete memory #${id}? This can't be undone.`)) return;
+    try {
+      await invoke<number>('memory_delete_local', { id });
+      memBrowserRows = memBrowserRows.filter((r) => r.id !== id);
+      /* Stats become stale after delete. Refresh in the background
+         so the kind chips + total count update without a full reload
+         loop. */
+      void refreshMemStats();
+    } catch (e) {
+      notifyError(e, { title: 'Delete failed' });
+    }
+  }
+
+  function memRowDate(epoch: number): string {
+    const d = new Date(epoch * 1000);
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+  }
+
+  function memRowPreview(s: string): string {
+    const collapsed = s.replace(/\s+/g, ' ').trim();
+    return collapsed.length > 220 ? collapsed.slice(0, 217) + '…' : collapsed;
+  }
 
   // ---- Connection diagnostics ----------------------------------------
 
@@ -645,6 +917,189 @@
       </div>
     </div>
 
+    <!-- UI density — distinct from scale. Trims padding around list
+         rows, pane headers, and chat messages so a single laptop screen
+         fits ~20-25% more content. Keyboard: ⌘\ toggles between the two.
+         See lib/state/density.svelte.ts for the apply mechanism. -->
+    <div class="card">
+      <header class="card-head">
+        <h2 class="card-title">UI density</h2>
+        <p class="card-sub">
+          Trim padding around inbox cards and chat messages to fit more on screen. Distinct from UI scale — fonts stay the same size. Keyboard shortcut: <span class="mono">⌘ \</span>.
+        </p>
+      </header>
+      <div class="scale-grid">
+        {#each [{ value: 'comfortable' as Density, label: 'Comfortable' }, { value: 'compact' as Density, label: 'Compact' }] as opt (opt.value)}
+          <button
+            class="scale-card"
+            class:active={densityState.value === opt.value}
+            onclick={() => applyDensity(opt.value)}
+            aria-pressed={densityState.value === opt.value}
+          >
+            <span class="scale-label">{opt.label}</span>
+          </button>
+        {/each}
+      </div>
+    </div>
+
+    <!-- Long-term memory.
+         Surfaces stats from the woom-memory SQLite store so the user
+         can see what's accumulated. Numbers are read on mount + on
+         "Refresh" — we don't subscribe to changes since the underlying
+         store can be mutated from MCP / paste-trap / auto-distill at
+         arbitrary times and a polling loop would be noise. -->
+    <div class="card">
+      <header class="card-head">
+        <h2 class="card-title">Long-term memory</h2>
+        <p class="card-sub">
+          Durable notes that persist across chat sessions. The agent searches them at the start of every turn; the paste-trap and chat archive flows also write here. Stored at <span class="mono">~/Library/Application Support/Woom/memory.db</span>.
+        </p>
+      </header>
+      <div class="grid">
+        <div class="stat">
+          <div class="stat-label">Total memories</div>
+          <div class="stat-value mono">{memStats?.total.toLocaleString() ?? '—'}</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">DB size</div>
+          <div class="stat-value mono">{memStats ? formatBytes(memStats.db_bytes) : '—'}</div>
+        </div>
+      </div>
+      {#if memStats && memStats.total > 0}
+        <div class="mem-breakdown">
+          {#each memKinds as kind (kind)}
+            {@const n = memStats.by_kind[kind] ?? 0}
+            {#if n > 0}
+              <span class="mem-chip mono" title="{n.toLocaleString()} {kind} memories">
+                <span class="mem-chip-kind">{kind}</span>
+                <span class="mem-chip-n">{n.toLocaleString()}</span>
+              </span>
+            {/if}
+          {/each}
+        </div>
+      {/if}
+      <div class="update-actions">
+        <button class="btn btn--ghost" onclick={refreshMemStats} disabled={memStatsBusy}>
+          {memStatsBusy ? 'Refreshing…' : 'Refresh'}
+        </button>
+        <button class="btn btn--ghost" onclick={() => (memBrowserOpen = !memBrowserOpen)}>
+          {memBrowserOpen ? 'Hide browser' : 'Browse'}
+        </button>
+      </div>
+      {#if memBrowserOpen}
+        <div class="mem-browser">
+          <div class="mem-browser-controls">
+            <input
+              class="mem-browser-search mono"
+              type="text"
+              bind:value={memBrowserQuery}
+              placeholder="Search memories — words, project names, tags…"
+              spellcheck="false"
+              autocomplete="off"
+            />
+            <select
+              class="mem-browser-kind"
+              bind:value={memBrowserKind}
+              disabled={memBrowserQuery.trim().length > 0}
+              title={memBrowserQuery.trim() ? 'Kind filter disabled while a search query is active' : 'Filter by kind'}
+            >
+              <option value={null}>All kinds</option>
+              {#each memKinds as kind (kind)}
+                <option value={kind}>{kind}</option>
+              {/each}
+            </select>
+            <button class="btn btn--ghost btn--sm" onclick={loadMemBrowser} disabled={memBrowserBusy}>
+              {memBrowserBusy ? '…' : 'Reload'}
+            </button>
+          </div>
+          <div class="mem-browser-list">
+            {#if memBrowserRows.length === 0 && !memBrowserBusy}
+              <div class="mem-browser-empty">
+                {memBrowserQuery.trim() ? 'No matches for that query.' : 'No memories yet.'}
+              </div>
+            {:else}
+              {#each memBrowserRows as row (row.id)}
+                <div class="mem-row" class:mem-row--editing={editingMemId === row.id}>
+                  <div class="mem-row-head">
+                    <span class="mem-row-id mono">#{row.id}</span>
+                    <span class="mem-row-kind mono">{row.kind}</span>
+                    <span class="mem-row-date mono">{memRowDate(row.created_at)}</span>
+                    {#if row.tags}
+                      <span class="mem-row-tags mono" title={row.tags}>{row.tags}</span>
+                    {/if}
+                    {#if editingMemId !== row.id}
+                      <button
+                        class="mem-row-edit"
+                        onclick={() => startEditMemRow(row)}
+                        title="Edit this memory"
+                        aria-label="Edit memory #{row.id}"
+                      >
+                        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                          <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                          <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4z"/>
+                        </svg>
+                      </button>
+                    {/if}
+                    <button
+                      class="mem-row-del"
+                      onclick={() => void deleteMemRow(row.id)}
+                      title="Delete this memory"
+                      aria-label="Delete memory #{row.id}"
+                    >
+                      <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <polyline points="3 6 5 6 21 6"/>
+                        <path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6"/>
+                        <path d="M10 11v6 M14 11v6"/>
+                      </svg>
+                    </button>
+                  </div>
+                  {#if editingMemId === row.id}
+                    <div class="mem-row-edit-form">
+                      <textarea
+                        class="mem-row-edit-content mono"
+                        bind:value={editDraftContent}
+                        rows="6"
+                        spellcheck="false"
+                        placeholder="Memory content…"
+                      ></textarea>
+                      <div class="mem-row-edit-row">
+                        <label class="mem-row-edit-field">
+                          <span class="mem-row-edit-label">Kind</span>
+                          <select bind:value={editDraftKind} class="mem-row-edit-kind">
+                            {#each memKinds as k (k)}
+                              <option value={k}>{k}</option>
+                            {/each}
+                          </select>
+                        </label>
+                        <label class="mem-row-edit-field mem-row-edit-field--grow">
+                          <span class="mem-row-edit-label">Tags (comma)</span>
+                          <input
+                            type="text"
+                            class="mem-row-edit-tags mono"
+                            bind:value={editDraftTags}
+                            placeholder="comma,separated,tags"
+                            spellcheck="false"
+                          />
+                        </label>
+                      </div>
+                      <div class="mem-row-edit-actions">
+                        <button class="btn btn--ghost btn--sm" onclick={cancelEditMemRow} disabled={editBusy}>Cancel</button>
+                        <button class="btn btn--primary btn--sm" onclick={saveEditMemRow} disabled={editBusy}>
+                          {editBusy ? 'Saving…' : 'Save'}
+                        </button>
+                      </div>
+                    </div>
+                  {:else}
+                    <div class="mem-row-body">{memRowPreview(row.content)}</div>
+                  {/if}
+                </div>
+              {/each}
+            {/if}
+          </div>
+        </div>
+      {/if}
+    </div>
+
     <!-- Updates -->
     <div class="card">
       <header class="card-head">
@@ -756,6 +1211,56 @@
           <pre class="bug-report-preview-pre">{bugReportPreview}</pre>
         </details>
       {/if}
+    </div>
+
+    <!-- Hooks (Claude Code parity §2). User-defined scripts wired
+         into agent lifecycle events. Config is a single JSON file
+         under <app_data>/hooks.json; this card edits it in place.
+         Validation runs before save — malformed JSON is rejected
+         with a inline error message so a hand-typed bug doesn't
+         silently wipe the existing config. -->
+    <div class="card">
+      <header class="card-head">
+        <h2 class="card-title">Hooks</h2>
+        <p class="card-sub">
+          Wire shell scripts into agent lifecycle events. Currently supported:
+          <span class="mono">UserPromptSubmit</span>, <span class="mono">Stop</span>,
+          <span class="mono">SessionStart</span>. Each handler reads JSON on stdin and may
+          rewrite the prompt, attach context, or block the action via exit code 2.
+        </p>
+      </header>
+      <div class="hooks-actions">
+        <span class="card-sub">{hookCount} hook{hookCount === 1 ? '' : 's'} enabled</span>
+        <button
+          class="btn btn--ghost"
+          onclick={() => void resetHooksDraft()}
+          disabled={hooksLoading || hooksDraft === hooksDraftPristine}
+          title="Revert unsaved edits"
+        >Revert</button>
+        <button
+          class="btn"
+          onclick={() => void saveHooksDraft()}
+          disabled={hooksLoading || hooksDraft === hooksDraftPristine || !!hooksParseError}
+        >{hooksLoading ? 'Saving…' : 'Save'}</button>
+      </div>
+      <textarea
+        class="hooks-editor mono"
+        bind:value={hooksDraft}
+        placeholder={hooksPlaceholder}
+        spellcheck="false"
+        rows="12"
+      ></textarea>
+      {#if hooksParseError}
+        <div class="hooks-error mono">{hooksParseError}</div>
+      {/if}
+      <p class="card-sub hooks-hint">
+        Schema:
+        <span class="mono">{`{ "hooks": { "<EventName>": [ { "matcher": "*", "handler": { "type": "command", "command": "/path/to/script" }, "timeout_ms": 5000, "disabled": false } ] } }`}</span>.
+        Script stdin = event JSON. Stdout JSON keys honored:
+        <span class="mono">updated_prompt</span> (UserPromptSubmit rewrite, deferred wiring),
+        <span class="mono">additional_context</span>, <span class="mono">reason</span>.
+        Exit 2 = block.
+      </p>
     </div>
 
     <!-- MCP servers diagnostic (M4 §2.9.8) -->
@@ -1015,6 +1520,209 @@
   }
   .scale-card.active .scale-label { color: var(--accent-bright); }
 
+  /* Memory panel — kind breakdown chips. Same vibe as theme swatches:
+     small, hover-able, no border by default to keep the row visually
+     calm. The number is dominant; the kind label is mute support. */
+  .mem-breakdown {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 12px;
+  }
+  .mem-chip {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 6px;
+    padding: 5px 10px;
+    background: var(--bg-2);
+    border: 1px solid var(--border-neutral);
+    border-radius: 999px;
+    font-size: 11px;
+  }
+  .mem-chip-kind { color: var(--text-mute); text-transform: capitalize; }
+  .mem-chip-n { color: var(--text-0); font-weight: 600; font-variant-numeric: tabular-nums; }
+
+  /* Memory browser. Toggle-revealed below the stats panel — a search
+     row + scrollable list of rows. Each row is a thin card with
+     metadata header + truncated content preview + delete affordance
+     on the right. No backing-store contract beyond what the Tauri
+     commands expose; the user can prune false-positives or stale
+     entries without touching the DB directly. */
+  .mem-browser {
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px dashed var(--border);
+  }
+  .mem-browser-controls {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+  .mem-browser-search {
+    flex: 1;
+    min-width: 0;
+    height: 30px;
+    padding: 0 10px;
+    background: var(--bg-2);
+    border: 1px solid var(--border-neutral);
+    border-radius: 6px;
+    color: var(--text-0);
+    font-size: 12.5px;
+  }
+  .mem-browser-search:focus { outline: 1px solid var(--accent); outline-offset: -1px; }
+  .mem-browser-kind {
+    height: 30px;
+    padding: 0 8px;
+    background: var(--bg-2);
+    border: 1px solid var(--border-neutral);
+    border-radius: 6px;
+    color: var(--text-0);
+    font-size: 12px;
+  }
+  .mem-browser-kind:disabled { opacity: 0.5; cursor: not-allowed; }
+  .mem-browser-list {
+    margin-top: 10px;
+    max-height: 420px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .mem-browser-empty {
+    padding: 32px 12px;
+    text-align: center;
+    color: var(--text-mute);
+    font-size: 12px;
+  }
+  .mem-row {
+    padding: 8px 10px;
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 12px;
+  }
+  .mem-row-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 4px;
+  }
+  .mem-row-id { color: var(--text-mute); font-size: 11px; }
+  .mem-row-kind {
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--accent-bright);
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    padding: 1px 5px;
+    border-radius: 3px;
+  }
+  .mem-row-date { color: var(--text-mute); font-size: 10.5px; }
+  .mem-row-tags {
+    flex: 1;
+    min-width: 0;
+    font-size: 10.5px;
+    color: var(--text-2);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .mem-row-del,
+  .mem-row-edit {
+    width: 24px; height: 24px;
+    display: grid; place-items: center;
+    background: transparent;
+    border: 0;
+    border-radius: 4px;
+    color: var(--text-mute);
+    cursor: pointer;
+    transition: color 120ms, background 120ms;
+  }
+  /* The first action button on a row pushes itself + every sibling
+     button to the right edge — keeps the layout the same whether
+     only Delete is visible or Edit + Delete are. */
+  .mem-row-edit { margin-left: auto; }
+  .mem-row-edit:hover {
+    color: var(--accent-bright);
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+  }
+  /* When only Delete is shown (editing in progress) it needs the same
+     margin-left so the row layout stays stable. */
+  .mem-row:not(.mem-row--editing) .mem-row-del {
+    margin-left: 0;
+  }
+  .mem-row--editing .mem-row-del {
+    margin-left: auto;
+  }
+  .mem-row-del:hover {
+    color: var(--error, #e88264);
+    background: color-mix(in srgb, var(--error, #e88264) 14%, transparent);
+  }
+  /* Inline edit form — only one row at a time. Textarea takes the
+     full width; kind + tags share a flex row below. */
+  .mem-row-edit-form {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 6px;
+  }
+  .mem-row-edit-content {
+    width: 100%;
+    min-height: 100px;
+    padding: 8px 10px;
+    background: var(--bg-1);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-0);
+    font-size: 12.5px;
+    line-height: 1.55;
+    resize: vertical;
+  }
+  .mem-row-edit-content:focus {
+    outline: 1px solid var(--accent);
+    outline-offset: -1px;
+  }
+  .mem-row-edit-row { display: flex; gap: 8px; align-items: flex-end; }
+  .mem-row-edit-field { display: flex; flex-direction: column; gap: 3px; }
+  .mem-row-edit-field--grow { flex: 1; min-width: 0; }
+  .mem-row-edit-label {
+    font-size: 10.5px;
+    color: var(--text-mute);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .mem-row-edit-kind,
+  .mem-row-edit-tags {
+    height: 28px;
+    padding: 0 8px;
+    background: var(--bg-1);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    color: var(--text-0);
+    font-size: 12px;
+  }
+  .mem-row-edit-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+  .mem-row--editing {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent);
+  }
+  .mem-row-body {
+    color: var(--text-1);
+    line-height: 1.55;
+    word-break: break-word;
+  }
+
+  .btn--sm {
+    height: 30px;
+    padding: 0 10px;
+    font-size: 11.5px;
+  }
+
   /* Connection diagnostics — filter chips + chronological list. */
   .diag-tabs {
     display: flex; flex-wrap: wrap; gap: 6px;
@@ -1078,6 +1786,44 @@
 
   /* Updates card */
   .update-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+  /* Hooks editor — monospace textarea with inline validation. */
+  .hooks-actions {
+    display: flex; align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+  }
+  .hooks-actions .card-sub { margin-right: auto; }
+  .hooks-editor {
+    width: 100%;
+    padding: 10px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--bg-0);
+    color: var(--text-0);
+    font: 11.5px / 1.55 'JetBrains Mono', ui-monospace, monospace;
+    resize: vertical;
+    min-height: 180px;
+    transition: border-color 120ms;
+  }
+  .hooks-editor:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+  .hooks-error {
+    margin-top: 6px;
+    padding: 6px 10px;
+    background: color-mix(in srgb, var(--error) 10%, transparent);
+    border: 1px solid color-mix(in srgb, var(--error) 50%, transparent);
+    border-radius: 5px;
+    color: var(--error);
+    font-size: 11px;
+    line-height: 1.4;
+  }
+  .hooks-hint {
+    margin-top: 8px;
+    line-height: 1.5;
+  }
   .update-status {
     padding: 10px 12px;
     border-radius: 8px;

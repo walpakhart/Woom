@@ -31,7 +31,7 @@ objc2-foundation = { version = "0.3", features = ["NSError", "NSString"] }
 objc2-local-authentication = { version = "0.3", features = ["LAContext", "LAError", "block2"] }
 block2 = "0.6"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "sync", "time"] }
 thiserror = "2"
 libc = "0.2"
 notify = "8"
