@@ -130,20 +130,11 @@
     </div>
     {#if isDone}<span class="qc-tag qc-tag--ok mono">answered</span>{/if}
     {#if isExecuting}<span class="qc-tag mono">sending…</span>{/if}
-    <!-- Close button — mirrors propose_bash / propose_commit cards.
-         When pending: dismiss = decline + resolve IPC with ok=false.
-         When done: just removes the card from the chat thread (the
-         result already landed in the tool_result; nothing to undo). -->
-    <button
-      class="qc-close"
-      onclick={() => void dismiss()}
-      aria-label={isPending ? 'Dismiss without choosing' : 'Close card'}
-      title={isPending ? 'Dismiss without choosing' : 'Close card'}
-    >
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true">
-        <path d="M6 6l12 12M6 18 18 6"/>
-      </svg>
-    </button>
+    <!-- × close button removed by design — an answered question card
+         is just resolved text-with-button, not a dismissable widget.
+         Pending questions still need a "decline" affordance, but that
+         lives as a quiet text-link inside the body, not as a corner
+         × that makes the whole thing read as overlay chrome. -->
   </header>
 
   {#if isPending}
@@ -185,12 +176,15 @@
       />
     </div>
     <footer class="qc-foot">
-      <!-- Dismiss lives in the × header now; footer is just the
-           primary "Send / Submit" path. Multi-select needs Submit
-           because clicking a checkbox doesn't auto-submit (unlike
-           radio behaviour); single-select submits on click + this
-           button is only the explicit confirm for typed "Other"
-           input without any clicked option. -->
+      <!-- Decline = text-link aesthetic, dismisses the question
+           without picking + resolves IPC with ok=false. Lives in the
+           same row as Submit so the user has both actions visible
+           without a corner × that read as overlay chrome. -->
+      <button
+        type="button"
+        class="qc-btn"
+        onclick={() => void dismiss()}
+      >dismiss</button>
       <button
         class="qc-btn qc-btn--primary"
         onclick={() => void submit()}
@@ -278,27 +272,6 @@
     background: color-mix(in srgb, #6ec3a4 10%, transparent);
     border: 1px solid color-mix(in srgb, #6ec3a4 35%, transparent);
   }
-  /* × button — top-right of the card header. Same chassis as the
-     close on overlays (small ghost icon, brightens on hover). */
-  .qc-close {
-    width: 22px; height: 22px;
-    display: grid; place-items: center;
-    background: transparent;
-    border: 0;
-    padding: 0;
-    color: var(--text-mute);
-    border-radius: 5px;
-    cursor: pointer;
-    flex-shrink: 0;
-    align-self: flex-start;
-    transition: color 120ms, background 120ms;
-  }
-  .qc-close:hover {
-    color: var(--text-0);
-    background: var(--bg-3);
-  }
-  .qc-close svg { width: 12px; height: 12px; }
-
   /* Option rows — flat list with subtle hover, no separate panel
    *  background. Selected state lifts via accent tint. Keep the
    *  clickable affordance obvious without re-introducing card chrome

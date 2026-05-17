@@ -30,6 +30,7 @@
     popUndo,
     sddState,
   } from '$lib/state/sdd.svelte';
+  import { sessionsState } from '$lib/state/sessions.svelte';
   import { diffMarkdown, renderDiffHtml } from '$lib/util/markdownDiff';
 
   interface Props {
@@ -118,11 +119,21 @@
   const undoVisible = $derived(undoSlot !== null && undoSecondsLeft > 0);
 
   const stage = $derived(p.workspace.stage);
+  /* Session-busy derived from the linked chat session. While the
+   *  agent is mid-turn we DON'T offer the Approve button — clicking
+   *  during a streaming reply caused the race-window bugs. UI shows
+   *  "agent working…" instead so the user knows why it's quiet. */
+  const linkedSession = $derived(
+    sessionsState.list.find((s) => s.id === p.workspace.session_id) ?? null
+  );
+  const sessionSending = $derived(!!linkedSession?.sending);
   const isAwaitingApproval = $derived(
-    stage.kind === 'spec_ready' || stage.kind === 'plan_ready' || stage.kind === 'phase_done'
+    !sessionSending &&
+      (stage.kind === 'spec_ready' || stage.kind === 'plan_ready' || stage.kind === 'phase_done')
   );
   const isInFlight = $derived(
-    stage.kind === 'drafting' || stage.kind === 'planning' || stage.kind === 'phase_running'
+    sessionSending ||
+      stage.kind === 'drafting' || stage.kind === 'planning' || stage.kind === 'phase_running'
   );
   const isTerminal = $derived(
     stage.kind === 'complete' || stage.kind === 'stopped' || stage.kind === 'failed'

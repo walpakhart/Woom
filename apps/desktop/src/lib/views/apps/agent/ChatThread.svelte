@@ -46,6 +46,19 @@
     sessionsState.list.find((s) => s.id === sessionsState.activeIds[p.kind]) ?? null
   );
 
+  /* Index of the LAST message in the visible stream (skipping hidden
+   *  orchestration messages). Used to anchor action cards + SDD card
+   *  inline at the natural conversation position — they render right
+   *  after the latest message so they scroll WITH the chat instead
+   *  of living in a separate trailing block at the bottom. */
+  const lastVisibleIndex = $derived.by(() => {
+    const list = sess?.messages ?? [];
+    for (let i = list.length - 1; i >= 0; i--) {
+      if (!list[i].hidden) return i;
+    }
+    return -1;
+  });
+
   const elapsed = $derived.by(() => {
     if (!p.thinkingStartedAt || !sess?.sending) return '';
     void p.thinkingTick;
@@ -734,39 +747,45 @@
           <div class="msg-system">{msg.content}</div>
         </article>
       {/if}
-    {/each}
 
-    {#if workspaceForSession(sess.id)}
-      {@const sddWs = workspaceForSession(sess.id)}
-      {#if sddWs}
-        <div class="action-wrap">
-          <SddCard
-            workspace={sddWs}
-            onAdvance={(prompt) => p.onSddAdvance?.(sess.id, prompt)}
-          />
-        </div>
-      {/if}
-    {/if}
-
-    {#each sess.actions as action (action.id)}
-      <div class="action-wrap">
-        {#if action.kind === 'question'}
-          <QuestionCard
-            {action}
-            onUpdate={(patch) => p.onUpdateAction(sess.id, action.id, patch)}
-            onDismiss={() => p.onRemoveAction(sess.id, action.id)}
-          />
-        {:else}
-          <ClaudeActionCard
-            {action}
-            onUpdate={(patch) => p.onUpdateAction(sess.id, action.id, patch)}
-            onDismiss={() => p.onRemoveAction(sess.id, action.id)}
-            onExecute={() => p.onExecuteAction(sess.id, action)}
-            onOpenPrInWoom={(url) => p.onOpenPrInWoom(url, action.kind === 'pr' ? action : null)}
-            {repoCwd}
-          />
+      <!-- Inline cards anchor right after the latest visible message
+           so they scroll with the conversation instead of living in a
+           trailing block at the bottom of the thread. SDD card +
+           action cards (question / propose_*) both render here. -->
+      {#if i === lastVisibleIndex}
+        {#if workspaceForSession(sess.id)}
+          {@const sddWs = workspaceForSession(sess.id)}
+          {#if sddWs}
+            <div class="action-wrap">
+              <SddCard
+                workspace={sddWs}
+                onAdvance={(prompt) => p.onSddAdvance?.(sess.id, prompt)}
+              />
+            </div>
+          {/if}
         {/if}
-      </div>
+
+        {#each sess.actions as action (action.id)}
+          <div class="action-wrap">
+            {#if action.kind === 'question'}
+              <QuestionCard
+                {action}
+                onUpdate={(patch) => p.onUpdateAction(sess.id, action.id, patch)}
+                onDismiss={() => p.onRemoveAction(sess.id, action.id)}
+              />
+            {:else}
+              <ClaudeActionCard
+                {action}
+                onUpdate={(patch) => p.onUpdateAction(sess.id, action.id, patch)}
+                onDismiss={() => p.onRemoveAction(sess.id, action.id)}
+                onExecute={() => p.onExecuteAction(sess.id, action)}
+                onOpenPrInWoom={(url) => p.onOpenPrInWoom(url, action.kind === 'pr' ? action : null)}
+                {repoCwd}
+              />
+            {/if}
+          </div>
+        {/each}
+      {/if}
     {/each}
   </div>
 {/if}
