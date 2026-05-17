@@ -127,7 +127,8 @@ export type ContinuationReason =
   | 'stop'            // User pressed Stop → force-killed CLI → uuid rotated
   | 'cwd_switch_fresh' // Moved to a project the session hasn't visited before
   | 'cwd_switch_resume' // Returned to a known project; CLI memory exists there but cross-project context lost
-  | 'app_restart';    // Loaded from disk, CLI session likely stale
+  | 'app_restart'     // Loaded from disk, CLI session likely stale
+  | 'app_crash';      // Prior process died mid-turn (pendingTurn marker survived)
 
 /** Optional metadata that fine-tunes the recap's framing. */
 export interface ContinuationContext {
@@ -229,6 +230,9 @@ export function buildContinuationRecap(
       break;
     case 'app_restart':
       intro = "You are CONTINUING a chat that was loaded from disk after Woom restarted. The CLI's own session memory may or may not be intact; the transcript below is the authoritative record either way.";
+      break;
+    case 'app_crash':
+      intro = "You are CONTINUING a chat whose PREVIOUS turn was interrupted mid-stream — the prior Woom process died (force-quit, OS crash, agent killed without finishing). The last assistant message in the transcript is therefore INCOMPLETE or absent; the user's most recent question may not have been answered at all. The CLI's session lock for that turn is likely stale, so Woom rotated to a fresh uuid before this turn. Re-read the recent transcript and pick up from where the prior turn was going.";
       break;
   }
 

@@ -145,6 +145,51 @@ export function updateGithubFilters(instanceId: string, patch: Partial<GithubFil
   );
 }
 
+/** Patch only the UI-side filter fields (uiQuery / uiRoleFilter /
+ *  uiStateFilter / uiRepoFilter / uiAuthorFilter) and persist. Skips
+ *  the API refresh that `updateGithubFilters` schedules — these
+ *  fields filter already-loaded items and don't affect the GitHub
+ *  search query, so a network round-trip would be wasted. Pair with
+ *  the existing GithubList local-state usage to make filters survive
+ *  solo switches. */
+export function updateGithubUiFilters(instanceId: string, patch: Partial<GithubFilters>) {
+  inboxState.githubFiltersByInstance[instanceId] = {
+    ...githubFiltersFor(instanceId),
+    ...patch
+  };
+  persistGhFilters();
+}
+
+/** Field-level diff-and-write helper matching `persistJiraUiFilters`.
+ *  Called from a $effect in GithubList — reads each local state
+ *  field and writes ONLY changed ones back into the persistent slot.
+ *  Avoids the "every keystroke rebinds the proxy" symptom where deep
+ *  effects watching the filter object would otherwise re-fire on
+ *  every typing event. */
+export function persistGithubUiFilters(
+  instanceId: string,
+  patch: {
+    uiQuery: string;
+    uiRoleFilter: 'reviewer' | null;
+    uiStateFilter: 'open' | 'draft' | null;
+    uiRepoFilter: string | null;
+    uiAuthorFilter: string | null;
+  }
+) {
+  const current = githubFiltersFor(instanceId);
+  let changed = false;
+  const next: GithubFilters = { ...current };
+  if (current.uiQuery !== patch.uiQuery) { next.uiQuery = patch.uiQuery; changed = true; }
+  if (current.uiRoleFilter !== patch.uiRoleFilter) { next.uiRoleFilter = patch.uiRoleFilter; changed = true; }
+  if (current.uiStateFilter !== patch.uiStateFilter) { next.uiStateFilter = patch.uiStateFilter; changed = true; }
+  if (current.uiRepoFilter !== patch.uiRepoFilter) { next.uiRepoFilter = patch.uiRepoFilter; changed = true; }
+  if (current.uiAuthorFilter !== patch.uiAuthorFilter) { next.uiAuthorFilter = patch.uiAuthorFilter; changed = true; }
+  if (changed) {
+    inboxState.githubFiltersByInstance[instanceId] = next;
+    persistGhFilters();
+  }
+}
+
 export async function loadGithubRepoOptions() {
   if (inboxState.githubRepoOptions.length || inboxState.githubRepoOptionsLoading) return;
   inboxState.githubRepoOptionsLoading = true;

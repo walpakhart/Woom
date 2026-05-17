@@ -41,6 +41,33 @@ export function setSentryFilters(
   };
 }
 
+/** Field-level diff helper for the in-memory UI filters
+ *  (uiQuery / uiLevelFilter / uiStatusFilter / uiProjectFilter).
+ *  Same shape as `persistGithubUiFilters` / `persistJiraUiFilters` —
+ *  called from a $effect in SentryList. No server refresh — these
+ *  fields filter already-loaded items, not the Sentry API query. */
+export function persistSentryUiFilters(
+  instanceId: string,
+  patch: {
+    uiQuery: string;
+    uiLevelFilter: 'fatal' | 'error' | 'warning' | 'info' | null;
+    uiStatusFilter: 'unresolved' | 'resolved' | 'ignored' | null;
+    uiProjectFilter: string | null;
+  }
+) {
+  const current = sentryFiltersFor(instanceId);
+  let changed = false;
+  const next: SentryFiltersPersisted = { ...current };
+  if (current.uiQuery !== patch.uiQuery) { next.uiQuery = patch.uiQuery; changed = true; }
+  if (current.uiLevelFilter !== patch.uiLevelFilter) { next.uiLevelFilter = patch.uiLevelFilter; changed = true; }
+  if (current.uiStatusFilter !== patch.uiStatusFilter) { next.uiStatusFilter = patch.uiStatusFilter; changed = true; }
+  if (current.uiProjectFilter !== patch.uiProjectFilter) { next.uiProjectFilter = patch.uiProjectFilter; changed = true; }
+  if (changed) {
+    inboxState.sentryFiltersByInstance[instanceId] = next;
+    persistSentryFilters();
+  }
+}
+
 /** Compose the `query=` string from this column's structured filter
  *  state. Empty status/level slots translate to "no qualifier" (Sentry
  *  default matches everything when no `is:` is present). */

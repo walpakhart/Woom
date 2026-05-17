@@ -2149,3 +2149,59 @@ img.chat-avatar { padding: 0; }
   to   { opacity: 1; transform: translateY(0) scale(1); }
 }
 
+
+
+/* ---- UI density modes ----
+ * `comfortable` (default, no attribute) leaves the original paddings.
+ * `compact` (data-density="compact" on <html>) trims paddings in the
+ * highest-density surfaces — inbox cards, list headers, chat messages,
+ * pane heads — so a single laptop screen fits ~20-25% more rows. We
+ * only touch padding + gap on a tight allowlist; font sizes / colours
+ * stay put so muscle memory and legibility don't shift.
+ *
+ * Toggle via `applyDensity()` in `$lib/state/density.svelte.ts` or
+ * the ⌘\ shortcut wired in `+page.svelte`. Settings UI exposes a
+ * dropdown for discoverability.
+ */
+:root[data-density="compact"] .inbox-item {
+  padding: 7px 10px 8px 12px;
+  gap: 2px;
+}
+:root[data-density="compact"] .inbox-header {
+  padding: 10px 14px 6px;
+}
+:root[data-density="compact"] .inbox-list {
+  padding: 4px 6px 14px;
+}
+:root[data-density="compact"] .chat-msg {
+  gap: 4px;
+}
+:root[data-density="compact"] .chat-msg-head {
+  margin-bottom: 2px;
+}
+/* Pane headers across solos — Jira / GitHub / Sentry detail headers,
+ * Editor activity bar headings, etc. Targets a broad set of selectors
+ * that share the same visual role (section / pane title bar). */
+:root[data-density="compact"] .pane-head,
+:root[data-density="compact"] .app-pane-head {
+  padding-top: 10px !important;
+  padding-bottom: 8px !important;
+}
+:root[data-density="compact"] .focus-shell {
+  padding-top: 18px;
+  padding-bottom: 60px;
+}
+/* Composer textarea — shave 4px off the vertical pad so the input
+ * doesn't dominate the bottom of the chat. Kept above 6px so the
+ * caret never crowds the border on the first keystroke. */
+:root[data-density="compact"] .composer-textarea,
+:root[data-density="compact"] .composer-shell {
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+/* Home dashboard: the aurora hero + stat-cards page benefits the most
+ * from compact mode because the page is the most card-heavy in the
+ * app. Tighten the section gaps and card paddings. */
+:root[data-density="compact"] .home-section + .home-section {
+  margin-top: 16px;
+}

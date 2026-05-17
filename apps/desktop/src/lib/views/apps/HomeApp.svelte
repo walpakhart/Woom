@@ -126,6 +126,16 @@
 
   /* ---------- Aggregated stats ---------- */
 
+  /** 14 calendar days × 24 clock hours of message counts. Day 0 is
+   *  the OLDEST day (~13 days ago at local midnight); day 13 is today.
+   *  Hour 0..23 is local-clock hour. The heatmap surfaces patterns
+   *  ("you work mornings", "Fridays are quiet") that the prior 24h
+   *  bar chart couldn't — same agent-message count source.
+   *
+   *  Local-time semantics on purpose: a user in PT vs UTC reading
+   *  "3am peak" should see their wall clock, not the server's. */
+  const HEATMAP_DAYS = 14;
+
   const stats = $derived.by(() => {
     let runningChats = 0;
     let totalChats = 0;
@@ -133,6 +143,19 @@
     const dayStart = p.now - 24 * 60 * 60 * 1000;
     /* 24 hourly buckets ending at `now`; index 0 = oldest hour. */
     const hourlyBuckets = new Array<number>(24).fill(0);
+    /* 14-day × 24-hour grid. Outer index = day (0 = oldest, 13 = today).
+       Anchor each day to its local-midnight boundary so DST transitions
+       don't leak counts into the wrong bucket. */
+    const heatmap: number[][] = Array.from({ length: HEATMAP_DAYS }, () =>
+      new Array<number>(24).fill(0)
+    );
+    const nowDate = new Date(p.now);
+    const todayMidnight = new Date(
+      nowDate.getFullYear(),
+      nowDate.getMonth(),
+      nowDate.getDate()
+    ).getTime();
+    const heatmapStart = todayMidnight - (HEATMAP_DAYS - 1) * 24 * 60 * 60 * 1000;
     for (const s of sessionsState.list) {
       if (s.agentKind !== 'claude' && s.agentKind !== 'cursor') continue;
       totalChats += 1;
@@ -140,13 +163,34 @@
       for (const m of s.messages) {
         const t = new Date(m.at ?? '').getTime();
         if (!Number.isFinite(t)) continue;
-        if (t < dayStart || t > p.now) continue;
-        messagesToday += 1;
-        const bucket = Math.min(
-          23,
-          Math.max(0, 23 - Math.floor((p.now - t) / (60 * 60 * 1000)))
-        );
-        hourlyBuckets[bucket] += 1;
+        if (t < dayStart || t > p.now) {
+          /* Skip rolling-24h aggregations outside the window — but
+             still bucket into the heatmap if it falls within the
+             14-day grid. */
+        } else {
+          messagesToday += 1;
+          const bucket = Math.min(
+            23,
+            Math.max(0, 23 - Math.floor((p.now - t) / (60 * 60 * 1000)))
+          );
+          hourlyBuckets[bucket] += 1;
+        }
+        if (t >= heatmapStart && t <= p.now) {
+          const msgDate = new Date(t);
+          const dayIdx = Math.floor(
+            (new Date(
+              msgDate.getFullYear(),
+              msgDate.getMonth(),
+              msgDate.getDate()
+            ).getTime() -
+              heatmapStart) /
+              (24 * 60 * 60 * 1000)
+          );
+          const hourIdx = msgDate.getHours();
+          if (dayIdx >= 0 && dayIdx < HEATMAP_DAYS && hourIdx >= 0 && hourIdx < 24) {
+            heatmap[dayIdx][hourIdx] += 1;
+          }
+        }
       }
     }
     let openPRs = 0;
@@ -172,11 +216,42 @@
       totalChats,
       messagesToday,
       hourlyBuckets,
+      heatmap,
+      heatmapStart,
       openPRs,
       openTickets,
       unresolvedSentry
     };
   });
+
+  /** Max single-cell count in the heatmap — used to scale per-cell
+   *  opacity. Clamped at 1 to avoid division-by-zero on a clean
+   *  installation. */
+  const heatmapMax = $derived.by(() => {
+    let m = 0;
+    for (const row of stats.heatmap) {
+      for (const n of row) {
+        if (n > m) m = n;
+      }
+    }
+    return Math.max(1, m);
+  });
+
+  /** Hover state for the heatmap. Drives the meta line that swaps in
+   *  when the user hovers a specific cell — replaces the static peak
+   *  chip with a "this day @ this hour: N messages" detail. */
+  let hoveredCell = $state<{ day: number; hour: number } | null>(null);
+
+  function heatmapCellLabel(dayIdx: number, hourIdx: number): string {
+    const dayStart = stats.heatmapStart + dayIdx * 24 * 60 * 60 * 1000;
+    const d = new Date(dayStart);
+    const weekday = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.getDay()];
+    const dom = d.getDate();
+    const hh = hourIdx;
+    const ampm = hh < 12 ? 'am' : 'pm';
+    const display = ((hh + 11) % 12) + 1;
+    return `${weekday} ${dom} · ${display}${ampm}`;
+  }
 
   /** One-line "what's happening right now" string. Listed in priority
    *  order so the most-actionable signal lands first; falls back to a
@@ -274,16 +349,10 @@
   const terminalCount = $derived(layoutState.instances.terminal.length);
   const editorCount = $derived(layoutState.instances.editor.length);
 
-  /** Bar height for the activity chart. Caller hands a count, the
-   *  fn maps it to a 4-32px range so empty hours still get a 2-3px
-   *  baseline (otherwise zero-runs read as missing data). */
-  function barHeight(count: number, max: number): number {
-    if (max === 0) return 4;
-    const ratio = count / max;
-    return Math.max(4, Math.round(4 + ratio * 28));
-  }
-
-  const hourlyMax = $derived(Math.max(...stats.hourlyBuckets, 0));
+  /* `barHeight` + `hourlyMax` retired with the 24h bar chart. The
+     heatmap reads stats.heatmap + heatmapMax for cell opacity; the
+     24h rolling-peak chip continues to use stats.hourlyBuckets via
+     peakHour. */
 </script>
 
 <section class="ho">
@@ -316,32 +385,46 @@
         </div>
       </div>
 
-      <!-- Right-side panel: 24h activity histogram. Bars are per-hour
-           message counts; the peak chip below summarises the chart in
-           one line so users get something even if they don't read the
-           bars. Empty state gets a friendly idle copy. -->
-      <div class="ho-spark">
-        <div class="ho-spark-head">
-          <span class="ho-spark-label mono">Last 24h</span>
-          {#if peakHour}
-            <span class="ho-spark-meta mono">peak {peakHour.label} · {peakHour.count} msg</span>
+      <!-- Right-side panel: 14d × 24h activity heatmap. Each cell is
+           one local-clock hour of one day; opacity scales with the
+           per-cell message count vs the grid max. Reveals patterns
+           the prior 24h bar chart couldn't (you work mornings, Fridays
+           are quiet, etc.). Hover surfaces the per-cell count; the
+           meta line falls back to the rolling-24h peak when the user
+           isn't hovering anything. -->
+      <div class="ho-heat">
+        <div class="ho-heat-head">
+          <span class="ho-heat-label mono">Last {HEATMAP_DAYS}d</span>
+          {#if hoveredCell}
+            {@const n = stats.heatmap[hoveredCell.day][hoveredCell.hour]}
+            <span class="ho-heat-meta mono">
+              {heatmapCellLabel(hoveredCell.day, hoveredCell.hour)} · {n} msg{n === 1 ? '' : 's'}
+            </span>
+          {:else if peakHour}
+            <span class="ho-heat-meta mono">24h peak {peakHour.label} · {peakHour.count} msg</span>
           {:else}
-            <span class="ho-spark-meta mono">no activity</span>
+            <span class="ho-heat-meta mono">no activity</span>
           {/if}
         </div>
-        <div class="ho-spark-bars">
-          {#each stats.hourlyBuckets as count, i}
-            <span
-              class="ho-spark-bar"
-              class:ho-spark-bar--zero={count === 0}
-              class:ho-spark-bar--peak={count > 0 && count === hourlyMax && hourlyMax > 0}
-              style:height="{barHeight(count, hourlyMax)}px"
-              title={count === 0 ? '—' : `${count} message${count === 1 ? '' : 's'}`}
-            ></span>
+        <div class="ho-heat-grid" role="img" aria-label="14-day activity heatmap">
+          {#each stats.heatmap as row, dayIdx (dayIdx)}
+            <div class="ho-heat-row">
+              {#each row as count, hourIdx (hourIdx)}
+                <span
+                  class="ho-heat-cell"
+                  class:ho-heat-cell--zero={count === 0}
+                  style:opacity={count === 0 ? '' : Math.max(0.18, count / heatmapMax).toString()}
+                  title={count === 0 ? '—' : `${heatmapCellLabel(dayIdx, hourIdx)}: ${count}`}
+                  onmouseenter={() => (hoveredCell = { day: dayIdx, hour: hourIdx })}
+                  onmouseleave={() => (hoveredCell = null)}
+                ></span>
+              {/each}
+            </div>
           {/each}
         </div>
-        <div class="ho-spark-axis mono">
-          <span>24h ago</span>
+        <div class="ho-heat-axis mono">
+          <span>0h</span>
+          <span>12h</span>
           <span>now</span>
         </div>
       </div>
@@ -750,10 +833,13 @@
     color: var(--text-1);
   }
 
-  /* 24h activity histogram — ambient, not central. */
-  .ho-spark {
-    display: flex; flex-direction: column; gap: 10px;
-    padding: 16px 18px;
+  /* 14d × 24h activity heatmap — GitHub-style. Each cell is one local-
+     clock hour of one day; opacity scales with the per-cell message
+     count. Calm at low values, peaks pop. Hover state surfaces the
+     per-cell label in the head meta line. */
+  .ho-heat {
+    display: flex; flex-direction: column; gap: 8px;
+    padding: 14px 16px 12px;
     border-radius: 14px;
     background:
       linear-gradient(180deg, color-mix(in srgb, var(--accent) 8%, transparent), transparent),
@@ -761,39 +847,50 @@
     border: 1px solid var(--border);
     min-width: 0;
   }
-  .ho-spark-head { display: flex; align-items: baseline; gap: 12px; }
-  .ho-spark-label {
+  .ho-heat-head { display: flex; align-items: baseline; gap: 12px; }
+  .ho-heat-label {
     font-size: 9.5px; font-weight: 700;
     letter-spacing: 0.1em;
     text-transform: uppercase;
     color: var(--text-mute);
   }
-  .ho-spark-meta {
+  .ho-heat-meta {
     font-size: 10.5px;
     color: var(--accent-bright);
     margin-left: auto;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
-  .ho-spark-bars {
+  .ho-heat-grid {
+    display: flex; flex-direction: column;
+    gap: 2px;
+  }
+  .ho-heat-row {
     display: grid;
     grid-template-columns: repeat(24, 1fr);
-    gap: 3px;
-    align-items: end;
-    height: 38px;
+    gap: 2px;
   }
-  .ho-spark-bar {
-    background: var(--accent);
-    border-radius: 2px;
+  .ho-heat-cell {
     width: 100%;
-    transition: background 140ms;
+    aspect-ratio: 1 / 1;
+    min-height: 8px;
+    max-height: 12px;
+    border-radius: 2px;
+    background: var(--accent);
+    opacity: 0.6;
+    transition: opacity 120ms, transform 120ms, box-shadow 120ms;
+    cursor: default;
   }
-  .ho-spark-bar--zero {
-    background: color-mix(in srgb, var(--accent) 16%, transparent);
+  .ho-heat-cell:hover {
+    transform: scale(1.4);
+    box-shadow: 0 0 0 1px var(--accent-bright);
   }
-  .ho-spark-bar--peak {
-    background: var(--accent-bright);
-    box-shadow: 0 0 8px var(--accent-glow);
+  .ho-heat-cell--zero {
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+    opacity: 1;
   }
-  .ho-spark-axis {
+  .ho-heat-axis {
     display: flex; justify-content: space-between;
     font-size: 9.5px;
     color: var(--text-mute);

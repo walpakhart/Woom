@@ -1183,43 +1183,12 @@
                 <DiffView repo={repoPath} path={diffTarget.path} staged={diffTarget.staged} />
               {/key}
             {:else if activePath}
-              {#if pendingEditsForActiveFile.length > 0}
-                <!-- Pending agent-edits banner. Surfaces "agent wrote
-                     N things in THIS file" right where the user is
-                     reading the file, with one-tap Keep / Revert
-                     scoped to this buffer. The full Multi-Agent Diff
-                     Review lives in the sidebar's Review tab; the
-                     "Open Review" affordance jumps the user there. -->
-                <div class="ev-pending-bar" role="status" aria-live="polite">
-                  <span class="ev-pending-icon" aria-hidden="true">
-                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
-                      <path d="M5 6l5.5 5.5L5 17"/>
-                      <path d="M13 17h6"/>
-                    </svg>
-                  </span>
-                  <span class="ev-pending-label">{pendingBannerLabel}</span>
-                  <span class="ev-pending-spacer"></span>
-                  {#if onRequestReviewTab}
-                    <button
-                      class="ev-pending-btn"
-                      onclick={() => onRequestReviewTab?.()}
-                      title="Open Review pane to step through every hunk"
-                    >Open Review</button>
-                  {/if}
-                  <button
-                    class="ev-pending-btn"
-                    disabled={bannerBusy}
-                    onclick={() => void revertActiveFileEdits()}
-                    title="Undo every agent edit on this file"
-                  >Revert</button>
-                  <button
-                    class="ev-pending-btn ev-pending-btn--primary"
-                    disabled={bannerBusy}
-                    onclick={keepActiveFileEdits}
-                    title="Mark every agent edit on this file as kept"
-                  >Keep</button>
-                </div>
-              {/if}
+              <!-- Pending-edits banner removed: it duplicated the
+                   sidebar Review tab which already lists pending edits
+                   with the same Keep/Revert affordances. Per-line
+                   change bar (left gutter) + Review tab cover the
+                   same need without sitting on top of the editor. -->
+
               {#if isImagePath}
                 <!-- Bitmap / vector image — render via the asset://
                      protocol instead of dumping bytes into CodeMirror.
@@ -1271,6 +1240,7 @@
                           {instanceId}
                           {wordWrap}
                           {onDirty}
+                          repoPath={repoPath ?? ''}
                           onSaved={onFileSaved}
                           onSelectionChange={(sel) => (selection = sel)}
                           onCursorChange={(info) => (cursorInfo = info)}
@@ -1293,6 +1263,7 @@
                       {instanceId}
                       {wordWrap}
                       {onDirty}
+                      repoPath={repoPath ?? ''}
                       onSaved={onFileSaved}
                       onSelectionChange={(sel) => (selection = sel)}
                       onCursorChange={(info) => (cursorInfo = info)}
@@ -1307,6 +1278,7 @@
                     {instanceId}
                     {wordWrap}
                     {onDirty}
+                    repoPath={repoPath ?? ''}
                     onSaved={onFileSaved}
                     onSelectionChange={(sel) => (selection = sel)}
                     onCursorChange={(info) => (cursorInfo = info)}
@@ -1985,45 +1957,6 @@
      shrinks to fit instead of having content go behind it). The
      `flex-direction: column` on `.ev-editor-wrap` above lets this
      row + the editor below stack cleanly. */
-  .ev-pending-bar {
-    display: flex; align-items: center; gap: 10px;
-    padding: 6px 12px;
-    background: linear-gradient(180deg,
-      color-mix(in srgb, var(--accent) 14%, var(--bg-1)),
-      var(--bg-1));
-    border-bottom: 1px solid var(--border-accent-2, var(--border));
-    color: var(--text-1);
-    font-size: 11.5px;
-    flex-shrink: 0;
-  }
-  .ev-pending-icon {
-    width: 18px; height: 18px;
-    display: inline-grid; place-items: center;
-    color: var(--accent-bright);
-  }
-  .ev-pending-label {
-    color: var(--text-0);
-    font-weight: 500;
-  }
-  .ev-pending-spacer { flex: 1; }
-  .ev-pending-btn {
-    padding: 3px 9px;
-    background: var(--bg-2);
-    border: 1px solid var(--border);
-    color: var(--text-1);
-    border-radius: 5px;
-    font-size: 11.5px;
-    cursor: pointer;
-    transition: color 120ms, border-color 120ms, background 120ms;
-  }
-  .ev-pending-btn:hover { color: var(--text-0); border-color: var(--border-strong, var(--border)); }
-  .ev-pending-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-  .ev-pending-btn--primary {
-    background: var(--accent-soft);
-    border-color: var(--border-accent-2);
-    color: var(--accent-bright);
-  }
-
   /* Status bar — single horizontal strip pinned to the bottom of
      the editor pane. Mono throughout, brand-dot for the git branch
      readout, mint check for "no problems". */

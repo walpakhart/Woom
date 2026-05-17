@@ -27,6 +27,36 @@
   // when rootPath changes (new repo → forget what we revealed in the old).
   let lastRevealed = $state('');
 
+  /* Per-repo expanded-paths cache. localStorage key includes the
+     repo root so two open folders don't trample each other's tree
+     state. Saved on every toggle + smartRefresh; restored on
+     mount / repo switch via the same walk-and-expand logic that
+     smartRefresh uses on watcher events. */
+  function treeExpandKey(root: string): string {
+    return `woom:editor:tree-expanded:v1:${root}`;
+  }
+  function readExpandedFromCache(root: string): Set<string> {
+    if (!root) return new Set();
+    try {
+      const raw = localStorage.getItem(treeExpandKey(root));
+      if (!raw) return new Set();
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return new Set();
+      return new Set(parsed.filter((p): p is string => typeof p === 'string'));
+    } catch {
+      return new Set();
+    }
+  }
+  function writeExpandedToCache(): void {
+    if (!rootPath) return;
+    try {
+      const paths = items.filter((it) => it.is_dir && it.expanded).map((it) => it.path);
+      localStorage.setItem(treeExpandKey(rootPath), JSON.stringify(paths));
+    } catch {
+      /* localStorage full / unavailable — non-essential, skip. */
+    }
+  }
+
   /** Batch-check `paths` against the repo's gitignore rules. Returns a Set
       of ignored absolute paths. Silent on failure (non-git dir, transient
       git error) — the tree keeps rendering without dimming. */
@@ -48,12 +78,38 @@
     loading = true;
     error = null;
     try {
-      const kids = await invoke<Entry[]>('fs_list_dir', { path: rootPath });
-      const ignored = await checkIgnored(kids.map((e) => e.path));
-      items = kids.map((e) => ({
-        name: e.name, path: e.path, is_dir: e.is_dir, depth: 0, expanded: false,
-        ignored: ignored.has(e.path)
-      }));
+      /* Restore previously-expanded dirs from localStorage and walk
+         into them so the tree comes back the way the user left it.
+         No cached state → standard one-level root listing. */
+      const cached = readExpandedFromCache(rootPath);
+      if (cached.size === 0) {
+        const kids = await invoke<Entry[]>('fs_list_dir', { path: rootPath });
+        const ignored = await checkIgnored(kids.map((e) => e.path));
+        items = kids.map((e) => ({
+          name: e.name, path: e.path, is_dir: e.is_dir, depth: 0, expanded: false,
+          ignored: ignored.has(e.path)
+        }));
+      } else {
+        /* Use the same walk-and-rebuild path smartRefresh uses, but
+           seeded from the cached `expanded` set instead of the
+           current in-memory items (there ARE none on first mount). */
+        const flat: Item[] = [];
+        async function walk(parent: string, depth: number, parentIgnored: boolean): Promise<void> {
+          const kids = await invoke<Entry[]>('fs_list_dir', { path: parent });
+          const ignoredHere = await checkIgnored(kids.map((e) => e.path));
+          for (const e of kids) {
+            const ignored = parentIgnored || ignoredHere.has(e.path);
+            const wasExpanded = e.is_dir && cached.has(e.path);
+            flat.push({ name: e.name, path: e.path, is_dir: e.is_dir, depth, expanded: wasExpanded, ignored });
+            if (wasExpanded) {
+              try { await walk(e.path, depth + 1, ignored); }
+              catch { /* skip kids whose dir disappeared since last save */ }
+            }
+          }
+        }
+        await walk(rootPath, 0, false);
+        items = flat;
+      }
     } catch (e: unknown) {
       error = e instanceof Error ? e.message : String(e);
     } finally {
@@ -76,6 +132,7 @@
         drop.push(j);
       }
       items = [...items.slice(0, idx), { ...it, expanded: false }, ...items.slice(idx + drop.length + 1)];
+      writeExpandedToCache();
       return;
     }
     // expand: fetch children, insert after
@@ -99,6 +156,7 @@
       ...inserted,
       ...items.slice(idx + 1)
     ];
+    writeExpandedToCache();
   }
 
   $effect(() => { void loadRoot(); lastRevealed = ''; });
@@ -129,6 +187,7 @@
       }
       await walk(rootPath, 0, false);
       items = flat;
+      writeExpandedToCache();
     } catch (e: unknown) {
       // Don't blow up the UI on a refresh error — leave stale state in place,
       // the next event will retry. (Common cause: rootPath disappeared, the

@@ -8,11 +8,14 @@
     githubItemsFor,
     githubLoadingFor,
     githubErrorFor,
-    openFocusItem
+    openFocusItem,
+    githubFiltersFor,
+    persistGithubUiFilters
   } from '$lib/state/inbox.svelte';
   import { relativeTime, type InboxItem, type ConnectionStatus, type Repository } from '$lib/data';
   import Dropdown from '$lib/components/ui/Dropdown.svelte';
   import ListSearchPicker from '$lib/views/apps/_shared/ListSearchPicker.svelte';
+  import CardContextMenu, { type MenuItem } from '$lib/views/apps/_shared/CardContextMenu.svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { onMount } from 'svelte';
 
@@ -51,19 +54,87 @@
   const loading = $derived(githubLoadingFor(p.instanceId));
   const error = $derived(githubErrorFor(p.instanceId));
 
-  /** Search + filter state. Kept local to the list (in-memory) so
-   *  filtering doesn't survive a refresh — that's intentional;
-   *  filters are an exploration tool, not a saved view. Each chip is
-   *  a toggle (click again to deselect → "all"); dropdowns use a
-   *  null sentinel for "any". */
-  let query = $state('');
-  let roleFilter = $state<'reviewer' | null>(null);
-  let stateFilter = $state<'open' | 'draft' | null>(null);
+  /** Search + filter state. Persisted per-instance via
+   *  `persistGithubUiFilters` — survives solo switches + app restart.
+   *  Each chip is a toggle (click again to deselect → "all");
+   *  dropdowns use a null sentinel for "any". Init reads from the
+   *  store; mutations bind to $state locally then a $effect mirrors
+   *  the diff back. */
+  const _init = githubFiltersFor(p.instanceId);
+  let query = $state(_init.uiQuery ?? '');
+  let roleFilter = $state<'reviewer' | null>(_init.uiRoleFilter ?? null);
+  let stateFilter = $state<'open' | 'draft' | null>(_init.uiStateFilter ?? null);
   /** `null` = inbox scope (involves:@me, the default). `'__all_open__'`
    *  = drop the involves filter, search every accessible repo.
    *  Otherwise the literal `owner/name` of a specific repo. */
-  let repoFilter = $state<string | null>(null);
-  let authorFilter = $state<string | null>(null);
+  let repoFilter = $state<string | null>(_init.uiRepoFilter ?? null);
+  let authorFilter = $state<string | null>(_init.uiAuthorFilter ?? null);
+
+  /* Mirror UI filter state into the persistent slot. Effect re-runs
+     whenever any field changes; `persistGithubUiFilters` is a no-op
+     when nothing differs so re-renders for unrelated reasons (items
+     refresh, focus change) don't punish disk writes. */
+  $effect(() => {
+    persistGithubUiFilters(p.instanceId, {
+      uiQuery: query,
+      uiRoleFilter: roleFilter,
+      uiStateFilter: stateFilter,
+      uiRepoFilter: repoFilter,
+      uiAuthorFilter: authorFilter
+    });
+  });
+
+  /* Right-click context menu state. `ctxCoords` holds the cursor
+     position; `ctxItem` carries the InboxItem the menu was opened
+     against (the action closures capture it so we don't lose the row
+     reference after the menu opens). */
+  let ctxCoords = $state<{ x: number; y: number } | null>(null);
+  let ctxItem = $state<InboxItem | null>(null);
+
+  function openCtxMenu(e: MouseEvent, it: InboxItem) {
+    e.preventDefault();
+    e.stopPropagation();
+    ctxCoords = { x: e.clientX, y: e.clientY };
+    ctxItem = it;
+  }
+  function closeCtxMenu() {
+    ctxCoords = null;
+    ctxItem = null;
+  }
+
+  const ctxItems = $derived.by<MenuItem[]>(() => {
+    const it = ctxItem;
+    if (!it) return [];
+    return [
+      {
+        label: 'Send to Claude',
+        icon: 'M22 2 11 13 M22 2l-7 20-4-9-9-4 20-7z',
+        onClick: () => p.onSendToClaude(it)
+      },
+      {
+        label: 'Send to Cursor',
+        icon: 'M3 3l8 18 2-8 8-2z',
+        onClick: () => p.onSendToCursor(it)
+      },
+      {
+        label: 'Open in browser',
+        icon: 'M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6 M15 3h6v6 M10 14L21 3',
+        onClick: () => p.onOpenBrowser(it.url)
+      },
+      {
+        label: 'Copy URL',
+        icon: 'M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2 M9 2h6a1 1 0 0 1 1 1v2H8V3a1 1 0 0 1 1-1z',
+        onClick: async () => {
+          try {
+            await navigator.clipboard.writeText(it.url);
+          } catch (e) {
+            console.warn('clipboard', e);
+          }
+        },
+        shortcut: '⌘C'
+      }
+    ];
+  });
 
   const me = $derived(p.githubStatus.kind === 'connected' ? p.githubStatus.user.login : null);
 
@@ -696,6 +767,7 @@
             ondragend={p.onDragEnd}
             onclick={(e) => clickItem(it, e)}
             ondblclick={() => p.onOpenBrowser(it.url)}
+            oncontextmenu={(e) => openCtxMenu(e, it)}
           >
             <div class="gl-card-top">
               <span class="gl-card-st {stateClass(it)}">{stateLabel(it)}</span>
@@ -775,6 +847,8 @@
     {/if}
   </div>
 </aside>
+
+<CardContextMenu coords={ctxCoords} items={ctxItems} onClose={closeCtxMenu} />
 
 <style>
   .gl {

@@ -8,6 +8,13 @@
   import { editorThemeExtension } from '$lib/components/editor/editorTheme';
   import { themeState } from '$lib/state/theme.svelte';
   import { recordCursor, readCursor } from '$lib/state/editorCursors.svelte';
+  import {
+    changeBarExtension,
+    setChangeBar,
+    parseUnifiedDiffToLineChanges,
+    type LineChanges
+  } from '$lib/components/editor/changeBar';
+  import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 
   interface Props {
     path: string;
@@ -66,6 +73,10 @@
      *  call. Skipped when not provided so most call sites pay
      *  nothing. */
     onTextChange?: (text: string) => void;
+    /** Absolute path of the repo this file belongs to. Drives the
+     *  left-gutter change bar (HEAD vs worktree). Empty / non-git
+     *  → no gutter. */
+    repoPath?: string;
   }
   let {
     path,
@@ -75,7 +86,8 @@
     onSelectionChange,
     onCursorChange,
     wordWrap = false,
-    onTextChange
+    onTextChange,
+    repoPath = ''
   }: Props = $props();
 
   let editorEl: HTMLDivElement;
@@ -143,6 +155,7 @@
             themeCompartment.of(editorThemeExtension(themeState.name)),
             languageCompartment.of(languageFor(p)),
             wrapCompartment.of(wordWrap ? EditorView.lineWrapping : []),
+            changeBarExtension(),
             keymap.of([
               { key: 'Mod-s', run: (v) => { void save(v); return true; } }
             ]),
@@ -154,6 +167,7 @@
                   dirty = d;
                   onDirty?.(d);
                 }
+                scheduleChangeBar();
                 /* Stream the buffer text up so the Markdown live-
                    preview can re-render. Only fired when the parent
                    wired a callback — no cost otherwise. */
@@ -251,6 +265,7 @@
           if (v && v.scrollDOM) v.scrollDOM.scrollTop = stored.scrollTop;
         });
       }
+      void refreshChangeBar();
     } catch (e: unknown) {
       error = e instanceof Error ? e.message : String(e);
     } finally {
@@ -267,10 +282,44 @@
       dirty = false;
       onDirty?.(false);
       onSaved?.(lastLoadedPath);
+      void refreshChangeBar();
     } catch (e: unknown) {
       error = e instanceof Error ? e.message : String(e);
     }
   }
+
+  /** Fetch `git diff` for the active file and push parsed per-line
+   *  markers into the editor's changeBar state field. Silent on
+   *  non-git roots / untracked paths — change bar just stays empty. */
+  let cbDebounce: ReturnType<typeof setTimeout> | null = null;
+  async function refreshChangeBar() {
+    if (!view || !lastLoadedPath || !repoPath) return;
+    if (!lastLoadedPath.startsWith(repoPath)) return;
+    const rel = lastLoadedPath.slice(repoPath.length + 1);
+    if (!rel) return;
+    try {
+      const diff = await invoke<string>('git_diff', {
+        repo: repoPath,
+        path: rel,
+        staged: false
+      });
+      const map: LineChanges = parseUnifiedDiffToLineChanges(diff);
+      view.dispatch({ effects: setChangeBar.of(map) });
+    } catch {
+      view.dispatch({ effects: setChangeBar.of(new Map()) });
+    }
+  }
+  function scheduleChangeBar() {
+    if (cbDebounce) clearTimeout(cbDebounce);
+    cbDebounce = setTimeout(() => { void refreshChangeBar(); }, 300);
+  }
+
+  let watchUnlisten: UnlistenFn | null = null;
+  onMount(async () => {
+    watchUnlisten = await listen<{ path: string }>('fs:changed', () => {
+      scheduleChangeBar();
+    });
+  });
 
   export async function reload() {
     if (!path) return;
@@ -323,6 +372,11 @@
   });
 
   $effect(() => {
+    /* Refresh change bar whenever repoPath changes (open new repo). */
+    if (repoPath) scheduleChangeBar();
+  });
+
+  $effect(() => {
     void load(path);
   });
 
@@ -357,6 +411,8 @@
   }
 
   onDestroy(() => {
+    watchUnlisten?.();
+    if (cbDebounce) clearTimeout(cbDebounce);
     /* Last-chance flush of the current cursor so a quit (or column
      * close) doesn't lose the user's position. The updateListener
      * already records most positions on the fly; this catches the
@@ -388,6 +444,24 @@
   .ed-surface :global(.cm-editor) { height: 100%; font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', monospace; font-size: 13px; }
   .ed-surface :global(.cm-editor.cm-focused) { outline: none; }
   .ed-surface :global(.cm-scroller) { font-family: inherit; }
+
+  /* Git change bar — 3px stripe painted as a border-left on changed
+     lines. Add = green, Mod = ochre, Del = red hairline at the
+     line preceding deleted content. Matches VS Code / IntelliJ. */
+  .ed-surface :global(.cm-line-changebar) {
+    border-left: 3px solid transparent;
+    padding-left: 3px;
+  }
+  .ed-surface :global(.cm-line-changebar--add) {
+    border-left-color: #6faE88;
+  }
+  .ed-surface :global(.cm-line-changebar--mod) {
+    border-left-color: #d9b86e;
+  }
+  .ed-surface :global(.cm-line-changebar--del) {
+    border-left-color: #e88264;
+    box-shadow: inset 0 -2px 0 0 #e88264;
+  }
   .ed-error {
     padding: 8px 14px;
     background: rgba(232, 130, 100, 0.12);

@@ -28,7 +28,8 @@ pub fn write_file(path: &str, contents: &str) -> Result<(), String> {
                 .map_err(|e| format!("mkdir -p {}: {}", parent.display(), e))?;
         }
     }
-    std::fs::write(path, contents).map_err(|e| format!("write {}: {}", path, e))
+    write_atomic(std::path::Path::new(path), contents.as_bytes())
+        .map_err(|e| format!("write {}: {}", path, e))
 }
 
 /// Binary write — for chat image attachments dropped from clipboard / Cmd+Shift+5
@@ -41,7 +42,53 @@ pub fn write_bytes(path: &str, bytes: &[u8]) -> Result<(), String> {
                 .map_err(|e| format!("mkdir -p {}: {}", parent.display(), e))?;
         }
     }
-    std::fs::write(path, bytes).map_err(|e| format!("write {}: {}", path, e))
+    write_atomic(std::path::Path::new(path), bytes)
+        .map_err(|e| format!("write {}: {}", path, e))
+}
+
+/// Write `bytes` to `target` durably: tempfile in the same directory,
+/// `fsync`, then rename over the destination. On crash before rename
+/// the destination keeps its previous contents (or stays absent);
+/// after rename, the new contents are guaranteed to be on disk.
+///
+/// Same-directory tempfile is intentional — `rename(2)` is atomic only
+/// when source and destination share a filesystem. Using `/tmp` would
+/// silently degrade to copy+unlink on a different mount.
+///
+/// On rename failure the tempfile is cleaned up so retries don't leave
+/// litter. If the parent directory is read-only or full this still
+/// surfaces the error to the caller; we don't fall back to a non-atomic
+/// write because that would defeat the durability promise.
+fn write_atomic(target: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let parent = target
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| std::path::Path::new("."));
+    let file_name = target
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("woom-tmp");
+    /* PID + nanos suffix is collision-proof enough — only this process
+     * writes here, and within a process nanos monotonically advances
+     * between two `SystemTime::now()` calls on every platform Tauri
+     * targets. We don't need crypto-grade randomness. */
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let tmp_name = format!(".{}.{}.{}.tmp", file_name, std::process::id(), nanos);
+    let tmp_path = parent.join(tmp_name);
+    {
+        let mut f = std::fs::File::create(&tmp_path)?;
+        f.write_all(bytes)?;
+        f.sync_all()?;
+    }
+    if let Err(e) = std::fs::rename(&tmp_path, target) {
+        let _ = std::fs::remove_file(&tmp_path);
+        return Err(e);
+    }
+    Ok(())
 }
 
 pub fn list_dir(path: &str) -> Result<Vec<DirEntry>, String> {
@@ -520,4 +567,81 @@ fn enriched_path() -> String {
         }
     }
     parts.join(":")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Tempdir helper so tests stay isolated from each other and from
+    /// real user files. Uses the process id + nanos so concurrent
+    /// `cargo test` runs don't collide.
+    fn tempdir() -> std::path::PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir().join(format!(
+            "woom-fs-test-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn write_file_round_trips() {
+        let dir = tempdir();
+        let p = dir.join("a.json");
+        write_file(p.to_str().unwrap(), "{\"x\":1}").unwrap();
+        let got = std::fs::read_to_string(&p).unwrap();
+        assert_eq!(got, "{\"x\":1}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn write_file_overwrites_existing() {
+        let dir = tempdir();
+        let p = dir.join("a.json");
+        write_file(p.to_str().unwrap(), "first").unwrap();
+        write_file(p.to_str().unwrap(), "second").unwrap();
+        let got = std::fs::read_to_string(&p).unwrap();
+        assert_eq!(got, "second");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn write_file_leaves_no_tempfile_on_success() {
+        /* After a successful write the only file in the directory
+         * should be the target. If the tempfile path leaks (rename
+         * failure path forgot to clean up, or tempfile naming
+         * collided with target) we'd see two files here. */
+        let dir = tempdir();
+        let p = dir.join("a.json");
+        write_file(p.to_str().unwrap(), "hello").unwrap();
+        let entries: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().collect();
+        assert_eq!(entries.len(), 1);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn write_file_creates_missing_parent() {
+        let dir = tempdir();
+        let p = dir.join("nested/deep/a.json");
+        write_file(p.to_str().unwrap(), "x").unwrap();
+        assert!(p.exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn write_bytes_handles_binary() {
+        let dir = tempdir();
+        let p = dir.join("img.bin");
+        let bytes: Vec<u8> = vec![0, 1, 2, 255, 0, 0, 13, 10];
+        write_bytes(p.to_str().unwrap(), &bytes).unwrap();
+        let got = std::fs::read(&p).unwrap();
+        assert_eq!(got, bytes);
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

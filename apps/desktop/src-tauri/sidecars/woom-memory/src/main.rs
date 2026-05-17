@@ -134,6 +134,21 @@ impl Memory {
     fn new(db_path: &str) -> anyhow::Result<Self> {
         let conn = Connection::open(db_path)
             .with_context(|| format!("open sqlite at {}", db_path))?;
+        /* Durability + concurrency pragmas. WAL lets readers and a
+         * single writer coexist (the sidecar is single-threaded but
+         * memory_local.rs writes from the desktop process — two
+         * writers on the same file). synchronous=NORMAL gives one
+         * fsync per checkpoint instead of per transaction, which on
+         * the modest memory write rate is fine: durable enough to
+         * survive process crashes, fast enough that bursts don't
+         * stall on disk. busy_timeout retries on lock contention
+         * instead of immediately returning SQLITE_BUSY. */
+        conn.pragma_update(None, "journal_mode", "WAL")
+            .context("set journal_mode=WAL")?;
+        conn.pragma_update(None, "synchronous", "NORMAL")
+            .context("set synchronous=NORMAL")?;
+        conn.pragma_update(None, "busy_timeout", 2_000)
+            .context("set busy_timeout=2000")?;
         init_schema(&conn).context("init schema")?;
         Ok(Self {
             db: Arc::new(Mutex::new(conn)),
@@ -186,6 +201,15 @@ impl Memory {
             Some(k) => Some(normalize_kind(Some(k))?),
             None => None,
         };
+        let safe_query = sanitize_fts5_query(query);
+        if safe_query.is_empty() {
+            /* All tokens were stripped (e.g. query was pure punctuation
+             * like ":::"). Return empty result rather than letting an
+             * empty MATCH string error out at SQLite level. */
+            return Ok(CallToolResult::success(vec![Content::text(
+                "No matching memories.".to_string(),
+            )]));
+        }
         let rows = {
             let conn = self.db.lock().map_err(lock_err)?;
             let sql = if kind_filter.is_some() {
@@ -211,10 +235,10 @@ impl Memory {
              * `Result` finishes. */
             let mut stmt = conn.prepare(sql).map_err(sql_err)?;
             let iter = if let Some(k) = &kind_filter {
-                stmt.query_map(params![query, k, limit], row_to_memory)
+                stmt.query_map(params![safe_query, k, limit], row_to_memory)
                     .map_err(sql_err)?
             } else {
-                stmt.query_map(params![query, limit], row_to_memory)
+                stmt.query_map(params![safe_query, limit], row_to_memory)
                     .map_err(sql_err)?
             };
             iter.collect::<Result<Vec<_>, _>>().map_err(sql_err)?
@@ -690,6 +714,41 @@ fn like_tag_pattern(t: &str) -> String {
     format!("%,{escaped},%")
 }
 
+/// Sanitize a user-supplied FTS5 MATCH query.
+///
+/// FTS5 has its own mini-DSL on top of the user's words: `:` means
+/// "column filter" (`tags:foo`), `*` is prefix, `"…"` is phrase,
+/// `AND/OR/NOT/NEAR` are operators, `(` `)` group, and bare numbers
+/// like `475:` are interpreted as column references — producing the
+/// "no such column: 475" error from the 2026-05-16 incident.
+///
+/// Strategy: tokenize on whitespace, strip every FTS5 metachar from
+/// each token (`"`, `:`, `(`, `)`, `*`, `^`), drop empty tokens, then
+/// re-emit each as a quoted phrase so any remaining content (digits,
+/// punctuation, Cyrillic) is treated as literal text. Multiple
+/// phrases joined by whitespace yield FTS5's implicit AND-of-phrases,
+/// which is exactly the recall semantics we want.
+///
+/// Trade-off: power users lose access to prefix-search (`foo*`) and
+/// boolean operators. That's acceptable — the tool description never
+/// promised them, and the cost of one mis-typed `:` killing search
+/// for everyone is much higher than the upside of advanced syntax.
+fn sanitize_fts5_query(input: &str) -> String {
+    /* Characters that have syntactic meaning to FTS5. Stripping these
+     * is safer than escaping because the FTS5 grammar treats some of
+     * them (e.g. `*` in column ref position) ambiguously. */
+    fn strip(c: char) -> bool {
+        matches!(c, '"' | ':' | '(' | ')' | '*' | '^' | '\\' | '\0')
+    }
+    input
+        .split_whitespace()
+        .map(|tok| tok.chars().filter(|c| !strip(*c)).collect::<String>())
+        .filter(|tok| !tok.is_empty())
+        .map(|tok| format!("\"{}\"", tok))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn unix_now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -834,6 +893,66 @@ mod tests {
     fn iso_8601_handles_leap_year() {
         /* 2024-02-29T12:34:56Z = 1709210096 */
         assert_eq!(iso_8601(1709210096), "2024-02-29T12:34:56Z");
+    }
+
+    #[test]
+    fn sanitize_fts5_strips_column_ref_syntax() {
+        /* The 2026-05-16 incident: `475:` was read as a column
+         * reference and SQLite errored with "no such column: 475". */
+        assert_eq!(sanitize_fts5_query("client 475:"), "\"client\" \"475\"");
+        assert_eq!(sanitize_fts5_query("foo:bar"), "\"foobar\"");
+    }
+
+    #[test]
+    fn sanitize_fts5_strips_operators_and_quotes() {
+        assert_eq!(
+            sanitize_fts5_query("\"hello\" AND world*"),
+            "\"hello\" \"AND\" \"world\""
+        );
+        assert_eq!(sanitize_fts5_query("(a OR b)"), "\"a\" \"OR\" \"b\"");
+    }
+
+    #[test]
+    fn sanitize_fts5_keeps_unicode() {
+        assert_eq!(
+            sanitize_fts5_query("кнопка density"),
+            "\"кнопка\" \"density\""
+        );
+    }
+
+    #[test]
+    fn sanitize_fts5_empty_when_all_punct() {
+        assert_eq!(sanitize_fts5_query(":::"), "");
+        assert_eq!(sanitize_fts5_query("   "), "");
+    }
+
+    #[test]
+    fn fts_search_survives_colon_query() {
+        /* Pre-fix this query crashed at SQLite level. Now it should
+         * just return zero matches without erroring. */
+        let conn = fresh_db();
+        conn.execute(
+            "INSERT INTO memories (content, tags, kind, created_at, updated_at) \
+             VALUES (?1, '', 'note', 100, 0)",
+            params!["client Acme had 475 widgets"],
+        )
+        .unwrap();
+        /* Use the sanitizer the way memory_search does. */
+        let safe = sanitize_fts5_query("client 475:");
+        assert!(!safe.is_empty());
+        let mut stmt = conn
+            .prepare(
+                "SELECT m.id FROM memories m \
+                 JOIN memories_fts fts ON fts.rowid = m.id \
+                 WHERE memories_fts MATCH ?1",
+            )
+            .unwrap();
+        let ids: Vec<i64> = stmt
+            .query_map(params![safe], |r| r.get::<_, i64>(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(ids, vec![1]);
     }
 
     #[test]

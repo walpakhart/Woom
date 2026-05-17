@@ -416,10 +416,29 @@
      instead of an output prop avoids prop ping-pong on every selection
      change (which wouldn't affect the count anyway). */
   export { rowCount };
+
+  /* Full-screen mode — overlays the whole window with the same pane
+     so the user can read diffs at full width without the rail / sidebar
+     fighting for pixels. Esc closes; F toggles. */
+  let fullscreen = $state(false);
+  function toggleFullscreen() { fullscreen = !fullscreen; }
+  function onKeyGlobal(e: KeyboardEvent) {
+    if (e.key === 'Escape' && fullscreen) {
+      e.preventDefault();
+      fullscreen = false;
+    }
+  }
+  $effect(() => {
+    if (fullscreen) {
+      window.addEventListener('keydown', onKeyGlobal);
+      return () => window.removeEventListener('keydown', onKeyGlobal);
+    }
+  });
 </script>
 
 <section
   class="rp"
+  class:rp--full={fullscreen}
   bind:this={paneEl}
   tabindex="0"
   onkeydown={onKey}
@@ -457,6 +476,22 @@
         <span class="rp-rem">−{totals.rem}</span>
       </span>
       <span class="rp-bar-spacer"></span>
+      <button
+        class="rp-bar-btn rp-bar-btn--icon"
+        onclick={toggleFullscreen}
+        title={fullscreen ? 'Exit full screen (Esc)' : 'Open in full screen'}
+        aria-label={fullscreen ? 'Exit full screen' : 'Open in full screen'}
+      >
+        {#if fullscreen}
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/>
+          </svg>
+        {:else}
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>
+          </svg>
+        {/if}
+      </button>
       <button
         class="rp-bar-btn"
         disabled={bulkBusy}
@@ -595,6 +630,36 @@
     background: var(--bg-1);
   }
   .rp:focus-visible { box-shadow: inset 0 0 0 1px var(--border-accent-2); }
+  /* Full-screen overlay — fixed cover above rail/sidebar (rail uses
+     up to z-index 9999 for popovers — sit above with 10000). */
+  .rp.rp--full {
+    position: fixed;
+    inset: 0;
+    z-index: 10000;
+    background: var(--bg-0);
+    box-shadow: 0 0 0 1px var(--border-neutral), 0 20px 60px rgba(0, 0, 0, 0.5);
+    padding: 0;
+  }
+  /* Inner list gets breathing room + can't run under viewport edges. */
+  .rp--full :global(.rp-list) {
+    padding: 12px 24px 24px;
+    max-width: 1280px;
+    margin: 0 auto;
+    width: 100%;
+  }
+  .rp--full :global(.rp-bar) {
+    padding: 10px 24px;
+  }
+  .rp--full :global(.rp-row) { margin-left: 0; margin-right: 0; }
+  .rp--full :global(.rp-diff) { font-size: 13px; }
+  /* Brighten the line-number column when fullscreen — it's the
+     primary navigation aid and `--text-mute` reads as nearly black
+     on the dark overlay bg. */
+  .rp--full :global(.rp-diff-no) { color: var(--text-1); }
+  .rp-bar-btn--icon {
+    padding: 4px 6px;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
 
   /* Empty state — same vocabulary as the Debug / Tests placeholders
      in EditorView so the sidebar feels uniform across tabs. */
@@ -679,19 +744,26 @@
   .rp-group-stats { display: flex; gap: 6px; font-size: 10.5px; flex: 0 0 auto; }
 
   .rp-row {
-    margin: 2px 6px;
-    border: 1px solid transparent;
-    border-radius: 6px;
+    margin: 4px 8px;
+    border: 1px solid var(--border-neutral, var(--border));
+    border-radius: 7px;
     background: var(--bg-2);
     transition: border-color 120ms, background 120ms;
     cursor: default;
   }
-  .rp-row:hover { border-color: var(--border); }
-  .rp-row--selected {
-    border-color: var(--border-accent-2);
-    background: linear-gradient(180deg, var(--accent-soft), var(--bg-2));
+  .rp-row:hover {
+    border-color: var(--border-neutral-hi, var(--border));
+    background: var(--bg-3, var(--bg-2));
   }
-  .rp-row--expanded { background: var(--bg-1); border-color: var(--border); }
+  .rp-row--selected {
+    border-color: var(--accent);
+    background: linear-gradient(180deg, var(--accent-soft), var(--bg-2));
+    box-shadow: 0 0 0 1px var(--accent) inset;
+  }
+  .rp-row--expanded {
+    background: var(--bg-3, var(--bg-1));
+    border-color: var(--border-neutral-hi, var(--border));
+  }
 
   .rp-row-head {
     width: 100%;
@@ -715,13 +787,19 @@
     font-size: 10px; font-weight: 700;
     padding: 1px 6px;
     border-radius: 4px;
-    background: var(--bg-1);
-    color: var(--text-2);
+    background: color-mix(in srgb, var(--accent) 18%, transparent);
+    color: var(--accent-bright);
     text-transform: uppercase;
     letter-spacing: 0.04em;
   }
-  .rp-row-tag--add { color: var(--diff-add-stroke); }
-  .rp-row-tag--rem { color: var(--diff-rem-stroke); }
+  .rp-row-tag--add {
+    background: color-mix(in srgb, var(--diff-add) 28%, transparent);
+    color: var(--text-0);
+  }
+  .rp-row-tag--rem {
+    background: color-mix(in srgb, var(--diff-rem) 28%, transparent);
+    color: var(--text-0);
+  }
   .rp-row-agent {
     width: 16px; height: 16px;
     display: grid; place-items: center;
@@ -742,36 +820,37 @@
   .rp-rem { color: var(--diff-rem); }
 
   .rp-row-actions {
-    display: flex; gap: 4px;
-    padding: 0 8px 6px 30px;
-    opacity: 0;
-    transition: opacity 140ms;
-    pointer-events: none;
-  }
-  .rp-row:hover .rp-row-actions,
-  .rp-row--selected .rp-row-actions,
-  .rp-row--expanded .rp-row-actions {
+    display: flex; gap: 6px;
+    padding: 0 10px 8px 30px;
     opacity: 1;
     pointer-events: auto;
   }
   .rp-act {
-    padding: 2px 8px;
-    background: transparent;
-    border: 1px solid var(--border);
-    color: var(--text-2);
-    border-radius: 4px;
+    padding: 3px 10px;
+    background: var(--bg-1);
+    border: 1px solid var(--border-neutral-hi, var(--border));
+    color: var(--text-0);
+    border-radius: 5px;
     font-size: 11px;
     cursor: pointer;
     transition: color 120ms, border-color 120ms, background 120ms;
   }
-  .rp-act:hover { color: var(--text-0); border-color: var(--border-strong, var(--border)); background: var(--bg-elev, var(--bg-2)); }
-  .rp-act:disabled { opacity: 0.5; cursor: not-allowed; }
+  .rp-act:hover {
+    color: var(--text-0);
+    border-color: var(--accent);
+    background: var(--bg-3, var(--bg-2));
+  }
+  .rp-act:disabled { opacity: 0.45; cursor: not-allowed; }
   .rp-act--primary {
     color: var(--accent-bright);
-    border-color: var(--border-accent-2);
+    border-color: var(--accent);
     background: var(--accent-soft);
   }
-  .rp-act--primary:hover { color: var(--accent-bright); }
+  .rp-act--primary:hover {
+    color: var(--text-0);
+    background: var(--accent);
+    border-color: var(--accent);
+  }
 
   .rp-row-body { padding: 0 8px 8px 30px; }
   .rp-row-loading {
@@ -798,18 +877,21 @@
     white-space: pre;
   }
   .rp-diff-row--add {
-    background: color-mix(in srgb, var(--diff-add) 18%, transparent);
-    color: var(--diff-add-stroke);
+    background: color-mix(in srgb, var(--diff-add) 26%, transparent);
+    color: var(--text-0);
+    font-weight: 500;
   }
   .rp-diff-row--rem {
-    background: color-mix(in srgb, var(--diff-rem) 18%, transparent);
-    color: var(--diff-rem-stroke);
+    background: color-mix(in srgb, var(--diff-rem) 26%, transparent);
+    color: var(--text-0);
+    font-weight: 500;
   }
-  .rp-diff-row--ctx { color: var(--text-2); }
+  .rp-diff-row--ctx { color: var(--text-1); }
   .rp-diff-no {
-    color: var(--text-mute);
+    color: var(--text-2);
     text-align: right; padding-right: 4px;
     font-size: 10.5px;
+    font-weight: 500;
   }
   .rp-diff-glyph { color: inherit; opacity: 0.7; }
   .rp-diff-text {

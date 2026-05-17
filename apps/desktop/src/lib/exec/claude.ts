@@ -10,6 +10,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { handleStreamEvent, resetTurnDispatcherState } from '$lib/stream/agentStream';
+import { markTurnStart, markTurnEnd } from '$lib/state/sessions.svelte';
 
 export interface AgentRunRequest {
   sessionId: string;
@@ -76,6 +77,12 @@ export async function runAgentRequest(req: AgentRunRequest): Promise<AgentRunRes
   // forced kill, malformed final line) would otherwise leak their
   // flags to here and skew this turn's usage stamping.
   resetTurnDispatcherState(req.sessionId);
+  /* Stamp pendingTurn so that if the app dies before this function
+   * returns (force-quit mid-stream, OS crash), the next boot's
+   * hydrateSession can flag the session as interrupted. The Rust
+   * side's stop() already cleans up its own process state; this is
+   * the JS-side counterpart that survives JS-process death. */
+  markTurnStart(req.sessionId);
   let unlisten: UnlistenFn | null = null;
   try {
     unlisten = await listen<string>(`claude:stream:${req.sessionId}`, (event) => {
@@ -114,6 +121,12 @@ export async function runAgentRequest(req: AgentRunRequest): Promise<AgentRunRes
     return { reply: result.reply, sessionUuid: result.session_uuid };
   } finally {
     unlisten?.();
+    /* Clear pendingTurn whether the call succeeded, errored, or
+     * threw via resume-orphan etc. — the marker is meant to survive
+     * only abrupt process death, not normal control flow exits.
+     * Failure path callers still get the error; they handle recovery
+     * via the existing resume-orphan / cwd-recap channels. */
+    markTurnEnd(req.sessionId);
   }
 }
 

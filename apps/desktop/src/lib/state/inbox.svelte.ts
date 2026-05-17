@@ -49,7 +49,9 @@ export {
   selectInboxItem,
   setGithubMeLogin,
   toggleFile,
-  updateGithubFilters
+  updateGithubFilters,
+  updateGithubUiFilters,
+  persistGithubUiFilters
 } from './inbox-github';
 
 export {
@@ -92,5 +94,6 @@ export {
   sentryItemsErrorFor,
   sentryItemsFor,
   sentryItemsLoadingFor,
-  setSentryFilters
+  setSentryFilters,
+  persistSentryUiFilters
 } from './inbox-sentry';

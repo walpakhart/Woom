@@ -71,7 +71,8 @@ function serializeSession(s: ClaudeSession): object {
     cwdSwitchRecap: s.cwdSwitchRecap,
     cwdUuids: s.cwdUuids,
     awaitingApproval: s.awaitingApproval,
-    pendingActionResults: s.pendingActionResults
+    pendingActionResults: s.pendingActionResults,
+    pendingTurn: s.pendingTurn ?? null
   };
 }
 
@@ -355,7 +356,16 @@ function hydrateSession(s: ClaudeSession): ClaudeSession {
     awaitingApproval:
       Boolean((s as { awaitingApproval?: boolean }).awaitingApproval),
     pendingActionResults:
-      (s as { pendingActionResults?: PendingActionResult[] }).pendingActionResults ?? []
+      (s as { pendingActionResults?: PendingActionResult[] }).pendingActionResults ?? [],
+    /* pendingTurn from disk means the prior process died mid-turn.
+       Clear the marker (so a clean reboot doesn't keep flagging) and
+       set the derived `interrupted` so the UI / next-turn flow can
+       offer recovery. Mid-process crash signal is one-shot — we
+       don't want to keep re-triggering recovery if the user just
+       leaves the chat sitting there with the banner visible. */
+    pendingTurn: null,
+    interrupted:
+      (s as { pendingTurn?: { startedAt: number } | null }).pendingTurn != null
   };
 }
 
@@ -598,7 +608,8 @@ export function newClaudeSession(
       cwdSwitchRecap: null,
       cwdUuids: {},
       awaitingApproval: false,
-      pendingActionResults: []
+      pendingActionResults: [],
+      pendingTurn: null
     },
     ...sessionsState.list
   ];
@@ -612,6 +623,16 @@ export function newClaudeSession(
 
 export function deleteClaudeSession(id: string) {
   const doomed = sessionsState.list.find((s) => s.id === id);
+  /* Auto-distill: before the session disappears, snapshot the first
+     user message + last assistant message into long-term memory so a
+     future chat can find what this session was about via memory_search.
+     Sessions with very little content (only the auto-created empty
+     state) skip the distill — nothing meaningful to preserve. The
+     save is fire-and-forget; deletion proceeds regardless of whether
+     it succeeds (toast surfaces an error if it does fail). */
+  if (doomed) {
+    void autoDistillSession(doomed);
+  }
   const rest = sessionsState.list.filter((s) => s.id !== id);
   sessionsState.list = rest;
   const kind = doomed?.agentKind ?? 'claude';
@@ -632,6 +653,72 @@ export function deleteClaudeSession(id: string) {
   // the chat surface from sitting on a permanent empty state.
   if (rest.filter((s) => s.agentKind === 'claude').length === 0) {
     newClaudeSession({ agentKind: 'claude' });
+  }
+}
+
+/** Snapshot a soon-to-be-deleted session into long-term memory. Picks
+ *  the first user message (intent anchor) + the last assistant
+ *  message (outcome anchor) + the cwd basename, formats as one note,
+ *  and saves through `memory_save_local`. The dedup logic on the Rust
+ *  side handles repeat saves cleanly — re-deleting a re-created chat
+ *  with the same content updates the existing row rather than
+ *  stacking duplicates.
+ *
+ *  Skip rules:
+ *    - 0 user messages → empty placeholder session, nothing to learn.
+ *    - First user message under 30 chars AND no assistant reply →
+ *      probably "test" / "hi" — noise.
+ *
+ *  Fire-and-forget. Caller treats this as a side effect that runs in
+ *  parallel with the actual list mutation. */
+async function autoDistillSession(sess: ClaudeSession): Promise<void> {
+  const users = sess.messages.filter((m) => m.role === 'user' && m.content.trim().length > 0);
+  const assistants = sess.messages.filter(
+    (m) => m.role === 'assistant' && m.content.trim().length > 0
+  );
+  if (users.length === 0) return;
+  const firstUser = users[0].content.trim();
+  const lastAssistant = assistants.length > 0
+    ? assistants[assistants.length - 1].content.trim()
+    : '';
+  if (assistants.length === 0 && firstUser.length < 30) return;
+
+  const cwd = sess.worktreePath || sess.cwd || '';
+  const cwdBase = cwd
+    ? cwd.split('/').filter((s) => s.length > 0).pop() ?? ''
+    : '';
+  const title = sess.title || 'Untitled chat';
+  /* Keep each section bounded — full transcripts can be huge; the
+     point of the distill is "enough to recall what this was", not
+     "preserve the whole thing". 1200 chars per section + the wrapper
+     stays under typical memory_search preview budget. */
+  const trunc = (s: string, n: number): string =>
+    s.length > n ? s.slice(0, n - 1) + '…' : s;
+  const sections: string[] = [
+    `Chat "${title}" archived${cwdBase ? ` (project: ${cwdBase})` : ''}.`,
+    `First user prompt: ${trunc(firstUser, 1200)}`
+  ];
+  if (lastAssistant) {
+    sections.push(`Last agent reply: ${trunc(lastAssistant, 1200)}`);
+  }
+  const content = sections.join('\n\n');
+  const tags: string[] = ['auto-distilled', `from-session:${sess.id.slice(0, 8)}`];
+  if (cwdBase) tags.push(`project:${cwdBase}`);
+  try {
+    await invoke<number>('memory_save_local', {
+      content,
+      kind: 'note',
+      tags
+    });
+  } catch (e) {
+    /* Surface the failure but don't block deletion — the user
+       explicitly asked to delete. Sticky error toast so they know
+       a memory snapshot wasn't captured if they care. */
+    notify({
+      kind: 'error',
+      title: 'Could not distill chat to memory',
+      body: String(e)
+    });
   }
 }
 
@@ -663,6 +750,52 @@ export function setActiveSessionInInstance(instanceId: string, sessionId: string
 
 export function updateSession(id: string, patch: Partial<ClaudeSession>) {
   sessionsState.list = sessionsState.list.map((s) => (s.id === id ? { ...s, ...patch } : s));
+}
+
+/** Stamp `pendingTurn` on the session as a crash-detection marker.
+ *  Call right before `runAgentRequest` invokes the CLI; pair with
+ *  `markTurnEnd` in the matching `finally`. If the app dies between
+ *  these two calls the marker survives to the next boot.
+ *
+ *  Synchronously triggers a disk write so the marker lands even if
+ *  the user force-quits within the debounce window — the whole point
+ *  of the marker is that it survives crashes that lose other in-flight
+ *  state, so we can't rely on the regular debounced flush. */
+export function markTurnStart(id: string) {
+  const s = sessionsState.list.find((x) => x.id === id);
+  if (!s) return;
+  /* Index of the just-appended user message. Caller convention is
+   * `appendSessionMessage(...)` immediately before `runAgentRequest`,
+   * so messages.length - 1 is the prompt being answered. If no user
+   * messages exist yet (defensive), record 0 — the recap path falls
+   * back to "no specific message" framing. */
+  const idx = Math.max(0, s.messages.length - 1);
+  sessionsState.list = sessionsState.list.map((x) =>
+    x.id === id ? { ...x, pendingTurn: { startedAt: Date.now(), userMessageIndex: idx } } : x
+  );
+  void flushSessionsNow();
+}
+
+/** Clear `pendingTurn` once a turn has reached a terminal state. Safe
+ *  to call when no marker is set (no-op). Does NOT clear `interrupted`
+ *  — that flag is a UI signal owned by the recovery flow. */
+export function markTurnEnd(id: string) {
+  const s = sessionsState.list.find((x) => x.id === id);
+  if (!s || s.pendingTurn == null) return;
+  sessionsState.list = sessionsState.list.map((x) =>
+    x.id === id ? { ...x, pendingTurn: null } : x
+  );
+}
+
+/** Acknowledge the interrupted-session banner without taking recovery
+ *  action. Clears the derived flag; pendingTurn was already cleared on
+ *  hydrate, so there's no on-disk state to touch. */
+export function dismissInterrupted(id: string) {
+  const s = sessionsState.list.find((x) => x.id === id);
+  if (!s || !s.interrupted) return;
+  sessionsState.list = sessionsState.list.map((x) =>
+    x.id === id ? { ...x, interrupted: false } : x
+  );
 }
 
 /** Attach a specific line range of a file as a `@path:start-end` mention

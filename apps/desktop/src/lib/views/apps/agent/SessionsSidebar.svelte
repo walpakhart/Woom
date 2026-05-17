@@ -10,10 +10,14 @@
     focusSession,
     setActiveSessionInInstance,
     newClaudeSession,
-    deleteClaudeSession
+    deleteClaudeSession,
+    updateSession
   } from '$lib/state/sessions.svelte';
   import { relativeTime } from '$lib/data';
   import BrandIcon from '$lib/components/ui/BrandIcon.svelte';
+  import CardContextMenu, { type MenuItem } from '$lib/views/apps/_shared/CardContextMenu.svelte';
+  import { notify } from '$lib/state/toaster.svelte';
+  import { invoke } from '@tauri-apps/api/core';
 
   type Kind = 'claude' | 'cursor';
 
@@ -65,7 +69,136 @@
     sessionsState.list.filter((s) => s.agentKind === kind).length
   );
 
+  /* Per-session memory presence. Keyed by the 8-char id prefix the
+     auto-distill / paste-trap / right-click-save flows write into
+     `from-session:<prefix>` tags. Fetched once on mount + on session
+     list growth (every new session might add memories elsewhere) —
+     no need to refetch on every render since memory writes happen
+     from a few well-defined entry points. */
+  let memCounts = $state<Record<string, number>>({});
+  async function refreshMemCounts(): Promise<void> {
+    try {
+      const map = await invoke<Record<string, number>>('memory_session_counts_local');
+      memCounts = map;
+    } catch {
+      /* Silent — sidebar still renders without the badge. */
+      memCounts = {};
+    }
+  }
+  $effect(() => { void refreshMemCounts(); });
+  /* Re-fetch whenever the visible session count changes — a newly-
+     deleted session triggers auto-distill which adds rows, and a
+     newly-created session won't have rows yet. The cost is one cheap
+     SQL scan; running it on count changes only avoids the per-keystroke
+     waste of running on every reactive tick. */
+  $effect(() => {
+    void totalCount;
+    void refreshMemCounts();
+  });
+  function memCountFor(sessId: string): number {
+    return memCounts[sessId.slice(0, 8)] ?? 0;
+  }
+
   const label = $derived(kind === 'claude' ? 'Claude' : 'Cursor');
+
+  /* Right-click context menu on session rows. Reuses the shared
+     CardContextMenu used in inbox lists + chat-thread messages.
+     Session type is already declared above for the groups derivation
+     — reuse the same alias here without re-declaring. */
+  let ctxCoords = $state<{ x: number; y: number } | null>(null);
+  let ctxSess = $state<Session | null>(null);
+
+  function openSessCtx(e: MouseEvent, sess: Session) {
+    e.preventDefault();
+    e.stopPropagation();
+    ctxCoords = { x: e.clientX, y: e.clientY };
+    ctxSess = sess;
+  }
+  function closeSessCtx() {
+    ctxCoords = null;
+    ctxSess = null;
+  }
+
+  const ctxItems = $derived.by<MenuItem[]>(() => {
+    const s = ctxSess;
+    if (!s) return [];
+    const items: MenuItem[] = [];
+    items.push({
+      label: 'Rename',
+      icon: 'M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7 M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4z',
+      onClick: () => {
+        const next = window.prompt('New chat title:', s.title || '');
+        if (next === null) return;
+        const trimmed = next.trim();
+        if (trimmed && trimmed !== s.title) {
+          updateSession(s.id, { title: trimmed });
+        }
+      }
+    });
+    items.push({
+      label: 'Copy transcript',
+      icon: 'M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2 M9 2h6a1 1 0 0 1 1 1v2H8V3a1 1 0 0 1 1-1z',
+      onClick: async () => {
+        const text = s.messages
+          .filter((m) => m.content.trim().length > 0)
+          .map((m) => `## ${m.role}\n\n${m.content}`)
+          .join('\n\n---\n\n');
+        try {
+          await navigator.clipboard.writeText(text);
+          notify({ kind: 'success', title: 'Transcript copied', ttlMs: 1800 });
+        } catch (e) {
+          notify({ kind: 'error', title: 'Copy failed', body: String(e) });
+        }
+      }
+    });
+    items.push({
+      label: 'Save to memory',
+      icon: 'M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z',
+      onClick: async () => {
+        const users = s.messages.filter((m) => m.role === 'user' && m.content.trim());
+        const asst = s.messages.filter((m) => m.role === 'assistant' && m.content.trim());
+        if (users.length === 0) {
+          notify({ kind: 'info', title: 'Nothing to distill yet', ttlMs: 2200 });
+          return;
+        }
+        const cwdBase = (s.worktreePath || s.cwd || '')
+          .split('/').filter(Boolean).pop() ?? '';
+        const trunc = (str: string, n: number): string =>
+          str.length > n ? str.slice(0, n - 1) + '…' : str;
+        const body: string[] = [
+          `Chat "${s.title || 'Untitled'}"${cwdBase ? ` (${cwdBase})` : ''}.`,
+          `First user prompt: ${trunc(users[0].content.trim(), 1200)}`
+        ];
+        if (asst.length) {
+          body.push(`Last agent reply: ${trunc(asst[asst.length - 1].content.trim(), 1200)}`);
+        }
+        const tags = ['manual-distill', `from-session:${s.id.slice(0, 8)}`];
+        if (cwdBase) tags.push(`project:${cwdBase}`);
+        try {
+          await invoke<number>('memory_save_local', {
+            content: body.join('\n\n'),
+            kind: 'note',
+            tags
+          });
+          notify({ kind: 'success', title: 'Saved chat to memory', ttlMs: 2200 });
+          void refreshMemCounts();
+        } catch (e) {
+          notify({ kind: 'error', title: 'Memory save failed', body: String(e) });
+        }
+      }
+    });
+    items.push({
+      label: 'Delete chat',
+      icon: 'M3 6h18 M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6 M10 11v6 M14 11v6',
+      danger: true,
+      onClick: () => {
+        if (window.confirm(`Delete "${s.title || 'Untitled'}"? Auto-distill saves a memory snapshot first.`)) {
+          deleteClaudeSession(s.id);
+        }
+      }
+    });
+    return items;
+  });
 
   function pickSession(sessId: string) {
     setActiveSessionInInstance(instanceId, sessId);
@@ -141,6 +274,7 @@
             tabindex="0"
             onclick={() => pickSession(sess.id)}
             onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') pickSession(sess.id); }}
+            oncontextmenu={(e) => openSessCtx(e, sess)}
           >
             <div class="ssb-icon">
               <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2 L14.5 9.5 L22 12 L14.5 14.5 L12 22 L9.5 14.5 L2 12 L9.5 9.5 Z"/></svg>
@@ -151,6 +285,15 @@
                 <span class="mono">{shortTime(lastAt ?? undefined) || relativeTime(lastAt ?? new Date().toISOString(), now)}</span>
                 <span class="ssb-dot">·</span>
                 <span>{msgCount} msgs</span>
+                {#if memCountFor(sess.id) > 0}
+                  <span class="ssb-dot">·</span>
+                  <span class="ssb-mem mono" title="{memCountFor(sess.id)} long-term memories saved from this chat">
+                    <svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
+                    </svg>
+                    <span>{memCountFor(sess.id)}</span>
+                  </span>
+                {/if}
                 {#if sess.sending}
                   <span class="ssb-dot">·</span>
                   <span class="ssb-running">◷ thinking</span>
@@ -184,6 +327,8 @@
     <span>{totalCount} sessions</span>
   </div>
 </aside>
+
+<CardContextMenu coords={ctxCoords} items={ctxItems} onClose={closeSessCtx} />
 
 <style>
   .ssb {
@@ -318,6 +463,16 @@
   .ssb-dot { opacity: 0.6; }
   .ssb-running { color: var(--app-tone, var(--accent-bright)); }
   .ssb-link { color: var(--src-editor); }
+  /* Memory-presence badge — small inline pill with the bookmark
+     glyph + count. Mute tone so it doesn't compete with the running
+     /linked indicators next to it. */
+  .ssb-mem {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    color: var(--text-mute);
+  }
+  .ssb-mem svg { flex-shrink: 0; opacity: 0.85; }
 
   /* Delete-X — sits on the right of the row, fades in on hover.
      Hover state turns it red so the user feels the destructive

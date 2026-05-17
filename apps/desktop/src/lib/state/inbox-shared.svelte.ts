@@ -58,6 +58,20 @@ export interface GithubFilters {
   search: string;
   /** GitHub login when `mode === 'user'`. */
   customUser: string;
+  /** Client-side UI filter state persisted so the list view survives
+   *  unmount/remount + solo switch. These fields are NOT used in the
+   *  GitHub search query — they filter already-loaded items in
+   *  GithubList. Mirrors the JiraFilters ui* pattern so the
+   *  user's "is:open author:me" filter survives a navigate-away. */
+  uiQuery: string;
+  uiRoleFilter: 'reviewer' | null;
+  uiStateFilter: 'open' | 'draft' | null;
+  /** UI-scoped repo filter (distinct from `repo` which drives the API
+   *  query). Holds either a literal `owner/name`, the `__inbox__`
+   *  sentinel for the inbox scope, or `__all_open__` for the
+   *  "browse every accessible repo" view. */
+  uiRepoFilter: string | null;
+  uiAuthorFilter: string | null;
 }
 
 /** A single sprint scope: a numeric sprint id, OR the literal
@@ -104,6 +118,15 @@ export interface SentryFiltersPersisted {
   projects: string[];
   environment: string | null;
   sort: 'date' | 'new' | 'priority' | 'freq' | 'user';
+  /** Client-side UI filter state — distinct from the persisted API
+   *  filters above, which drive the server query. These filter the
+   *  already-loaded items list in SentryList and survive solo
+   *  switches via persistSentryUiFilters. Mirrors the Github/Jira
+   *  ui-prefixed pattern. */
+  uiQuery: string;
+  uiLevelFilter: 'fatal' | 'error' | 'warning' | 'info' | null;
+  uiStatusFilter: 'unresolved' | 'resolved' | 'ignored' | null;
+  uiProjectFilter: string | null;
 }
 
 // ---- Persistence keys ------------------------------------------------
@@ -127,7 +150,12 @@ export const DEFAULT_GH_FILTERS: GithubFilters = {
   mode: 'involving',
   repo: null,
   search: '',
-  customUser: ''
+  customUser: '',
+  uiQuery: '',
+  uiRoleFilter: null,
+  uiStateFilter: null,
+  uiRepoFilter: null,
+  uiAuthorFilter: null
 };
 
 export const DEFAULT_JIRA_FILTERS: JiraFilters = {
@@ -148,7 +176,11 @@ export const DEFAULT_SENTRY_FILTERS: SentryFiltersPersisted = {
   level: 'all',
   projects: [],
   environment: null,
-  sort: 'date'
+  sort: 'date',
+  uiQuery: '',
+  uiLevelFilter: null,
+  uiStatusFilter: null,
+  uiProjectFilter: null
 };
 
 // ---- Normalisers (defensive parsers) --------------------------------
@@ -156,6 +188,8 @@ export const DEFAULT_SENTRY_FILTERS: SentryFiltersPersisted = {
 function normalizeGhFilters(raw: unknown): GithubFilters {
   if (typeof raw !== 'object' || !raw) return { ...DEFAULT_GH_FILTERS };
   const parsed = raw as Record<string, unknown>;
+  const uiRoleRaw = parsed.uiRoleFilter;
+  const uiStateRaw = parsed.uiStateFilter;
   return {
     mode:
       typeof parsed.mode === 'string'
@@ -163,7 +197,15 @@ function normalizeGhFilters(raw: unknown): GithubFilters {
         : 'involving',
     repo: typeof parsed.repo === 'string' ? parsed.repo : null,
     search: typeof parsed.search === 'string' ? parsed.search : '',
-    customUser: typeof parsed.customUser === 'string' ? parsed.customUser : ''
+    customUser: typeof parsed.customUser === 'string' ? parsed.customUser : '',
+    uiQuery: typeof parsed.uiQuery === 'string' ? parsed.uiQuery : '',
+    uiRoleFilter: uiRoleRaw === 'reviewer' ? 'reviewer' : null,
+    uiStateFilter:
+      uiStateRaw === 'open' || uiStateRaw === 'draft' ? uiStateRaw : null,
+    uiRepoFilter:
+      typeof parsed.uiRepoFilter === 'string' ? parsed.uiRepoFilter : null,
+    uiAuthorFilter:
+      typeof parsed.uiAuthorFilter === 'string' ? parsed.uiAuthorFilter : null
   };
 }
 
@@ -244,7 +286,22 @@ function normalizeSentryFilters(raw: unknown): SentryFiltersPersisted {
       parsed.sort === 'freq' ||
       parsed.sort === 'user'
         ? parsed.sort
-        : 'date'
+        : 'date',
+    uiQuery: typeof parsed.uiQuery === 'string' ? parsed.uiQuery : '',
+    uiLevelFilter:
+      parsed.uiLevelFilter === 'fatal' ||
+      parsed.uiLevelFilter === 'error' ||
+      parsed.uiLevelFilter === 'warning' ||
+      parsed.uiLevelFilter === 'info'
+        ? parsed.uiLevelFilter
+        : null,
+    uiStatusFilter:
+      parsed.uiStatusFilter === 'unresolved' ||
+      parsed.uiStatusFilter === 'resolved' ||
+      parsed.uiStatusFilter === 'ignored'
+        ? parsed.uiStatusFilter
+        : null,
+    uiProjectFilter: typeof parsed.uiProjectFilter === 'string' ? parsed.uiProjectFilter : null
   };
 }
 
@@ -407,7 +464,27 @@ function readSentryTabFilters(): SentryFiltersPersisted {
         parsed.sort === 'freq' ||
         parsed.sort === 'user'
           ? parsed.sort
-          : 'date'
+          : 'date',
+      /* Tab-scope filters don't have a separate UI-only slice — the
+         tab IS the UI, and its filters drive the API query directly.
+         Default the new ui* fields here so the SentryFiltersPersisted
+         shape stays uniform across tab + per-instance reads; consumers
+         that don't care about ui* just ignore them. */
+      uiQuery: typeof parsed.uiQuery === 'string' ? parsed.uiQuery : '',
+      uiLevelFilter:
+        parsed.uiLevelFilter === 'fatal' ||
+        parsed.uiLevelFilter === 'error' ||
+        parsed.uiLevelFilter === 'warning' ||
+        parsed.uiLevelFilter === 'info'
+          ? parsed.uiLevelFilter
+          : null,
+      uiStatusFilter:
+        parsed.uiStatusFilter === 'unresolved' ||
+        parsed.uiStatusFilter === 'resolved' ||
+        parsed.uiStatusFilter === 'ignored'
+          ? parsed.uiStatusFilter
+          : null,
+      uiProjectFilter: typeof parsed.uiProjectFilter === 'string' ? parsed.uiProjectFilter : null
     };
   } catch {
     return { ...DEFAULT_SENTRY_FILTERS };
@@ -422,7 +499,13 @@ export function persistSentryTabFilters() {
       level: inboxState.sentryTabLevel,
       projects: inboxState.sentryTabProjects,
       environment: inboxState.sentryTabEnvironment,
-      sort: inboxState.sentryTabSort
+      sort: inboxState.sentryTabSort,
+      /* Tab scope doesn't use the ui* slice. Persist default empties
+         so JSON round-trip stays type-safe. */
+      uiQuery: '',
+      uiLevelFilter: null,
+      uiStatusFilter: null,
+      uiProjectFilter: null
     };
     localStorage.setItem(SENTRY_TAB_FILTERS_KEY, JSON.stringify(payload));
   } catch {/* ignore */}

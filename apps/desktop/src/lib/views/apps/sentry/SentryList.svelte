@@ -7,11 +7,14 @@
     sentryItemsFor,
     sentryItemsLoadingFor,
     sentryItemsErrorFor,
-    openSentryFocus
+    openSentryFocus,
+    sentryFiltersFor,
+    persistSentryUiFilters
   } from '$lib/state/inbox.svelte';
   import { relativeTime, sentryLevelClass, type SentryIssue, type SentryStatus } from '$lib/data';
   import Dropdown from '$lib/components/ui/Dropdown.svelte';
   import ListSearchPicker from '$lib/views/apps/_shared/ListSearchPicker.svelte';
+  import CardContextMenu, { type MenuItem } from '$lib/views/apps/_shared/CardContextMenu.svelte';
   import { invoke } from '@tauri-apps/api/core';
 
   interface Props {
@@ -44,11 +47,24 @@
   const loading = $derived(sentryItemsLoadingFor(p.instanceId));
   const error = $derived(sentryItemsErrorFor(p.instanceId));
 
-  /** Search + filter state. In-memory; resets on refresh. */
-  let query = $state('');
-  let levelFilter = $state<'fatal' | 'error' | 'warning' | 'info' | null>(null);
-  let statusFilter = $state<'unresolved' | 'resolved' | 'ignored' | null>(null);
-  let projectFilter = $state<string | null>(null);
+  /** Search + filter state. Persisted per-instance via
+   *  `persistSentryUiFilters` — survives solo switches + app
+   *  restart. Init reads from the store; mutations bind to $state
+   *  locally then a $effect mirrors the diff back. */
+  const _init = sentryFiltersFor(p.instanceId);
+  let query = $state(_init.uiQuery ?? '');
+  let levelFilter = $state<'fatal' | 'error' | 'warning' | 'info' | null>(_init.uiLevelFilter ?? null);
+  let statusFilter = $state<'unresolved' | 'resolved' | 'ignored' | null>(_init.uiStatusFilter ?? null);
+  let projectFilter = $state<string | null>(_init.uiProjectFilter ?? null);
+
+  $effect(() => {
+    persistSentryUiFilters(p.instanceId, {
+      uiQuery: query,
+      uiLevelFilter: levelFilter,
+      uiStatusFilter: statusFilter,
+      uiProjectFilter: projectFilter
+    });
+  });
 
   /** Unique project slugs in the current items, prepended with the
    *  "All projects" sentinel option for the dropdown. */
@@ -127,6 +143,60 @@
     if (!p.isClickNotDrag(e)) return;
     openSentryFocus(it.id);
   }
+
+  /* Right-click context menu — Send to Claude/Cursor + Open + Copy.
+     Status flip (resolve / ignore / unresolve) deferred — would need
+     a `sentry_update_issue` Tauri command path through the agent
+     `propose_*` channel; out of scope for the menu wiring round. */
+  let ctxCoords = $state<{ x: number; y: number } | null>(null);
+  let ctxItem = $state<SentryIssue | null>(null);
+  function openCtxMenu(e: MouseEvent, it: SentryIssue) {
+    e.preventDefault();
+    e.stopPropagation();
+    ctxCoords = { x: e.clientX, y: e.clientY };
+    ctxItem = it;
+  }
+  function closeCtxMenu() {
+    ctxCoords = null;
+    ctxItem = null;
+  }
+  const ctxItems = $derived.by<MenuItem[]>(() => {
+    const it = ctxItem;
+    if (!it) return [];
+    return [
+      {
+        label: 'Send to Claude',
+        icon: 'M22 2 11 13 M22 2l-7 20-4-9-9-4 20-7z',
+        onClick: () => p.onSendToClaude(it)
+      },
+      {
+        label: 'Send to Cursor',
+        icon: 'M3 3l8 18 2-8 8-2z',
+        onClick: () => p.onSendToCursor(it)
+      },
+      {
+        label: 'Open in browser',
+        icon: 'M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6 M15 3h6v6 M10 14L21 3',
+        onClick: () => p.onOpenBrowser(it.permalink)
+      },
+      {
+        label: 'Copy short-id',
+        icon: 'M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2 M9 2h6a1 1 0 0 1 1 1v2H8V3a1 1 0 0 1 1-1z',
+        onClick: async () => {
+          try { await navigator.clipboard.writeText(it.short_id); }
+          catch (e) { console.warn('clipboard', e); }
+        }
+      },
+      {
+        label: 'Copy URL',
+        icon: 'M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.72 M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71',
+        onClick: async () => {
+          try { await navigator.clipboard.writeText(it.permalink); }
+          catch (e) { console.warn('clipboard', e); }
+        }
+      }
+    ];
+  });
 
   /* ─── Search picker (server-side) ───────────────────────────────
      Hits `sentry_list_issues` directly with the user's query each
@@ -337,6 +407,7 @@
             ondragend={p.onDragEnd}
             onclick={(e) => clickItem(it, e)}
             ondblclick={() => p.onOpenBrowser(it.permalink)}
+            oncontextmenu={(e) => openCtxMenu(e, it)}
           >
             <div class="sl-card-top">
               <span class="sl-level {sentryLevelClass(it.level)}">{it.level}</span>
@@ -391,6 +462,8 @@
     {/if}
   </div>
 </aside>
+
+<CardContextMenu coords={ctxCoords} items={ctxItems} onClose={closeCtxMenu} />
 
 <style>
   .sl {

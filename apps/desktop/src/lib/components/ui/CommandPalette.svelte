@@ -31,6 +31,8 @@
   import { isPalettePinned, togglePalettePin, pinnedState } from '$lib/state/pinned.svelte';
   import { focusTrap } from '$lib/actions/focusTrap';
   import type { View } from '$lib/state/view.svelte';
+  import { invoke } from '@tauri-apps/api/core';
+  import { notify } from '$lib/state/toaster.svelte';
 
   /** Top-level commands rendered in the palette's "Actions" section.
    *  Pure-data shape so +page.svelte can build the list once with the
@@ -685,6 +687,45 @@
       );
     }
 
+    /* 7. Memory hits — long-term notes that match the query. Async-
+       sourced via `memory_search_local`; the `memoryHits` cache fills
+       in a tick after typing, so the first paint of these rows lags
+       slightly behind the other sections. Subtitle is a normalized
+       preview of the content (whitespace collapsed). Pick = preview
+       the full content in a toast (the user can copy from there or
+       jump to Settings → Memory to delete). */
+    if (memoryHits.length > 0 && query.trim().length >= 2) {
+      const rows: Result[] = [];
+      for (const hit of memoryHits) {
+        const preview = hit.content.replace(/\s+/g, ' ').trim().slice(0, 120);
+        rows.push({
+          key: `mem:${hit.id}`,
+          badge: 'M',
+          /* Reuse 'action' badge kind — closest visual fit (a neutral
+             tone, distinct from any source). Adding a dedicated
+             'memory' kind would mean extending Result + paletteMru +
+             every badge consumer; not worth it for one section. */
+          badgeKind: 'action' as const,
+          title: preview,
+          subtitle: `#${hit.id} · ${hit.kind}${hit.tags ? ` · ${hit.tags}` : ''}`,
+          section: 'Memory',
+          /* Score 50 — below recents/actions/views (which use 1000-N
+             style) but above fuzzy-matched items so a memory hit
+             relevant to the query bubbles up early in the result list. */
+          score: 50,
+          pick: () => {
+            notify({
+              kind: 'info',
+              title: `Memory #${hit.id} (${hit.kind})`,
+              body: hit.content,
+              ttlMs: 15000
+            });
+          }
+        });
+      }
+      push(rows);
+    }
+
     return r;
   });
 
@@ -726,6 +767,56 @@
   $effect(() => {
     query;
     selectedIdx = 0;
+  });
+
+  /* ---------- Long-term memory in the palette ---------- */
+  /* Cached hits for the current query — async memory_search_local
+     can't fit into the synchronous `results` derivation, so we keep
+     an async-mirrored slice here and append rows from it during the
+     derivation. Cache is keyed by the query string so a stale call
+     completing after the user typed more doesn't overwrite fresher
+     results. Min query length 2 — single chars would spam the DB
+     and FTS5 with low-value matches. */
+  interface MemoryHit {
+    id: number;
+    kind: string;
+    content: string;
+    tags: string;
+    created_at: number;
+  }
+  let memoryHits = $state<MemoryHit[]>([]);
+  let memoryHitsForQuery = $state<string>('');
+  let memoryDebounce: ReturnType<typeof setTimeout> | null = null;
+
+  $effect(() => {
+    const q = query.trim();
+    if (q === memoryHitsForQuery) return;
+    if (q.length < 2) {
+      memoryHits = [];
+      memoryHitsForQuery = q;
+      return;
+    }
+    if (memoryDebounce) clearTimeout(memoryDebounce);
+    memoryDebounce = setTimeout(async () => {
+      try {
+        const hits = await invoke<MemoryHit[]>('memory_search_local', {
+          query: q,
+          limit: 5
+        });
+        /* Stale check: by the time the call returns the user may
+           have typed more / cleared the box. Drop the result if it
+           doesn't match what's in the input now. */
+        if (q === query.trim()) {
+          memoryHits = hits;
+          memoryHitsForQuery = q;
+        }
+      } catch {
+        if (q === query.trim()) {
+          memoryHits = [];
+          memoryHitsForQuery = q;
+        }
+      }
+    }, 200);
   });
 </script>
 
