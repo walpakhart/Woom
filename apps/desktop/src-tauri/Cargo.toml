@@ -50,6 +50,11 @@ uuid = { version = "1", features = ["v4"] }
 # Port is published to `<app_data>/bridge.port` for sidecar discovery.
 axum = "0.8"
 strip-ansi-escapes = "0.2"
+# SDD (spec-driven development) — YAML frontmatter parsing for spec/plan/phase
+# files in `<app_data>/sdd-workspaces/<workspace_id>/`. `serde_yaml` is on
+# maintenance mode but still the de-facto standard for YAML in Rust and is
+# enough for our tiny frontmatter blocks (no exotic YAML features used).
+serde_yaml = "0.9"
 
 [profile.release]
 panic = "abort"

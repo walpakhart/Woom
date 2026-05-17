@@ -17,6 +17,7 @@ mod jira;
 mod keychain;
 mod library;
 mod memory_local;
+mod sdd;
 mod sentry;
 mod skills;
 mod statusline;
@@ -276,6 +277,7 @@ pub fn run() {
         .manage(watch::new_state())
         .manage(terminal::TerminalRegistry::default())
         .manage(bg_tasks::BgRegistry::new())
+        .manage(sdd::SddRegistry::new())
         .manage(action_ipc_state())
         .invoke_handler(tauri::generate_handler![
             github_connect_pat,
@@ -455,6 +457,19 @@ pub fn run() {
             bg_tasks::bg_logs,
             bg_tasks::bg_wait_line,
             bg_tasks::preview_open_window,
+            // SDD (Spec-Driven Development) — orchestrated spec → plan
+            // → phases workflow in a temp workspace under
+            // `<app_data>/sdd-workspaces/<id>/`. See `sdd.rs`.
+            sdd::sdd_start,
+            sdd::sdd_get,
+            sdd::sdd_list,
+            sdd::sdd_refresh,
+            sdd::sdd_approve,
+            sdd::sdd_pause,
+            sdd::sdd_resume,
+            sdd::sdd_stop,
+            sdd::sdd_prompt,
+            sdd::sdd_discard,
             // User-defined hooks — agent-lifecycle scripts. See
             // `hooks.rs` for the contract (stdin JSON / exit code /
             // stdout JSON). `hooks_run` is called from the frontend
