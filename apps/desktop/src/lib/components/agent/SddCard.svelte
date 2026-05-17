@@ -26,6 +26,7 @@
     retrySddPhase,
     buildPromptForStage,
   } from '$lib/state/sdd.svelte';
+  import { diffMarkdown, renderDiffHtml } from '$lib/util/markdownDiff';
 
   interface Props {
     workspace: SddWorkspace;
@@ -44,6 +45,27 @@
    *  YAML frontmatter on disk is preserved by the Rust side. */
   let editMode = $state(false);
   let editDraft = $state('');
+  /* Agent's last-saved body at the moment edit mode was entered. Used
+   *  by the diff-split and diff-unified views to show "what changed
+   *  vs the draft". Captured ONCE on `startEdit()` so toggling views
+   *  is instant + never re-reads the file. Cleared on cancel / save. */
+  let editOriginal = $state('');
+  /* Which sub-view of edit mode is active — plain `edit` (textarea),
+   *  `diff-split` (read-only original | editable draft), or
+   *  `diff-unified` (single-pane jsdiff-rendered HTML). */
+  type EditView = 'edit' | 'diff-split' | 'diff-unified';
+  let editView = $state<EditView>('edit');
+  /* Refs for the split view's two panes — wired so the `onscroll`
+   *  handler can copy proportional scroll position between them. */
+  let splitOriginalEl: HTMLPreElement | null = $state(null);
+  let splitDraftEl: HTMLTextAreaElement | null = $state(null);
+  /* Cached unified-diff HTML — recomputed on every keystroke via
+   *  `$derived`. For a typical plan (~200 lines) this is cheap;
+   *  jsdiff's diffLines is O(n*m) but bounded by line count. */
+  const unifiedDiffHtml = $derived.by(() => {
+    if (editView !== 'diff-unified') return '';
+    return renderDiffHtml(diffMarkdown(editOriginal, editDraft));
+  });
 
   const stage = $derived(p.workspace.stage);
   const isAwaitingApproval = $derived(
@@ -159,12 +181,20 @@
   function startEdit() {
     if (!body) return;
     editDraft = body.markdown;
+    /* Snapshot the agent's last-saved body BEFORE any user edits land
+     *  on `editDraft`. Used by diff-split (read-only left pane) and
+     *  diff-unified (jsdiff base) so toggling views never re-reads
+     *  the file. */
+    editOriginal = body.markdown;
+    editView = 'edit';
     editMode = true;
     bodyOpen = true;
   }
   function cancelEdit() {
     editMode = false;
     editDraft = '';
+    editOriginal = '';
+    editView = 'edit';
   }
   async function saveEdit() {
     const t = editTarget();
@@ -172,6 +202,26 @@
     await saveSddBody(p.workspace.id, t, editDraft);
     editMode = false;
     editDraft = '';
+    editOriginal = '';
+    editView = 'edit';
+  }
+
+  /* Sync-scroll between the split panes — proportional so when one
+   *  is taller (e.g. the textarea wraps differently than the <pre>)
+   *  both reach end at the same time. Source pane is whichever just
+   *  fired `onscroll`; target gets `scrollTop = ratio * targetMax`. */
+  function syncScroll(source: HTMLElement, target: HTMLElement | null) {
+    if (!target) return;
+    const sMax = source.scrollHeight - source.clientHeight;
+    const tMax = target.scrollHeight - target.clientHeight;
+    if (sMax <= 0 || tMax <= 0) return;
+    const ratio = source.scrollTop / sMax;
+    /* Skip if the target is already at the matching ratio — avoids a
+     *  feedback loop where setting `scrollTop` re-fires the other
+     *  pane's `onscroll` handler. */
+    const want = Math.round(ratio * tMax);
+    if (Math.abs(target.scrollTop - want) <= 1) return;
+    target.scrollTop = want;
   }
 
   async function onPause() { await pauseSdd(p.workspace.id); }
@@ -255,12 +305,73 @@
       {#if bodyOpen}
         {#if editMode}
           <div class="sdd-body-edit">
-            <textarea
-              class="sdd-edit-area mono"
-              bind:value={editDraft}
-              spellcheck="false"
-              rows="14"
-            ></textarea>
+            <!-- View toolbar — toggle between plain edit, side-by-side
+                 diff, and unified diff. Pills sit above the active
+                 region so the user can flip without losing draft. -->
+            <div class="sdd-view-tabs" role="tablist" aria-label="Edit view">
+              <button
+                type="button"
+                class="sdd-view-tab"
+                class:active={editView === 'edit'}
+                role="tab"
+                aria-selected={editView === 'edit'}
+                onclick={() => (editView = 'edit')}
+              >edit</button>
+              <button
+                type="button"
+                class="sdd-view-tab"
+                class:active={editView === 'diff-split'}
+                role="tab"
+                aria-selected={editView === 'diff-split'}
+                onclick={() => (editView = 'diff-split')}
+              >split</button>
+              <button
+                type="button"
+                class="sdd-view-tab"
+                class:active={editView === 'diff-unified'}
+                role="tab"
+                aria-selected={editView === 'diff-unified'}
+                onclick={() => (editView = 'diff-unified')}
+              >diff</button>
+            </div>
+
+            {#if editView === 'edit'}
+              <textarea
+                class="sdd-edit-area mono"
+                bind:value={editDraft}
+                spellcheck="false"
+                rows="14"
+              ></textarea>
+            {:else if editView === 'diff-split'}
+              <div class="sdd-diff-split">
+                <!-- Left: read-only original. <pre> mirrors the
+                     textarea's font + line-height so visible line
+                     alignment tracks (sync-scroll uses ratios, but
+                     identical metrics keep the diff readable). -->
+                <pre
+                  bind:this={splitOriginalEl}
+                  class="sdd-edit-area sdd-edit-area--readonly mono"
+                  onscroll={(e) => syncScroll(e.currentTarget, splitDraftEl)}
+                >{editOriginal}</pre>
+                <textarea
+                  bind:this={splitDraftEl}
+                  bind:value={editDraft}
+                  class="sdd-edit-area mono"
+                  spellcheck="false"
+                  rows="14"
+                  onscroll={(e) => syncScroll(e.currentTarget, splitOriginalEl)}
+                ></textarea>
+              </div>
+            {:else}
+              <!-- Unified: jsdiff-rendered HTML using Markdown.svelte's
+                   .diff-line / .diff-add / .diff-rem / .diff-ctx
+                   classes (wrapped in .prose so the global selectors
+                   bind). Read-only — toggle back to 'edit' to type. -->
+              <div class="sdd-diff-unified">
+                {@html unifiedDiffHtml}
+              </div>
+            {/if}
+
             <div class="sdd-edit-actions">
               <button type="button" class="sdd-btn" onclick={cancelEdit}>cancel</button>
               <button type="button" class="sdd-btn sdd-btn--primary" onclick={saveEdit}>save</button>
@@ -480,6 +591,84 @@
     outline: 2px solid var(--accent);
     outline-offset: -1px;
     border-color: transparent;
+  }
+  /* Read-only `<pre>` for the split view's left pane — same metrics
+   *  as the textarea so visible line alignment tracks. Native pre
+   *  wraps long lines via `white-space: pre-wrap` so a long sentence
+   *  doesn't escape the box. */
+  .sdd-edit-area--readonly {
+    white-space: pre-wrap;
+    overflow-y: auto;
+    overflow-x: hidden;
+    word-break: break-word;
+    color: var(--text-1);
+    background: var(--bg-0);
+    margin: 0;
+    cursor: default;
+    resize: none;
+    user-select: text;
+  }
+
+  /* View-mode toolbar — three text-button pills above the active
+   *  edit region. Same chassis as PreviewPane's `.pv-tabs` (small
+   *  bg-2 pill row, active state lifts to bg-0). */
+  .sdd-view-tabs {
+    display: inline-flex;
+    align-self: flex-start;
+    background: var(--bg-2);
+    border-radius: 6px;
+    padding: 2px;
+    gap: 2px;
+  }
+  .sdd-view-tab {
+    padding: 3px 10px;
+    border: 0;
+    background: transparent;
+    color: var(--text-mute);
+    font-size: 10.5px;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 120ms, color 120ms;
+  }
+  .sdd-view-tab:hover {
+    color: var(--accent-bright);
+  }
+  .sdd-view-tab.active {
+    background: var(--bg-0);
+    color: var(--text-0);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+  }
+
+  /* Side-by-side split — fixed two-column grid so original (left)
+   *  and draft (right) keep equal width. min-width: 0 on grid
+   *  children prevents long lines from forcing overflow. */
+  .sdd-diff-split {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+  .sdd-diff-split > * { min-width: 0; }
+
+  /* Unified diff — wrap so the Markdown.svelte `.prose :global(.diff-*)`
+   *  rules paint the <span class="diff-line"> nodes that
+   *  renderDiffHtml emits. Same vertical metrics as the textarea so
+   *  the eye finds the same line position when flipping back. */
+  .sdd-diff-unified {
+    min-height: 240px;
+    max-height: 480px;
+    overflow-y: auto;
+    padding: 4px 0;
+    border-radius: 5px;
+    background: var(--bg-0);
+    border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--border-neutral));
+  }
+  .sdd-diff-unified :global(pre.diff-block) {
+    margin: 0;
+    border: 0;
+    background: transparent;
+    padding: 4px 0;
   }
   .sdd-edit-actions {
     display: flex; gap: 14px; align-items: center;
