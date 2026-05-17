@@ -391,7 +391,40 @@
           </svg>
           <span class="mono">{body.title}</span>
         </button>
-        {#if !editMode && editTarget()}
+        {#if editMode}
+          <!-- View switch lives inline next to the file title — three
+               muted text-buttons separated by ·, no pill chrome. Active
+               state is just "color: text-0". Reads as a switch within
+               the line, not a panel above it. -->
+          <span class="sdd-view-switch" role="tablist" aria-label="Edit view">
+            <button
+              type="button"
+              class="sdd-view-tab"
+              class:active={editView === 'edit'}
+              role="tab"
+              aria-selected={editView === 'edit'}
+              onclick={() => (editView = 'edit')}
+            >edit</button>
+            <span class="sdd-view-sep" aria-hidden="true">·</span>
+            <button
+              type="button"
+              class="sdd-view-tab"
+              class:active={editView === 'diff-split'}
+              role="tab"
+              aria-selected={editView === 'diff-split'}
+              onclick={() => (editView = 'diff-split')}
+            >split</button>
+            <span class="sdd-view-sep" aria-hidden="true">·</span>
+            <button
+              type="button"
+              class="sdd-view-tab"
+              class:active={editView === 'diff-unified'}
+              role="tab"
+              aria-selected={editView === 'diff-unified'}
+              onclick={() => (editView = 'diff-unified')}
+            >diff</button>
+          </span>
+        {:else if editTarget()}
           <button type="button" class="sdd-edit-toggle" onclick={startEdit} title="Edit before approving">
             edit ✎
           </button>
@@ -400,36 +433,6 @@
       {#if bodyOpen}
         {#if editMode}
           <div class="sdd-body-edit">
-            <!-- View toolbar — toggle between plain edit, side-by-side
-                 diff, and unified diff. Pills sit above the active
-                 region so the user can flip without losing draft. -->
-            <div class="sdd-view-tabs" role="tablist" aria-label="Edit view">
-              <button
-                type="button"
-                class="sdd-view-tab"
-                class:active={editView === 'edit'}
-                role="tab"
-                aria-selected={editView === 'edit'}
-                onclick={() => (editView = 'edit')}
-              >edit</button>
-              <button
-                type="button"
-                class="sdd-view-tab"
-                class:active={editView === 'diff-split'}
-                role="tab"
-                aria-selected={editView === 'diff-split'}
-                onclick={() => (editView = 'diff-split')}
-              >split</button>
-              <button
-                type="button"
-                class="sdd-view-tab"
-                class:active={editView === 'diff-unified'}
-                role="tab"
-                aria-selected={editView === 'diff-unified'}
-                onclick={() => (editView = 'diff-unified')}
-              >diff</button>
-            </div>
-
             {#if editView === 'edit'}
               <textarea
                 class="sdd-edit-area mono"
@@ -439,10 +442,6 @@
               ></textarea>
             {:else if editView === 'diff-split'}
               <div class="sdd-diff-split">
-                <!-- Left: read-only original. <pre> mirrors the
-                     textarea's font + line-height so visible line
-                     alignment tracks (sync-scroll uses ratios, but
-                     identical metrics keep the diff readable). -->
                 <pre
                   bind:this={splitOriginalEl}
                   class="sdd-edit-area sdd-edit-area--readonly mono"
@@ -458,19 +457,10 @@
                 ></textarea>
               </div>
             {:else}
-              <!-- Unified: jsdiff-rendered HTML using Markdown.svelte's
-                   .diff-line / .diff-add / .diff-rem / .diff-ctx
-                   classes (wrapped in .prose so the global selectors
-                   bind). Read-only — toggle back to 'edit' to type. -->
               <div class="sdd-diff-unified">
                 {@html unifiedDiffHtml}
               </div>
             {/if}
-
-            <div class="sdd-edit-actions">
-              <button type="button" class="sdd-btn" onclick={cancelEdit}>cancel</button>
-              <button type="button" class="sdd-btn sdd-btn--primary" onclick={saveEdit}>save</button>
-            </div>
           </div>
         {:else}
           <div class="sdd-body-content">
@@ -488,27 +478,36 @@
   {/if}
 
   <footer class="sdd-actions">
-    {#if isAwaitingApproval}
-      <button class="sdd-btn sdd-btn--primary" disabled={advanceClicked} onclick={advance}>
-        {advanceClicked ? 'sending…' : actionLabel()}
-      </button>
-    {/if}
-    {#if isInFlight}
-      <button class="sdd-btn" onclick={onPause}>Pause</button>
-    {/if}
-    {#if isPaused}
-      <button class="sdd-btn sdd-btn--primary" onclick={onResume}>Resume</button>
-    {/if}
-    {#if stage.kind === 'failed'}
-      <button class="sdd-btn sdd-btn--primary" disabled={advanceClicked} onclick={onRetry}>Retry phase</button>
-    {/if}
-    {#if undoVisible}
-      <button class="sdd-btn" onclick={onUndo} title="Restore the body that was there before your last save">
-        ↶ Undo last edit ({undoSecondsLeft}s)
-      </button>
-    {/if}
-    {#if !isTerminal}
-      <button class="sdd-btn" onclick={onStop}>Stop</button>
+    {#if editMode}
+      <!-- Edit-mode footer merges into the card's main actions row —
+           cancel + save sit alongside Discard as siblings of the same
+           grammar (text-buttons + accent-pill primary), no separate
+           edit-actions bar competing for attention. -->
+      <button type="button" class="sdd-btn" onclick={cancelEdit}>cancel</button>
+      <button type="button" class="sdd-btn sdd-btn--primary" onclick={saveEdit}>save</button>
+    {:else}
+      {#if isAwaitingApproval}
+        <button class="sdd-btn sdd-btn--primary" disabled={advanceClicked} onclick={advance}>
+          {advanceClicked ? 'sending…' : actionLabel()}
+        </button>
+      {/if}
+      {#if isInFlight}
+        <button class="sdd-btn" onclick={onPause}>Pause</button>
+      {/if}
+      {#if isPaused}
+        <button class="sdd-btn sdd-btn--primary" onclick={onResume}>Resume</button>
+      {/if}
+      {#if stage.kind === 'failed'}
+        <button class="sdd-btn sdd-btn--primary" disabled={advanceClicked} onclick={onRetry}>Retry phase</button>
+      {/if}
+      {#if undoVisible}
+        <button class="sdd-btn" onclick={onUndo} title="Restore the body that was there before your last save">
+          ↶ Undo last edit ({undoSecondsLeft}s)
+        </button>
+      {/if}
+      {#if !isTerminal}
+        <button class="sdd-btn" onclick={onStop}>Stop</button>
+      {/if}
     {/if}
     <button class="sdd-btn sdd-btn--mute" onclick={onDiscard}>Discard</button>
   </footer>
@@ -676,71 +675,70 @@
     display: flex; flex-direction: column;
     gap: 6px;
   }
+  /* Edit area — drop the heavy mono frame. Reads as a continuation
+   *  of the card's body rather than a form-input transplanted in.
+   *  Bg is a touch darker than the card's accent-tint to signal
+   *  editability without breaking the surface. Left border-stripe
+   *  echoes the card's outer accent stripe (recursive structure). */
   .sdd-edit-area {
     width: 100%;
     min-height: 240px;
-    padding: 10px 12px;
-    border-radius: 5px;
-    border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border-neutral));
-    background: var(--bg-0);
+    padding: 6px 0 6px 12px;
+    border: 0;
+    border-left: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
+    background: color-mix(in srgb, var(--bg-0) 70%, transparent);
     color: var(--text-0);
     font-family: 'JetBrains Mono', monospace;
     font-size: 12px;
-    line-height: 1.5;
+    line-height: 1.55;
     resize: vertical;
+    outline: 0;
   }
   .sdd-edit-area:focus {
-    outline: 2px solid var(--accent);
-    outline-offset: -1px;
-    border-color: transparent;
+    border-left-color: var(--accent);
+    background: color-mix(in srgb, var(--bg-0) 85%, transparent);
   }
   /* Read-only `<pre>` for the split view's left pane — same metrics
-   *  as the textarea so visible line alignment tracks. Native pre
-   *  wraps long lines via `white-space: pre-wrap` so a long sentence
-   *  doesn't escape the box. */
+   *  as the textarea so visible line alignment tracks. */
   .sdd-edit-area--readonly {
     white-space: pre-wrap;
     overflow-y: auto;
     overflow-x: hidden;
     word-break: break-word;
-    color: var(--text-1);
-    background: var(--bg-0);
+    color: var(--text-2);
     margin: 0;
     cursor: default;
     resize: none;
     user-select: text;
   }
+  .sdd-edit-area--readonly:focus { border-left-color: color-mix(in srgb, var(--accent) 30%, transparent); }
 
-  /* View-mode toolbar — three text-button pills above the active
-   *  edit region. Same chassis as PreviewPane's `.pv-tabs` (small
-   *  bg-2 pill row, active state lifts to bg-0). */
-  .sdd-view-tabs {
-    display: inline-flex;
-    align-self: flex-start;
-    background: var(--bg-2);
-    border-radius: 6px;
-    padding: 2px;
-    gap: 2px;
+  /* Inline view switch — three text-buttons separated by · in the
+   *  same body-row as the file title. No pill chrome, no panel —
+   *  reads as a typographic switch within the line. Active state is
+   *  just color: text-0; inactive stays text-mute. */
+  .sdd-view-switch {
+    display: inline-flex; align-items: baseline;
+    gap: 4px;
+    margin-left: auto;
+    font-size: 11px;
+    color: var(--text-mute);
   }
   .sdd-view-tab {
-    padding: 3px 10px;
+    padding: 0;
     border: 0;
     background: transparent;
     color: var(--text-mute);
-    font-size: 10.5px;
-    font-weight: 500;
-    letter-spacing: 0.02em;
-    border-radius: 4px;
+    font-size: 11px;
     cursor: pointer;
-    transition: background 120ms, color 120ms;
+    transition: color 120ms;
   }
-  .sdd-view-tab:hover {
-    color: var(--accent-bright);
-  }
-  .sdd-view-tab.active {
-    background: var(--bg-0);
-    color: var(--text-0);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+  .sdd-view-tab:hover { color: var(--accent-bright); }
+  .sdd-view-tab.active { color: var(--text-0); }
+  .sdd-view-sep {
+    color: var(--text-mute);
+    opacity: 0.5;
+    user-select: none;
   }
 
   /* Side-by-side split — fixed two-column grid so original (left)
@@ -749,34 +747,27 @@
   .sdd-diff-split {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 8px;
+    gap: 12px;
   }
   .sdd-diff-split > * { min-width: 0; }
 
-  /* Unified diff — wrap so the Markdown.svelte `.prose :global(.diff-*)`
-   *  rules paint the <span class="diff-line"> nodes that
-   *  renderDiffHtml emits. Same vertical metrics as the textarea so
-   *  the eye finds the same line position when flipping back. */
+  /* Unified diff — no separate box, just spacing. The renderer's
+   *  inner `<pre class="diff-block">` carries its own padding via
+   *  Markdown.svelte's global rules; we just provide the scroll
+   *  cap + sit on the same accent-tinted card bg. */
   .sdd-diff-unified {
     min-height: 240px;
     max-height: 480px;
     overflow-y: auto;
-    padding: 4px 0;
-    border-radius: 5px;
-    background: var(--bg-0);
-    border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--border-neutral));
+    padding-left: 12px;
+    border-left: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
   }
   .sdd-diff-unified :global(pre.diff-block) {
     margin: 0;
     border: 0;
     background: transparent;
-    padding: 4px 0;
+    padding: 0;
   }
-  .sdd-edit-actions {
-    display: flex; gap: 14px; align-items: center;
-    justify-content: flex-end;
-  }
-
   /* Failed banner — uses warn-tone red accents inside the card, sits
    *  above the actions row so the user sees WHY before they decide
    *  whether to retry. */
