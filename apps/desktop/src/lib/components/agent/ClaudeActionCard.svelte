@@ -295,61 +295,60 @@
 </div>
 
 <style>
-  /* v6 action-card — premium tactile element, brand-stripe on the
-     left, gradient tint per kind, soft glow shadow. The kind's tone
-     is exposed via --cac-tone / --cac-glow so the head icon, stripe,
-     and outer glow share one source of truth. */
+  /* Inline action card — same visual language as SddCard / QuestionCard:
+   *  blockquote-shaped (left accent stripe + tint + rounded only on
+   *  the right) so the card reads as RICH CONTENT in the chat thread,
+   *  not as a modal proposal pinned on top. Previous "premium tactile"
+   *  treatment (gradient, drop-shadow, 12px radius, inset glow) made
+   *  every proposal feel like a UI interrupt; unified blockquote
+   *  pattern keeps the focus on conversation flow.
+   *
+   *  Tone is per-kind via `--cac-tone` (all kinds share `--app-tone`
+   *  today; per-kind palettes can override later without touching the
+   *  base shape). */
   .cac {
-    --cac-tone: var(--accent);
-    --cac-glow: var(--accent-glow);
-    position: relative;
-    background:
-      linear-gradient(180deg,
-        color-mix(in srgb, var(--cac-tone) 7%, transparent),
-        color-mix(in srgb, var(--cac-tone) 2%, transparent) 70%),
-      var(--bg-2);
-    border: 1px solid color-mix(in srgb, var(--cac-tone) 28%, transparent);
-    border-radius: 12px;
-    padding: 12px 14px 12px 16px;
-    display: flex; flex-direction: column; gap: 10px;
-    transition: border-color 200ms, background 200ms;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
-    overflow: hidden;
+    --cac-tone: var(--app-tone, var(--accent));
+    border-left: 3px solid var(--cac-tone);
+    border-radius: 0 6px 6px 0;
+    background: color-mix(in srgb, var(--cac-tone) 8%, transparent);
+    padding: 10px 14px 11px;
+    display: flex; flex-direction: column; gap: 8px;
+    transition: background 200ms;
+    color: var(--text-1);
+    font-size: 13.5px;
+    line-height: 1.55;
   }
-  .cac::before {
-    content: '';
-    position: absolute; left: 0; top: 0; bottom: 0;
-    width: 3px;
-    background: linear-gradient(180deg,
-      var(--cac-tone),
-      color-mix(in srgb, var(--cac-tone) 55%, var(--bg-0)));
-    box-shadow: 0 0 12px var(--cac-glow);
-    z-index: 1;
-  }
-  .cac--commit,
-  .cac--pr,
-  .cac--switch,
-  .cac--bash   { --cac-tone: var(--app-tone, var(--accent)); --cac-glow: var(--app-glow, var(--accent-glow)); }
   .cac-input--cmd { background: var(--bg-0); }
-  .cac--done   { opacity: 0.72; --cac-glow: rgba(0, 0, 0, 0); }
-  .cac--error  { --cac-tone: var(--error); --cac-glow: rgba(232, 130, 100, 0.40); }
+  .cac--done   { opacity: 0.72; }
+  .cac--error  {
+    --cac-tone: var(--error);
+    background: color-mix(in srgb, var(--error) 8%, transparent);
+  }
 
+  /* Header reads as a byline row: glyph · title · status tag · ×.
+   *  No icon chip background — typography carries hierarchy. */
   .cac-head { display: flex; align-items: center; gap: 8px; }
   .cac-icon {
-    width: 22px; height: 22px; border-radius: 5px;
+    width: 16px; height: 16px;
     display: inline-flex; align-items: center; justify-content: center;
-    background: var(--bg-2); color: var(--accent-bright);
+    color: var(--cac-tone);
+    flex-shrink: 0;
   }
-  .cac-title { font-size: 12.5px; color: var(--text-0); font-weight: 600; flex: 1; }
-  .cac-tag { font-size: 10px; padding: 2px 7px; border-radius: 3px; margin-left: 6px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
-  .cac-tag--ok { background: rgba(204, 120, 92, 0.18); color: var(--success); }
-  .cac-tag--err { background: rgba(232, 130, 100, 0.18); color: var(--error); }
+  .cac-icon svg { width: 14px; height: 14px; }
+  .cac-title { font-size: 12.5px; color: var(--text-0); font-weight: 500; flex: 1; }
+  .cac-tag { font-size: 9.5px; padding: 1px 6px; border-radius: 3px; margin-left: 6px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; }
+  .cac-tag--ok { background: color-mix(in srgb, var(--success) 14%, transparent); color: var(--success); }
+  .cac-tag--err { background: color-mix(in srgb, var(--error) 14%, transparent); color: var(--error); }
   .cac-x {
-    width: 22px; height: 22px; border-radius: 4px;
+    width: 18px; height: 18px; border-radius: 3px;
     display: inline-flex; align-items: center; justify-content: center;
-    color: var(--text-2);
+    color: var(--text-mute);
+    background: transparent;
+    border: 0;
+    cursor: pointer;
+    transition: color 120ms;
   }
-  .cac-x:hover { background: var(--bg-3); color: var(--text-0); }
+  .cac-x:hover { color: var(--text-0); }
 
   .cac-note {
     font-size: 12px; color: var(--text-1);
@@ -402,20 +401,42 @@
   }
   .cac-link:hover { text-decoration: underline; }
 
-  .cac-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 2px; }
-  .cac-btn {
-    padding: 6px 14px; border-radius: 6px;
-    font-size: 12px; font-weight: 600;
-    transition: background 100ms;
+  /* Actions row mirrors SddCard: text-buttons for secondary actions
+   *  (Dismiss / Close), one accent-filled pill for the primary CTA.
+   *  Keeps the row visually quiet — it's the body content (form
+   *  inputs) that should carry the user's attention, not the action
+   *  chrome. */
+  .cac-actions {
+    display: flex; align-items: center;
+    gap: 14px;
+    justify-content: flex-end;
+    margin-top: 4px;
   }
+  .cac-btn {
+    padding: 2px 0;
+    border: 0;
+    background: transparent;
+    color: var(--text-mute);
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: color 120ms;
+  }
+  .cac-btn:hover:not(:disabled) { color: var(--accent-bright); }
   .cac-btn:disabled { opacity: 0.4; cursor: default; }
   .cac-btn--ghost {
-    background: var(--bg-2); color: var(--text-1);
-    border: 1px solid var(--border-neutral-hi);
+    color: var(--text-mute);
   }
-  .cac-btn--ghost:hover:not(:disabled) { background: var(--bg-3); color: var(--text-0); }
   .cac-btn--primary {
-    background: var(--accent); color: var(--accent-fg);
+    padding: 4px 12px;
+    border-radius: 5px;
+    background: color-mix(in srgb, var(--cac-tone) 32%, transparent);
+    border: 1px solid color-mix(in srgb, var(--cac-tone) 55%, transparent);
+    color: var(--text-0);
+    font-weight: 500;
   }
-  .cac-btn--primary:hover:not(:disabled) { background: var(--accent-bright); }
+  .cac-btn--primary:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--cac-tone) 45%, transparent);
+    color: var(--text-0);
+  }
 </style>

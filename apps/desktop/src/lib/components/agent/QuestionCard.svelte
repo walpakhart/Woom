@@ -218,31 +218,36 @@
 </div>
 
 <style>
+  /* Question card — same inline-blockquote treatment as SddCard /
+   *  ClaudeActionCard. Accent stripe on the left, accent-soft tint
+   *  bg, rounded only on the right. Reads as a rich element IN the
+   *  conversation rather than a modal popover. */
   .qc {
     margin: 8px 0;
-    border: 1px solid var(--border-hi);
-    border-radius: 10px;
-    background: var(--bg-1);
-    overflow: hidden;
+    border-left: 3px solid var(--accent);
+    border-radius: 0 6px 6px 0;
+    background: color-mix(in srgb, var(--accent) 8%, transparent);
+    color: var(--text-1);
+    font-size: 13.5px;
+    line-height: 1.55;
+    padding: 10px 14px 11px;
+    display: flex; flex-direction: column;
+    gap: 8px;
   }
   .qc--done {
-    background: var(--bg-2);
-    border-color: var(--border);
+    opacity: 0.72;
   }
   .qc-head {
     display: flex; align-items: flex-start;
     gap: 10px;
-    padding: 10px 14px;
-    border-bottom: 1px solid var(--border);
   }
-  .qc--done .qc-head { border-bottom: 0; }
   .qc-icon {
-    width: 22px; height: 22px;
+    width: 18px; height: 18px;
     display: grid; place-items: center;
-    color: var(--accent);
+    color: var(--accent-bright);
     flex-shrink: 0;
   }
-  .qc-icon svg { width: 16px; height: 16px; }
+  .qc-icon svg { width: 14px; height: 14px; }
   .qc-title-wrap { flex: 1; min-width: 0; }
   .qc-title {
     font-size: 13px;
@@ -294,30 +299,33 @@
   }
   .qc-close svg { width: 12px; height: 12px; }
 
+  /* Option rows — flat list with subtle hover, no separate panel
+   *  background. Selected state lifts via accent tint. Keep the
+   *  clickable affordance obvious without re-introducing card chrome
+   *  for each row. */
   .qc-opts {
     display: flex; flex-direction: column;
     gap: 4px;
-    padding: 10px 12px 0;
   }
   .qc-opt {
     display: flex; align-items: flex-start;
     gap: 10px;
-    padding: 8px 10px;
-    background: var(--bg-2);
-    border: 1px solid var(--border);
-    border-radius: 7px;
+    padding: 6px 10px;
+    background: transparent;
+    border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
+    border-radius: 5px;
     color: var(--text-0);
     cursor: pointer;
     text-align: left;
     transition: background 100ms, border-color 100ms;
   }
   .qc-opt:hover:not(:disabled) {
-    background: var(--bg-3);
-    border-color: var(--border-hi);
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    border-color: color-mix(in srgb, var(--accent) 50%, transparent);
   }
   .qc-opt:disabled { cursor: not-allowed; opacity: 0.5; }
   .qc-opt--selected {
-    background: color-mix(in srgb, var(--accent) 12%, var(--bg-2));
+    background: color-mix(in srgb, var(--accent) 18%, transparent);
     border-color: var(--accent);
   }
   .qc-opt-pip {
@@ -353,7 +361,7 @@
   }
 
   .qc-other {
-    padding: 8px 12px 0;
+    margin-top: 4px;
   }
   .qc-other-input {
     width: 100%;
@@ -370,34 +378,42 @@
     border-color: transparent;
   }
 
+  /* Foot mirrors SddCard / ClaudeActionCard actions row — primary
+   *  CTA carries an accent-filled pill; secondary actions sit as
+   *  bare text-buttons that only colour-shift on hover. */
   .qc-foot {
-    display: flex; justify-content: flex-end;
-    gap: 6px;
-    padding: 10px 12px;
+    display: flex; align-items: center;
+    justify-content: flex-end;
+    gap: 14px;
+    margin-top: 2px;
   }
   .qc-btn {
-    padding: 4px 12px;
-    border-radius: 5px;
-    border: 1px solid var(--border);
-    background: var(--bg-2);
-    color: var(--text-1);
-    font-size: 11.5px;
+    padding: 2px 0;
+    border: 0;
+    background: transparent;
+    color: var(--text-mute);
+    font-size: 12px;
     font-weight: 500;
     cursor: pointer;
+    transition: color 120ms;
   }
-  .qc-btn:hover { background: var(--bg-3); }
+  .qc-btn:hover:not(:disabled) { color: var(--accent-bright); }
   .qc-btn:disabled { opacity: 0.5; cursor: not-allowed; }
   .qc-btn--primary {
-    background: color-mix(in srgb, var(--accent) 30%, var(--bg-2));
-    border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
+    padding: 4px 12px;
+    border-radius: 5px;
+    background: color-mix(in srgb, var(--accent) 32%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
     color: var(--text-0);
   }
   .qc-btn--primary:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--accent) 40%, var(--bg-2));
+    background: color-mix(in srgb, var(--accent) 45%, transparent);
+    color: var(--text-0);
   }
 
+  /* Resolved state — rendered after the user answered. Reads as a
+   *  quiet recap line inside the card, not a separate panel. */
   .qc-resolved {
-    padding: 10px 14px;
     display: flex; flex-direction: column;
     gap: 4px;
   }
@@ -412,9 +428,5 @@
     letter-spacing: 0.08em;
     text-transform: uppercase;
     color: var(--text-mute);
-    padding: 1px 6px;
-    border-radius: 3px;
-    background: var(--bg-1);
-    border: 1px solid var(--border);
   }
 </style>
