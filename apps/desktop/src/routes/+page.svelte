@@ -2420,17 +2420,24 @@
         await startLoopFromSlash(session, withArgs.args);
         void scrollChatBottom();
       } else if (withArgs.name === 'sdd') {
-        /* /sdd <prompt> — create temp workspace + stamp the canonical
-         *  spec-writer prompt into the composer input, then recursively
-         *  fire `sendClaudeMessage()` so the agent picks it up via the
-         *  same path as a manual user message (hooks, history, etc.).
-         *  Identical to the skill-dispatch flow above. */
+        /* /sdd <prompt> — split the visible user-message from the
+         *  agent-facing template. User's ASK appears in the chat as
+         *  a normal user bubble (the thing they actually typed). The
+         *  multi-paragraph spec-writer template is sent SILENTLY via
+         *  `sendClaudeMessage({ silent: true })` — agent's CLI sees
+         *  it through --resume history, the visible thread skips it.
+         *  Card progress is the user-facing indicator from here on. */
+        appendSessionMessage(session.id, {
+          role: 'user',
+          content: withArgs.args,
+          at: new Date().toISOString()
+        });
         const { startSddFromSlash } = await import('$lib/services/slashCommands');
         const rendered = await startSddFromSlash(session, withArgs.args);
         if (rendered) {
           updateSession(session.id, { input: rendered });
           await Promise.resolve();
-          await sendClaudeMessage();
+          await sendClaudeMessage({ silent: true });
         }
         void scrollChatBottom();
       }
@@ -2496,18 +2503,35 @@
   const queueSavedDrafts = new Map<string, { text: string; mentions: Mention[] }>();
 
   /** SDD card "Approve & continue" / "Next phase" click handler.
-   *  Stamps the next-stage prompt into the composer + recursively fires
-   *  the normal send pipeline — identical flow to the skill-dispatch
-   *  path and the `/sdd` slash command kickoff. */
+   *  Pushes the next-stage prompt into the agent's CLI session
+   *  SILENTLY — the giant phase/plan/spec template is recorded in the
+   *  agent's `--resume` transcript so context inheritance works, but
+   *  the visible chat thread skips it via `hidden: true`. Agent's
+   *  reply stays visible (usually a short "Phase N done.").
+   *
+   *  We still go through `sendClaudeMessage` (with `silent: true`) so
+   *  all the post-turn plumbing — sending=false, statusline refresh,
+   *  SDD refresh, queue drain — runs identically to a manual user
+   *  turn. SDD shouldn't fork a parallel pipeline; it just gets to
+   *  borrow the existing one. */
   async function onSddAdvance(sessionId: string, prompt: string): Promise<void> {
     const s = sessionsState.list.find((x) => x.id === sessionId);
     if (!s) return;
     updateSession(sessionId, { input: prompt });
     await Promise.resolve();
-    await sendClaudeMessage();
+    await sendClaudeMessage({ silent: true });
   }
 
-  async function sendClaudeMessage() {
+  /** Options for `sendClaudeMessage`. `silent` is used by the SDD
+   *  orchestrator to push phase prompts into the agent's CLI session
+   *  WITHOUT polluting the visible chat with the giant template — the
+   *  user-message bubble is marked `hidden: true` so ChatThread skips
+   *  it. Agent's reply stays visible (it's short and useful — usually
+   *  "Phase N done."). Skips slash-command parsing, the UserPromptSubmit
+   *  hook, and mention baking — SDD prompts are internal and shouldn't
+   *  go through user-prompt-shaped middleware. */
+  type SendOpts = { silent?: boolean };
+  async function sendClaudeMessage(opts: SendOpts = {}) {
     const s = activeSession;
     if (!s) return;
     /* Queue while a turn is in flight: instead of dropping the click,
@@ -2537,36 +2561,36 @@
      * call. `parseSlashCommand` only matches when the WHOLE message
      * is the command, so a regular message that happens to start
      * with `/` falls through to the normal path. */
-    if (await handleSlashCommand(text, s)) return;
+    if (!opts.silent && (await handleSlashCommand(text, s))) return;
     const id = s.id;
     const kind = (s.agentKind ?? 'claude') as 'claude' | 'cursor';
     /* UserPromptSubmit hook — runs *before* the message is stamped
-       on the thread and sent upstream. Two outcomes we honor today:
-         - `blocked: true` → abort the send; surface feedback as a
-           muted system message so the user knows why.
-         - any other → continue. (Phase 2.1 wires `updated_prompt`
-           rewrite — would need to thread the rewritten text through
-           the mention-baker and prompt assembler below.) */
-    try {
-      const hookOut = await runHook('UserPromptSubmit', {
-        session_id: id,
-        agent_kind: kind,
-        prompt: text,
-        cwd: s.cwd ?? null,
-        worktree_path: s.worktreePath ?? null
-      });
-      if (hookOut.blocked) {
-        appendSessionMessage(id, {
-          role: 'assistant',
-          content: `_Blocked by hook: ${hookOut.feedback.join('; ') || '(no reason given)'}_`,
-          at: new Date().toISOString()
+       on the thread and sent upstream. Skipped on `silent` (SDD)
+       turns because the prompt is orchestrator-generated, not user-
+       authored — UserPromptSubmit hooks expect to see real user
+       intent. */
+    if (!opts.silent) {
+      try {
+        const hookOut = await runHook('UserPromptSubmit', {
+          session_id: id,
+          agent_kind: kind,
+          prompt: text,
+          cwd: s.cwd ?? null,
+          worktree_path: s.worktreePath ?? null
         });
-        return;
+        if (hookOut.blocked) {
+          appendSessionMessage(id, {
+            role: 'assistant',
+            content: `_Blocked by hook: ${hookOut.feedback.join('; ') || '(no reason given)'}_`,
+            at: new Date().toISOString()
+          });
+          return;
+        }
+      } catch (err) {
+        /* Hook IPC failed — log + continue. Better to send the message
+           than to silently swallow it on a config glitch. */
+        console.warn('UserPromptSubmit hook failed', err);
       }
-    } catch (err) {
-      /* Hook IPC failed — log + continue. Better to send the message
-         than to silently swallow it on a config glitch. */
-      console.warn('UserPromptSubmit hook failed', err);
     }
     // Snapshot the mentions BEFORE clearing so we can still bake them into
     // the prompt below + stamp the image refs onto the user-message bubble
@@ -2585,7 +2609,8 @@
       role: 'user',
       content: text,
       at: new Date().toISOString(),
-      ...(userImages.length ? { images: userImages } : {})
+      ...(userImages.length ? { images: userImages } : {}),
+      ...(opts.silent ? { hidden: true } : {})
     });
     // Auto-title from first user message when chat had no mentions
     const curr = sessionsState.list.find((x) => x.id === id);

@@ -319,11 +319,10 @@ export async function startSddFromSlash(
     return null;
   }
   const prompt = await buildKickoffPrompt(ws);
-  appendSessionMessage(session.id, {
-    role: 'assistant',
-    content: `_SDD started — workspace at \`${ws.root}\`. Agent will draft \`spec.md\` and stop. Approve via the inline card._`,
-    at: new Date().toISOString()
-  });
+  /* No "_SDD started…_" preamble — the inline SddCard appearing in
+   *  the chat IS the indicator. Adding a system-style line on top
+   *  would be redundant and clash with the goal of keeping the
+   *  visible thread clean. */
   return prompt;
 }
 

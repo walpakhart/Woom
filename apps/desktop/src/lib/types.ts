@@ -139,6 +139,14 @@ export type ClaudeMessage = {
       entry holds the absolute path (rendered via `convertFileSrc`) and the
       basename for the alt text. Only set on `role: 'user'` messages. */
   images?: { path: string; name: string }[];
+  /** When true, the chat thread DOES NOT render this message — it's
+   *  invisible orchestration traffic that the agent's CLI transcript
+   *  needs to see (so `--resume` history stays correct) but the user
+   *  shouldn't have to scroll past. Set by SDD when phase prompts are
+   *  injected: the giant spec/plan/phase template lives on the agent's
+   *  side but stays out of the user's visible chat. Pure UX filter —
+   *  search / export / hydrate all treat hidden + visible alike. */
+  hidden?: boolean;
 };
 
 export type Mention = {

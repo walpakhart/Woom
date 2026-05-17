@@ -475,7 +475,10 @@
     {/if}
 
     {#each sess.messages as msg, i (i)}
-      {#if msg.role === 'user'}
+      {#if msg.hidden}
+        <!-- Hidden orchestration traffic (SDD phase prompts) — agent
+             CLI sees it via --resume, the user doesn't. Skipped entirely. -->
+      {:else if msg.role === 'user'}
         <article
           class="msg msg--user"
           oncontextmenu={(e) => openMsgCtxMenu(e, msg, i)}
