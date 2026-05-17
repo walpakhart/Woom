@@ -2544,6 +2544,17 @@
        are pending mentions we still queue but warn — the mentions
        stay attached for now and the next free moment uses them. */
     if (s.sending) {
+      /* SDD prompts are orchestrator-driven, not user-typed. Queuing
+       *  them while a turn is in flight would replay them later — at
+       *  which point the workspace stage has already advanced and the
+       *  prompt is stale (and worse: re-enters the visible chat). Bail
+       *  silently — the card's button is gated on `isInFlight` so the
+       *  user shouldn't have been able to trigger this anyway; this
+       *  is the defence-in-depth path. */
+      if (opts.silent) {
+        updateSession(s.id, { input: '' });
+        return;
+      }
       const draft = s.input.trim();
       if (!draft && s.mentions.length === 0) return;
       const entry = { text: draft, mentions: [...s.mentions] };
@@ -3034,7 +3045,27 @@
          active-session flip is a feature, not a bug: the user is
          intentionally driving this session forward. */
       const sessAfterDrain = sessionsState.list.find((x) => x.id === id);
-      const queue = sessAfterDrain?.pendingQueue ?? [];
+      /* Stripe SDD orchestrator templates out of the queue — they
+       *  should never have been here (silent prompts now bail before
+       *  enqueue) but historical sessions may have stuck copies, and
+       *  the cost of an over-eager filter is zero: SDD prompts are
+       *  always re-derived from the workspace stage, so a user re-
+       *  click rebuilds the right one. Markers cover the three
+       *  template headers from `sdd_prompts/{spec,plan,phase}.md`. */
+      const rawQueue = sessAfterDrain?.pendingQueue ?? [];
+      const queue = rawQueue.filter((entry) => {
+        const t = entry.text.trimStart();
+        return !(
+          t.startsWith('# SDD Phase 1 — Write the spec') ||
+          t.startsWith('# SDD Phase 2 — Write the plan') ||
+          t.startsWith('# SDD Phase 3+ — Execute phase')
+        );
+      });
+      if (queue.length !== rawQueue.length) {
+        /* Drop the SDD entries from the persisted queue so they
+         *  don't re-appear on the next drain. */
+        updateSession(id, { pendingQueue: queue });
+      }
       if (queue.length > 0) {
         const [nextEntry, ...rest] = queue;
         // Save the user's current draft once (on first drain) so we can

@@ -67,6 +67,23 @@
     return renderDiffHtml(diffMarkdown(editOriginal, editDraft));
   });
 
+  /* Local "advance in flight" gate. Set true the moment the user
+   *  clicks the primary CTA so a double-click can't fire two agent
+   *  turns. Cleared automatically when the workspace stage changes
+   *  (i.e. the agent has touched something — watcher emitted a
+   *  rebuild). Prevents the stuck-queue bug where ~20 phase-execute
+   *  prompts ended up in `pendingQueue` because the user kept
+   *  clicking while the first turn was streaming. */
+  let advanceClicked = $state(false);
+  // svelte-ignore state_referenced_locally
+  let lastStageKind = $state(p.workspace.stage.kind);
+  $effect(() => {
+    if (p.workspace.stage.kind !== lastStageKind) {
+      lastStageKind = p.workspace.stage.kind;
+      advanceClicked = false;
+    }
+  });
+
   const stage = $derived(p.workspace.stage);
   const isAwaitingApproval = $derived(
     stage.kind === 'spec_ready' || stage.kind === 'plan_ready' || stage.kind === 'phase_done'
@@ -106,6 +123,10 @@
    *  the workspace stage first, then we ask for the prompt the new
    *  stage needs. */
   async function advance() {
+    /* Guard re-entry — once a click is in flight, ignore further
+     *  clicks until the stage changes. */
+    if (advanceClicked) return;
+    advanceClicked = true;
     /* Flip the appropriate approve gate. After flipping, we re-build
      *  the prompt against the FRESH workspace state — the awaited
      *  approve call returns the new workspace, so we use it. */
@@ -123,6 +144,10 @@
     const prompt = await buildPromptForStage(fresh);
     if (prompt) {
       void p.onAdvance(prompt);
+    } else {
+      /* No prompt to send (e.g. all phases done already) — release
+       *  the gate so the button is usable for the next stage. */
+      advanceClicked = false;
     }
   }
 
@@ -228,6 +253,8 @@
   async function onResume() { await resumeSdd(p.workspace.id); }
   async function onStop() { await stopSdd(p.workspace.id); }
   async function onRetry() {
+    if (advanceClicked) return;
+    advanceClicked = true;
     /* Retry button shows on Failed stage. Pick the phase that's
      *  marked failed (there's at most one in sequential mode) and
      *  reset its status — derive_stage flips us back to PhaseDone
@@ -237,9 +264,13 @@
       const fresh = await retrySddPhase(p.workspace.id, failed.number);
       if (fresh) {
         const prompt = await buildPromptForStage(fresh);
-        if (prompt) void p.onAdvance(prompt);
+        if (prompt) {
+          void p.onAdvance(prompt);
+          return;
+        }
       }
     }
+    advanceClicked = false;
   }
   async function onDiscard() {
     if (!confirm('Discard this SDD workspace? All temp files will be deleted.')) {
@@ -394,7 +425,9 @@
 
   <footer class="sdd-actions">
     {#if isAwaitingApproval}
-      <button class="sdd-btn sdd-btn--primary" onclick={advance}>{actionLabel()}</button>
+      <button class="sdd-btn sdd-btn--primary" disabled={advanceClicked} onclick={advance}>
+        {advanceClicked ? 'sending…' : actionLabel()}
+      </button>
     {/if}
     {#if isInFlight}
       <button class="sdd-btn" onclick={onPause}>Pause</button>
@@ -403,7 +436,7 @@
       <button class="sdd-btn sdd-btn--primary" onclick={onResume}>Resume</button>
     {/if}
     {#if stage.kind === 'failed'}
-      <button class="sdd-btn sdd-btn--primary" onclick={onRetry}>Retry phase</button>
+      <button class="sdd-btn sdd-btn--primary" disabled={advanceClicked} onclick={onRetry}>Retry phase</button>
     {/if}
     {#if !isTerminal}
       <button class="sdd-btn" onclick={onStop}>Stop</button>
@@ -742,9 +775,10 @@
     cursor: pointer;
     transition: color 120ms;
   }
-  .sdd-btn:hover {
+  .sdd-btn:hover:not(:disabled) {
     color: var(--accent-bright);
   }
+  .sdd-btn:disabled { opacity: 0.5; cursor: not-allowed; }
   .sdd-btn--primary {
     padding: 4px 12px;
     border-radius: 5px;
@@ -754,7 +788,7 @@
     font-weight: 500;
     font-size: 12px;
   }
-  .sdd-btn--primary:hover {
+  .sdd-btn--primary:hover:not(:disabled) {
     background: color-mix(in srgb, var(--accent) 45%, transparent);
     color: var(--text-0);
   }
