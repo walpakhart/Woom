@@ -454,6 +454,7 @@ pub fn run() {
             bg_tasks::bg_send_stdin,
             bg_tasks::bg_logs,
             bg_tasks::bg_wait_line,
+            bg_tasks::preview_open_window,
             // User-defined hooks — agent-lifecycle scripts. See
             // `hooks.rs` for the contract (stdin JSON / exit code /
             // stdout JSON). `hooks_run` is called from the frontend

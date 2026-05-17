@@ -108,9 +108,17 @@ export async function refreshBgTasks(): Promise<void> {
 
 async function subscribeTaskLines(id: string): Promise<void> {
   try {
-    const un = await listen<BgLine>(`bg:line:${id}`, (evt) => {
+    /* `bg:lines:<id>` (plural) — batched payload `BgLine[]`. Replaces
+     *  the legacy per-line `bg:line:<id>` event; Rust coalesces every
+     *  ≤80ms / ≤100 lines to keep IPC + Svelte reactivity cheap on
+     *  bursty dev-server output. One state mutation per batch, not
+     *  per line — critical for not freezing the renderer thread. */
+    const un = await listen<BgLine[]>(`bg:lines:${id}`, (evt) => {
+      const incoming = evt.payload;
+      if (!incoming.length) return;
       const cur = bgTasksState.lines[id] ?? [];
-      cur.push(evt.payload);
+      // Single push of the whole batch — cheaper than N pushes.
+      cur.push(...incoming);
       if (cur.length > bgTasksState.lineCapPerTask) {
         const drop = cur.length - bgTasksState.lineCapPerTask;
         cur.splice(0, drop);
@@ -119,7 +127,7 @@ async function subscribeTaskLines(id: string): Promise<void> {
     });
     bgTasksState.lineUnlisten[id] = un;
   } catch (e) {
-    console.warn(`subscribe bg:line:${id}`, e);
+    console.warn(`subscribe bg:lines:${id}`, e);
   }
 }
 

@@ -91,6 +91,13 @@ const LOG_CAP_BYTES: u64 = 10 * 1024 * 1024;
 const RECENT_LINES_CAP: usize = 30;
 const KILL_GRACE_MS: u64 = 3000;
 const BROADCAST_CAPACITY: usize = 256;
+/// Coalescer cadence — at most one `bg:lines:<id>` IPC event per this
+/// many ms, regardless of how many lines streamed in. Tuned for a smooth
+/// 60Hz UI without saturating Tauri's main thread on bursty output.
+const COALESCE_WINDOW_MS: u64 = 80;
+/// Hard burst cap — flush early if we accumulate this many lines before
+/// the cadence elapses. Prevents 10K-line dumps from blowing JSON encode.
+const COALESCE_BURST_CAP: usize = 100;
 
 /// Live state for one tracked process. The registry holds these in
 /// memory; the public `BgTask` is a serialisable snapshot.
@@ -209,6 +216,55 @@ fn scan_url(line: &str) -> Option<(String, Option<u16>)> {
         start = p + scheme_len;
     }
     None
+}
+
+/// Drain a per-task line channel and emit batched `bg:lines:<id>` Tauri
+/// events. ONE event per ≤COALESCE_WINDOW_MS (80ms) or per
+/// COALESCE_BURST_CAP (100) lines — whichever fires first. Replaces the
+/// previous per-line emit pattern that froze the app on Vite/Next dev
+/// startup (~hundreds of lines/sec → IPC saturation + Svelte
+/// reactivity storm).
+async fn run_coalescer(
+    app: AppHandle,
+    id: String,
+    mut rx: mpsc::UnboundedReceiver<BgLine>,
+) {
+    let event_name = format!("bg:lines:{id}");
+    let mut buf: Vec<BgLine> = Vec::with_capacity(COALESCE_BURST_CAP);
+    let window = Duration::from_millis(COALESCE_WINDOW_MS);
+    loop {
+        /* Wait for ANY line — if the channel closes (both readers
+         *  EOF'd, original sender dropped) we exit cleanly. */
+        let first = match rx.recv().await {
+            Some(line) => line,
+            None => break,
+        };
+        buf.push(first);
+        /* Accumulate more lines for up to `window` ms OR until burst
+         *  cap, whichever first. `try_recv` is a non-blocking poll,
+         *  `recv` with timeout gives us "either a new line within X ms
+         *  or flush". */
+        let deadline = tokio::time::Instant::now() + window;
+        while buf.len() < COALESCE_BURST_CAP {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            match tokio::time::timeout(remaining, rx.recv()).await {
+                Ok(Some(line)) => buf.push(line),
+                Ok(None) => {
+                    // Channel closed mid-window — flush remaining lines and exit.
+                    if !buf.is_empty() {
+                        let _ = app.emit(&event_name, &buf);
+                    }
+                    return;
+                }
+                Err(_) => break, // timeout — flush
+            }
+        }
+        let _ = app.emit(&event_name, &buf);
+        buf.clear();
+    }
 }
 
 /// Append a line to the task's recent_lines + url/port detections.
@@ -343,6 +399,16 @@ pub async fn spawn(
     let (line_tx, _) = broadcast::channel::<BgLine>(BROADCAST_CAPACITY);
     let (stdin_tx, mut stdin_rx) = mpsc::channel::<Vec<u8>>(32);
 
+    /* Coalescer channel — reader loops dump each parsed line here; a
+     *  single coalescer task drains it every COALESCE_WINDOW_MS (or when
+     *  the buffer reaches COALESCE_BURST_CAP) and emits ONE Tauri event
+     *  `bg:lines:<id>` carrying a `Vec<BgLine>`. Without this, a fast
+     *  dev server (Vite/Next/turbo) firing hundreds of lines/sec did
+     *  one IPC roundtrip per line + one Svelte reactivity rebuild per
+     *  line — main thread saturated, whole app froze. Batching cuts
+     *  IPC pressure by ~30× on bursty output. */
+    let (lines_tx, lines_rx) = mpsc::unbounded_channel::<BgLine>();
+
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
     let stdin = child.stdin.take();
@@ -357,6 +423,13 @@ pub async fn spawn(
     }));
 
     registry.tasks.write().insert(id.clone(), state.clone());
+
+    // Spawn the coalescer — flushes batched lines to the UI.
+    {
+        let app2 = app.clone();
+        let id2 = id.clone();
+        tokio::spawn(run_coalescer(app2, id2, lines_rx));
+    }
 
     // Stdin forwarder — bytes-in via `bg_send_stdin` get pushed here.
     if let Some(mut stdin) = stdin {
@@ -375,10 +448,10 @@ pub async fn spawn(
 
     // Stdout reader.
     if let Some(stdout) = stdout {
-        let app2 = app.clone();
         let id2 = id.clone();
         let state2 = state.clone();
         let log_path2 = log_path.clone();
+        let lines_tx2 = lines_tx.clone();
         tokio::spawn(async move {
             let mut reader = BufReader::new(stdout);
             let mut line = String::new();
@@ -395,7 +468,7 @@ pub async fn spawn(
                             line: trimmed,
                         };
                         ingest_line(&state2, evt.clone());
-                        let _ = app2.emit(&format!("bg:line:{id2}"), &evt);
+                        let _ = lines_tx2.send(evt);
                         // Best-effort log file append.
                         if let Ok(mut f) = std::fs::OpenOptions::new()
                             .append(true)
@@ -414,10 +487,10 @@ pub async fn spawn(
 
     // Stderr reader — same as stdout, separate stream tag.
     if let Some(stderr) = stderr {
-        let app2 = app.clone();
         let id2 = id.clone();
         let state2 = state.clone();
         let log_path2 = log_path.clone();
+        let lines_tx2 = lines_tx.clone();
         tokio::spawn(async move {
             let mut reader = BufReader::new(stderr);
             let mut line = String::new();
@@ -434,7 +507,7 @@ pub async fn spawn(
                             line: trimmed,
                         };
                         ingest_line(&state2, evt.clone());
-                        let _ = app2.emit(&format!("bg:line:{id2}"), &evt);
+                        let _ = lines_tx2.send(evt);
                         if let Ok(mut f) = std::fs::OpenOptions::new()
                             .append(true)
                             .create(true)
@@ -449,6 +522,11 @@ pub async fn spawn(
             }
         });
     }
+    /* Drop the original sender so the coalescer exits when BOTH reader
+     *  loops terminate (each owns a clone). The original `lines_tx`
+     *  belongs to this scope; without dropping it the channel would
+     *  stay open even after stdout/stderr EOF. */
+    drop(lines_tx);
 
     // Waiter — flips status to Exited when the child terminates.
     {
@@ -667,4 +745,50 @@ pub async fn bg_wait_line(
     timeout_ms: u64,
 ) -> Result<Option<BgLine>, String> {
     wait_line(&registry, &id, contains, timeout_ms).await
+}
+
+/// Open a separate Tauri WebviewWindow pointed at a localhost URL —
+/// gives the user a full-fidelity preview window (real cursor, real
+/// scrolling, real keyboard) instead of the cramped inline iframe.
+/// Reuses an existing window with the same label so reopening focuses
+/// rather than spawning duplicates.
+///
+/// Why this beats `tauri-plugin-opener` (default browser): the Tauri
+/// window stays bound to the Woom app's lifecycle (closes when the
+/// task dies / when the user exits Woom), runs in the same process
+/// (future: `WebviewWindow::eval` for agent automation — Phase 1d),
+/// and avoids the cold-start of spawning Chrome.
+#[tauri::command]
+pub async fn preview_open_window(
+    app: AppHandle,
+    task_id: String,
+    url: String,
+    title: Option<String>,
+) -> Result<(), String> {
+    let parsed = tauri::Url::parse(&url).map_err(|e| format!("bad url `{url}`: {e}"))?;
+    /* Sanitise to alnum + dash + underscore — Tauri rejects window
+     *  labels containing `:` / spaces / dots. `task_id` is already
+     *  safe (`bg-` + 10 hex chars) but be defensive. */
+    let label = format!("preview-{}", task_id.replace(|c: char| !c.is_alphanumeric() && c != '-' && c != '_', "_"));
+
+    if let Some(existing) = app.get_webview_window(&label) {
+        let _ = existing.show();
+        let _ = existing.unminimize();
+        let _ = existing.set_focus();
+        return Ok(());
+    }
+
+    let win_title = title.unwrap_or_else(|| format!("Preview · {task_id}"));
+    let _w = tauri::WebviewWindowBuilder::new(
+        &app,
+        &label,
+        tauri::WebviewUrl::External(parsed),
+    )
+    .title(win_title)
+    .inner_size(1100.0, 800.0)
+    .min_inner_size(420.0, 320.0)
+    .resizable(true)
+    .build()
+    .map_err(|e| format!("build window: {e}"))?;
+    Ok(())
 }

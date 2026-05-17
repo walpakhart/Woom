@@ -415,6 +415,9 @@
     const lower = body.toLowerCase();
     return KNOWN_SLASH_COMMANDS.filter((c) => c.startsWith(lower));
   });
+  /** Live `permissionMode === 'plan'` flag for the toggle pill. */
+  const planActive = $derived((sess?.permissionMode ?? 'default') === 'plan');
+
   /** Skill names that prefix-match the slash token. Project-scoped
    *  skills sort first (they're already at the head of
    *  `skillsState.list` because discovery walks cwd before user home). */
@@ -992,35 +995,28 @@
             </span>
           {/if}
 
-          <!-- Permission mode pill. `default` is implicit + hidden;
-               `plan` shows a yellow read-only banner that doubles as
-               the toggle. ⇧⇥ also cycles. Click to flip. -->
-          {#if (sess.permissionMode ?? 'default') === 'plan'}
-            <button
-              class="cmp-mode-pill cmp-mode-pill--plan"
-              onclick={() => updateSession(sess.id, { permissionMode: 'default' })}
-              title="Plan mode — agent should READ only, no edits or mutating bash. ⇧⇥ to toggle."
-            >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <circle cx="12" cy="12" r="9"/>
-                <path d="M9 12l2 2 4-4"/>
-              </svg>
-              <span>plan</span>
-            </button>
-          {:else}
-            <button
-              class="cmp-mode-pill cmp-mode-pill--muted"
-              onclick={() => updateSession(sess.id, { permissionMode: 'plan' })}
-              title="Default mode — agent can read + write + run bash. ⇧⇥ for plan mode (read-only)."
-              aria-label="Switch to plan mode"
-            >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <path d="M9 11l3 3L22 4"/>
-                <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
-              </svg>
-              <span class="cmp-mode-pill-label-faint">⇧⇥ plan</span>
-            </button>
-          {/if}
+          <!-- Permission mode toggle. Single button, two states. When
+               `default`, renders a quiet dot — barely visible at rest
+               so the composer footer doesn't shout. When `plan`, the
+               dot fills + amber-glows + the word "plan" appears next
+               to it. Click toggles; ⇧⇥ in the textarea also cycles
+               (handled in onKey). Tooltip carries the kbd hint so the
+               affordance stays discoverable without crowding the UI. -->
+          <button
+            class="cmp-mode-dot"
+            class:cmp-mode-dot--plan={planActive}
+            onclick={() => updateSession(sess.id, { permissionMode: planActive ? 'default' : 'plan' })}
+            aria-pressed={planActive}
+            aria-label={planActive ? 'Plan mode active — click to switch back to default' : 'Default mode — click to enter plan mode'}
+            title={planActive
+              ? 'Plan mode — agent reads only (no edits, no mutating bash). ⇧⇥ to toggle.'
+              : '⇧⇥ for plan mode — flips the agent into read-only investigation.'}
+          >
+            <span class="cmp-mode-dot-pip" aria-hidden="true"></span>
+            {#if planActive}
+              <span class="cmp-mode-dot-label">plan</span>
+            {/if}
+          </button>
 
           <span class="cmp-model">
             {#if p.kind === 'claude'}
@@ -1670,41 +1666,70 @@
     display: inline-flex; align-items: center; gap: 4px;
   }
 
-  /* Permission-mode pill — sits left of the model picker. The "plan"
-     variant glows amber so the user can't miss they're in read-only
-     mode; the muted "default" variant just shows the shortcut hint
-     ⇧⇥ as an affordance to discover plan mode. */
-  .cmp-mode-pill {
+  /* Permission-mode toggle — sits left of the model picker. Quiet
+     dot at rest, amber "plan" pill when active. Designed to fade
+     into the composer footer so the eye lands on the model/Send
+     row first; the dot only commands attention when the session
+     is actually in plan mode. */
+  .cmp-mode-dot {
     display: inline-flex; align-items: center;
-    gap: 4px;
-    padding: 3px 8px;
+    gap: 5px;
+    padding: 3px 5px;
     border-radius: 5px;
-    border: 1px solid var(--border);
-    background: var(--bg-2);
+    border: 1px solid transparent;
+    background: transparent;
     color: var(--text-mute);
-    font-size: 10.5px;
+    font-size: 10px;
     font-weight: 600;
+    letter-spacing: 0.03em;
     cursor: pointer;
     flex-shrink: 0;
     transition: background 120ms, border-color 120ms, color 120ms;
   }
-  .cmp-mode-pill svg { width: 11px; height: 11px; }
-  .cmp-mode-pill:hover {
+  .cmp-mode-dot:hover {
     background: var(--bg-3);
-    border-color: var(--border-hi);
+    border-color: var(--border);
     color: var(--text-1);
   }
-  .cmp-mode-pill--plan {
-    background: color-mix(in srgb, #e0b16c 14%, var(--bg-1));
-    border-color: color-mix(in srgb, #e0b16c 50%, var(--border-hi));
+  .cmp-mode-dot-pip {
+    /* Default state — small hollow ring. Reads as "off but available". */
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    border: 1.5px solid var(--text-mute);
+    background: transparent;
+    transition: border-color 150ms, background 150ms, box-shadow 150ms;
+    flex-shrink: 0;
+  }
+  .cmp-mode-dot:hover .cmp-mode-dot-pip {
+    border-color: var(--text-1);
+  }
+  /* Plan state — pill fills with amber tone + soft glow so the user
+     can't miss they're in read-only mode. The dot becomes solid. */
+  .cmp-mode-dot--plan {
+    background: color-mix(in srgb, #e0b16c 14%, transparent);
+    border-color: color-mix(in srgb, #e0b16c 40%, var(--border));
     color: #e0b16c;
+    padding: 3px 8px 3px 6px;
   }
-  .cmp-mode-pill--plan:hover {
-    background: color-mix(in srgb, #e0b16c 22%, var(--bg-1));
+  .cmp-mode-dot--plan:hover {
+    background: color-mix(in srgb, #e0b16c 22%, transparent);
+    border-color: color-mix(in srgb, #e0b16c 55%, var(--border-hi));
+    color: #f0c084;
   }
-  .cmp-mode-pill-label-faint {
+  .cmp-mode-dot--plan .cmp-mode-dot-pip {
+    border-color: #e0b16c;
+    background: #e0b16c;
+    box-shadow: 0 0 0 3px color-mix(in srgb, #e0b16c 22%, transparent);
+  }
+  .cmp-mode-dot-label {
     font-size: 10px;
-    letter-spacing: 0.02em;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: lowercase;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .cmp-mode-dot,
+    .cmp-mode-dot-pip { transition: none; }
   }
 
   .cmp-send {
