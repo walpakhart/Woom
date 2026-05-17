@@ -25,6 +25,10 @@
     saveSddBody,
     retrySddPhase,
     buildPromptForStage,
+    targetKey,
+    stashUndo,
+    popUndo,
+    sddState,
   } from '$lib/state/sdd.svelte';
   import { diffMarkdown, renderDiffHtml } from '$lib/util/markdownDiff';
 
@@ -83,6 +87,35 @@
       advanceClicked = false;
     }
   });
+
+  /* 1-second tick — drives the undo affordance's countdown display.
+   *  Cheap; only lives while the card is mounted. Same pattern as
+   *  PreviewPane's elapsed-time tick. */
+  let now = $state(Date.now());
+  $effect(() => {
+    const t = setInterval(() => { now = Date.now(); }, 1000);
+    return () => clearInterval(t);
+  });
+
+  /* Undo affordance state — derived from the store slot for the
+   *  CURRENT stage's target. Only one undo per file is tracked at a
+   *  time; switching stages picks the right slot via `targetKey`.
+   *  30-second window; after that the slot stays (until the agent
+   *  rewrites or a fresh save replaces it) but the affordance hides. */
+  const UNDO_WINDOW_MS = 30_000;
+  const undoSlot = $derived.by(() => {
+    const t = editTarget();
+    if (!t) return null;
+    const slots = sddState.undoByWorkspace[p.workspace.id];
+    if (!slots) return null;
+    return slots[targetKey(t)] ?? null;
+  });
+  const undoSecondsLeft = $derived.by(() => {
+    if (!undoSlot) return 0;
+    const left = Math.ceil((undoSlot.savedAt + UNDO_WINDOW_MS - now) / 1000);
+    return Math.max(0, left);
+  });
+  const undoVisible = $derived(undoSlot !== null && undoSecondsLeft > 0);
 
   const stage = $derived(p.workspace.stage);
   const isAwaitingApproval = $derived(
@@ -224,11 +257,31 @@
   async function saveEdit() {
     const t = editTarget();
     if (!t) return;
+    /* Snapshot pre-save body into the undo store BEFORE the network
+     *  call. Skipped when the draft is identical to the original —
+     *  no point flashing an Undo affordance for a no-op save. */
+    if (editOriginal !== editDraft) {
+      stashUndo(p.workspace.id, targetKey(t), editOriginal);
+    }
     await saveSddBody(p.workspace.id, t, editDraft);
     editMode = false;
     editDraft = '';
     editOriginal = '';
     editView = 'edit';
+  }
+
+  /** Restore the pre-save body for the current stage's target.
+   *  Reads + clears the slot, then calls `saveSddBody` to write it
+   *  back. The watcher's `sdd:changed` event will refresh the card.
+   *  Caller must verify a slot exists (button only renders when it
+   *  does) — defence-in-depth handled here by a null-guard. */
+  async function onUndo() {
+    const t = editTarget();
+    if (!t) return;
+    const key = targetKey(t);
+    const prev = popUndo(p.workspace.id, key);
+    if (prev == null) return;
+    await saveSddBody(p.workspace.id, t, prev);
   }
 
   /* Sync-scroll between the split panes — proportional so when one
@@ -437,6 +490,11 @@
     {/if}
     {#if stage.kind === 'failed'}
       <button class="sdd-btn sdd-btn--primary" disabled={advanceClicked} onclick={onRetry}>Retry phase</button>
+    {/if}
+    {#if undoVisible}
+      <button class="sdd-btn" onclick={onUndo} title="Restore the body that was there before your last save">
+        ↶ Undo last edit ({undoSecondsLeft}s)
+      </button>
     {/if}
     {#if !isTerminal}
       <button class="sdd-btn" onclick={onStop}>Stop</button>

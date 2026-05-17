@@ -78,6 +78,19 @@ interface SddStoreShape {
   unlistenByWorkspace: Record<string, UnlistenFn>;
   /** Global broadcast listener — one per app lifecycle. */
   globalUnlisten: UnlistenFn | null;
+  /** One-level undo target per (workspace, target). Target key is
+   *  `spec` / `plan` / `phase-NN`. `body` is the pre-save markdown;
+   *  `savedAt` is the ms-since-epoch at which the save fired (used
+   *  to time out the affordance after 30s). In-memory only — wiped
+   *  on app restart by design (the spec is explicit on this). */
+  undoByWorkspace: Record<string, Record<string, { body: string; savedAt: number }>>;
+  /** Self-save debounce — `lastSelfSaveAt[wsId]` = ms timestamp of the
+   *  most recent `saveSddBody` call from THIS app instance. The
+   *  agent-rewrite-detection branch in the `sdd:changed` listener
+   *  skips its auto-clear when the incoming change landed within
+   *  ~500ms of our own save — otherwise our own write round-trip
+   *  would false-positive as "agent rewrote it". */
+  lastSelfSaveAt: Record<string, number>;
 }
 
 export const sddState = $state<SddStoreShape>({
@@ -85,7 +98,60 @@ export const sddState = $state<SddStoreShape>({
   workspaceBySession: {},
   unlistenByWorkspace: {},
   globalUnlisten: null,
+  undoByWorkspace: {},
+  lastSelfSaveAt: {},
 });
+
+/** Stable key for the (target) addressed by a save action. Keeps
+ *  spec/plan/phase routes pulling from the same record without
+ *  having to thread a discriminated union through every store op. */
+export function targetKey(
+  target: { kind: 'spec' } | { kind: 'plan' } | { kind: 'phase'; number: number }
+): string {
+  if (target.kind === 'spec') return 'spec';
+  if (target.kind === 'plan') return 'plan';
+  return `phase-${target.number}`;
+}
+
+/** Stash a pre-save snapshot so the SddCard's "Undo last edit"
+ *  affordance can restore it within 30s. Also stamps `lastSelfSaveAt`
+ *  so the listener's agent-rewrite-detection branch knows the
+ *  upcoming `sdd:changed` event is ours, not the agent's. */
+export function stashUndo(workspaceId: string, key: string, prevBody: string): void {
+  const slots = sddState.undoByWorkspace[workspaceId] ?? {};
+  slots[key] = { body: prevBody, savedAt: Date.now() };
+  sddState.undoByWorkspace[workspaceId] = slots;
+  sddState.lastSelfSaveAt[workspaceId] = Date.now();
+}
+
+/** Read + clear the undo slot. Returns the prior body, or null. */
+export function popUndo(workspaceId: string, key: string): string | null {
+  const slots = sddState.undoByWorkspace[workspaceId];
+  if (!slots) return null;
+  const slot = slots[key];
+  if (!slot) return null;
+  delete slots[key];
+  /* Stamp lastSelfSaveAt again — the upcoming write-back from the
+   *  caller's `saveSddBody` will also emit `sdd:changed`, which the
+   *  listener would otherwise treat as an agent rewrite. */
+  sddState.lastSelfSaveAt[workspaceId] = Date.now();
+  return slot.body;
+}
+
+/** Compare a stashed undo body against the workspace's current body
+ *  for the same target key. Returns true when they DIFFER, meaning
+ *  the agent has rewritten the file since we stashed. Used by the
+ *  listener to drop stale undo slots. */
+function bodyForKey(ws: SddWorkspace, key: string): string | null {
+  if (key === 'spec') return ws.spec_body;
+  if (key === 'plan') return ws.plan_body;
+  if (key.startsWith('phase-')) {
+    const n = Number(key.slice('phase-'.length));
+    const ph = ws.phases.find((p) => p.number === n);
+    return ph?.body ?? null;
+  }
+  return null;
+}
 
 /** Initialise the global `sdd:changed` listener AND hydrate from disk.
  *  Idempotent — safe to call from `+page.svelte` onMount more than
@@ -100,6 +166,26 @@ export async function initSdd(): Promise<void> {
     try {
       const ws = await invoke<SddWorkspace>('sdd_get', { id });
       upsertWorkspace(ws);
+      /* Agent-rewrite detection. For every stashed undo slot whose
+       *  underlying body now DIFFERS from the snapshot we stashed at
+       *  save time AND the change DIDN'T land within ~500ms of our
+       *  own save (which would be the round-trip from our own
+       *  saveSddBody emit), drop the slot — the user undo'ing back
+       *  to an old body the agent has since rewritten would be a
+       *  footgun. */
+      const slots = sddState.undoByWorkspace[id];
+      if (slots) {
+        const lastSelf = sddState.lastSelfSaveAt[id] ?? 0;
+        const now = Date.now();
+        if (now - lastSelf > 500) {
+          for (const key of Object.keys(slots)) {
+            const current = bodyForKey(ws, key);
+            if (current !== null && current !== slots[key].body) {
+              delete slots[key];
+            }
+          }
+        }
+      }
     } catch {
       /* Workspace was discarded between emit + receive — fine, drop. */
       removeWorkspace(id);
