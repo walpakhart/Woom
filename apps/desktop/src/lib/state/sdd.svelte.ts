@@ -205,6 +205,42 @@ export async function approveSdd(
   }
 }
 
+/** Save user-edited body for the spec, plan, or a specific phase. The
+ *  YAML frontmatter is preserved verbatim on the Rust side. */
+export async function saveSddBody(
+  id: string,
+  target: { kind: 'spec' } | { kind: 'plan' } | { kind: 'phase'; number: number },
+  body: string
+): Promise<SddWorkspace | null> {
+  const args = target.kind === 'phase'
+    ? { kind: 'phase', number: target.number }
+    : { kind: target.kind };
+  try {
+    const ws = await invoke<SddWorkspace>('sdd_save_body', { id, target: args, body });
+    upsertWorkspace(ws);
+    return ws;
+  } catch (e) {
+    console.warn('sdd_save_body failed', e);
+    return null;
+  }
+}
+
+/** Reset a failed (or done) phase back to `pending`. The next
+ *  advance fires the phase prompt again with a fresh status. */
+export async function retrySddPhase(
+  id: string,
+  phase: number
+): Promise<SddWorkspace | null> {
+  try {
+    const ws = await invoke<SddWorkspace>('sdd_retry_phase', { id, phase });
+    upsertWorkspace(ws);
+    return ws;
+  } catch (e) {
+    console.warn('sdd_retry_phase failed', e);
+    return null;
+  }
+}
+
 export async function pauseSdd(id: string): Promise<void> {
   try { await invoke('sdd_pause', { id }); } catch (e) { console.warn(e); }
 }

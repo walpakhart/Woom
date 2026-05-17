@@ -470,6 +470,8 @@ pub fn run() {
             sdd::sdd_resume,
             sdd::sdd_stop,
             sdd::sdd_prompt,
+            sdd::sdd_save_body,
+            sdd::sdd_retry_phase,
             sdd::sdd_discard,
             // User-defined hooks — agent-lifecycle scripts. See
             // `hooks.rs` for the contract (stdin JSON / exit code /

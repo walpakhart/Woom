@@ -385,7 +385,20 @@ fn derive_stage(
     spec_status: Option<String>,
     plan_status: Option<String>,
 ) -> SddStage {
-    // Honour external overrides — if user paused/stopped, stay there.
+    /* Filesystem-backed pause/stop signals — same convention as
+     *  brain's orchestrator. The card writes `control/stop` /
+     *  `control/pause` on user click, which lets state survive an
+     *  app restart (in-memory `w.stage` is reset to Drafting on
+     *  hydrate, so we have to recover the user's intent from disk). */
+    let root = PathBuf::from(&w.root);
+    if root.join("control/stop").exists() {
+        return SddStage::Stopped;
+    }
+    if root.join("control/pause").exists() {
+        return SddStage::Paused;
+    }
+    // Honour in-memory overrides too (the control file may not have
+    // landed yet between flip_stage + the immediate rebuild).
     if matches!(w.stage, SddStage::Paused | SddStage::Stopped) {
         return w.stage.clone();
     }
@@ -408,7 +421,14 @@ fn derive_stage(
     if !plan_approved {
         return SddStage::PlanReady;
     }
-    // Plan approved — execute phases in order.
+    // Plan approved — check for failure first so a failed phase
+    // doesn't get masked by a later "done" sibling. (Sequential exec
+    // means this is the latest phase touched.)
+    if let Some(p) = w.phases.iter().find(|p| p.status == "failed") {
+        return SddStage::Failed {
+            reason: format!("Phase {} ({}) failed — see result file", p.number, p.title),
+        };
+    }
     let running_phase = w.phases.iter().find(|p| p.status == "running");
     if let Some(p) = running_phase {
         return SddStage::PhaseRunning { phase: p.number };
@@ -447,6 +467,52 @@ fn set_status_on(path: &Path, new_status: &str) -> Result<(), String> {
     map.insert(
         serde_yaml::Value::String("updated".into()),
         serde_yaml::Value::String(format_iso(now_ms())),
+    );
+    let new_yaml = serde_yaml::to_string(&map).map_err(|e| format!("yaml: {e}"))?;
+    let content = format!("---\n{new_yaml}---\n\n{}\n", body.trim_end());
+    let tmp = path.with_extension("md.tmp");
+    std::fs::write(&tmp, content).map_err(|e| format!("write tmp: {e}"))?;
+    std::fs::rename(&tmp, path).map_err(|e| format!("rename: {e}"))?;
+    Ok(())
+}
+
+/// Replace the body of a markdown file while preserving its YAML
+/// frontmatter verbatim. Used by `sdd_save_body` so the user can edit
+/// spec.md / plan.md / phase.md content inline in the card without
+/// blowing away the agent's frontmatter (status, depends_on, etc).
+fn replace_body_on(path: &Path, new_body: &str) -> Result<(), String> {
+    let raw = std::fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    let (yaml_str, _) = split_frontmatter_raw(&raw);
+    let content = if yaml_str.is_empty() {
+        format!("{}\n", new_body.trim_end())
+    } else {
+        format!("---\n{yaml_str}\n---\n\n{}\n", new_body.trim_end())
+    };
+    let tmp = path.with_extension("md.tmp");
+    std::fs::write(&tmp, content).map_err(|e| format!("write tmp: {e}"))?;
+    std::fs::rename(&tmp, path).map_err(|e| format!("rename: {e}"))?;
+    Ok(())
+}
+
+/// Reset a phase file's status back to `pending` so the orchestrator
+/// will re-issue it on the next advance. Used by the card's "Retry"
+/// button on a failed phase. Also clears any tasks_completed counter
+/// so the agent re-attempts from the top.
+fn reset_phase_status(path: &Path) -> Result<(), String> {
+    let raw = std::fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    let (yaml_str, body) = split_frontmatter_raw(&raw);
+    let mut map: serde_yaml::Mapping = if yaml_str.trim().is_empty() {
+        serde_yaml::Mapping::new()
+    } else {
+        serde_yaml::from_str(&yaml_str).map_err(|e| format!("parse frontmatter: {e}"))?
+    };
+    map.insert(
+        serde_yaml::Value::String("status".into()),
+        serde_yaml::Value::String("pending".into()),
+    );
+    map.insert(
+        serde_yaml::Value::String("tasks_completed".into()),
+        serde_yaml::Value::Number(serde_yaml::Number::from(0)),
     );
     let new_yaml = serde_yaml::to_string(&map).map_err(|e| format!("yaml: {e}"))?;
     let content = format!("---\n{new_yaml}---\n\n{}\n", body.trim_end());
@@ -766,12 +832,33 @@ pub async fn sdd_approve(
     Ok(snapshot)
 }
 
+/// Write a control file under `<workspace>/control/<name>`. Best-effort
+/// — failures are reported but don't poison the stage flip (the in-memory
+/// override still wins until the next process restart). Removing the
+/// file is the inverse (`unset_control_file`).
+fn set_control_file(root: &Path, name: &str) -> Result<(), String> {
+    let dir = root.join("control");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir control: {e}"))?;
+    std::fs::write(dir.join(name), b"").map_err(|e| format!("write control/{name}: {e}"))
+}
+
+fn unset_control_files(root: &Path) {
+    let _ = std::fs::remove_file(root.join("control/pause"));
+    let _ = std::fs::remove_file(root.join("control/stop"));
+}
+
 #[tauri::command]
 pub async fn sdd_pause(
     app: AppHandle,
     registry: State<'_, SddRegistry>,
     id: String,
 ) -> Result<SddWorkspace, String> {
+    /* Drop the control file FIRST so the next derive_stage picks it up
+     *  regardless of in-memory state. */
+    if let Some(cell) = registry.workspaces.read().get(&id).cloned() {
+        let root = PathBuf::from(cell.read().root.clone());
+        let _ = set_control_file(&root, "pause");
+    }
     flip_stage(&app, &registry, &id, SddStage::Paused)
 }
 
@@ -781,13 +868,17 @@ pub async fn sdd_resume(
     registry: State<'_, SddRegistry>,
     id: String,
 ) -> Result<SddWorkspace, String> {
-    // Resume = recompute stage from disk; control flag clearing handled here.
+    // Resume = wipe control files + recompute stage from disk.
     let cell = registry
         .workspaces
         .read()
         .get(&id)
         .cloned()
         .ok_or_else(|| format!("unknown workspace {id}"))?;
+    {
+        let root = PathBuf::from(cell.read().root.clone());
+        unset_control_files(&root);
+    }
     let snapshot = {
         let mut w = cell.write();
         // Force stage out of Paused so derive_stage can compute fresh.
@@ -805,6 +896,10 @@ pub async fn sdd_stop(
     registry: State<'_, SddRegistry>,
     id: String,
 ) -> Result<SddWorkspace, String> {
+    if let Some(cell) = registry.workspaces.read().get(&id).cloned() {
+        let root = PathBuf::from(cell.read().root.clone());
+        let _ = set_control_file(&root, "stop");
+    }
     flip_stage(&app, &registry, &id, SddStage::Stopped)
 }
 
@@ -841,6 +936,101 @@ pub async fn sdd_prompt(kind: SddPromptKind) -> Result<String, String> {
         SddPromptKind::Phase => PHASE_TEMPLATE_PROMPT,
     };
     Ok(s.to_string())
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SddEditTarget {
+    Spec,
+    Plan,
+    Phase { number: u32 },
+}
+
+/// Save user-edited body for spec / plan / a specific phase. The YAML
+/// frontmatter is preserved verbatim — we only swap the markdown
+/// content. Used by the card's inline "edit" affordance so the user
+/// can tweak the agent's spec/plan before approving without round-
+/// tripping through a text editor.
+#[tauri::command]
+pub async fn sdd_save_body(
+    app: AppHandle,
+    registry: State<'_, SddRegistry>,
+    id: String,
+    target: SddEditTarget,
+    body: String,
+) -> Result<SddWorkspace, String> {
+    let cell = registry
+        .workspaces
+        .read()
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| format!("unknown workspace {id}"))?;
+    let path: PathBuf = {
+        let w = cell.read();
+        match target {
+            SddEditTarget::Spec => w
+                .spec_path
+                .clone()
+                .map(PathBuf::from)
+                .ok_or_else(|| "no spec yet".to_string())?,
+            SddEditTarget::Plan => w
+                .plan_path
+                .clone()
+                .map(PathBuf::from)
+                .ok_or_else(|| "no plan yet".to_string())?,
+            SddEditTarget::Phase { number } => w
+                .phases
+                .iter()
+                .find(|p| p.number == number)
+                .map(|p| PathBuf::from(&p.path))
+                .ok_or_else(|| format!("phase {number} not found"))?,
+        }
+    };
+    replace_body_on(&path, &body)?;
+    let snapshot = {
+        let mut w = cell.write();
+        rebuild_from_disk(&mut w)?;
+        w.clone()
+    };
+    emit_changed(&app, &id);
+    Ok(snapshot)
+}
+
+/// Reset a failed (or done) phase back to `pending` so the next
+/// advance re-issues it. Used by the card's "Retry" button on a
+/// failed phase. The user is the gate — we don't auto-retry inside
+/// the agent prompt (that's the per-prompt `{{retries_max}}` budget);
+/// THIS reset is for the case where verification failed AFTER the
+/// in-prompt retries were exhausted.
+#[tauri::command]
+pub async fn sdd_retry_phase(
+    app: AppHandle,
+    registry: State<'_, SddRegistry>,
+    id: String,
+    phase: u32,
+) -> Result<SddWorkspace, String> {
+    let cell = registry
+        .workspaces
+        .read()
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| format!("unknown workspace {id}"))?;
+    let path: PathBuf = {
+        let w = cell.read();
+        w.phases
+            .iter()
+            .find(|p| p.number == phase)
+            .map(|p| PathBuf::from(&p.path))
+            .ok_or_else(|| format!("phase {phase} not found"))?
+    };
+    reset_phase_status(&path)?;
+    let snapshot = {
+        let mut w = cell.write();
+        rebuild_from_disk(&mut w)?;
+        w.clone()
+    };
+    emit_changed(&app, &id);
+    Ok(snapshot)
 }
 
 /// Optional convenience — wipe a workspace dir from disk + drop it from
@@ -920,11 +1110,19 @@ fn ensure_watcher(
             ) {
                 continue;
             }
-            /* Ignore our own `.tmp` writes from atomic rename pattern.
-             *  Without this the rename → file-removed event would fire
-             *  a spurious rebuild that sees an in-flight state. */
+            /* Ignore noise:
+             *  - `.tmp` writes from our atomic rename pattern (we'd see
+             *    both the tmp create AND the rename-target create —
+             *    only the latter is real "content changed")
+             *  - `meta.json` side-car (session_id / user_prompt — doesn't
+             *    affect stage, would cause spurious rebuilds on init)
+             *  - anything inside `control/` (pause/stop signal files;
+             *    those are HANDLED by the agent reading them, not by
+             *    the stage-derivation path). */
             let ignore = evt.paths.iter().any(|p| {
-                p.extension().is_some_and(|e| e == "tmp")
+                if p.extension().is_some_and(|e| e == "tmp") { return true; }
+                if p.file_name().is_some_and(|n| n == "meta.json") { return true; }
+                p.components().any(|c| c.as_os_str() == "control")
             });
             if ignore { continue; }
 

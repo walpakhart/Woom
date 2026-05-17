@@ -22,6 +22,8 @@
     resumeSdd,
     stopSdd,
     discardSdd,
+    saveSddBody,
+    retrySddPhase,
     buildPromptForStage,
   } from '$lib/state/sdd.svelte';
 
@@ -37,6 +39,11 @@
    *  clicks the section to expand. Persists per-stage (so unique to
    *  this render, not the workspace globally — re-mount resets). */
   let bodyOpen = $state(false);
+  /* Edit mode — swap the rendered Markdown for a textarea. The user
+   *  can tweak the agent's spec/plan/phase content before approving.
+   *  YAML frontmatter on disk is preserved by the Rust side. */
+  let editMode = $state(false);
+  let editDraft = $state('');
 
   const stage = $derived(p.workspace.stage);
   const isAwaitingApproval = $derived(
@@ -139,9 +146,51 @@
     return '';
   }
 
+  /* Edit-mode helpers. Save target depends on current stage — spec
+   *  when SpecReady, plan when PlanReady, current phase otherwise. */
+  function editTarget(): { kind: 'spec' } | { kind: 'plan' } | { kind: 'phase'; number: number } | null {
+    if (stage.kind === 'spec_ready') return { kind: 'spec' };
+    if (stage.kind === 'plan_ready') return { kind: 'plan' };
+    if (stage.kind === 'phase_running' || stage.kind === 'phase_done') {
+      return { kind: 'phase', number: stage.phase };
+    }
+    return null;
+  }
+  function startEdit() {
+    if (!body) return;
+    editDraft = body.markdown;
+    editMode = true;
+    bodyOpen = true;
+  }
+  function cancelEdit() {
+    editMode = false;
+    editDraft = '';
+  }
+  async function saveEdit() {
+    const t = editTarget();
+    if (!t) return;
+    await saveSddBody(p.workspace.id, t, editDraft);
+    editMode = false;
+    editDraft = '';
+  }
+
   async function onPause() { await pauseSdd(p.workspace.id); }
   async function onResume() { await resumeSdd(p.workspace.id); }
   async function onStop() { await stopSdd(p.workspace.id); }
+  async function onRetry() {
+    /* Retry button shows on Failed stage. Pick the phase that's
+     *  marked failed (there's at most one in sequential mode) and
+     *  reset its status — derive_stage flips us back to PhaseDone
+     *  for the prior phase, so the next advance re-issues this one. */
+    const failed = p.workspace.phases.find((ph) => ph.status === 'failed');
+    if (failed) {
+      const fresh = await retrySddPhase(p.workspace.id, failed.number);
+      if (fresh) {
+        const prompt = await buildPromptForStage(fresh);
+        if (prompt) void p.onAdvance(prompt);
+      }
+    }
+  }
   async function onDiscard() {
     if (!confirm('Discard this SDD workspace? All temp files will be deleted.')) {
       /* Note: same Tauri webview confirm caveat as PreviewPane — Tauri
@@ -185,22 +234,50 @@
 
   {#if body}
     <div class="sdd-body">
-      <button
-        type="button"
-        class="sdd-body-toggle"
-        onclick={() => (bodyOpen = !bodyOpen)}
-        aria-expanded={bodyOpen}
-      >
-        <svg class="sdd-chev" class:open={bodyOpen} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
-          <path d="M9 6l6 6-6 6"/>
-        </svg>
-        <span class="mono">{body.title}</span>
-      </button>
+      <div class="sdd-body-row">
+        <button
+          type="button"
+          class="sdd-body-toggle"
+          onclick={() => (bodyOpen = !bodyOpen)}
+          aria-expanded={bodyOpen}
+        >
+          <svg class="sdd-chev" class:open={bodyOpen} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+            <path d="M9 6l6 6-6 6"/>
+          </svg>
+          <span class="mono">{body.title}</span>
+        </button>
+        {#if !editMode && editTarget()}
+          <button type="button" class="sdd-edit-toggle" onclick={startEdit} title="Edit before approving">
+            edit ✎
+          </button>
+        {/if}
+      </div>
       {#if bodyOpen}
-        <div class="sdd-body-content">
-          <Markdown source={body.markdown} />
-        </div>
+        {#if editMode}
+          <div class="sdd-body-edit">
+            <textarea
+              class="sdd-edit-area mono"
+              bind:value={editDraft}
+              spellcheck="false"
+              rows="14"
+            ></textarea>
+            <div class="sdd-edit-actions">
+              <button type="button" class="sdd-btn" onclick={cancelEdit}>cancel</button>
+              <button type="button" class="sdd-btn sdd-btn--primary" onclick={saveEdit}>save</button>
+            </div>
+          </div>
+        {:else}
+          <div class="sdd-body-content">
+            <Markdown source={body.markdown} />
+          </div>
+        {/if}
       {/if}
+    </div>
+  {/if}
+
+  {#if stage.kind === 'failed'}
+    <div class="sdd-failed">
+      <strong>Failed:</strong> {stage.reason}
     </div>
   {/if}
 
@@ -213,6 +290,9 @@
     {/if}
     {#if isPaused}
       <button class="sdd-btn sdd-btn--primary" onclick={onResume}>Resume</button>
+    {/if}
+    {#if stage.kind === 'failed'}
+      <button class="sdd-btn sdd-btn--primary" onclick={onRetry}>Retry phase</button>
     {/if}
     {#if !isTerminal}
       <button class="sdd-btn" onclick={onStop}>Stop</button>
@@ -357,6 +437,68 @@
     display: flex; flex-direction: column;
     gap: 6px;
   }
+  .sdd-body-row {
+    display: flex; align-items: center;
+    gap: 14px;
+  }
+  /* Edit toggle — text-link aesthetic, sits next to the file-title
+   *  chevron. Same hover behaviour as the other text-buttons. */
+  .sdd-edit-toggle {
+    border: 0;
+    background: transparent;
+    color: var(--text-mute);
+    cursor: pointer;
+    font-size: 11px;
+    padding: 1px 0;
+    transition: color 120ms;
+  }
+  .sdd-edit-toggle:hover {
+    color: var(--accent-bright);
+  }
+
+  /* Edit-mode textarea — fills the body slot while editing. mono +
+   *  subtle accent border to feel like an "agent's draft you're
+   *  amending" rather than a generic form input. */
+  .sdd-body-edit {
+    display: flex; flex-direction: column;
+    gap: 6px;
+  }
+  .sdd-edit-area {
+    width: 100%;
+    min-height: 240px;
+    padding: 10px 12px;
+    border-radius: 5px;
+    border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border-neutral));
+    background: var(--bg-0);
+    color: var(--text-0);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    line-height: 1.5;
+    resize: vertical;
+  }
+  .sdd-edit-area:focus {
+    outline: 2px solid var(--accent);
+    outline-offset: -1px;
+    border-color: transparent;
+  }
+  .sdd-edit-actions {
+    display: flex; gap: 14px; align-items: center;
+    justify-content: flex-end;
+  }
+
+  /* Failed banner — uses warn-tone red accents inside the card, sits
+   *  above the actions row so the user sees WHY before they decide
+   *  whether to retry. */
+  .sdd-failed {
+    padding: 6px 10px;
+    border-left: 2px solid var(--error);
+    background: color-mix(in srgb, var(--error) 10%, transparent);
+    border-radius: 3px;
+    color: var(--text-1);
+    font-size: 12px;
+    line-height: 1.5;
+  }
+  .sdd-failed strong { color: var(--error); }
   /* Body toggle is a text-link, not a button — keeps the "inline
    *  prose" feel. Chevron + filename hint at expandability without
    *  shouting. */

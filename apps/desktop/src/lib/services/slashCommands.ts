@@ -185,6 +185,8 @@ export function appendSlashHelp(session: ClaudeSession): void {
     '- `/preview [cmd]` — open the Preview pane; with args, spawn a background task',
     '- `/kill <id|label>` — kill a tracked background task',
     '- `/ps` — list running background tasks',
+    '- `/sdd <ask>` — spec → plan → phases workflow in a temp workspace (no git pollution)',
+    '- `/loop <duration> <prompt>` / `/unloop` — re-send a prompt on a cadence',
     '- `/help` — show this list'
   ];
   appendSessionMessage(session.id, {
