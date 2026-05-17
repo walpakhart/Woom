@@ -10,6 +10,8 @@
   import Markdown from '$lib/components/ui/Markdown.svelte';
   import ClaudeActionCard from '$lib/components/agent/ClaudeActionCard.svelte';
   import QuestionCard from '$lib/components/agent/QuestionCard.svelte';
+  import SddCard from '$lib/components/agent/SddCard.svelte';
+  import { workspaceForSession } from '$lib/state/sdd.svelte';
   import CardContextMenu, { type MenuItem } from '$lib/views/apps/_shared/CardContextMenu.svelte';
   import { notify } from '$lib/state/toaster.svelte';
   import { setDragPayload } from '$lib/state/drag.svelte';
@@ -33,6 +35,10 @@
      *  worktree / linked editor, so all we have to do here is plumb
      *  the path through. */
     onOpenFile?: (path: string) => void;
+    /** SDD card "advance" → stamp the next prompt into composer + fire
+     *  the same send pipeline a manual user message uses. Wired up from
+     *  +page.svelte; null when the parent hasn't plumbed it (e.g. tests). */
+    onSddAdvance?: (sessionId: string, prompt: string) => void;
   }
   let p: Props = $props();
 
@@ -726,6 +732,18 @@
         </article>
       {/if}
     {/each}
+
+    {#if workspaceForSession(sess.id)}
+      {@const sddWs = workspaceForSession(sess.id)}
+      {#if sddWs}
+        <div class="action-wrap">
+          <SddCard
+            workspace={sddWs}
+            onAdvance={(prompt) => p.onSddAdvance?.(sess.id, prompt)}
+          />
+        </div>
+      {/if}
+    {/if}
 
     {#each sess.actions as action (action.id)}
       <div class="action-wrap">

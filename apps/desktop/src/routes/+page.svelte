@@ -177,6 +177,7 @@
   import { initScale } from '$lib/state/scale.svelte';
   import { initDensity, toggleDensity } from '$lib/state/density.svelte';
   import { initBgTasks } from '$lib/state/bgTasks.svelte';
+  import { initSdd, workspaceForSession, refreshSdd } from '$lib/state/sdd.svelte';
   import { loadHookConfig, runHook } from '$lib/state/hooks.svelte';
   import { skillsState, refreshSkills, renderSkill } from '$lib/state/skills.svelte';
   import { loadClaudeMd } from '$lib/state/claudemd.svelte';
@@ -982,6 +983,7 @@
     // listener so the Preview pane (right side of Claude/Cursor solo)
     // refreshes when a process spawns / exits anywhere in the app.
     void initBgTasks();
+    void initSdd();
     // Hooks — load the user's `hooks.json` config so the lifecycle
     // call sites (UserPromptSubmit / Stop / SessionStart later) can
     // dispatch without an IPC stall on the first invocation.
@@ -2417,6 +2419,20 @@
       } else if (withArgs.name === 'loop') {
         await startLoopFromSlash(session, withArgs.args);
         void scrollChatBottom();
+      } else if (withArgs.name === 'sdd') {
+        /* /sdd <prompt> — create temp workspace + stamp the canonical
+         *  spec-writer prompt into the composer input, then recursively
+         *  fire `sendClaudeMessage()` so the agent picks it up via the
+         *  same path as a manual user message (hooks, history, etc.).
+         *  Identical to the skill-dispatch flow above. */
+        const { startSddFromSlash } = await import('$lib/services/slashCommands');
+        const rendered = await startSddFromSlash(session, withArgs.args);
+        if (rendered) {
+          updateSession(session.id, { input: rendered });
+          await Promise.resolve();
+          await sendClaudeMessage();
+        }
+        void scrollChatBottom();
       }
       return true;
     }
@@ -2478,6 +2494,18 @@
   // Set on first drain, cleared when the queue empties so the user's
   // in-progress text survives the queue firing.
   const queueSavedDrafts = new Map<string, { text: string; mentions: Mention[] }>();
+
+  /** SDD card "Approve & continue" / "Next phase" click handler.
+   *  Stamps the next-stage prompt into the composer + recursively fires
+   *  the normal send pipeline — identical flow to the skill-dispatch
+   *  path and the `/sdd` slash command kickoff. */
+  async function onSddAdvance(sessionId: string, prompt: string): Promise<void> {
+    const s = sessionsState.list.find((x) => x.id === sessionId);
+    if (!s) return;
+    updateSession(sessionId, { input: prompt });
+    await Promise.resolve();
+    await sendClaudeMessage();
+  }
 
   async function sendClaudeMessage() {
     const s = activeSession;
@@ -2922,6 +2950,16 @@
       (m, i) => i === finalSess.messages.length - 1 && m.role === 'assistant' && m.content.startsWith('**Claude failed:')
     );
     updateSession(id, { sending: false });
+    /* SDD refresh — if the session has an active SDD workspace, the
+     *  agent's just-completed turn likely wrote a spec/plan/phase file.
+     *  Re-read the workspace from disk so the inline card reflects the
+     *  new state (stage transition, new phases, status flips, etc.).
+     *  Fire-and-forget; the resulting `sdd:changed:<id>` event will
+     *  update the reactive store. */
+    {
+      const sddWs = workspaceForSession(id);
+      if (sddWs) void refreshSdd(sddWs.id);
+    }
     /* Stop hook — fires on every normal turn completion (errored OR
        not). Hooks can use this for notifications, log archival, or
        conditional `/loop`-style behavior. Failures swallow so a bad
@@ -5498,6 +5536,7 @@
           onDragOver={(e) => onAgentDragOver(APP_INSTANCE_IDS.claude, 'claude', e)}
           onDrop={(e) => onAgentDrop(APP_INSTANCE_IDS.claude, 'claude', e)}
           onDragLeave={() => onAgentDragLeave(APP_INSTANCE_IDS.claude)}
+          onSddAdvance={onSddAdvance}
         />
       {/if}
 
@@ -5540,6 +5579,7 @@
           onDragOver={(e) => onAgentDragOver(APP_INSTANCE_IDS.cursor, 'cursor', e)}
           onDrop={(e) => onAgentDrop(APP_INSTANCE_IDS.cursor, 'cursor', e)}
           onDragLeave={() => onAgentDragLeave(APP_INSTANCE_IDS.cursor)}
+          onSddAdvance={onSddAdvance}
         />
       {/if}
 

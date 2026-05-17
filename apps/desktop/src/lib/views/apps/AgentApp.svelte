@@ -87,6 +87,7 @@
     /** Click on a file/dir reference inside a chat bubble — opens it
      *  in the linked editor (or the active editor instance). */
     onOpenFile?: (path: string) => void;
+    onSddAdvance?: (sessionId: string, prompt: string) => void;
   }
   let p: Props = $props();
 
@@ -209,6 +210,7 @@
                 onStartEditMessage={p.onStartEditMessage}
                 onResendMessage={p.onResendMessage}
                 onOpenFile={p.onOpenFile}
+                onSddAdvance={p.onSddAdvance}
               />
               <Composer
                 kind={p.kind}
@@ -278,6 +280,7 @@
               onStartEditMessage={p.onStartEditMessage}
               onResendMessage={p.onResendMessage}
               onOpenFile={p.onOpenFile}
+              onSddAdvance={p.onSddAdvance}
             />
             <Composer
               kind={p.kind}
