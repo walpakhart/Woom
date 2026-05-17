@@ -995,6 +995,31 @@
             </span>
           {/if}
 
+          <!-- SDD button — prefills `/sdd ` into the composer so the
+               user can type their ask + hit Enter. Same code path as
+               typing the slash command manually (`startSddFromSlash`
+               in services/slashCommands.ts); this is purely an
+               affordance hint that SDD mode exists. Tooltip explains
+               what happens. -->
+          <button
+            class="cmp-sdd-btn"
+            onclick={() => {
+              if (!sess) return;
+              updateSession(sess.id, { input: '/sdd ' });
+              queueMicrotask(() => {
+                if (ta) {
+                  ta.selectionStart = ta.value.length;
+                  ta.selectionEnd = ta.value.length;
+                  ta.focus();
+                }
+              });
+            }}
+            aria-label="Start a Spec-Driven Development workflow"
+            title="SDD — agent writes spec/plan/phases to a temp folder and executes them step-by-step. Won't touch your repo until you approve."
+          >
+            <span class="cmp-sdd-glyph">SDD</span>
+          </button>
+
           <!-- Permission mode toggle. Single button, two states. When
                `default`, renders a quiet dot — barely visible at rest
                so the composer footer doesn't shout. When `plan`, the
@@ -1671,6 +1696,34 @@
      into the composer footer so the eye lands on the model/Send
      row first; the dot only commands attention when the session
      is actually in plan mode. */
+  /* SDD button — same visual register as `.cmp-mode-dot`'s quiet
+   *  rest state, but always shows the "SDD" glyph since it's a one-
+   *  shot launcher (no toggle states). Hover lifts to the accent
+   *  tint so users discover what it does without the button itself
+   *  shouting. */
+  .cmp-sdd-btn {
+    display: inline-flex; align-items: center;
+    padding: 2px 7px;
+    border-radius: 5px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--text-mute);
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: background 120ms, border-color 120ms, color 120ms;
+  }
+  .cmp-sdd-btn:hover {
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+    border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+    color: var(--accent-bright);
+  }
+  .cmp-sdd-glyph {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+  }
+
   .cmp-mode-dot {
     display: inline-flex; align-items: center;
     gap: 5px;

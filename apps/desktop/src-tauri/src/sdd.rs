@@ -215,16 +215,27 @@ fn write_with_frontmatter(path: &Path, fm: &FrontMatter, body: &str) -> Result<(
 // Registry + lifecycle.
 // ---------------------------------------------------------------------------
 
+/// Inner shared state — held inside an `Arc` so the file-watcher
+/// thread can keep its own clone and refresh workspaces without going
+/// through Tauri's `State<'_, SddRegistry>` (which is bound to the
+/// command's lifetime).
+type SharedWorkspaces = Arc<RwLock<HashMap<String, Arc<RwLock<SddWorkspace>>>>>;
+
 pub struct SddRegistry {
-    workspaces: RwLock<HashMap<String, Arc<RwLock<SddWorkspace>>>>,
+    workspaces: SharedWorkspaces,
     base_dir: RwLock<Option<PathBuf>>,
+    /// File-system watcher — one `notify::RecommendedWatcher` for the
+    /// whole base dir. Lazy-initialized on first `sdd_start`. Held in
+    /// the struct so it doesn't get dropped (drop = stop watching).
+    watcher: parking_lot::Mutex<Option<notify::RecommendedWatcher>>,
 }
 
 impl SddRegistry {
     pub fn new() -> Self {
         Self {
-            workspaces: RwLock::new(HashMap::new()),
+            workspaces: Arc::new(RwLock::new(HashMap::new())),
             base_dir: RwLock::new(None),
+            watcher: parking_lot::Mutex::new(None),
         }
     }
 
@@ -557,8 +568,103 @@ pub async fn sdd_start(
     };
     let cell = Arc::new(RwLock::new(ws.clone()));
     registry.workspaces.write().insert(id.clone(), cell);
+    /* Persist side-car metadata so the workspace can be restored after
+     *  app restart with full context (session binding, original ask). */
+    let meta = SddMeta {
+        user_prompt: Some(ws.user_prompt.clone()),
+        session_id: ws.session_id.clone(),
+        created_at: Some(ws.created_at),
+    };
+    if let Ok(meta_json) = serde_json::to_string_pretty(&meta) {
+        let _ = std::fs::write(root.join("meta.json"), meta_json);
+    }
+    /* Boot the FS watcher if this is the first workspace. Failures here
+     *  are non-fatal — we fall back to the explicit `sdd_refresh` poll
+     *  that the orchestrator calls after each agent turn. */
+    let _ = ensure_watcher(&app, registry.workspaces.clone(), &registry.watcher, &base);
     emit_changed(&app, &id);
     Ok(ws)
+}
+
+/// Scan `<app_data>/sdd-workspaces/*` and rebuild the registry from
+/// what's on disk. Called once from the frontend on app boot so
+/// previously-created workspaces survive a restart and re-attach to
+/// their session id.
+///
+/// We DON'T try to be clever about associating workspaces to currently-
+/// open sessions — the workspace stores its own `session_id` in the
+/// frontmatter of `spec.md` (well, in v2 it will; for v1 we just trust
+/// the dir name). The frontend store uses `workspaceBySession` to
+/// surface the right one in each chat's card.
+#[tauri::command]
+pub async fn sdd_hydrate(
+    app: AppHandle,
+    registry: State<'_, SddRegistry>,
+) -> Result<Vec<SddWorkspace>, String> {
+    let base = registry.ensure_base_dir(&app)?;
+    let mut out: Vec<SddWorkspace> = Vec::new();
+    let entries = match std::fs::read_dir(&base) {
+        Ok(e) => e,
+        Err(_) => return Ok(out),
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let id = match path.file_name().and_then(|s| s.to_str()) {
+            Some(s) if s.starts_with("sdd-") => s.to_string(),
+            _ => continue,
+        };
+        // Skip if already in memory.
+        if registry.workspaces.read().contains_key(&id) {
+            continue;
+        }
+        /* Bootstrap with placeholder values; rebuild_from_disk fills
+         *  spec/plan/phases and recomputes the stage. session_id and
+         *  user_prompt are recovered from a `meta.json` if present
+         *  (we'll write that in a follow-up); for now they stay null. */
+        let mut ws = SddWorkspace {
+            id: id.clone(),
+            session_id: None,
+            root: path.to_string_lossy().into_owned(),
+            stage: SddStage::Drafting,
+            user_prompt: String::new(),
+            spec_path: None,
+            spec_body: None,
+            plan_path: None,
+            plan_body: None,
+            phases: Vec::new(),
+            created_at: now_ms(),
+            updated_at: now_ms(),
+        };
+        let _ = rebuild_from_disk(&mut ws);
+        // Recover user_prompt + session_id from optional meta.json side-car.
+        if let Ok(meta_raw) = std::fs::read_to_string(path.join("meta.json")) {
+            if let Ok(meta) = serde_json::from_str::<SddMeta>(&meta_raw) {
+                ws.user_prompt = meta.user_prompt.unwrap_or_default();
+                ws.session_id = meta.session_id;
+                ws.created_at = meta.created_at.unwrap_or(ws.created_at);
+            }
+        }
+        let cell = Arc::new(RwLock::new(ws.clone()));
+        registry.workspaces.write().insert(id.clone(), cell);
+        out.push(ws);
+    }
+    /* Boot the watcher once we have workspaces on disk to observe. */
+    let _ = ensure_watcher(&app, registry.workspaces.clone(), &registry.watcher, &base);
+    Ok(out)
+}
+
+/// Side-car metadata stored at `<workspace>/meta.json`. Currently
+/// holds the bits that DON'T live in spec.md frontmatter (session id,
+/// user's original ask) so they survive an app restart even when
+/// the agent hasn't written spec.md yet.
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+struct SddMeta {
+    user_prompt: Option<String>,
+    session_id: Option<String>,
+    created_at: Option<u64>,
 }
 
 #[tauri::command]
@@ -763,4 +869,103 @@ fn emit_changed(app: &AppHandle, id: &str) {
     // for any "list of all workspaces" UI we add later (none right now).
     let _ = app.emit(&format!("sdd:changed:{id}"), &id);
     let _ = app.emit("sdd:changed", &id);
+}
+
+/// Boot the filesystem watcher on first workspace creation. Spawns one
+/// background OS thread that drains `notify` events, debounces them per
+/// workspace, rebuilds the workspace from disk, and emits
+/// `sdd:changed:<id>`.
+///
+/// Watching the BASE dir recursively (vs per-workspace) lets us handle
+/// "new workspace created" + "old workspace removed" without re-arming
+/// the watcher each time. Cheap — base dir is single-purpose so there
+/// are no other write sources to filter against.
+///
+/// Debounce: 250 ms per workspace. The agent often writes a file then
+/// updates frontmatter immediately after; without debouncing we'd
+/// rebuild twice in quick succession and the UI would flicker.
+fn ensure_watcher(
+    app: &AppHandle,
+    workspaces: SharedWorkspaces,
+    watcher_slot: &parking_lot::Mutex<Option<notify::RecommendedWatcher>>,
+    base_dir: &Path,
+) -> Result<(), String> {
+    use notify::{EventKind, RecursiveMode, Watcher};
+    let mut guard = watcher_slot.lock();
+    if guard.is_some() {
+        return Ok(());
+    }
+    let (tx, rx) = std::sync::mpsc::channel::<notify::Result<notify::Event>>();
+    let mut w = notify::recommended_watcher(tx).map_err(|e| format!("watcher init: {e}"))?;
+    w.watch(base_dir, RecursiveMode::Recursive)
+        .map_err(|e| format!("watch {}: {e}", base_dir.display()))?;
+    *guard = Some(w);
+    drop(guard);
+
+    let workspaces2 = Arc::clone(&workspaces);
+    let app2 = app.clone();
+    std::thread::spawn(move || {
+        use std::time::{Duration, Instant};
+        let debounce = Duration::from_millis(250);
+        let mut last_emit: HashMap<String, Instant> = HashMap::new();
+        while let Ok(res) = rx.recv() {
+            let Ok(evt) = res else { continue };
+            /* Filter to mutation events only — `notify` also emits
+             *  "Any" / metadata-only events on some platforms that
+             *  don't carry useful info. We only care about content
+             *  changes (file added / modified / removed). */
+            if !matches!(
+                evt.kind,
+                EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
+            ) {
+                continue;
+            }
+            /* Ignore our own `.tmp` writes from atomic rename pattern.
+             *  Without this the rename → file-removed event would fire
+             *  a spurious rebuild that sees an in-flight state. */
+            let ignore = evt.paths.iter().any(|p| {
+                p.extension().is_some_and(|e| e == "tmp")
+            });
+            if ignore { continue; }
+
+            /* For each affected path, find the owning workspace
+             *  (workspace whose root is an ancestor of the path). */
+            let mut hit_workspaces: Vec<String> = Vec::new();
+            {
+                let map = workspaces2.read();
+                for path in &evt.paths {
+                    for (id, cell) in map.iter() {
+                        let root = PathBuf::from(cell.read().root.clone());
+                        if path.starts_with(&root) {
+                            if !hit_workspaces.contains(id) {
+                                hit_workspaces.push(id.clone());
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+            for id in hit_workspaces {
+                let now = Instant::now();
+                if let Some(&last) = last_emit.get(&id) {
+                    if now.duration_since(last) < debounce {
+                        continue;
+                    }
+                }
+                last_emit.insert(id.clone(), now);
+                /* Rebuild from disk under write lock; drop the lock
+                 *  before emitting the event to keep the lock window
+                 *  short. */
+                {
+                    let map = workspaces2.read();
+                    let Some(cell) = map.get(&id).cloned() else { continue };
+                    drop(map);
+                    let mut w = cell.write();
+                    let _ = rebuild_from_disk(&mut w);
+                }
+                emit_changed(&app2, &id);
+            }
+        }
+    });
+    Ok(())
 }

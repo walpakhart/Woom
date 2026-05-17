@@ -87,8 +87,10 @@ export const sddState = $state<SddStoreShape>({
   globalUnlisten: null,
 });
 
-/** Initialise the global `sdd:changed` listener. Idempotent — safe to
- *  call from `+page.svelte` onMount more than once. */
+/** Initialise the global `sdd:changed` listener AND hydrate from disk.
+ *  Idempotent — safe to call from `+page.svelte` onMount more than
+ *  once. Hydration rebuilds any workspaces that existed before app
+ *  restart, so the user's previous SDD session resumes seamlessly. */
 export async function initSdd(): Promise<void> {
   if (sddState.globalUnlisten) return;
   sddState.globalUnlisten = await listen<string>('sdd:changed', async (evt) => {
@@ -103,6 +105,16 @@ export async function initSdd(): Promise<void> {
       removeWorkspace(id);
     }
   });
+  /* Hydrate any workspaces left on disk from a prior run. The Rust
+   *  side scans `<app_data>/sdd-workspaces/*` and rebuilds in-memory
+   *  state from the files. Failures here are non-fatal — worst case
+   *  the user has to /sdd again. */
+  try {
+    const ws = await invoke<SddWorkspace[]>('sdd_hydrate');
+    for (const w of ws) upsertWorkspace(w);
+  } catch (e) {
+    console.warn('sdd_hydrate failed', e);
+  }
 }
 
 function upsertWorkspace(ws: SddWorkspace): void {

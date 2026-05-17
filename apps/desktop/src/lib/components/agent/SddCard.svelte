@@ -222,43 +222,62 @@
 </aside>
 
 <style>
+  /* SDD card visual language — modelled on Markdown.svelte's
+   *  blockquote treatment (subtle accent-tinted bg + left stripe,
+   *  no full border, rounded only on the right). The card should
+   *  feel like a rich element WITHIN the message stream, not a
+   *  modal pinned on top — same way a markdown table or quote
+   *  reads as content rather than an interrupt-y proposal.
+   *  Atmosphere: warm accent tint says "agent is offering you a
+   *  decision here", typography matches surrounding prose. */
   .sdd-card {
-    border: 1px solid var(--border);
     border-left: 3px solid var(--accent);
-    border-radius: 8px;
-    background: var(--bg-1);
-    padding: 12px 14px;
+    border-radius: 0 6px 6px 0;
+    background: var(--accent-soft);
+    padding: 10px 14px 11px;
     display: flex; flex-direction: column;
-    gap: 10px;
+    gap: 8px;
     min-width: 0;
+    color: var(--text-1);
+    font-size: 13.5px;
+    line-height: 1.55;
   }
   .sdd-card[data-tone="live"] {
     border-left-color: #66d39a;
+    background: color-mix(in srgb, #66d39a 8%, var(--bg-1));
   }
   .sdd-card[data-tone="warn"] {
     border-left-color: #e0b16c;
+    background: color-mix(in srgb, #e0b16c 8%, var(--bg-1));
   }
   .sdd-card[data-tone="ok"] {
     border-left-color: var(--accent);
   }
 
+  /* Byline row reads like prose: "SDD · stage label · spinner · id".
+   *  No header chrome, no chip backgrounds — typography carries the
+   *  hierarchy. */
   .sdd-head {
     display: flex; align-items: center;
     gap: 8px;
+    font-size: 12px;
   }
   .sdd-glyph {
     font-family: 'JetBrains Mono', monospace;
     font-size: 9.5px;
     font-weight: 700;
-    letter-spacing: 0.12em;
+    letter-spacing: 0.14em;
     color: var(--accent-bright);
-    background: var(--accent-soft);
-    padding: 2px 6px;
-    border-radius: 4px;
-    border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+    text-transform: uppercase;
+  }
+  .sdd-glyph::after {
+    content: '·';
+    color: var(--text-mute);
+    margin-left: 8px;
+    font-weight: 400;
   }
   .sdd-stage {
-    font-size: 12.5px;
+    font-size: 12px;
     font-weight: 500;
     color: var(--text-0);
   }
@@ -274,17 +293,22 @@
     font-size: 10px;
     color: var(--text-mute);
     margin-left: auto;
+    font-family: 'JetBrains Mono', monospace;
+    opacity: 0.6;
   }
 
   .sdd-prompt-line {
     display: flex; gap: 6px;
-    font-size: 12px;
+    font-size: 13px;
+    line-height: 1.55;
     color: var(--text-1);
+    font-style: italic;
   }
   .sdd-prompt-label {
     color: var(--text-mute);
     font-weight: 500;
     flex-shrink: 0;
+    font-style: normal;
   }
   .sdd-prompt-text {
     color: var(--text-1);
@@ -294,13 +318,17 @@
   .sdd-phases {
     display: flex; flex-wrap: wrap; gap: 5px;
   }
+  /* Phase pills look like inline code spans — same font + bg
+   *  language as `<code>` from prose. Reinforces "this is part of the
+   *  message" feel rather than "this is UI chrome". */
   .sdd-phase-pill {
     display: inline-flex; align-items: center;
     gap: 5px;
-    font-size: 11px;
-    padding: 3px 8px;
-    border-radius: 999px;
-    border: 1px solid var(--border-neutral);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10.5px;
+    padding: 1px 8px;
+    border-radius: 4px;
+    border: 1px solid var(--border-neutral-hi);
     background: var(--bg-2);
     color: var(--text-2);
   }
@@ -329,23 +357,23 @@
     display: flex; flex-direction: column;
     gap: 6px;
   }
+  /* Body toggle is a text-link, not a button — keeps the "inline
+   *  prose" feel. Chevron + filename hint at expandability without
+   *  shouting. */
   .sdd-body-toggle {
     display: inline-flex; align-items: center;
-    gap: 6px;
-    padding: 5px 8px;
-    border-radius: 5px;
-    border: 1px solid var(--border-neutral);
-    background: var(--bg-2);
-    color: var(--text-1);
+    gap: 5px;
+    padding: 1px 0;
+    border: 0;
+    background: transparent;
+    color: var(--text-mute);
     cursor: pointer;
-    font-size: 11px;
+    font-size: 11.5px;
     align-self: flex-start;
-    transition: background 120ms, border-color 120ms;
+    transition: color 120ms;
   }
   .sdd-body-toggle:hover {
-    background: var(--bg-3);
-    border-color: var(--border-hi);
-    color: var(--text-0);
+    color: var(--accent-bright);
   }
   .sdd-chev {
     width: 10px; height: 10px;
@@ -353,45 +381,55 @@
   }
   .sdd-chev.open { transform: rotate(90deg); }
 
+  /* Expanded body renders as a quote-within-quote — slightly inset,
+   *  bordered on the left, transparent bg so the parent accent tint
+   *  stays visible. Reads like a "this is what the agent wrote" excerpt
+   *  inside the SDD frame. */
   .sdd-body-content {
-    padding: 10px 12px;
-    background: var(--bg-0);
-    border: 1px solid var(--border-neutral);
-    border-radius: 6px;
-    max-height: 400px;
+    padding: 4px 0 4px 12px;
+    border-left: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
+    max-height: 360px;
     overflow-y: auto;
-  }
-
-  .sdd-actions {
-    display: flex; gap: 6px;
     margin-top: 2px;
   }
+
+  /* Actions read as a row of text-buttons — only the primary CTA has
+   *  any chrome (a soft accent fill). Pause/Stop/Discard are bare
+   *  prose with hover underline so they don't compete with the
+   *  reading flow. */
+  .sdd-actions {
+    display: flex; align-items: center;
+    gap: 14px;
+    margin-top: 4px;
+  }
   .sdd-btn {
-    padding: 4px 10px;
-    border-radius: 5px;
-    background: var(--bg-2);
-    border: 1px solid var(--border);
-    color: var(--text-1);
-    font-size: 11px;
+    padding: 2px 0;
+    border: 0;
+    background: transparent;
+    color: var(--text-mute);
+    font-size: 12px;
     cursor: pointer;
-    transition: background 120ms, border-color 120ms, color 120ms;
+    transition: color 120ms;
   }
   .sdd-btn:hover {
-    background: var(--bg-3);
-    border-color: var(--border-hi);
-    color: var(--text-0);
+    color: var(--accent-bright);
   }
   .sdd-btn--primary {
-    background: color-mix(in srgb, var(--accent) 30%, var(--bg-2));
-    border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+    padding: 4px 12px;
+    border-radius: 5px;
+    background: color-mix(in srgb, var(--accent) 32%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
     color: var(--text-0);
+    font-weight: 500;
+    font-size: 12px;
   }
   .sdd-btn--primary:hover {
-    background: color-mix(in srgb, var(--accent) 40%, var(--bg-2));
+    background: color-mix(in srgb, var(--accent) 45%, transparent);
+    color: var(--text-0);
   }
   .sdd-btn--mute {
     margin-left: auto;
     color: var(--text-mute);
-    border-color: var(--border-neutral);
+    font-size: 11.5px;
   }
 </style>

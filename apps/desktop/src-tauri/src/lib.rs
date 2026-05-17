@@ -461,6 +461,7 @@ pub fn run() {
             // → phases workflow in a temp workspace under
             // `<app_data>/sdd-workspaces/<id>/`. See `sdd.rs`.
             sdd::sdd_start,
+            sdd::sdd_hydrate,
             sdd::sdd_get,
             sdd::sdd_list,
             sdd::sdd_refresh,
