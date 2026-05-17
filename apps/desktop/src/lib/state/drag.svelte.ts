@@ -38,10 +38,27 @@ export type DragPayload =
       };
     };
 
-export const dragState = $state<{ payload: DragPayload | null }>({ payload: null });
+export const dragState = $state<{
+  payload: DragPayload | null;
+  /** A payload landed on the Canvas rail icon during drag. The active
+   *  CanvasSurface drains this via $effect on mount / activation and
+   *  inserts the live card at viewport center. Needed because the
+   *  drop fires on the rail (outside the canvas DOM), so the surface
+   *  has no event coords to anchor the insert. Bumped `seq` so the
+   *  same payload object dropped twice still triggers the effect. */
+  pendingRailDrop: { payload: DragPayload; seq: number } | null;
+}>({ payload: null, pendingRailDrop: null });
 
 export function setDragPayload(p: DragPayload | null) {
   dragState.payload = p;
+}
+
+let railDropSeq = 0;
+/** Queue a payload for insertion into the active canvas. Called by
+ *  the Rail's canvas-icon drop handler. CanvasSurface owns the drain. */
+export function requestCanvasRailDrop(payload: DragPayload) {
+  railDropSeq += 1;
+  dragState.pendingRailDrop = { payload, seq: railDropSeq };
 }
 
 /** Install a window-level safety net that clears the drag payload on

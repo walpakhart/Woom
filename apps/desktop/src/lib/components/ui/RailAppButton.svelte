@@ -46,6 +46,12 @@
      *  reads `layoutState.activeInstance[kind]` to pick the actual instance,
      *  so we set the active-instance pointer before calling. */
     onActivate: () => void;
+    /** Optional drop handler. When provided, the primary icon accepts
+     *  drag payloads and renders the `rail-dropping` highlight while
+     *  one is hovering. Used by Canvas so users can drag a card from
+     *  any inbox / chat-message directly onto the rail icon without
+     *  first switching view. */
+    onDropPayload?: (e: DragEvent) => void;
   }
   let p: Props = $props();
 
@@ -91,6 +97,35 @@
   });
 
   let dragHoverTimer: ReturnType<typeof setTimeout> | null = null;
+  /** True while a drop-acceptable payload hovers the primary icon. Drives
+   *  the `rail-dropping` highlight so the user sees Canvas (etc.) is a
+   *  valid drop target — same vocabulary the Claude / Cursor rail uses. */
+  let dropOver = $state(false);
+
+  /** WebKit hides `application/x-woom-*` mimes during dragover; mirror
+   *  the predicate from Rail.svelte so the primary rail-btn accepts
+   *  the same set of payloads the column drop targets handle. */
+  function hasDropPayload(e: DragEvent): boolean {
+    if (!p.onDropPayload) return false;
+    const types = e.dataTransfer?.types;
+    if (!types) return false;
+    return (
+      types.indexOf('Files') !== -1 ||
+      types.indexOf('text/uri-list') !== -1 ||
+      types.indexOf('text/plain') !== -1 ||
+      types.indexOf('application/x-woom-file') !== -1 ||
+      types.indexOf('application/x-woom-jira') !== -1 ||
+      types.indexOf('application/x-woom-github') !== -1 ||
+      types.indexOf('application/x-woom-sentry') !== -1
+    );
+  }
+
+  /** Map kind → `data-view` value the parent Rail's CSS uses to scope
+   *  drag-pulse + active-halo selectors. Mirrors the literals on the
+   *  singleton rail buttons (Claude / Cursor / Editor / etc.). */
+  function viewForKind(kind: AppKind): string {
+    return `${kind}App`;
+  }
 
   function activate(id: string) {
     setActiveInstance(p.kind, id);
@@ -127,6 +162,10 @@
    *  Cancelled on dragleave. */
   function onDragEnterPrimary(e: DragEvent) {
     if (!e.dataTransfer) return;
+    if (hasDropPayload(e)) {
+      e.preventDefault();
+      dropOver = true;
+    }
     if (!hasExtras) return;
     if (dragHoverTimer) clearTimeout(dragHoverTimer);
     dragHoverTimer = setTimeout(() => {
@@ -134,11 +173,30 @@
       dragHoverTimer = null;
     }, 450);
   }
+  function onDragOverPrimary(e: DragEvent) {
+    /* preventDefault on dragover is what *enables* the drop — without
+     *  it WebKit reports "no-drop" and the drop event never fires on
+     *  release. */
+    if (!hasDropPayload(e)) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+    if (!dropOver) dropOver = true;
+  }
   function onDragLeavePrimary() {
     if (dragHoverTimer) {
       clearTimeout(dragHoverTimer);
       dragHoverTimer = null;
     }
+    dropOver = false;
+  }
+  function onDropPrimary(e: DragEvent) {
+    dropOver = false;
+    if (!p.onDropPayload) return;
+    e.preventDefault();
+    /* Switch view to this kind so the surface mounts and can drain the
+     *  queued payload from module state. */
+    p.onActivate();
+    p.onDropPayload(e);
   }
 
   function onKey(e: KeyboardEvent) {
@@ -155,15 +213,19 @@
       class:active={p.active && activeId === primaryInst?.id}
       class:kind-active={p.active && activeId !== primaryInst?.id}
       class:has-extras={hasExtras}
+      class:rail-dropping={dropOver}
       style="--rail-tone: {p.tone}; --rail-glow: {p.glow};"
       data-tooltip={hasExtras
         ? `${p.tooltip} · ${primaryInst?.name}${primaryFolderSuffix()}`
         : `${p.tooltip}${primaryFolderSuffix()}`}
       aria-label={p.label}
+      data-view={viewForKind(p.kind)}
       onclick={onClickPrimary}
       oncontextmenu={onContextMenu}
       ondragenter={onDragEnterPrimary}
+      ondragover={onDragOverPrimary}
       ondragleave={onDragLeavePrimary}
+      ondrop={onDropPrimary}
     >
       {@render p.icon()}
     </button>

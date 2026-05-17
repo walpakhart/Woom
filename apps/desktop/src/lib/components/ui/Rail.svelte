@@ -8,6 +8,7 @@
      because their official marks are rich gradients that don't
      distill cleanly to a single mono <path>. */
   import { SVG_GITHUB, SVG_JIRA, SVG_SENTRY } from '$lib/data';
+  import { dragState, requestCanvasRailDrop } from '$lib/state/drag.svelte';
   import type {
     ClaudeStatus,
     ConnectionStatus,
@@ -45,6 +46,25 @@
     sentryStatus?: SentryStatus;
     claudeStatus?: ClaudeStatus | null;
     cursorStatus?: CursorStatus | null;
+    /** Unread badge counts per source — `max(0, current - lastSeen)`.
+     *  Owner computes these from inbox counts + railBadges seen-map;
+     *  the Rail just renders them. 0 = no badge. */
+    githubBadge?: number;
+    jiraBadge?: number;
+    sentryBadge?: number;
+    /** True when a drag payload is in flight globally. Drives the
+     *  attention pulse on Claude / Cursor (and a soft dim on other
+     *  rail icons) so the user can find drop targets at a glance
+     *  without learning the affordance through experimentation. */
+    dragActive?: boolean;
+    /** True when the active Claude / Cursor session is mid-turn.
+     *  Drives an ambient pulse on the corresponding rail icon so the
+     *  user can tell at a glance "Claude is thinking" without having
+     *  to switch back to its solo. Mutually exclusive with
+     *  `rail-dropping` and the `is-drag-active` pulse — drop UI wins
+     *  when both would fire so the drag affordance stays unmuddied. */
+    claudeBusy?: boolean;
+    cursorBusy?: boolean;
     /** Drop landed on the Claude / Cursor rail icon. Parent owns the
      *  routing — switches the view and forwards the DragEvent to the
      *  same `onAgentDrop` pipeline a column-level drop would hit. The
@@ -63,8 +83,21 @@
     sentryStatus,
     claudeStatus,
     cursorStatus,
+    githubBadge = 0,
+    jiraBadge = 0,
+    sentryBadge = 0,
+    dragActive = false,
+    claudeBusy = false,
+    cursorBusy = false,
     onAgentDrop
   }: Props = $props();
+
+  /** Cap displayed digits at "99+" so a runaway count doesn't blow the
+   *  rail's 44px width. Anything over 99 reads the same way visually:
+   *  "lots". */
+  function badgeLabel(n: number): string {
+    return n > 99 ? '99+' : String(n);
+  }
 
   /** Highlight the Claude / Cursor rail button while a payload is
    *  dragging over it. Cleared on `dragleave` (when the cursor truly
@@ -114,6 +147,17 @@
     e.preventDefault();
     view = kind === 'claude' ? 'claudeApp' : 'cursorApp';
     onAgentDrop(kind, e);
+  }
+
+  /** Canvas rail drop. The Canvas surface isn't in the DOM while the
+   *  user is on another solo, so we can't forward the DragEvent — but
+   *  `dragState.payload` carries everything CanvasSurface needs. Queue
+   *  it via `requestCanvasRailDrop`; the surface's $effect drains it
+   *  at viewport center after the view switch mounts it. */
+  function onCanvasRailDrop(_e: DragEvent) {
+    const payload = dragState.payload;
+    if (!payload) return;
+    requestCanvasRailDrop(payload);
   }
 
   interface IdentityRow {
@@ -462,6 +506,7 @@
 
 <aside
   class="rail"
+  class:is-drag-active={dragActive}
   onmouseover={onRailMouseOver}
   onmouseout={onRailMouseOut}
   role="navigation"
@@ -542,6 +587,9 @@
     aria-label="Jira"
   >
     <svg viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true">{@html SVG_JIRA}</svg>
+    {#if jiraBadge > 0 && view !== 'jiraApp'}
+      <span class="rail-badge" aria-label="{jiraBadge} new in Jira">{badgeLabel(jiraBadge)}</span>
+    {/if}
   </button>
 
   <button
@@ -554,6 +602,9 @@
     aria-label="GitHub"
   >
     <svg viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true">{@html SVG_GITHUB}</svg>
+    {#if githubBadge > 0 && view !== 'githubApp'}
+      <span class="rail-badge" aria-label="{githubBadge} new in GitHub">{badgeLabel(githubBadge)}</span>
+    {/if}
   </button>
 
   <button
@@ -566,6 +617,9 @@
     aria-label="Sentry"
   >
     <svg viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true">{@html SVG_SENTRY}</svg>
+    {#if sentryBadge > 0 && view !== 'sentryApp'}
+      <span class="rail-badge" aria-label="{sentryBadge} new in Sentry">{badgeLabel(sentryBadge)}</span>
+    {/if}
   </button>
 
   <div class="rail-divider"></div>
@@ -575,6 +629,7 @@
     class="rail-btn"
     class:active={view === 'claudeApp'}
     class:rail-dropping={dropOverKind === 'claude'}
+    class:rail-busy={claudeBusy && dropOverKind !== 'claude'}
     style="--rail-tone: var(--src-claude); --rail-glow: rgba(232,155,125,0.42);"
     data-tooltip="Claude · ⌘4 — drop to attach"
     data-view="claudeApp"
@@ -596,6 +651,7 @@
     class="rail-btn"
     class:active={view === 'cursorApp'}
     class:rail-dropping={dropOverKind === 'cursor'}
+    class:rail-busy={cursorBusy && dropOverKind !== 'cursor'}
     style="--rail-tone: var(--src-cursor); --rail-glow: rgba(220,220,220,0.32);"
     data-tooltip="Cursor · ⌘5 — drop to attach"
     data-view="cursorApp"
@@ -633,11 +689,12 @@
   <RailAppButton
     kind="canvas"
     label="Canvas"
-    tooltip="Canvas · ⌘7"
+    tooltip="Canvas · ⌘7 — drop to pin as card"
     active={view === 'canvasApp'}
     tone="var(--src-canvas)"
     glow="rgba(125,194,213,0.40)"
     onActivate={() => (view = 'canvasApp')}
+    onDropPayload={onCanvasRailDrop}
   >
     {#snippet icon()}
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="14" rx="2"/><rect x="6" y="6" width="9" height="6" rx="1"/><rect x="13" y="13" width="5" height="3" rx="0.5"/></svg>
@@ -991,6 +1048,37 @@
     filter: drop-shadow(0 0 8px var(--rail-glow));
   }
 
+  /* Ambient "thinking" pulse — applied to Claude / Cursor when the
+     active session for that kind is mid-turn. Two-layer halo (inner
+     1.5px ring + 18px outer glow) pulses on a 1.6s sine so the eye
+     reads it as a heartbeat, not a strobe. Source-tinted via the
+     button's own `--rail-glow` so Claude pulses rust and Cursor
+     pulses silver. Gated upstream so the drag drop-target pulse
+     (which uses the same CSS slot) wins when both would fire. */
+  :global(.rail-btn.rail-busy:not(.rail-dropping)) {
+    animation: rail-busy-pulse 1.6s ease-in-out infinite;
+  }
+  @keyframes rail-busy-pulse {
+    0%, 100% {
+      box-shadow:
+        inset 0 0 0 1px color-mix(in srgb, var(--rail-tone) 20%, transparent),
+        0 0 0 0 color-mix(in srgb, var(--rail-glow) 0%, transparent);
+    }
+    50% {
+      box-shadow:
+        inset 0 0 0 1.5px color-mix(in srgb, var(--rail-tone) 55%, transparent),
+        0 0 18px color-mix(in srgb, var(--rail-glow) 55%, transparent);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    :global(.rail-btn.rail-busy:not(.rail-dropping)) {
+      animation: none;
+      box-shadow:
+        inset 0 0 0 1.5px color-mix(in srgb, var(--rail-tone) 40%, transparent),
+        0 0 10px color-mix(in srgb, var(--rail-glow) 35%, transparent);
+    }
+  }
+
   /* Retry / disconnect dot */
   .rail-dot {
     position: absolute;
@@ -1011,6 +1099,85 @@
   }
   @media (prefers-reduced-motion: reduce) {
     .rail-dot--retrying { animation: none; opacity: 0.85; }
+  }
+
+  /* Unread badge — small numeric pill in the source-accent tone.
+     Anchored to the top-right of the rail-btn, painted with the same
+     `--rail-tone` as the icon so each source's brand colour reads on
+     its own badge (Jira blue, GitHub purple, Sentry plum). Capped to
+     "99+" upstream so the pill never blows past the 44px footprint.
+     Hidden when the user is viewing that solo — opening the source
+     IS the "mark seen" gesture; keeping the badge while you're
+     looking at the list would be noise. */
+  .rail-badge {
+    position: absolute;
+    top: 2px; right: 2px;
+    min-width: 16px; height: 16px;
+    padding: 0 4px;
+    border-radius: 8px;
+    background: var(--rail-tone);
+    color: #fff;
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 16px;
+    letter-spacing: -0.01em;
+    text-align: center;
+    /* 1px ring in the rail background prevents the badge from blending
+       into the rail-btn when the button itself is highlighted/active. */
+    box-shadow:
+      0 0 0 2px rgba(20, 24, 26, 0.92),
+      0 0 8px color-mix(in srgb, var(--rail-glow) 60%, transparent);
+    pointer-events: none;
+    /* Fade in when count appears so a refresh-driven badge doesn't
+       pop without warning. Transform-only so we don't fight the
+       active-button halo's compositor layer. */
+    animation: rail-badge-in 220ms var(--ease-out, ease-out);
+  }
+  @keyframes rail-badge-in {
+    from { opacity: 0; transform: scale(0.6); }
+    to   { opacity: 1; transform: scale(1); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .rail-badge { animation: none; }
+  }
+
+  /* Drag-active attention: while a payload is in flight, pulse the
+     two drop targets (Claude + Cursor) with a soft glow so the user
+     can find them at a glance — discoverability fix for the silent
+     drag affordance. The pulse uses the rail-btn's own `--rail-glow`
+     so each agent keeps its brand tone (rust for Claude, silver for
+     Cursor). Dimmed when the actual `.rail-dropping` state takes
+     over, so the dragover highlight reads clearly over the pulse. */
+  :global(.rail.is-drag-active .rail-btn[data-view="claudeApp"]),
+  :global(.rail.is-drag-active .rail-btn[data-view="cursorApp"]),
+  :global(.rail.is-drag-active .rail-btn[data-view="canvasApp"]) {
+    animation: rail-drop-pulse 1.6s ease-in-out infinite;
+  }
+  :global(.rail.is-drag-active .rail-btn[data-view="claudeApp"].rail-dropping),
+  :global(.rail.is-drag-active .rail-btn[data-view="cursorApp"].rail-dropping),
+  :global(.rail.is-drag-active .rail-btn[data-view="canvasApp"].rail-dropping) {
+    animation: none;
+  }
+  @keyframes rail-drop-pulse {
+    0%, 100% {
+      box-shadow:
+        0 0 0 0 color-mix(in srgb, var(--rail-glow) 0%, transparent),
+        0 0 0 0 color-mix(in srgb, var(--rail-glow) 0%, transparent);
+    }
+    50% {
+      box-shadow:
+        0 0 0 3px color-mix(in srgb, var(--rail-glow) 35%, transparent),
+        0 0 18px color-mix(in srgb, var(--rail-glow) 55%, transparent);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    :global(.rail.is-drag-active .rail-btn[data-view="claudeApp"]),
+    :global(.rail.is-drag-active .rail-btn[data-view="cursorApp"]),
+    :global(.rail.is-drag-active .rail-btn[data-view="canvasApp"]) {
+      animation: none;
+      box-shadow:
+        0 0 0 2px color-mix(in srgb, var(--rail-glow) 30%, transparent);
+    }
   }
 
   /* Avatar at the bottom — popover with identity rows */
