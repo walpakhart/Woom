@@ -579,15 +579,19 @@
                 {#if ev.kind === 'text'}
                   {#if ev.body}<Markdown source={ev.body} onOpenFile={p.onOpenFile} />{/if}
                 {:else if ev.kind === 'trace'}
-                  <details class="trace" open>
+                  <details class="trace" class:trace--single={ev.segments.length === 1} open>
+                    <!-- Summary stays in the DOM for a11y (focus + Enter
+                         toggle), but is hidden via CSS when there's
+                         only one step — single calls render straight
+                         under the prose, no "1 step" header noise.
+                         The carets / glyphs collapse to text-glyph
+                         dimensions; bg + bottom border were dropped
+                         in phase 1 already. -->
                     <summary class="trace-head">
-                      <span class="trace-check" aria-hidden="true">
-                        <svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                      <span class="trace-head-caret" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg>
                       </span>
                       <span class="trace-head-label"><strong>{ev.segments.length}</strong> step{ev.segments.length === 1 ? '' : 's'}</span>
-                      <span class="trace-head-caret" aria-hidden="true">
-                        <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg>
-                      </span>
                     </summary>
                     <div class="trace-body">
                       {#snippet toolIcon(kind: string)}
@@ -974,14 +978,14 @@
     border-left: 2px solid color-mix(in srgb, var(--accent) 25%, transparent);
     padding-left: 12px;
   }
-  /* Outer "N steps" head — kept working with the old chrome FOR NOW;
-     phase 2 collapses this to a quiet text prefix. Here we only soften
-     it (drop hover panel + bottom border) so phase 1's flat body
-     doesn't visually collide with a still-boxy head. */
+  /* Outer "N steps" head — quiet text prefix above the run.
+     Caret + label only, no bg, no border, no separator. Hidden via
+     `.trace--single` when there's exactly one step (the modifier is
+     set on `<details>` from the markup based on segments.length). */
   .trace-head {
-    display: flex; align-items: baseline; gap: 6px;
-    padding: 2px 0;
-    font-size: 12px;
+    display: flex; align-items: baseline; gap: 5px;
+    padding: 0;
+    font-size: 11.5px;
     color: var(--text-mute);
     cursor: pointer;
     user-select: none;
@@ -990,28 +994,26 @@
   .trace-head::-webkit-details-marker { display: none; }
   .trace-head::marker { content: ''; }
   .trace-head:hover { color: var(--text-1); }
-  .trace-check {
-    width: 11px; height: 11px;
-    display: inline-grid; place-items: center;
-    color: var(--success);
-    flex-shrink: 0;
-  }
+  .trace--single > .trace-head { display: none; }
   .trace-head-label {
-    font-size: 12px;
+    font-size: 11.5px;
     color: var(--text-mute);
-    flex: 1;
   }
   .trace-head :global(strong) {
     color: var(--text-1);
     font-weight: 500;
-    margin-right: 2px;
+    margin-right: 1px;
   }
+  /* Leading ▸ caret on the head — rotates to ▾ when the run is open.
+     Matches the per-step caret rotation; same visual grammar. */
   .trace-head-caret {
     color: var(--text-mute);
     display: inline-grid; place-items: center;
     transition: transform 160ms;
+    transform: translateY(1px);
+    opacity: 0.7;
   }
-  .trace[open] .trace-head-caret { transform: rotate(180deg); }
+  .trace[open] .trace-head-caret { transform: translateY(1px) rotate(90deg); }
   /* No bottom border when open — flat continuation into step lines. */
   .trace-body {
     padding: 2px 0 4px;
@@ -1136,23 +1138,25 @@
   .trace-step--pr         { --step-tone: var(--src-jira); }
   .trace-step--switch_cwd { --step-tone: var(--src-jira); }
   .trace-step--mcp        { --step-tone: var(--src-github); }
-  /* Inline output body — separated from the command row by a thin
-     divider only when expanded. Same background as the row so the
-     two read as one card (no nested-pill double-border look). */
-  .trace-step[open] .trace-out-body {
-    border-top: 1px solid color-mix(in srgb, var(--step-tone) 18%, var(--border));
-  }
+  /* Expanded output — indented mono continuation under the row. No
+     box, no separator divider, no bg fill. A dashed left stripe sits
+     under the step row's icon column, so the eye associates the
+     continuation with its parent. Matches Markdown.svelte's
+     blockquote pattern but inset further to nest inside the trace
+     cluster's outer stripe. */
   .trace-out-body {
-    margin: 0;
-    padding: 9px 11px;
-    font-size: 11px;
-    line-height: 1.5;
-    color: var(--text-1);
+    margin: 2px 0 4px 20px;
+    padding-left: 12px;
+    border-left: 1px dashed color-mix(in srgb, var(--step-tone) 35%, transparent);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11.5px;
+    line-height: 1.55;
+    color: var(--text-2);
     white-space: pre-wrap;
     word-break: break-word;
-    max-height: 360px;
-    overflow: auto;
-    background: color-mix(in srgb, var(--step-tone) 4%, var(--bg-1));
+    max-height: 320px;
+    overflow-y: auto;
+    background: transparent;
   }
   /* Plain text segment fallback — markdown-rendered. */
   .trace-line {
