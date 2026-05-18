@@ -225,14 +225,23 @@ export type ClaudeAction =
   | {
       id: string;
       kind: 'question';
+      /** Shape of the question card:
+       *   - `single`  — radio list, click auto-submits.
+       *   - `multi`   — checkbox list + Submit button.
+       *   - `text`    — free-form input only, no clickable options.
+       *   - `confirm` — Yes / No buttons, no `options` needed.
+       *  Defaults to `single` (or `multi` when the legacy
+       *  `multi_select=true` flag was set). */
+      questionKind: 'single' | 'multi' | 'text' | 'confirm';
       /** The literal question text — rendered as the card's header. */
       question: string;
       /** Short context blurb shown above the option list (optional). */
       header?: string;
-      /** 2-4 mutually-exclusive options. Each rendered as a button.
-       *  Selecting one resolves the MCP tool with the chosen `label`. */
+      /** Clickable options. Empty for `questionKind=text|confirm`. */
       options: { label: string; description?: string }[];
-      /** True when the user may select multiple. Default false. */
+      /** Legacy mirror of `questionKind === 'multi'` — kept for
+       *  back-compat with older serialised sessions. New code should
+       *  read `questionKind`. */
       multiSelect?: boolean;
       status: 'pending' | 'executing' | 'done' | 'error';
       /** Chosen label(s) — set on submit. Surfaces in the executed-card

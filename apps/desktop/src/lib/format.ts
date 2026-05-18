@@ -101,6 +101,15 @@ export function formatToolUse(name: string, input: Record<string, unknown>): str
     const fp = s('notebook_path') || s('file_path');
     return fp ? `_notebook edit_ ${mdInlineCode(toolPathLabel(fp))}` : `_notebook edit_`;
   }
+  if (name === 'mcp__app__ask_user_question') {
+    /* Special hint for the interactive question card. The renderer
+     * recognises `_ask_` and swaps the trace row for a QuestionCard
+     * inline, matching it back to the pending action by question
+     * text. We carry the FULL question text (untruncated) so the
+     * match is robust — the renderer truncates for display. */
+    const q = s('question');
+    return q ? `_ask_ ${mdInlineCode(q)}` : `_ask…_`;
+  }
   if (name === 'mcp__app__propose_bash' || name === 'mcp__github__propose_bash') {
     const cmd = s('command');
     return cmd ? mdInlineCode(`$ ${truncInline(cmd, 400)}`) : `_propose bash…_`;

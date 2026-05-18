@@ -2326,26 +2326,37 @@ impl App {
     }
 
     #[tool(
-        description = "Ask the user a multiple-choice question and BLOCK until they pick. Surfaces a card in the chat with the question, optional header context, and 2-4 short options. The user clicks one (or selects several when `multi_select=true`) or types free-form text into the always-present 'Other' field; either resolves the tool with their answer in the SAME turn, so the agent reasons about the choice immediately and continues.\n\n**When to use**: any branch in your reasoning where the user's preference materially changes what you do next (architecture choice, lib pick, naming, scope). Use INSTEAD of finishing your turn with \"Which would you prefer? A, B, or C?\" — that ends the turn and forces a re-context on the next user message; this tool keeps the same turn alive AND renders interactive buttons the user can click without typing.\n\n**Schema**: `question` is the headline (rendered prominently). `header` is a 1-2 sentence context blurb above the options. `options` is an array of `{ label, description? }` — 2 to 4 entries; label is what shows on the button + comes back in the tool result; description is the muted explanation under the button. `multi_select=true` lets the user pick multiple; the result is comma-joined.\n\n**Don't use** for confirmations of destructive actions (use `propose_bash` / `propose_commit` / `propose_pr` — they have approval semantics + execute). Don't use for open-ended Q&A — write a regular question in chat for that."
+        description = "Ask the user a question and BLOCK until they answer. Surfaces a card in the chat that resolves the tool with their response IN THE SAME TURN, so the agent reasons about the choice and continues without ending the turn.\n\n**Question shapes** (`kind`): pick whichever fits the decision —\n- `single` (default): radio list. Clicking an option auto-submits. Best for short branching choices (A / B / C).\n- `multi`: checkbox list, user picks any combination, clicks Submit. Best for \"which features should I enable\".\n- `text`: free-form input only, no clickable options. Best for \"what should we name this?\", \"paste the secret\", \"describe in one sentence\".\n- `confirm`: Yes / No buttons, no options needed. Best for irreversible-but-recoverable decisions that don't warrant a full propose_bash card.\n\n**Schema**: `question` is the headline. `header` is a 1-2 sentence context blurb above the body. `options` is an array of `{ label, description? }` — 2-4 entries for `single` / `multi`; IGNORED for `text` / `confirm` (omit it). `multi_select=true` is a legacy alias for `kind=multi`.\n\n**When to use**: any branch in your reasoning where the user's preference materially changes what you do next. Use INSTEAD of finishing your turn with a prose question — prose ends the turn and forces a re-context on the user's next message; this tool keeps the same turn alive AND renders interactive UI.\n\n**Don't use** for confirmations of destructive shell / git actions (those go through `propose_bash` / `propose_commit` / `propose_pr` — they ALSO execute). `kind=confirm` here is for \"should I proceed with this refactor / direction?\", not \"should I run `rm -rf`\"."
     )]
     async fn ask_user_question(
         &self,
-        Parameters(AskUserQuestionParams { question, header, options, multi_select }): Parameters<AskUserQuestionParams>,
+        Parameters(AskUserQuestionParams { question, header, options, kind, multi_select }): Parameters<AskUserQuestionParams>,
     ) -> Result<CallToolResult, ErrorData> {
         if question.trim().is_empty() {
             return Err(ErrorData::invalid_params("`question` is empty", None));
         }
-        if options.len() < 2 || options.len() > 4 {
+        let effective_kind = kind.unwrap_or(if multi_select == Some(true) {
+            AskUserQuestionKind::Multi
+        } else {
+            AskUserQuestionKind::Single
+        });
+        let needs_options = matches!(
+            effective_kind,
+            AskUserQuestionKind::Single | AskUserQuestionKind::Multi
+        );
+        if needs_options && (options.len() < 2 || options.len() > 4) {
             return Err(ErrorData::invalid_params(
-                "`options` must have 2-4 entries",
+                "`options` must have 2-4 entries for kind=single/multi",
                 None,
             ));
         }
+        let is_multi = matches!(effective_kind, AskUserQuestionKind::Multi);
         let params = serde_json::json!({
             "question": question,
             "header": header,
             "options": options,
-            "multi_select": multi_select.unwrap_or(false),
+            "kind": effective_kind,
+            "multi_select": is_multi,
         });
         let fallback = format!(
             "Question posted (IPC unavailable, user can't click): {}",
@@ -2554,6 +2565,23 @@ struct AskUserQuestionOption {
     description: Option<String>,
 }
 
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum AskUserQuestionKind {
+    /// Single-choice radio. Clicking an option auto-submits.
+    Single,
+    /// Multi-select checkboxes. User clicks Submit to confirm.
+    Multi,
+    /// Free-form text only — no clickable options. `options` is
+    /// ignored. Use for "what should we name this?", "paste the
+    /// API key", "describe in one sentence what you actually want".
+    Text,
+    /// Two-button Yes / No prompt. `options` is ignored; Yes / No
+    /// labels are rendered by the UI. Result comes back literally
+    /// as "Yes" or "No".
+    Confirm,
+}
+
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct AskUserQuestionParams {
     /// The headline question. Rendered prominently at the card top.
@@ -2561,10 +2589,19 @@ struct AskUserQuestionParams {
     /// Optional 1-2 sentence context blurb above the option list.
     #[serde(default)]
     header: Option<String>,
-    /// 2-4 mutually-exclusive options (3-4 enabled via `multi_select`).
+    /// Clickable options. 2-4 entries when `kind` is `single` /
+    /// `multi`. IGNORED (may be empty) when `kind` is `text` or
+    /// `confirm` — those shapes don't render an option list.
+    #[serde(default)]
     options: Vec<AskUserQuestionOption>,
-    /// When true, the card renders checkboxes instead of radio buttons
-    /// and the user may pick multiple. Default false.
+    /// Shape of the question. Defaults to `multi` when `multi_select=true`,
+    /// else `single`. `text` shows only a free-form input (no buttons);
+    /// `confirm` shows Yes / No buttons (no `options` needed).
+    #[serde(default)]
+    kind: Option<AskUserQuestionKind>,
+    /// Legacy alias for `kind=multi`. Prefer `kind` directly in new
+    /// call sites; this stays for backwards compat with older agent
+    /// turns. Ignored when `kind` is set explicitly.
     #[serde(default)]
     multi_select: Option<bool>,
 }

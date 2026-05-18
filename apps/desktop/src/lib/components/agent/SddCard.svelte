@@ -538,28 +538,39 @@
    *  reads as content rather than an interrupt-y proposal.
    *  Atmosphere: warm accent tint says "agent is offering you a
    *  decision here", typography matches surrounding prose. */
+  /* Quiet blockquote — same grammar as `.cac` / `.qc`. No tint, no
+   *  rounded right edge; the left accent rail does all the heavy
+   *  lifting, typography matches surrounding prose. Per-tone variants
+   *  shift the rail colour only, so a live / warn / ok SDD phase
+   *  still reads as the SAME element with a different mood. */
   .sdd-card {
-    border-left: 3px solid var(--accent);
-    border-radius: 0 6px 6px 0;
-    background: var(--accent-soft);
-    padding: 10px 14px 11px;
+    border-left: 2px solid color-mix(in srgb, var(--accent) 75%, transparent);
+    background: transparent;
+    padding: 4px 0 6px 14px;
     display: flex; flex-direction: column;
     gap: 8px;
     min-width: 0;
     color: var(--text-1);
     font-size: 13.5px;
     line-height: 1.55;
+    transition: background 160ms, border-left-color 160ms;
   }
+  .sdd-card:hover { background: color-mix(in srgb, var(--accent) 4%, transparent); }
+  .sdd-card:focus-within { border-left-color: var(--accent); }
   .sdd-card[data-tone="live"] {
-    border-left-color: #66d39a;
-    background: color-mix(in srgb, #66d39a 8%, var(--bg-1));
+    border-left-color: color-mix(in srgb, #66d39a 75%, transparent);
+  }
+  .sdd-card[data-tone="live"]:hover {
+    background: color-mix(in srgb, #66d39a 4%, transparent);
   }
   .sdd-card[data-tone="warn"] {
-    border-left-color: #e0b16c;
-    background: color-mix(in srgb, #e0b16c 8%, var(--bg-1));
+    border-left-color: color-mix(in srgb, #e0b16c 75%, transparent);
+  }
+  .sdd-card[data-tone="warn"]:hover {
+    background: color-mix(in srgb, #e0b16c 4%, transparent);
   }
   .sdd-card[data-tone="ok"] {
-    border-left-color: var(--accent);
+    border-left-color: color-mix(in srgb, var(--accent) 75%, transparent);
   }
 
   /* Byline row reads like prose: "SDD · stage label · spinner · id".

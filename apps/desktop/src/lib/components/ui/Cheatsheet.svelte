@@ -79,7 +79,8 @@
         { keys: `${mod}${shift} V`, label: 'Markdown preview — cycle Edit / Split / Preview' },
         { keys: `${mod} F`, label: 'Find in current buffer' },
         { keys: `${mod}${shift} F`, label: 'Find in files — project-wide grep' },
-        { keys: `${mod}${shift} R`, label: 'Review pane — accept / reject every agent edit (j / k · a · r · e)' }
+        { keys: `${mod}${shift} R`, label: 'Review pane — accept / reject every agent edit (j / k · a · r · e)' },
+        { keys: `${mod}${shift} B`, label: 'New git branch — opens GitPanel branch picker with the create input focused' }
       ]
     },
     {

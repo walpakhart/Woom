@@ -297,6 +297,7 @@
     | 'read' | 'edit' | 'write' | 'create' | 'delete'
     | 'bash' | 'grep' | 'glob' | 'webfetch' | 'websearch'
     | 'todo' | 'todos' | 'switch_cwd' | 'commit' | 'pr'
+    | 'ask'
     | 'mcp' | 'unknown';
 
   type ToolHint = {
@@ -373,6 +374,7 @@
     if (verb === 'switch cwd') return { kind: 'switch_cwd', label: 'Switch cwd', target: primary, scope };
     if (verb === 'commit') return { kind: 'commit', label: 'Commit', target: primary, scope };
     if (verb === 'open pr') return { kind: 'pr', label: 'PR', target: primary, scope };
+    if (verb === 'ask') return { kind: 'ask', label: 'Ask', target: primary, scope };
     if (verb === 'notebook edit') return { kind: 'edit', label: 'Notebook', target: primary, scope };
     if (verb === 'using bash…' || verb === 'propose bash…') {
       return { kind: 'bash', label: 'Bash', target: primary, scope };
@@ -392,6 +394,54 @@
       target: primary,
       scope,
     };
+  }
+
+  /** Set of pending question-action ids that are already anchored to
+   *  a `_ask_` trace step in the current session — so the
+   *  `inlineActions` snippet at the bottom of the message body doesn't
+   *  render them a second time. Walks every message's events once on
+   *  change of `sess.messages` / `sess.actions`. Cheap: bounded by
+   *  trace-segment count, and most messages have zero asks. */
+  const anchoredQuestionIds = $derived.by(() => {
+    const ids = new Set<string>();
+    if (!sess) return ids;
+    for (const msg of sess.messages) {
+      if (!msg.events) continue;
+      for (const ev of msg.events) {
+        if (ev.kind !== 'trace') continue;
+        for (const seg of ev.segments) {
+          const parsed = parseTraceSegment(seg);
+          if (parsed.kind !== 'tool' || parsed.output) continue;
+          const hint = parseToolHint(parsed.cmd);
+          if (hint.kind !== 'ask') continue;
+          const q = pendingQuestionForAskHint(hint.target);
+          if (q) ids.add(q.id);
+        }
+      }
+    }
+    return ids;
+  });
+
+  /** Find the pending `question` action whose question text matches
+   *  the given `_ask_` trace hint. Used to anchor the QuestionCard at
+   *  the trace-step slot instead of trailing at the message bottom.
+   *  Match strategy: prefix compare against the hint's truncated text
+   *  AND the action's full question, in both directions, so an
+   *  ellipsised hint still locks onto its long-form action. */
+  function pendingQuestionForAskHint(
+    probe: string
+  ): Extract<ClaudeAction, { kind: 'question' }> | null {
+    if (!sess || !probe) return null;
+    const trimmed = probe.replace(/…$/, '').trim();
+    if (!trimmed) return null;
+    for (const a of sess.actions) {
+      if (a.kind !== 'question' || a.status !== 'pending') continue;
+      const aq = a.question.trim();
+      if (aq === trimmed) return a;
+      if (aq.startsWith(trimmed)) return a;
+      if (trimmed.startsWith(aq.slice(0, Math.min(80, aq.length)))) return a;
+    }
+    return null;
   }
 
   function diffStats(oldText: string, newText: string): { add: number; rem: number } {
@@ -487,6 +537,52 @@
       </div>
     {/if}
 
+    <!-- Inline cards (SDD + question / propose_*) live INSIDE the
+         current message's body so they inherit the byline-column
+         indent and scroll naturally with the prose, instead of
+         floating full-width below the conversation. Rendered once,
+         under whichever message is `lastVisibleIndex`. -->
+    {#snippet inlineActions()}
+      {#if workspaceForSession(sess.id)}
+        {@const sddWs = workspaceForSession(sess.id)}
+        {#if sddWs}
+          <div class="action-wrap">
+            <SddCard
+              workspace={sddWs}
+              onAdvance={(prompt) => p.onSddAdvance?.(sess.id, prompt)}
+            />
+          </div>
+        {/if}
+      {/if}
+
+      {#each sess.actions as action (action.id)}
+        {#if action.kind === 'question' && anchoredQuestionIds.has(action.id)}
+          <!-- Already rendered inline at its `_ask_` trace step.
+               Skip the bottom-of-body fallback to avoid duplicate
+               cards. -->
+        {:else}
+        <div class="action-wrap">
+          {#if action.kind === 'question'}
+            <QuestionCard
+              {action}
+              onUpdate={(patch) => p.onUpdateAction(sess.id, action.id, patch)}
+              onDismiss={() => p.onRemoveAction(sess.id, action.id)}
+            />
+          {:else}
+            <ClaudeActionCard
+              {action}
+              onUpdate={(patch) => p.onUpdateAction(sess.id, action.id, patch)}
+              onDismiss={() => p.onRemoveAction(sess.id, action.id)}
+              onExecute={() => p.onExecuteAction(sess.id, action)}
+              onOpenPrInWoom={(url) => p.onOpenPrInWoom(url, action.kind === 'pr' ? action : null)}
+              {repoCwd}
+            />
+          {/if}
+        </div>
+        {/if}
+      {/each}
+    {/snippet}
+
     {#each sess.messages as msg, i (i)}
       {#if msg.hidden}
         <!-- Hidden orchestration traffic (SDD phase prompts) — agent
@@ -536,6 +632,7 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 4v5h-5"/></svg>
               </button>
             </div>
+            {#if i === lastVisibleIndex}{@render inlineActions()}{/if}
           </div>
         </article>
       {:else if msg.role === 'assistant'}
@@ -619,6 +716,11 @@
                           <!-- Three-line checklist with a tick on the first
                                row — telegraphs "agent's plan" at a glance. -->
                           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 11 8 15 4"/><line x1="3" y1="6" x2="6" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+                        {:else if kind === 'ask'}
+                          <!-- Speech bubble + question mark — the
+                               resolved trace step shows what the
+                               agent asked and what the user picked. -->
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
                         {:else if kind === 'mcp'}
                           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5 12 2"/><line x1="12" y1="22" x2="12" y2="12"/><line x1="22" y1="8.5" x2="12" y2="12"/><line x1="2" y1="8.5" x2="12" y2="12"/></svg>
                         {:else}
@@ -660,6 +762,37 @@
                               </summary>
                               <pre class="trace-out-body mono">{parsed.output}</pre>
                             </details>
+                          {:else if hint.kind === 'ask'}
+                            <!-- `ask_user_question` running: swap the trace
+                                 row for the interactive QuestionCard
+                                 inline at the EXACT step position, so
+                                 the prompt reads as part of the agent's
+                                 turn (same vertical slot as the tool
+                                 call), not as a separate panel at the
+                                 bottom of the message. Match by question
+                                 prefix — wait_id ↔ tool_use_id linkage
+                                 doesn't exist in our IPC, so we lean on
+                                 the question text. -->
+                            {@const pendingQ = pendingQuestionForAskHint(hint.target)}
+                            {#if pendingQ}
+                              <QuestionCard
+                                action={pendingQ}
+                                onUpdate={(patch) => p.onUpdateAction(sess.id, pendingQ.id, patch)}
+                                onDismiss={() => p.onRemoveAction(sess.id, pendingQ.id)}
+                              />
+                            {:else}
+                              <div class="trace-step trace-step--ask" data-status="running">
+                                <div class="trace-cmd-row">
+                                  <span class="trace-cmd-icon" aria-hidden="true">
+                                    {@render toolIcon('ask')}
+                                  </span>
+                                  <span class="trace-cmd-label mono">{hint.label}</span>
+                                  {#if hint.target}
+                                    <code class="trace-cmd-target mono" title={hint.target}>{hint.target}</code>
+                                  {/if}
+                                </div>
+                              </div>
+                            {/if}
                           {:else}
                             <!-- No output (yet): streaming row.
                                  `data-status="running"` triggers the
@@ -745,51 +878,14 @@
                 {Math.round(msg.usage.contextSize / 1000)}K context · {msg.usage.outputTokens} out
               </div>
             {/if}
+            {#if i === lastVisibleIndex}{@render inlineActions()}{/if}
           </div>
         </article>
       {:else}
         <article class="msg msg--system">
           <div class="msg-system">{msg.content}</div>
+          {#if i === lastVisibleIndex}{@render inlineActions()}{/if}
         </article>
-      {/if}
-
-      <!-- Inline cards anchor right after the latest visible message
-           so they scroll with the conversation instead of living in a
-           trailing block at the bottom of the thread. SDD card +
-           action cards (question / propose_*) both render here. -->
-      {#if i === lastVisibleIndex}
-        {#if workspaceForSession(sess.id)}
-          {@const sddWs = workspaceForSession(sess.id)}
-          {#if sddWs}
-            <div class="action-wrap">
-              <SddCard
-                workspace={sddWs}
-                onAdvance={(prompt) => p.onSddAdvance?.(sess.id, prompt)}
-              />
-            </div>
-          {/if}
-        {/if}
-
-        {#each sess.actions as action (action.id)}
-          <div class="action-wrap">
-            {#if action.kind === 'question'}
-              <QuestionCard
-                {action}
-                onUpdate={(patch) => p.onUpdateAction(sess.id, action.id, patch)}
-                onDismiss={() => p.onRemoveAction(sess.id, action.id)}
-              />
-            {:else}
-              <ClaudeActionCard
-                {action}
-                onUpdate={(patch) => p.onUpdateAction(sess.id, action.id, patch)}
-                onDismiss={() => p.onRemoveAction(sess.id, action.id)}
-                onExecute={() => p.onExecuteAction(sess.id, action)}
-                onOpenPrInWoom={(url) => p.onOpenPrInWoom(url, action.kind === 'pr' ? action : null)}
-                {repoCwd}
-              />
-            {/if}
-          </div>
-        {/each}
       {/if}
     {/each}
   </div>

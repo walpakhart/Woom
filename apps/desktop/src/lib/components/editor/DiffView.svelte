@@ -16,14 +16,24 @@
     path: string;
     /** true = staged-vs-HEAD, false = worktree-vs-index */
     staged: boolean;
+    /** Called when the user wants to jump from the diff to the real
+     *  file in the editor. `line` is a 1-based line number in the
+     *  WORKTREE (b-side) — the first changed line, so the caret lands
+     *  on the hunk without scrolling. Parent decides which editor
+     *  instance to target. */
+    onOpenFile?: (line: number) => void;
   }
-  let { repo, path, staged }: Props = $props();
+  let { repo, path, staged, onOpenFile }: Props = $props();
 
   let containerEl: HTMLDivElement;
   let merge: MergeView | null = null;
   let loading = $state(false);
   let error = $state<string | null>(null);
   let stats = $state<{ add: number; del: number }>({ add: 0, del: 0 });
+  /** 1-based line number of the first changed line on the b-side
+   *  (worktree). Defaults to 1 when no hunks are detected (e.g. a
+   *  newly-added file — every line is "changed", land at the top). */
+  let firstChangedLine = $state(1);
   /* Full-screen toggle. Pin shows the diff at viewport-cover so the
      user can read both sides without the rail / sidebar fighting for
      pixels. Esc closes; same key dance as overlays elsewhere. */
@@ -102,15 +112,22 @@
     const aLines = a.split('\n');
     const bLines = b.split('\n');
     let add = 0, del = 0;
+    let firstChange = -1;
     const max = Math.max(aLines.length, bLines.length);
     for (let i = 0; i < max; i++) {
       const l = aLines[i];
       const r = bLines[i];
-      if (l === undefined && r !== undefined) add++;
-      else if (l !== undefined && r === undefined) del++;
-      else if (l !== r) { add++; del++; }
+      let changed = false;
+      if (l === undefined && r !== undefined) { add++; changed = true; }
+      else if (l !== undefined && r === undefined) { del++; changed = true; }
+      else if (l !== r) { add++; del++; changed = true; }
+      if (changed && firstChange < 0) firstChange = i;
     }
     stats = { add, del };
+    /* 1-based line on the b-side. Clamp to 1 for the safety case where
+       the diff is empty (file unchanged) or every line differs from
+       line 0. */
+    firstChangedLine = Math.max(1, (firstChange < 0 ? 0 : firstChange) + 1);
   }
 
   $effect(() => {
@@ -134,6 +151,24 @@
       <span class="dv-add">+{stats.add}</span>
       <span class="dv-del">−{stats.del}</span>
     </span>
+    {#if onOpenFile}
+      <!-- Jump to the underlying file in the editor surface. We land
+           the caret on the first changed line so the user doesn't have
+           to re-find the hunk after switching contexts. -->
+      <button
+        class="dv-openfile"
+        onclick={() => onOpenFile?.(firstChangedLine)}
+        title="Open file at first change"
+        aria-label="Open file at first change"
+      >
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+          <polyline points="14 2 14 8 20 8"/>
+          <path d="M11 14h6M14 11l3 3-3 3"/>
+        </svg>
+        <span>open file</span>
+      </button>
+    {/if}
     <button
       class="dv-fullscreen"
       onclick={toggleFullscreen}
@@ -181,6 +216,20 @@
     transition: background 100ms ease, color 100ms ease, border-color 100ms ease;
   }
   .dv-fullscreen:hover { background: var(--bg-2); color: var(--text-0); border-color: var(--border-neutral-hi); }
+  .dv-openfile {
+    background: transparent;
+    border: 1px solid var(--border-neutral);
+    border-radius: 5px;
+    padding: 3px 8px 3px 6px;
+    color: var(--text-1);
+    cursor: pointer;
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 11px;
+    font-family: inherit;
+    transition: background 100ms ease, color 100ms ease, border-color 100ms ease;
+  }
+  .dv-openfile:hover { background: var(--bg-2); color: var(--accent-bright); border-color: var(--accent); }
+  .dv-openfile svg { flex-shrink: 0; }
   .dv-head {
     display: flex; align-items: center; gap: 12px;
     padding: 6px 14px;

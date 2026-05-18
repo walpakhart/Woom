@@ -822,6 +822,28 @@
     diffTarget = null;
   }
 
+  /** Hop from a diff view to the real file, scrolling the caret to
+   *  the first changed line. We add a tab + activate it (via the
+   *  existing `openFile`), then fire the cross-component goto event
+   *  the Editor component already listens for. RAF + microtask dance
+   *  lets the new EditorView mount before we dispatch — otherwise the
+   *  goto event fires before any Editor instance is attached and the
+   *  jump is dropped. */
+  function openDiffFileAtLine(relPath: string, line: number) {
+    if (!repoPath || !relPath) return;
+    const abs = `${repoPath}/${relPath}`;
+    openFile(abs);
+    queueMicrotask(() => {
+      requestAnimationFrame(() => {
+        window.dispatchEvent(
+          new CustomEvent('woom:editor:goto', {
+            detail: { editorId: instanceId, filePath: abs, line }
+          })
+        );
+      });
+    });
+  }
+
   async function switchTab(path: string) {
     if (path === activePath) return;
     if (dirtyByPath[activePath]) {
@@ -1180,7 +1202,12 @@
           <div class="ev-editor-wrap">
             {#if diffTarget}
               {#key `${diffTarget.path}:${diffTarget.staged}`}
-                <DiffView repo={repoPath} path={diffTarget.path} staged={diffTarget.staged} />
+                <DiffView
+                  repo={repoPath}
+                  path={diffTarget.path}
+                  staged={diffTarget.staged}
+                  onOpenFile={(line) => openDiffFileAtLine(diffTarget!.path, line)}
+                />
               {/key}
             {:else if activePath}
               <!-- Pending-edits banner removed: it duplicated the

@@ -306,23 +306,28 @@
    *  Tone is per-kind via `--cac-tone` (all kinds share `--app-tone`
    *  today; per-kind palettes can override later without touching the
    *  base shape). */
+  /* Quiet blockquote — no fill, no rounded right corner, hairline
+   *  accent rail. Card reads as a typographic block on the same
+   *  surface as the prose, instead of a tinted panel sitting on top.
+   *  Hover lifts a 4% tint so the active proposal is still findable
+   *  by the eye when scanning the thread. */
   .cac {
     --cac-tone: var(--app-tone, var(--accent));
-    border-left: 3px solid var(--cac-tone);
-    border-radius: 0 6px 6px 0;
-    background: color-mix(in srgb, var(--cac-tone) 8%, transparent);
-    padding: 10px 14px 11px;
+    border-left: 2px solid color-mix(in srgb, var(--cac-tone) 75%, transparent);
+    background: transparent;
+    padding: 4px 0 6px 14px;
     display: flex; flex-direction: column; gap: 8px;
-    transition: background 200ms;
+    transition: background 160ms, border-left-color 160ms;
     color: var(--text-1);
     font-size: 13.5px;
     line-height: 1.55;
   }
+  .cac:hover { background: color-mix(in srgb, var(--cac-tone) 4%, transparent); }
+  .cac:focus-within { border-left-color: var(--cac-tone); }
   .cac-input--cmd { background: var(--bg-0); }
   .cac--done   { opacity: 0.72; }
   .cac--error  {
     --cac-tone: var(--error);
-    background: color-mix(in srgb, var(--error) 8%, transparent);
   }
 
   /* Header reads as a byline row: glyph · title · status tag · ×.

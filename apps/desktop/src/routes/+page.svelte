@@ -923,9 +923,20 @@
     }
     if (p.kind === 'question') {
       const opts = Array.isArray(px.options) ? px.options : [];
+      /* The sidecar normalises `kind` for us (single/multi/text/confirm),
+       * but older serialised sessions may still carry only `multi_select`
+       * — derive from that as a fallback so resumed turns keep working. */
+      const rawKind = typeof px.kind === 'string' ? px.kind : '';
+      const questionKind: 'single' | 'multi' | 'text' | 'confirm' =
+        rawKind === 'multi'   ? 'multi'   :
+        rawKind === 'text'    ? 'text'    :
+        rawKind === 'confirm' ? 'confirm' :
+        rawKind === 'single'  ? 'single'  :
+        px.multi_select === true ? 'multi' : 'single';
       return {
         id,
         kind: 'question',
+        questionKind,
         question: String(px.question ?? ''),
         header: typeof px.header === 'string' ? px.header : undefined,
         options: opts
@@ -936,7 +947,7 @@
                   : undefined }
             : { label: String(o) }))
           .filter((o) => o.label.length > 0),
-        multiSelect: px.multi_select === true,
+        multiSelect: questionKind === 'multi',
         status: 'pending',
         waitId: p.wait_id
       };
@@ -4811,6 +4822,19 @@
        * on non-US layouts (Cmd-Shift remaps the printable char). */
       e.preventDefault();
       symbolPickerOpen = !symbolPickerOpen;
+    } else if (
+      (e.metaKey || e.ctrlKey) && e.shiftKey &&
+      (e.key === 'b' || e.key === 'B' || e.code === 'KeyB') &&
+      view === 'editorApp'
+    ) {
+      /* ⇧⌘B — create a new git branch from anywhere in the editor
+       * surface. Dispatches a window-level event the GitPanel listens
+       * for: it pops the branch picker open, flips to "create" mode,
+       * and the new-branch-name input auto-focuses via its attach
+       * directive. Scoped to the editor solo so the binding doesn't
+       * fire while the user is buried in a chat / canvas / terminal. */
+      e.preventDefault();
+      window.dispatchEvent(new CustomEvent('woom:editor:new-branch'));
     } else if (
       (e.metaKey || e.ctrlKey) &&
       !e.shiftKey && !e.altKey &&

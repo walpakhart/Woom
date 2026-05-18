@@ -10,12 +10,16 @@
   import { invoke } from '@tauri-apps/api/core';
 
   type QuestionOption = { label: string; description?: string };
+  type QuestionKind = 'single' | 'multi' | 'text' | 'confirm';
   type Action = {
     id: string;
     kind: 'question';
+    /** Shape — single / multi / text / confirm. */
+    questionKind: QuestionKind;
     question: string;
     header?: string;
     options: QuestionOption[];
+    /** Legacy mirror — `true` iff `questionKind === 'multi'`. */
     multiSelect?: boolean;
     status: 'pending' | 'executing' | 'done' | 'error';
     chosen?: string[];
@@ -34,10 +38,16 @@
   const isPending = $derived(p.action.status === 'pending');
   const isDone = $derived(p.action.status === 'done');
   const isExecuting = $derived(p.action.status === 'executing');
+  /* `questionKind` is the canonical field; falling back to the legacy
+   *  `multiSelect` keeps resumed older-session cards behaving sensibly
+   *  even though new sidecar turns always set `questionKind`. */
+  const qk: QuestionKind = $derived(
+    p.action.questionKind ?? (p.action.multiSelect ? 'multi' : 'single')
+  );
 
   /* Per-card local state — selected option set (single or multi) plus
-     the "Other" free-form text. We don't write into action.chosen
-     until submit so the agent only sees the final value. */
+     the free-form text field. We don't write into action.chosen until
+     submit so the agent only sees the final value. */
   let picked = $state<Set<string>>(new Set());
   let otherText = $state('');
 
@@ -47,53 +57,72 @@
 
   function toggle(label: string): void {
     if (!isPending) return;
-    if (p.action.multiSelect) {
+    if (qk === 'multi') {
       const next = new Set(picked);
       if (next.has(label)) next.delete(label);
       else next.add(label);
       picked = next;
     } else {
-      /* Radio behaviour — single click also submits when single-select
-       *  and no other text typed. Faster path for the common case. */
+      /* Radio behaviour for `single` — clicking auto-submits with
+       *  the chosen label so the most common path is one click. */
       picked = new Set([label]);
       void submit();
     }
   }
 
-  async function submit(): Promise<void> {
-    if (!isPending) return;
+  async function resolveWith(summary: string, chosen: string[], other?: string) {
     if (!p.action.waitId) {
-      /* No IPC handle — card was synthesized from the stream parser
-       *  before the sidecar's IPC request landed. Mark error so the
-       *  agent's turn doesn't deadlock. */
       p.onUpdate({ status: 'error', result: 'no waitId — IPC handshake missing' });
       return;
     }
-    const labels = [...picked];
-    const other = otherText.trim();
-    if (labels.length === 0 && other.length === 0) return;
     p.onUpdate({
       status: 'executing',
-      chosen: labels,
+      chosen,
       other: other || undefined
     });
-    /* Summary text fed back to the agent. Includes both clicked
-     *  options AND the "Other" text when present, so the agent sees
-     *  the user's full intent — not just the chosen labels. */
-    const parts: string[] = [];
-    if (labels.length > 0) parts.push(`Chose: ${labels.join(', ')}`);
-    if (other) parts.push(`Other: ${other}`);
-    const summary = parts.join(' · ');
     try {
       await invoke<boolean>('resolve_action_wait', {
         waitId: p.action.waitId,
         ok: true,
         summary
       });
-      p.onUpdate({ status: 'done', result: summary });
+      /* Drop the card from the session entirely once answered. The
+       * trace step's output already carries the chosen summary
+       * ("Chose: <label>") so a persisting "answered" card on the
+       * thread is dead chrome that just clutters scroll. Error path
+       * still leaves the card up so the user can retry / dismiss. */
+      p.onDismiss();
     } catch (e) {
       p.onUpdate({ status: 'error', result: String(e) });
     }
+  }
+
+  async function submit(): Promise<void> {
+    if (!isPending) return;
+    if (qk === 'text') {
+      const t = otherText.trim();
+      if (!t.length) return;
+      await resolveWith(t, [], t);
+      return;
+    }
+    const labels = [...picked];
+    const other = otherText.trim();
+    if (labels.length === 0 && other.length === 0) return;
+    /* Summary fed back to the agent. Includes both clicked options
+     *  AND the free-form text when present, so the agent sees the
+     *  user's full intent — not just the chosen labels. */
+    const parts: string[] = [];
+    if (labels.length > 0) parts.push(`Chose: ${labels.join(', ')}`);
+    if (other) parts.push(`Other: ${other}`);
+    await resolveWith(parts.join(' · '), labels, other);
+  }
+
+  /** Confirm-card shortcut: click Yes / No and immediately resolve.
+   *  Skips the picked-set machinery entirely — the answer IS the
+   *  click. */
+  function confirm(answer: 'Yes' | 'No') {
+    if (!isPending) return;
+    void resolveWith(answer, [answer]);
   }
 
   async function dismiss(): Promise<void> {
@@ -138,61 +167,101 @@
   </header>
 
   {#if isPending}
-    <div class="qc-opts" role={p.action.multiSelect ? 'group' : 'radiogroup'}>
-      {#each p.action.options as opt, i (i)}
-        {@const selected = isSelected(opt.label)}
+    {#if qk === 'confirm'}
+      <!-- Confirm shape — two pill buttons, click resolves immediately
+           with "Yes" or "No". No options list, no text field. -->
+      <div class="qc-confirm">
         <button
           type="button"
-          class="qc-opt"
-          class:qc-opt--selected={selected}
-          role={p.action.multiSelect ? 'checkbox' : 'radio'}
-          aria-checked={selected}
-          onclick={() => toggle(opt.label)}
-          disabled={!isPending}
+          class="qc-confirm-btn qc-confirm-btn--no"
+          onclick={() => confirm('No')}
+        >No</button>
+        <button
+          type="button"
+          class="qc-confirm-btn qc-confirm-btn--yes"
+          onclick={() => confirm('Yes')}
+        >Yes</button>
+      </div>
+      <footer class="qc-foot qc-foot--minimal">
+        <button type="button" class="qc-btn" onclick={() => void dismiss()}>dismiss</button>
+      </footer>
+    {:else if qk === 'text'}
+      <!-- Text shape — just the free-form input, prominently. Enter
+           submits, no clickable options. -->
+      <div class="qc-text">
+        <input
+          class="qc-text-input mono"
+          type="text"
+          bind:value={otherText}
+          placeholder="Type your answer…"
+          onkeydown={(e) => { if (e.key === 'Enter') { void submit(); } }}
+          {@attach (node: HTMLInputElement) => node.focus()}
+        />
+      </div>
+      <footer class="qc-foot">
+        <button type="button" class="qc-btn" onclick={() => void dismiss()}>dismiss</button>
+        <button
+          class="qc-btn qc-btn--primary"
+          onclick={() => void submit()}
+          disabled={otherText.trim().length === 0}
+        >Send</button>
+      </footer>
+    {:else}
+      <div class="qc-opts" role={qk === 'multi' ? 'group' : 'radiogroup'}>
+        {#each p.action.options as opt, i (i)}
+          {@const selected = isSelected(opt.label)}
+          <button
+            type="button"
+            class="qc-opt"
+            class:qc-opt--selected={selected}
+            role={qk === 'multi' ? 'checkbox' : 'radio'}
+            aria-checked={selected}
+            onclick={() => toggle(opt.label)}
+            disabled={!isPending}
+          >
+            <span class="qc-opt-pip" aria-hidden="true">
+              {#if qk === 'multi'}
+                {#if selected}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M5 12l5 5 9-11"/></svg>{/if}
+              {:else}
+                {#if selected}<span class="qc-opt-dot"></span>{/if}
+              {/if}
+            </span>
+            <div class="qc-opt-body">
+              <div class="qc-opt-label">{opt.label}</div>
+              {#if opt.description}
+                <div class="qc-opt-desc">{opt.description}</div>
+              {/if}
+            </div>
+          </button>
+        {/each}
+      </div>
+      <!-- Free-form fallback — quietly typographic, no boxy input
+           chrome. Reads like an Aside line that the user can fill in
+           when none of the options fit. -->
+      <div class="qc-other">
+        <input
+          class="qc-other-input"
+          type="text"
+          bind:value={otherText}
+          placeholder="or type your own…"
+          onkeydown={(e) => { if (e.key === 'Enter') { void submit(); } }}
+        />
+      </div>
+      <footer class="qc-foot">
+        <button
+          type="button"
+          class="qc-btn"
+          onclick={() => void dismiss()}
+        >dismiss</button>
+        <button
+          class="qc-btn qc-btn--primary"
+          onclick={() => void submit()}
+          disabled={picked.size === 0 && otherText.trim().length === 0}
         >
-          <span class="qc-opt-pip" aria-hidden="true">
-            {#if p.action.multiSelect}
-              {#if selected}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M5 12l5 5 9-11"/></svg>{/if}
-            {:else}
-              {#if selected}<span class="qc-opt-dot"></span>{/if}
-            {/if}
-          </span>
-          <div class="qc-opt-body">
-            <div class="qc-opt-label">{opt.label}</div>
-            {#if opt.description}
-              <div class="qc-opt-desc">{opt.description}</div>
-            {/if}
-          </div>
+          {qk === 'multi' ? 'Submit' : 'Send'}
         </button>
-      {/each}
-    </div>
-    <div class="qc-other">
-      <input
-        class="qc-other-input"
-        type="text"
-        bind:value={otherText}
-        placeholder="Other (free-form answer)…"
-        onkeydown={(e) => { if (e.key === 'Enter') { void submit(); } }}
-      />
-    </div>
-    <footer class="qc-foot">
-      <!-- Decline = text-link aesthetic, dismisses the question
-           without picking + resolves IPC with ok=false. Lives in the
-           same row as Submit so the user has both actions visible
-           without a corner × that read as overlay chrome. -->
-      <button
-        type="button"
-        class="qc-btn"
-        onclick={() => void dismiss()}
-      >dismiss</button>
-      <button
-        class="qc-btn qc-btn--primary"
-        onclick={() => void submit()}
-        disabled={picked.size === 0 && otherText.trim().length === 0}
-      >
-        {p.action.multiSelect ? 'Submit' : 'Send'}
-      </button>
-    </footer>
+      </footer>
+    {/if}
   {:else if isDone}
     <div class="qc-resolved">
       {#if p.action.chosen && p.action.chosen.length > 0}
@@ -212,22 +281,25 @@
 </div>
 
 <style>
-  /* Question card — same inline-blockquote treatment as SddCard /
-   *  ClaudeActionCard. Accent stripe on the left, accent-soft tint
-   *  bg, rounded only on the right. Reads as a rich element IN the
-   *  conversation rather than a modal popover. */
+  /* Quiet blockquote — no fill, no rounded right corner, hairline
+   *  accent rail. Matches `.cac` / `.sdd-card` so all inline cards
+   *  share one visual grammar; lives on the same typographic surface
+   *  as the prose instead of a tinted panel on top. Hover lifts a
+   *  4% tint so the active question is still findable when scanning. */
   .qc {
     margin: 8px 0;
-    border-left: 3px solid var(--accent);
-    border-radius: 0 6px 6px 0;
-    background: color-mix(in srgb, var(--accent) 8%, transparent);
+    border-left: 2px solid color-mix(in srgb, var(--accent) 75%, transparent);
+    background: transparent;
     color: var(--text-1);
     font-size: 13.5px;
     line-height: 1.55;
-    padding: 10px 14px 11px;
+    padding: 4px 0 6px 14px;
     display: flex; flex-direction: column;
     gap: 8px;
+    transition: background 160ms, border-left-color 160ms;
   }
+  .qc:hover { background: color-mix(in srgb, var(--accent) 4%, transparent); }
+  .qc:focus-within { border-left-color: var(--accent); }
   .qc--done {
     opacity: 0.72;
   }
@@ -333,23 +405,82 @@
     line-height: 1.45;
   }
 
-  .qc-other {
-    margin-top: 4px;
-  }
+  /* Free-form input — typographic only. Hairline bottom rule that
+   *  brightens on focus; no box, no fill, no inset. Reads as a line
+   *  the user can write on, not another widget glued to the bottom. */
+  .qc-other { margin-top: 2px; }
   .qc-other-input {
     width: 100%;
-    padding: 6px 10px;
-    border-radius: 6px;
-    border: 1px solid var(--border);
-    background: var(--bg-2);
+    padding: 4px 0 5px;
+    border: 0;
+    border-bottom: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+    background: transparent;
     color: var(--text-0);
-    font-size: 12px;
+    font-size: 12.5px;
+    font-family: inherit;
+    transition: border-color 140ms;
   }
+  .qc-other-input::placeholder { color: var(--text-mute); font-style: italic; }
   .qc-other-input:focus {
-    outline: 2px solid var(--accent);
-    outline-offset: -1px;
-    border-color: transparent;
+    outline: none;
+    border-bottom-color: var(--accent);
   }
+
+  /* `text` shape — input is the primary control, so render it bigger
+   *  and monospace (it usually receives a name / path / snippet). */
+  .qc-text { margin-top: 2px; }
+  .qc-text-input {
+    width: 100%;
+    padding: 6px 0 7px;
+    border: 0;
+    border-bottom: 1px solid color-mix(in srgb, var(--accent) 32%, transparent);
+    background: transparent;
+    color: var(--text-0);
+    font-size: 13.5px;
+    transition: border-color 140ms;
+  }
+  .qc-text-input::placeholder { color: var(--text-mute); font-style: italic; }
+  .qc-text-input:focus {
+    outline: none;
+    border-bottom-color: var(--accent);
+  }
+
+  /* `confirm` shape — two equal-width pills. "Yes" carries the accent
+   *  weight, "No" sits as a quieter ghost so the destructive answer
+   *  doesn't read like the default. */
+  .qc-confirm {
+    display: flex;
+    gap: 8px;
+    margin-top: 4px;
+  }
+  .qc-confirm-btn {
+    flex: 1;
+    padding: 6px 14px;
+    border-radius: 5px;
+    border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+    background: transparent;
+    color: var(--text-0);
+    font-size: 12.5px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 120ms, border-color 120ms;
+  }
+  .qc-confirm-btn--yes {
+    background: color-mix(in srgb, var(--accent) 28%, transparent);
+    border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  }
+  .qc-confirm-btn--yes:hover {
+    background: color-mix(in srgb, var(--accent) 42%, transparent);
+  }
+  .qc-confirm-btn--no {
+    color: var(--text-1);
+    border-color: var(--border-neutral-hi);
+  }
+  .qc-confirm-btn--no:hover {
+    background: color-mix(in srgb, var(--text-1) 6%, transparent);
+    color: var(--text-0);
+  }
+  .qc-foot--minimal { justify-content: flex-end; }
 
   /* Foot mirrors SddCard / ClaudeActionCard actions row — primary
    *  CTA carries an accent-filled pill; secondary actions sit as

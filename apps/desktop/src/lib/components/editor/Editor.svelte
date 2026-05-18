@@ -98,6 +98,14 @@
   let error = $state<string | null>(null);
   let dirty = $state(false);
 
+  /* Autosave: write dirty buffers to disk after a short idle window.
+     600 ms feels right — long enough to avoid mid-token saves under
+     normal typing, short enough that Cmd-Tab to the file tree sees
+     up-to-date contents. We still expose Cmd-S so a deliberate
+     "save NOW" stays instant. */
+  const AUTOSAVE_MS = 600;
+  let autosaveTimer: ReturnType<typeof setTimeout> | null = null;
+
   const languageCompartment = new Compartment();
   /* Theme lives in its own compartment so we can swap CodeMirror's
      editor theme without rebuilding the EditorState. Reactive
@@ -130,6 +138,24 @@
           to: sel.to,
           scrollTop: view.scrollDOM.scrollTop
         });
+        /* Flush a pending autosave to disk before we destroy the view.
+           We bypass save() here because save() touches `view` after
+           the await (refreshChangeBar dispatches), and the next line
+           tears it down. Direct invoke + onSaved notification is
+           enough to keep the GitPanel and dirty indicator in sync. */
+        if (autosaveTimer) { clearTimeout(autosaveTimer); autosaveTimer = null; }
+        if (dirty) {
+          const pendingPath = lastLoadedPath;
+          const pendingContents = view.state.doc.toString();
+          try {
+            await invoke('fs_write_file', { path: pendingPath, contents: pendingContents });
+            onSaved?.(pendingPath);
+          } catch {
+            /* Swallow — surfacing a stale-buffer error in the new file
+               would confuse the user. They'll see the dirty dot when
+               they navigate back to pendingPath. */
+          }
+        }
       }
       view?.destroy();
       /* Restore the new file's saved selection (clamped to the
@@ -168,6 +194,7 @@
                   onDirty?.(d);
                 }
                 scheduleChangeBar();
+                if (d) scheduleAutosave();
                 /* Stream the buffer text up so the Markdown live-
                    preview can re-render. Only fired when the parent
                    wired a callback — no cost otherwise. */
@@ -275,6 +302,7 @@
 
   async function save(v: EditorView) {
     if (!lastLoadedPath) return;
+    if (autosaveTimer) { clearTimeout(autosaveTimer); autosaveTimer = null; }
     const cur = v.state.doc.toString();
     try {
       await invoke('fs_write_file', { path: lastLoadedPath, contents: cur });
@@ -312,6 +340,17 @@
   function scheduleChangeBar() {
     if (cbDebounce) clearTimeout(cbDebounce);
     cbDebounce = setTimeout(() => { void refreshChangeBar(); }, 300);
+  }
+
+  /** Restart the autosave countdown. Fires from the updateListener on
+   *  every doc change when the buffer is dirty; the most recent timer
+   *  wins, so steady typing never triggers a save mid-keystroke. */
+  function scheduleAutosave() {
+    if (autosaveTimer) clearTimeout(autosaveTimer);
+    autosaveTimer = setTimeout(() => {
+      autosaveTimer = null;
+      if (view && dirty) void save(view);
+    }, AUTOSAVE_MS);
   }
 
   let watchUnlisten: UnlistenFn | null = null;
@@ -413,6 +452,7 @@
   onDestroy(() => {
     watchUnlisten?.();
     if (cbDebounce) clearTimeout(cbDebounce);
+    if (autosaveTimer) clearTimeout(autosaveTimer);
     /* Last-chance flush of the current cursor so a quit (or column
      * close) doesn't lose the user's position. The updateListener
      * already records most positions on the fly; this catches the
@@ -425,6 +465,18 @@
         to: sel.to,
         scrollTop: view.scrollDOM?.scrollTop ?? 0
       });
+      /* Same idea for the buffer: if the user typed and immediately
+         closed the column, the autosave timer never fired. Fire a
+         best-effort write here so unsaved keystrokes don't vanish.
+         Bypass save() to avoid touching the about-to-be-destroyed
+         view via refreshChangeBar. */
+      if (dirty) {
+        const pendingPath = lastLoadedPath;
+        const pendingContents = view.state.doc.toString();
+        void invoke('fs_write_file', { path: pendingPath, contents: pendingContents })
+          .then(() => onSaved?.(pendingPath))
+          .catch(() => {});
+      }
     }
     view?.destroy();
   });
