@@ -845,18 +845,18 @@
     color: var(--accent-bright);
   }
 
-  /* User message — soft bg + 2px clay stripe on the left. The
-     `position: relative` anchor lets the absolute-positioned hover
-     actions float at the top-right without inflating the bubble's
-     resting height. */
+  /* User message — flat blockquote-style on the prose surface.
+     Same chrome grammar as SddCard / Markdown.svelte blockquote:
+     3px accent stripe + accent-soft tint + rounded only on the
+     right. No full border, no gradient bg. User's text reads as
+     part of the typographic surface, not as a chat bubble widget. */
   .msg--user .msg-body {
     position: relative;
-    padding: 12px 16px 12px 18px;
-    background: linear-gradient(180deg, var(--bg-2),
-      color-mix(in srgb, var(--bg-2) 90%, var(--accent-soft)));
-    border: 1px solid var(--border);
-    border-left: 2px solid var(--accent);
-    border-radius: 10px;
+    padding: 8px 14px 9px;
+    background: var(--accent-soft);
+    border: 0;
+    border-left: 3px solid var(--accent);
+    border-radius: 0 6px 6px 0;
   }
 
   /* Hover actions sit BELOW the bubble (not over it) — small, naked
@@ -1211,75 +1211,90 @@
     
   }
 
-  /* Edit card — collapsible file pill. Header: tag + path + +/- stats +
-     status + caret. Body: real LCS diff with line numbers + glyph. */
+  /* Edit card — flat file-edit line on the prose surface, same
+     grammar as trace step rows. No box, no full border, no bg fill;
+     just a 2px editor-tone left stripe + 12px indent so the file
+     edit reads as an annotation in the conversation. Expanded body
+     (diff) keeps its content but loses the wrapper bg. */
   .edit-card {
     margin: 6px 0;
-    background: var(--bg-2);
-    border: 1px solid var(--border);
-    border-left: 2px solid var(--src-editor);
-    border-radius: 8px;
+    border-left: 2px solid color-mix(in srgb, var(--src-editor) 70%, transparent);
+    padding-left: 12px;
+    background: transparent;
+    border-radius: 0;
     font-size: 12.5px;
-    overflow: hidden;
   }
   .edit-card-head {
-    display: flex; align-items: center;
-    gap: 12px;
-    padding: 10px 14px;
+    display: flex; align-items: baseline;
+    gap: 8px;
+    padding: 0;
     cursor: pointer;
     user-select: none;
     list-style: none;
+    line-height: 1.55;
   }
   .edit-card-head::-webkit-details-marker { display: none; }
   .edit-card-head::marker { content: ''; }
-  .edit-card[open] .edit-card-head {
-    border-bottom: 1px solid var(--border);
-    background: linear-gradient(180deg,
-      color-mix(in srgb, var(--src-editor) 5%, transparent),
-      transparent);
-  }
+  /* No head bg on open — flat continuation into the diff body. */
   .edit-card[open] .edit-expand svg { transform: rotate(180deg); }
+  /* Tag reads as a lowercase mono prefix, not a chip. */
   .edit-tag {
-    display: inline-flex; align-items: center;
-    padding: 2px 7px;
-    font-size: 10px; font-weight: 600;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
-    background: var(--bg-3);
-    border-radius: 4px;
-    color: var(--text-2);
+    display: inline-flex; align-items: baseline;
+    padding: 0;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0;
+    text-transform: lowercase;
+    background: transparent;
+    border-radius: 0;
+    color: var(--src-editor);
     flex-shrink: 0;
   }
   .edit-tag--add { color: var(--diff-add-stroke); }
   .edit-tag--rem { color: var(--diff-rem-stroke); }
   .edit-path {
     font-size: 12px;
-    color: var(--text-0);
+    color: var(--text-1);
     flex: 1;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    direction: rtl;
+    text-align: left;
+    unicode-bidi: plaintext;
   }
-  .edit-stats { display: flex; gap: 8px; font-size: 11px; }
+  .edit-card[open] .edit-path {
+    direction: ltr;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+  .edit-stats { display: flex; gap: 8px; font-size: 10.5px; }
   .edit-stats .add { color: var(--diff-add); }
   .edit-stats .rem { color: var(--diff-rem); }
+  /* Status reads as muted text — "applied", "pending" — not a pill. */
   .edit-status {
-    font-size: 9.5px; color: var(--text-mute);
-    text-transform: uppercase; letter-spacing: 0.08em;
-    padding: 1px 5px;
-    border-radius: 3px;
-    background: var(--bg-3);
-    border: 1px solid var(--border);
+    font-size: 10px;
+    color: var(--text-mute);
+    text-transform: lowercase;
+    letter-spacing: 0;
+    padding: 0;
+    border-radius: 0;
+    background: transparent;
+    border: 0;
   }
   .edit-expand {
     color: var(--text-mute);
     display: inline-grid; place-items: center;
     transition: transform 160ms;
+    opacity: 0.6;
   }
   .edit-expand svg { transition: transform 160ms; }
 
+  /* Expanded diff body — same indent as the head, no wrapper bg. */
   .edit-card-body {
     max-height: 480px;
     overflow: auto;
-    background: var(--bg-1);
+    background: transparent;
+    margin-top: 4px;
   }
   .diff {
     display: block;
