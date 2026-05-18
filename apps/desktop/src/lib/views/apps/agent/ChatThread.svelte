@@ -661,10 +661,11 @@
                               <pre class="trace-out-body mono">{parsed.output}</pre>
                             </details>
                           {:else}
-                            <!-- No output (yet): still render the row, just
-                                 non-interactive (matches a streaming step
-                                 before its result lands). -->
-                            <div class="trace-step trace-step--{hint.kind}">
+                            <!-- No output (yet): streaming row.
+                                 `data-status="running"` triggers the
+                                 leading-glyph pulse animation so the
+                                 user sees this step is in-flight. -->
+                            <div class="trace-step trace-step--{hint.kind}" data-status="running">
                               <div class="trace-cmd-row">
                                 <span class="trace-cmd-icon" aria-hidden="true">
                                   {@render toolIcon(hint.kind)}
@@ -677,7 +678,7 @@
                                   <span class="trace-cmd-scope mono">{hint.scope}</span>
                                 {/if}
                                 {#if fallbackBash}
-                                  <code class="trace-cmd-target mono">{fallbackBash}</code>
+                                  <code class="trace-cmd-target mono" title={fallbackBash}>{fallbackBash}</code>
                                 {/if}
                               </div>
                             </div>
@@ -1034,6 +1035,33 @@
   }
   .trace-step--has-output { cursor: pointer; }
   .trace-step--has-output:hover .trace-cmd-label { color: var(--text-0); }
+
+  /* In-flight pulse — slow 1.2s opacity oscillation on the leading
+     glyph only; rest of the row stays steady so the eye doesn't
+     get tugged by a whole flashing line. Stamped via `data-status="running"`
+     from the streaming-branch markup; completed rows drop the
+     attribute, so the animation auto-stops when output lands. */
+  @keyframes trace-pulse {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.35; }
+  }
+  .trace-step[data-status="running"] .trace-cmd-icon {
+    animation: trace-pulse 1.2s ease-in-out infinite;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .trace-step[data-status="running"] .trace-cmd-icon { animation: none; opacity: 0.7; }
+  }
+
+  /* Error state — DEFERRED. The plan called for swapping glyph +
+     label to `var(--error)` via `data-status="error"`, but
+     `parseTraceSegment` doesn't currently expose an error flag (no
+     exit-code / stderr-marker plumbing), so no markup branch can
+     stamp the attribute. Wiring lands separately; the CSS rule was
+     dropped here to keep svelte-check clean instead of leaving a
+     dead selector. When detection lands, re-add:
+       `.trace-step[data-status="error"] { --step-tone: var(--error); }`
+       `.trace-step[data-status="error"] .trace-cmd-label,`
+       `.trace-step[data-status="error"] .trace-cmd-target { color: var(--error); }` */
   /* Command row — single flex line at prose line-height. Icon column is
      a fixed-width text-glyph slot; no chip background. Items align
      on the baseline so the glyph + label + target read as one strip
@@ -1073,6 +1101,10 @@
   }
   .trace-cmd-target {
     flex: 1; min-width: 0;
+    /* Soft cap so the target never eats the whole row when the meta
+     *  + caret sit to the right. Caller's `title=` attr preserves
+     *  the full string for hover. */
+    max-width: 60ch;
     font-size: 12px;
     color: var(--text-1);
     background: transparent;
