@@ -1113,13 +1113,24 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    /* Right-side ellipsis bites filenames; flip the direction so the
-       basename stays visible on long absolute paths.
-       (`apps/desktop/src/lib/components/editor/codemirrorLang.ts` →
-       `…/lib/components/editor/codemirrorLang.ts` instead of
-       `apps/desktop/src/lib/components/editor/codemir…`.) */
-    direction: rtl;
+    /* Default LTR ellipsis — right-truncates with `…` at the end.
+       Path-shaped kinds (read/edit/write/create/delete) flip to RTL
+       below so basenames stay visible on long absolute paths.
+       (`apps/desktop/.../codemirrorLang.ts` →
+       `…/codemirrorLang.ts`.) Bash / grep / shell-command kinds
+       keep LTR so the verb at the start of the command stays
+       visible — RTL on bash produced `…d /Users/... && git` which
+       hid `cd` and clipped the tail under the meta. */
+    direction: ltr;
     text-align: left;
+  }
+  .trace-step--read .trace-cmd-target,
+  .trace-step--edit .trace-cmd-target,
+  .trace-step--write .trace-cmd-target,
+  .trace-step--create .trace-cmd-target,
+  .trace-step--delete .trace-cmd-target,
+  .trace-step--glob .trace-cmd-target {
+    direction: rtl;
     unicode-bidi: plaintext;
   }
   /* When the row is open, drop the truncation so the user sees the
