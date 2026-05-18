@@ -959,89 +959,88 @@
     padding: 4px 12px;
   }
 
-  /* Trace card — outer rounded bubble that holds the head row plus
-     a stack of step sub-bubbles when expanded. The bubble has a soft
-     bg + brand-tinted left stripe so it stands apart from prose. */
+  /* Trace cluster — outer marker for a run of tool-call steps from
+     one assistant turn. Single soft left stripe groups the run as a
+     cluster; the inner per-step rows render as flat text lines on
+     the prose surface, NOT as bordered widgets. Spec ref:
+     "annotated text lines, not boxed widgets". */
   .trace {
     display: block;
     margin: 6px 0;
     max-width: 720px;
-    background: linear-gradient(180deg,
-      color-mix(in srgb, var(--app-tone, var(--src-claude)) 4%, var(--bg-2)),
-      var(--bg-2));
-    border: 1px solid var(--border);
-    border-left: 2px solid color-mix(in srgb, var(--app-tone, var(--src-claude)) 70%, var(--border));
-    border-radius: 10px;
-    overflow: hidden;
+    border: 0;
+    background: transparent;
+    border-radius: 0;
+    border-left: 2px solid color-mix(in srgb, var(--accent) 25%, transparent);
+    padding-left: 12px;
   }
+  /* Outer "N steps" head — kept working with the old chrome FOR NOW;
+     phase 2 collapses this to a quiet text prefix. Here we only soften
+     it (drop hover panel + bottom border) so phase 1's flat body
+     doesn't visually collide with a still-boxy head. */
   .trace-head {
-    display: flex; align-items: center; gap: 8px;
-    padding: 8px 12px;
+    display: flex; align-items: baseline; gap: 6px;
+    padding: 2px 0;
     font-size: 12px;
-    color: var(--text-1);
+    color: var(--text-mute);
     cursor: pointer;
     user-select: none;
     list-style: none;
   }
   .trace-head::-webkit-details-marker { display: none; }
   .trace-head::marker { content: ''; }
-  .trace-head:hover { background: color-mix(in srgb, var(--app-tone, var(--src-claude)) 5%, transparent); }
+  .trace-head:hover { color: var(--text-1); }
   .trace-check {
-    width: 15px; height: 15px;
-    display: grid; place-items: center;
-    background: color-mix(in srgb, var(--success) 22%, transparent);
+    width: 11px; height: 11px;
+    display: inline-grid; place-items: center;
     color: var(--success);
-    border-radius: 50%;
     flex-shrink: 0;
   }
   .trace-head-label {
     font-size: 12px;
-    color: var(--text-1);
+    color: var(--text-mute);
     flex: 1;
   }
   .trace-head :global(strong) {
-    color: var(--text-0);
-    font-weight: 600;
+    color: var(--text-1);
+    font-weight: 500;
     margin-right: 2px;
   }
   .trace-head-caret {
     color: var(--text-mute);
-    display: grid; place-items: center;
+    display: inline-grid; place-items: center;
     transition: transform 160ms;
   }
   .trace[open] .trace-head-caret { transform: rotate(180deg); }
-  .trace[open] .trace-head { border-bottom: 1px solid var(--border); }
+  /* No bottom border when open — flat continuation into step lines. */
   .trace-body {
-    padding: 10px 12px 12px;
+    padding: 2px 0 4px;
     display: flex; flex-direction: column;
-    gap: 10px;
+    gap: 1px;
   }
-  /* Step card — single rounded container that owns the per-kind tone.
-     When there's an output, .trace-step is a <details> element whose
-     <summary> is the command row and whose body is the inline output.
-     One container = one visual unit instead of two stacked pills. */
+  /* Step row — flat text line. No border, no bg, no hover panel; just
+     glyph + label + target + scope + meta + caret on one baseline.
+     `--step-tone` lives on for the glyph color only. */
   .trace-step {
     --step-tone: var(--accent-bright);
     display: flex; flex-direction: column;
-    background: var(--bg-1);
-    border: 1px solid var(--border);
-    border-left: 2px solid color-mix(in srgb, var(--step-tone) 65%, var(--border));
-    border-radius: 7px;
+    background: transparent;
+    border: 0;
+    border-radius: 0;
     overflow: hidden;
-    transition: border-color 120ms, background 120ms;
+    transition: none;
   }
   .trace-step--has-output { cursor: pointer; }
-  .trace-step--has-output:hover {
-    border-color: color-mix(in srgb, var(--step-tone) 32%, var(--border));
-  }
-  /* Command row — leading per-tool icon + verb chip + monospace target.
-     The icon's hue uses the parent's --step-tone; everything else stays
-     neutral so a long list of steps reads as a coherent script. */
+  .trace-step--has-output:hover .trace-cmd-label { color: var(--text-0); }
+  /* Command row — single flex line at prose line-height. Icon column is
+     a fixed-width text-glyph slot; no chip background. Items align
+     on the baseline so the glyph + label + target read as one strip
+     of text. */
   .trace-cmd-row {
-    display: flex; align-items: center; gap: 9px;
-    padding: 7px 11px;
+    display: flex; align-items: baseline; gap: 6px;
+    padding: 0;
     min-width: 0;
-    transition: background 120ms;
+    line-height: 1.55;
   }
   .trace-cmd-row--toggle {
     list-style: none;
@@ -1049,32 +1048,31 @@
   }
   .trace-cmd-row--toggle::-webkit-details-marker { display: none; }
   .trace-cmd-row--toggle::marker { content: ''; }
-  .trace-step--has-output:hover .trace-cmd-row--toggle {
-    background: color-mix(in srgb, var(--step-tone) 6%, transparent);
-  }
   .trace-cmd-icon {
     flex-shrink: 0;
-    width: 22px; height: 22px;
-    display: grid; place-items: center;
-    border-radius: 6px;
+    width: 14px; height: 14px;
+    display: inline-grid; place-items: center;
     color: var(--step-tone);
-    background: color-mix(in srgb, var(--step-tone) 14%, transparent);
-    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--step-tone) 22%, transparent);
+    background: transparent;
+    box-shadow: none;
+    /* Lift slightly so SVG aligns with text baseline. */
+    transform: translateY(2px);
   }
-  .trace-cmd-icon svg { width: 13px; height: 13px; }
+  .trace-cmd-icon svg { width: 12px; height: 12px; }
   .trace-cmd-label {
     flex-shrink: 0;
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--step-tone);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    line-height: 1.2;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-2);
+    text-transform: lowercase;
+    letter-spacing: 0;
+    line-height: 1.55;
   }
   .trace-cmd-target {
     flex: 1; min-width: 0;
     font-size: 12px;
-    color: var(--text-0);
+    color: var(--text-1);
     background: transparent;
     border: none;
     padding: 0;
@@ -1090,9 +1088,8 @@
     text-align: left;
     unicode-bidi: plaintext;
   }
-  /* When the card is open, drop the truncation so the user sees the
-     entire command above the output — they clicked precisely because
-     they wanted the full picture. */
+  /* When the row is open, drop the truncation so the user sees the
+     entire command above the output. */
   .trace-step[open] .trace-cmd-target {
     direction: ltr;
     white-space: pre-wrap;
@@ -1104,11 +1101,11 @@
     flex-shrink: 0;
     font-size: 11px;
     color: var(--text-mute);
-    line-height: 1.4;
+    line-height: 1.55;
   }
   .trace-cmd-meta {
     flex-shrink: 0;
-    font-size: 10px;
+    font-size: 10.5px;
     color: var(--text-mute);
     margin-left: auto;
     padding-left: 6px;
@@ -1118,8 +1115,9 @@
     display: inline-grid; place-items: center;
     color: var(--text-mute);
     transition: transform 140ms;
+    opacity: 0.6;
   }
-  .trace-step[open] .trace-cmd-caret { transform: rotate(180deg); }
+  .trace-step[open] .trace-cmd-caret { transform: rotate(180deg); opacity: 0.9; }
   /* Per-kind hue overrides. Read = info blue, mutations = warm
      editor-orange, search = mint, web = teal, mcp = lavender,
      cwd/commit/pr = jira blue. Keeps the sequence scannable
