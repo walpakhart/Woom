@@ -22,6 +22,7 @@
     type SlashCommand
   } from '$lib/services/slashCommands';
   import { skillsState, refreshSkills, type Skill } from '$lib/state/skills.svelte';
+  import { sddState, toggleSddLibrary } from '$lib/state/sdd.svelte';
   import { statuslineState } from '$lib/state/statusline.svelte';
 
   type Kind = 'claude' | 'cursor';
@@ -1020,6 +1021,23 @@
             <span class="cmp-sdd-glyph">SDD</span>
           </button>
 
+          <!-- Library toggle — opens / closes the inline list of every
+               SDD workspace on disk. Lets the user revisit past specs,
+               see phase progress, re-open a workspace into the current
+               chat, or discard one. Pure UI toggle; no side effects. -->
+          <button
+            class="cmp-sdd-btn"
+            class:cmp-sdd-btn--active={sess && sddState.libraryOpenBySession[sess.id]}
+            onclick={() => {
+              if (!sess) return;
+              toggleSddLibrary(sess.id);
+            }}
+            aria-label="Toggle SDD spec history"
+            title="SDD history — list of every spec/plan in the temp workspaces, with phase status + re-open."
+          >
+            <span class="cmp-sdd-glyph">HISTORY</span>
+          </button>
+
           <!-- Permission mode toggle. Single button, two states. When
                `default`, renders a quiet dot — barely visible at rest
                so the composer footer doesn't shout. When `plan`, the
@@ -1715,6 +1733,11 @@
   .cmp-sdd-btn:hover {
     background: color-mix(in srgb, var(--accent) 14%, transparent);
     border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+    color: var(--accent-bright);
+  }
+  .cmp-sdd-btn--active {
+    background: color-mix(in srgb, var(--accent) 22%, transparent);
+    border-color: color-mix(in srgb, var(--accent) 50%, transparent);
     color: var(--accent-bright);
   }
   .cmp-sdd-glyph {

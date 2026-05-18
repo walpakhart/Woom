@@ -91,6 +91,11 @@ interface SddStoreShape {
    *  ~500ms of our own save — otherwise our own write round-trip
    *  would false-positive as "agent rewrote it". */
   lastSelfSaveAt: Record<string, number>;
+  /** Per-session toggle for the library panel. When true, ChatThread
+   *  renders a `SddLibraryCard` listing every workspace on disk so
+   *  the user can re-open / discard / inspect past specs. Pure UI
+   *  state — not persisted, resets on app restart. */
+  libraryOpenBySession: Record<string, boolean>;
   /** Deferred silent SDD prompts, keyed by SESSION id. Populated when
    *  the user clicks Approve/Continue while the chat session is still
    *  mid-turn (e.g. agent's previous reply hasn't fully streamed in).
@@ -108,8 +113,23 @@ export const sddState = $state<SddStoreShape>({
   globalUnlisten: null,
   undoByWorkspace: {},
   lastSelfSaveAt: {},
+  libraryOpenBySession: {},
   pendingSilentBySession: {},
 });
+
+/** Toggle the library panel for a session. */
+export function toggleSddLibrary(sessionId: string): void {
+  sddState.libraryOpenBySession[sessionId] = !sddState.libraryOpenBySession[sessionId];
+}
+
+/** Bind an existing workspace to a session — used when the user
+ *  re-opens a workspace from the library. Replaces whatever was
+ *  active (if anything) without deleting it; the prior workspace
+ *  stays on disk and remains discoverable via the library list. */
+export function bindWorkspaceToSession(sessionId: string, workspaceId: string): void {
+  sddState.workspaceBySession[sessionId] = workspaceId;
+  sddState.libraryOpenBySession[sessionId] = false;
+}
 
 /** Park a silent SDD prompt that couldn't fire right now (session
  *  busy). The post-turn drain in `+page.svelte` picks it up + fires
