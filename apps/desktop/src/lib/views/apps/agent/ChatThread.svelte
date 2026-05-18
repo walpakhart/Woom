@@ -11,8 +11,7 @@
   import ClaudeActionCard from '$lib/components/agent/ClaudeActionCard.svelte';
   import QuestionCard from '$lib/components/agent/QuestionCard.svelte';
   import SddCard from '$lib/components/agent/SddCard.svelte';
-  import SddLibraryCard from '$lib/components/agent/SddLibraryCard.svelte';
-  import { workspaceForSession, sddState } from '$lib/state/sdd.svelte';
+  import { workspaceForSession } from '$lib/state/sdd.svelte';
   import CardContextMenu, { type MenuItem } from '$lib/views/apps/_shared/CardContextMenu.svelte';
   import { notify } from '$lib/state/toaster.svelte';
   import { setDragPayload } from '$lib/state/drag.svelte';
@@ -759,11 +758,6 @@
            trailing block at the bottom of the thread. SDD card +
            action cards (question / propose_*) both render here. -->
       {#if i === lastVisibleIndex}
-        {#if sddState.libraryOpenBySession[sess.id]}
-          <div class="action-wrap">
-            <SddLibraryCard sessionId={sess.id} />
-          </div>
-        {/if}
         {#if workspaceForSession(sess.id)}
           {@const sddWs = workspaceForSession(sess.id)}
           {#if sddWs}

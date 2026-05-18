@@ -22,7 +22,6 @@
     type SlashCommand
   } from '$lib/services/slashCommands';
   import { skillsState, refreshSkills, type Skill } from '$lib/state/skills.svelte';
-  import { sddState, toggleSddLibrary } from '$lib/state/sdd.svelte';
   import { statuslineState } from '$lib/state/statusline.svelte';
 
   type Kind = 'claude' | 'cursor';
@@ -1021,22 +1020,11 @@
             <span class="cmp-sdd-glyph">SDD</span>
           </button>
 
-          <!-- Library toggle — opens / closes the inline list of every
-               SDD workspace on disk. Lets the user revisit past specs,
-               see phase progress, re-open a workspace into the current
-               chat, or discard one. Pure UI toggle; no side effects. -->
-          <button
-            class="cmp-sdd-btn"
-            class:cmp-sdd-btn--active={sess && sddState.libraryOpenBySession[sess.id]}
-            onclick={() => {
-              if (!sess) return;
-              toggleSddLibrary(sess.id);
-            }}
-            aria-label="Toggle SDD spec history"
-            title="SDD history — list of every spec/plan in the temp workspaces, with phase status + re-open."
-          >
-            <span class="cmp-sdd-glyph">HISTORY</span>
-          </button>
+          <!-- SDD history moved to ChatHeader chip (next to memory).
+               Removed the [HISTORY] composer button on user feedback:
+               "I thought history would be where memory is in the
+               header so it opens a menu". -->
+
 
           <!-- Permission mode toggle. Single button, two states. When
                `default`, renders a quiet dot — barely visible at rest

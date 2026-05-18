@@ -14,6 +14,13 @@
   import { invoke } from '@tauri-apps/api/core';
   import { notify } from '$lib/state/toaster.svelte';
   import { tick, untrack } from 'svelte';
+  import {
+    sddState,
+    bindWorkspaceToSession,
+    discardSdd,
+    type SddWorkspace,
+    type SddPhase,
+  } from '$lib/state/sdd.svelte';
 
   type Kind = 'claude' | 'cursor';
 
@@ -204,6 +211,58 @@
     }
   }
 
+  /* SDD history popover — same chassis as the memory chip but driven
+   *  by `sddState.workspaces`. Click toggles, outside-click / Escape
+   *  close. Row click rebinds the workspace to the current session
+   *  (SddCard re-renders below). Replaces the inline `SddLibraryCard`
+   *  + composer `[HISTORY]` button approach — user feedback: history
+   *  belongs in the header alongside memory, NOT as a floating inline
+   *  card in the message stream. */
+  let sddPopoverOpen = $state(false);
+  let sddPopoverEl = $state<HTMLDivElement | null>(null);
+
+  function toggleSddPopover() {
+    sddPopoverOpen = !sddPopoverOpen;
+  }
+  function closeSddPopover() {
+    sddPopoverOpen = false;
+  }
+  function sddStageLabel(w: SddWorkspace): string {
+    const s = w.stage;
+    switch (s.kind) {
+      case 'drafting': return 'drafting spec';
+      case 'spec_ready': return 'spec ready';
+      case 'planning': return 'drafting plan';
+      case 'plan_ready': return 'plan ready';
+      case 'phase_running': return `phase ${s.phase} running`;
+      case 'phase_done': return `phase ${s.phase} done`;
+      case 'complete': return 'complete';
+      case 'paused': return 'paused';
+      case 'stopped': return 'stopped';
+      case 'failed': return 'failed';
+    }
+  }
+  function sddStageTone(w: SddWorkspace): 'live' | 'ok' | 'warn' | 'dim' {
+    const k = w.stage.kind;
+    if (k === 'drafting' || k === 'planning' || k === 'phase_running') return 'live';
+    if (k === 'failed' || k === 'stopped') return 'warn';
+    if (k === 'complete') return 'ok';
+    return 'dim';
+  }
+  function sddPhaseProgress(w: SddWorkspace): string {
+    if (w.phases.length === 0) return '';
+    const done = w.phases.filter((ph: SddPhase) => ph.status === 'done').length;
+    return `${done}/${w.phases.length}`;
+  }
+  function sddOpenWorkspace(workspaceId: string) {
+    if (!sess) return;
+    bindWorkspaceToSession(sess.id, workspaceId);
+    closeSddPopover();
+  }
+  async function sddDiscardWorkspace(workspaceId: string) {
+    await discardSdd(workspaceId);
+  }
+
   function memDate(epoch: number): string {
     const d = new Date(epoch * 1000);
     const yyyy = d.getFullYear();
@@ -346,6 +405,67 @@
       {/if}
     </div>
   {/if}
+
+  <!-- SDD history chip — same chassis as the memory chip. Click
+       toggles a popover listing every SDD workspace on disk with
+       its stage, phase progress, and per-row open / discard. Replaces
+       the inline library card; history now lives next to memory,
+       NOT in the message stream. -->
+  <div class="ch-mem-wrap">
+    <button
+      class="ch-mem"
+      class:ch-mem--open={sddPopoverOpen}
+      onclick={toggleSddPopover}
+      title="SDD workspace history"
+      aria-label="Show SDD workspace history"
+      aria-expanded={sddPopoverOpen}
+    >
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <rect x="3" y="3" width="18" height="18" rx="2"/>
+        <path d="M3 9h18M9 21V9"/>
+      </svg>
+      <span class="ch-mem-count">{sddState.workspaces.length}</span>
+    </button>
+    {#if sddPopoverOpen}
+      <div bind:this={sddPopoverEl} class="ch-mem-pop" role="dialog" aria-label="SDD workspace history">
+        <div class="ch-mem-pop-head">
+          <span class="ch-mem-pop-title">
+            {sddState.workspaces.length} SDD workspace{sddState.workspaces.length === 1 ? '' : 's'}
+          </span>
+          <button class="ch-mem-pop-close" onclick={closeSddPopover} aria-label="Close">
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+              <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
+        </div>
+        <div class="ch-mem-pop-list">
+          {#if sddState.workspaces.length === 0}
+            <div class="ch-sdd-empty">No specs yet. Type <span class="mono">/sdd &lt;ask&gt;</span> to start one.</div>
+          {:else}
+            {#each sddState.workspaces as w (w.id)}
+              {@const activeWid = sess ? sddState.workspaceBySession[sess.id] : null}
+              {@const isActive = w.id === activeWid}
+              <div class="ch-sdd-row" data-tone={sddStageTone(w)} class:active={isActive}>
+                <button class="ch-sdd-row-main" type="button" onclick={() => sddOpenWorkspace(w.id)} title="Open this workspace in the current chat">
+                  <span class="ch-sdd-stage mono">{sddStageLabel(w)}</span>
+                  <span class="ch-sdd-ask">{w.user_prompt || '(no ask)'}</span>
+                  {#if sddPhaseProgress(w)}
+                    <span class="ch-sdd-prog mono">{sddPhaseProgress(w)}</span>
+                  {/if}
+                </button>
+                <button class="ch-sdd-discard" type="button" onclick={() => void sddDiscardWorkspace(w.id)} title="Delete this workspace">
+                  <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <polyline points="3 6 5 6 21 6"/><path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6"/>
+                  </svg>
+                </button>
+              </div>
+            {/each}
+          {/if}
+        </div>
+      </div>
+    {/if}
+  </div>
+
   {#if sess?.sending}
     <span class="ch-running">
       <span class="ch-pip"></span>
@@ -607,6 +727,70 @@
     flex-direction: column;
     gap: 4px;
   }
+  /* SDD history rows — same popover chassis as memory but denser
+   *  (one line per workspace, click = re-bind to current session,
+   *  trash glyph = discard). Active workspace highlighted via
+   *  accent-bright label color. */
+  .ch-sdd-empty {
+    padding: 16px 12px;
+    color: var(--text-mute);
+    font-size: 12px;
+    font-style: italic;
+    text-align: center;
+  }
+  .ch-sdd-row {
+    display: flex; align-items: center;
+    gap: 6px;
+    padding: 4px 6px;
+    border-radius: 5px;
+    transition: background 120ms;
+  }
+  .ch-sdd-row:hover { background: var(--bg-2); }
+  .ch-sdd-row.active .ch-sdd-stage { color: var(--accent-bright); font-weight: 600; }
+  .ch-sdd-row-main {
+    flex: 1; min-width: 0;
+    display: inline-flex; align-items: baseline; gap: 10px;
+    padding: 2px 0;
+    background: transparent; border: 0;
+    color: var(--text-1);
+    cursor: pointer;
+    text-align: left;
+    font: inherit;
+  }
+  .ch-sdd-stage {
+    flex-shrink: 0;
+    font-size: 10px;
+    color: var(--text-mute);
+    min-width: 100px;
+  }
+  .ch-sdd-row[data-tone="live"] .ch-sdd-stage { color: #66d39a; }
+  .ch-sdd-row[data-tone="warn"] .ch-sdd-stage { color: #e0b16c; }
+  .ch-sdd-row[data-tone="ok"] .ch-sdd-stage { color: var(--accent-bright); }
+  .ch-sdd-ask {
+    flex: 1; min-width: 0;
+    font-size: 12px;
+    color: var(--text-1);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .ch-sdd-prog {
+    flex-shrink: 0;
+    font-size: 10px;
+    color: var(--text-mute);
+  }
+  .ch-sdd-discard {
+    width: 22px; height: 22px;
+    display: grid; place-items: center;
+    background: transparent; border: 0;
+    color: var(--text-mute);
+    border-radius: 4px;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: color 120ms, background 120ms;
+  }
+  .ch-sdd-discard:hover { color: var(--error); background: var(--bg-3); }
+
   .ch-mem-row {
     border: 1px solid var(--border);
     border-radius: 6px;
