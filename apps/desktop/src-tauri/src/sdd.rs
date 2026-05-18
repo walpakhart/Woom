@@ -120,6 +120,11 @@ pub struct SddWorkspace {
     pub spec_body: Option<String>,
     pub plan_path: Option<String>,
     pub plan_body: Option<String>,
+    /// Final wrap-up written by the agent after every phase is done.
+    /// Source: `<workspace>/SUMMARY.md`. Optional — older workspaces
+    /// (or workflows the user discarded mid-flight) don't have one.
+    pub summary_path: Option<String>,
+    pub summary_body: Option<String>,
     pub phases: Vec<SddPhase>,
     pub created_at: u64,
     pub updated_at: u64,
@@ -302,6 +307,19 @@ fn rebuild_from_disk(workspace: &mut SddWorkspace) -> Result<(), String> {
     } else {
         workspace.plan_path = None;
         workspace.plan_body = None;
+    }
+
+    // --- summary (post-completion wrap-up) ---
+    let summary_path = root.join("SUMMARY.md");
+    if summary_path.exists() {
+        let raw = std::fs::read_to_string(&summary_path)
+            .map_err(|e| format!("read summary: {e}"))?;
+        let (_, body) = parse_frontmatter(&raw);
+        workspace.summary_path = Some(summary_path.to_string_lossy().into_owned());
+        workspace.summary_body = Some(body);
+    } else {
+        workspace.summary_path = None;
+        workspace.summary_body = None;
     }
 
     // --- phases ---
@@ -583,6 +601,7 @@ fn days_to_ymd(z: i64) -> (i32, u32, u32) {
 const SPEC_TEMPLATE_PROMPT: &str = include_str!("./sdd_prompts/spec.md");
 const PLAN_TEMPLATE_PROMPT: &str = include_str!("./sdd_prompts/plan.md");
 const PHASE_TEMPLATE_PROMPT: &str = include_str!("./sdd_prompts/phase.md");
+const SUMMARY_TEMPLATE_PROMPT: &str = include_str!("./sdd_prompts/summary.md");
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -590,6 +609,7 @@ pub enum SddPromptKind {
     Spec,
     Plan,
     Phase,
+    Summary,
 }
 
 // ---------------------------------------------------------------------------
@@ -628,6 +648,8 @@ pub async fn sdd_start(
         spec_body: None,
         plan_path: None,
         plan_body: None,
+        summary_path: None,
+        summary_body: None,
         phases: Vec::new(),
         created_at: now_ms(),
         updated_at: now_ms(),
@@ -700,6 +722,8 @@ pub async fn sdd_hydrate(
             spec_body: None,
             plan_path: None,
             plan_body: None,
+            summary_path: None,
+            summary_body: None,
             phases: Vec::new(),
             created_at: now_ms(),
             updated_at: now_ms(),
@@ -934,6 +958,7 @@ pub async fn sdd_prompt(kind: SddPromptKind) -> Result<String, String> {
         SddPromptKind::Spec => SPEC_TEMPLATE_PROMPT,
         SddPromptKind::Plan => PLAN_TEMPLATE_PROMPT,
         SddPromptKind::Phase => PHASE_TEMPLATE_PROMPT,
+        SddPromptKind::Summary => SUMMARY_TEMPLATE_PROMPT,
     };
     Ok(s.to_string())
 }

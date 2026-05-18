@@ -59,6 +59,10 @@ export interface SddWorkspace {
   spec_body: string | null;
   plan_path: string | null;
   plan_body: string | null;
+  /** Final wrap-up at `<workspace>/SUMMARY.md` — populated after every
+   *  phase is done. Null on running / paused / failed workflows. */
+  summary_path: string | null;
+  summary_body: string | null;
   phases: SddPhase[];
   created_at: number;
   updated_at: number;
@@ -386,7 +390,7 @@ export async function discardSdd(id: string): Promise<void> {
 
 // --- Prompt assembly -------------------------------------------------
 
-type PromptKind = 'spec' | 'plan' | 'phase';
+type PromptKind = 'spec' | 'plan' | 'phase' | 'summary';
 
 /** Fetch a prompt template from the Rust side. Templates are embedded
  *  via `include_str!` at build time so they ship with the binary. */
@@ -435,6 +439,15 @@ export async function buildPromptForStage(ws: SddWorkspace): Promise<string | nu
         phase_file: `${next.slug}.md`,
         retries_max: '1',
       });
+    }
+    case 'complete': {
+      /* Workflow finished — agent writes the final wrap-up.
+       *  Returned ONLY if no SUMMARY.md exists yet, so the prompt
+       *  fires once per workspace. Caller (orchestrator post-turn
+       *  hook) detects this and silently sends it. */
+      if (ws.summary_body) return null;
+      const tpl = await fetchPrompt('summary');
+      return interpolate(tpl, { workspace_root: root, user_prompt: ws.user_prompt });
     }
     case 'phase_running':
       return null; // already in flight

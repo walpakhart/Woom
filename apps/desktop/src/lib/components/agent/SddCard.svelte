@@ -86,6 +86,16 @@
     if (p.workspace.stage.kind !== lastStageKind) {
       lastStageKind = p.workspace.stage.kind;
       advanceClicked = false;
+      /* Auto-open the body section when the workflow completes so
+       *  the user doesn't have to chevron-expand to see the final
+       *  summary. Mirror behaviour for Failed so the failure
+       *  reason / last phase context is visible immediately. */
+      if (
+        p.workspace.stage.kind === 'complete' ||
+        p.workspace.stage.kind === 'failed'
+      ) {
+        bodyOpen = true;
+      }
     }
   });
 
@@ -215,10 +225,16 @@
       if (ph) return { title: `phases/${ph.slug}.md`, markdown: ph.body };
     }
     if (stage.kind === 'complete') {
+      /* Prefer the agent's wrap-up (SUMMARY.md) when present — it's
+       *  the curated digest. Fall back to concatenated phase
+       *  summaries while the summary is still being written. */
+      if (p.workspace.summary_body) {
+        return { title: 'SUMMARY.md', markdown: p.workspace.summary_body };
+      }
       const all = p.workspace.phases
         .map((ph) => `### Phase ${ph.number}: ${ph.title}\n\n${ph.summary ?? '_no summary written_'}\n`)
         .join('\n');
-      return { title: 'all phases', markdown: all || '_no phase summaries_' };
+      return { title: 'all phases', markdown: all || '_no phase summaries — waiting for wrap-up…_' };
     }
     return null;
   }

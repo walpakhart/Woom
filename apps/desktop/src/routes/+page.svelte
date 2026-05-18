@@ -2999,7 +2999,21 @@
      *  update the reactive store. */
     {
       const sddWs = workspaceForSession(id);
-      if (sddWs) void refreshSdd(sddWs.id);
+      if (sddWs) {
+        void refreshSdd(sddWs.id).then(async (fresh) => {
+          /* Auto-fire the workflow summary once the last phase
+           *  completes. `buildPromptForStage` returns the summary
+           *  template only when stage='complete' AND no SUMMARY.md
+           *  exists yet — so this fires exactly once per workspace.
+           *  Silent send, same lane as Approve clicks. */
+          if (!fresh) return;
+          if (fresh.stage.kind !== 'complete') return;
+          if (fresh.summary_body) return;
+          const { buildPromptForStage } = await import('$lib/state/sdd.svelte');
+          const prompt = await buildPromptForStage(fresh);
+          if (prompt) await onSddAdvance(id, prompt);
+        });
+      }
     }
     /* Stop hook — fires on every normal turn completion (errored OR
        not). Hooks can use this for notifications, log archival, or
