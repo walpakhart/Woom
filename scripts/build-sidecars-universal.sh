@@ -8,6 +8,10 @@
 # Produces:
 #   apps/desktop/src-tauri/binaries/<name>-aarch64-apple-darwin
 #   apps/desktop/src-tauri/binaries/<name>-x86_64-apple-darwin
+#   apps/desktop/src-tauri/binaries/<name>-universal-apple-darwin  (lipo of the two)
+#
+# Tauri 2.x does NOT auto-lipo sidecars when bundling for universal-apple-darwin —
+# it looks for a single <name>-universal-apple-darwin file. So we lipo here.
 #
 # Requires rustup with both `aarch64-apple-darwin` and `x86_64-apple-darwin`
 # targets installed (added on demand below).
@@ -43,4 +47,14 @@ for triple in "${TARGETS[@]}"; do
     chmod +x "$dst"
     echo "  ✓ $name → $dst"
   done
+done
+
+echo "==> lipo per-arch sidecars into universal-apple-darwin"
+for name in "${SIDECARS[@]}"; do
+  arm="$BINARIES_DIR/$name-aarch64-apple-darwin"
+  x86="$BINARIES_DIR/$name-x86_64-apple-darwin"
+  uni="$BINARIES_DIR/$name-universal-apple-darwin"
+  lipo -create -output "$uni" "$arm" "$x86"
+  chmod +x "$uni"
+  echo "  ✓ $name → $uni"
 done
