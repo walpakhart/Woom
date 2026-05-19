@@ -109,7 +109,7 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          pnpm sidecars:release
+          pnpm sidecars:release:universal
           pnpm --filter @woom/desktop tauri build --target universal-apple-darwin
 
       - name: Locate DMG
