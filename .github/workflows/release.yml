@@ -128,7 +128,11 @@ jobs:
           # manifest references the DMG directly, so we sign it explicitly
           # here with the same ed25519 key. Produces Woom_<ver>_universal.dmg.sig
           # next to the DMG — exactly where make-manifest.mjs expects it.
-          DMG_PATH=$(ls apps/desktop/src-tauri/target/universal-apple-darwin/release/bundle/dmg/Woom_${VERSION}_*.dmg | head -1)
+          # Absolute path — `pnpm --filter @woom/desktop exec` runs the
+          # command with cwd switched to `apps/desktop/`, which breaks
+          # any relative path resolved from repo root.
+          DMG_PATH="$PWD/apps/desktop/src-tauri/target/universal-apple-darwin/release/bundle/dmg/Woom_${VERSION}_universal.dmg"
+          test -f "$DMG_PATH" || { echo "::error::DMG not found at $DMG_PATH"; exit 1; }
           # `tauri signer sign` accepts the key contents directly via
           # --private-key, plus password via --password (empty allowed).
           # It writes <DMG_PATH>.sig as a sibling.
