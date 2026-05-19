@@ -11,7 +11,6 @@ dist/
 **/src-tauri/target/
 **/src-tauri/gen/schemas/
 apps/desktop/src-tauri/binaries/woom-*
-apps/desktop/src-tauri/binaries/forgehold-*
 
 # Env + secrets
 .env
@@ -19,6 +18,13 @@ apps/desktop/src-tauri/binaries/forgehold-*
 .env.*.local
 *.pem
 *.p12
+
+# Tauri updater signing keys — generated locally by the maintainer.
+# The real key lives at ~/.tauri/woom-update.key (outside the repo);
+# these globs are defence-in-depth so a stray copy in the worktree
+# can't accidentally land in a commit. See docs/RELEASES.md.
+*.tauri.key
+*.tauri.key.pub
 
 # Editor
 .vscode/*

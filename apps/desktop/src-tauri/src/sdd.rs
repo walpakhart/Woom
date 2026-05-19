@@ -602,6 +602,7 @@ const SPEC_TEMPLATE_PROMPT: &str = include_str!("./sdd_prompts/spec.md");
 const PLAN_TEMPLATE_PROMPT: &str = include_str!("./sdd_prompts/plan.md");
 const PHASE_TEMPLATE_PROMPT: &str = include_str!("./sdd_prompts/phase.md");
 const SUMMARY_TEMPLATE_PROMPT: &str = include_str!("./sdd_prompts/summary.md");
+const AMEND_TEMPLATE_PROMPT: &str = include_str!("./sdd_prompts/amend.md");
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -610,6 +611,11 @@ pub enum SddPromptKind {
     Plan,
     Phase,
     Summary,
+    /// In-place correction of the active spec / plan / phase. Used
+    /// when the user types a delta mid-workflow instead of approving
+    /// the current artifact — the agent edits files in place rather
+    /// than scaffolding a fresh workspace.
+    Amend,
 }
 
 // ---------------------------------------------------------------------------
@@ -959,6 +965,7 @@ pub async fn sdd_prompt(kind: SddPromptKind) -> Result<String, String> {
         SddPromptKind::Plan => PLAN_TEMPLATE_PROMPT,
         SddPromptKind::Phase => PHASE_TEMPLATE_PROMPT,
         SddPromptKind::Summary => SUMMARY_TEMPLATE_PROMPT,
+        SddPromptKind::Amend => AMEND_TEMPLATE_PROMPT,
     };
     Ok(s.to_string())
 }

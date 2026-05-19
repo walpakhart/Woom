@@ -23,6 +23,7 @@ mod skills;
 mod statusline;
 mod terminal;
 mod terminal_bridge;
+mod updater;
 mod watch;
 mod worktree;
 
@@ -278,6 +279,7 @@ pub fn run() {
         .manage(terminal::TerminalRegistry::default())
         .manage(bg_tasks::BgRegistry::new())
         .manage(sdd::SddRegistry::new())
+        .manage(std::sync::Arc::new(updater::UpdaterState::new()))
         .manage(action_ipc_state())
         .invoke_handler(tauri::generate_handler![
             github_connect_pat,
@@ -501,6 +503,18 @@ pub fn run() {
             // system-prompt suffix on each turn.
             claudemd::claudemd_load,
             resolve_action_wait,
+            // Auto-updater state machine — wraps the Tauri updater
+            // plugin with persisted settings + a 6-hour background
+            // poll. See `updater.rs` module docs.
+            updater::updater_check_now,
+            updater::updater_get_state,
+            updater::updater_get_settings,
+            updater::updater_set_auto_check,
+            updater::updater_snooze,
+            updater::updater_skip_version,
+            updater::updater_clear_skip,
+            updater::updater_install_now,
+            updater::updater_install_on_quit,
         ])
         .setup(|app| {
             // Hooks config — load at startup so the frontend's first
@@ -567,6 +581,14 @@ pub fn run() {
                     claude::evict_stale_warm(warm_pool_handle.clone()).await;
                 }
             });
+            // Auto-updater poll task — fires an immediate startup
+            // check, then loops every 6 hours respecting the persisted
+            // `auto_check_enabled` toggle. Emits `update:state` events
+            // the frontend store subscribes to.
+            updater::spawn_poll(app.handle().clone());
+            // Inspect any pending-update slot from a prior session —
+            // detect success / surface failure / age out stale DMGs.
+            updater::detect_pending_outcome(&app.handle().clone());
             Ok(())
         })
         .build(tauri::generate_context!())
@@ -587,6 +609,25 @@ pub fn run() {
             // startup `kill_stale_sidecars` does, so the next launch
             // of Woom (or Cursor immediately reconnecting via
             // MCP) gets a clean slate.
+            if let tauri::RunEvent::ExitRequested { .. } = &event {
+                // Stage-on-quit swap (Phase 5 task 3). If the user
+                // queued an "Install on quit" earlier, the matching
+                // DMG sits at `pending_update_path`; spawn the swap
+                // script synchronously here so the host exit unblocks
+                // the `rm -rf $APP_INSTALL_PATH` step. We deliberately
+                // block on the script — it usually completes in
+                // <10s on a fast disk, and a longer hang is preferable
+                // to a half-applied install left to chance.
+                let settings = updater::load_settings(app);
+                if let Some(dmg) = settings.pending_update_path.as_ref() {
+                    let dmg_path = std::path::PathBuf::from(dmg);
+                    if dmg_path.exists() {
+                        if let Err(e) = updater::fire_swap_script_blocking(app, &dmg_path) {
+                            eprintln!("[woom] update swap failed during quit: {e}");
+                        }
+                    }
+                }
+            }
             if let tauri::RunEvent::Exit = event {
                 terminal_bridge::clear_port_file(app);
                 // Best-effort cleanup of the action-IPC socket so the

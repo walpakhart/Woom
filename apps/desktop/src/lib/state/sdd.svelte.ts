@@ -390,7 +390,7 @@ export async function discardSdd(id: string): Promise<void> {
 
 // --- Prompt assembly -------------------------------------------------
 
-type PromptKind = 'spec' | 'plan' | 'phase' | 'summary';
+type PromptKind = 'spec' | 'plan' | 'phase' | 'summary' | 'amend';
 
 /** Fetch a prompt template from the Rust side. Templates are embedded
  *  via `include_str!` at build time so they ship with the binary. */
@@ -467,5 +467,23 @@ export async function buildKickoffPrompt(
   return interpolate(tpl, {
     workspace_root: ws.root,
     user_prompt: ws.user_prompt,
+  });
+}
+
+/** Build the in-place amend prompt — used when the user wants to
+ *  correct the current spec / plan / phase instead of approving it.
+ *  The agent edits files under `ws.root` rather than scaffolding a
+ *  fresh workspace. Caller drops the result into the composer and
+ *  fires the normal send pipeline. */
+export async function buildAmendPrompt(
+  ws: SddWorkspace,
+  userChange: string
+): Promise<string> {
+  const tpl = await fetchPrompt('amend');
+  return interpolate(tpl, {
+    workspace_root: ws.root,
+    user_prompt: ws.user_prompt,
+    stage_kind: ws.stage.kind,
+    user_change: userChange.trim(),
   });
 }

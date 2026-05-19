@@ -1068,7 +1068,12 @@
   .trace {
     display: block;
     margin: 6px 0;
-    max-width: 720px;
+    /* Span the full message-body column so trace rows align with the
+     * Edit / Write diff cards rendered alongside — earlier 720px cap
+     * left bash / read / grep rows visually short of the right edge
+     * while edit-cards ran to the chat-column boundary, producing a
+     * jagged right-margin in the trace. Uniform width reads cleaner. */
+     width: 100%;
     border: 0;
     background: transparent;
     border-radius: 0;
@@ -1197,14 +1202,18 @@
   }
   .trace-cmd-target {
     flex: 1; min-width: 0;
-    /* Soft cap so the target never eats the whole row when the meta
-     *  + caret sit to the right. Caller's `title=` attr preserves
-     *  the full string for hover. */
-    max-width: 60ch;
+    /* Soft cap kept generous (~140ch) so long bash / grep targets
+     *  stay readable end-to-end before truncation kicks in. Caller's
+     *  `title=` attr preserves the full string for hover. */
+    max-width: 140ch;
     font-size: 12px;
-    color: var(--text-1);
-    background: transparent;
-    border: none;
+    /* Drop the inline-code chip chrome inherited from prose-level
+     *  `code` styling (bg + border). Trace targets read as bare
+     *  mono text — color carries the per-step tone via `--step-tone`
+     *  instead of a gray pill. */
+    color: var(--step-tone, var(--text-1));
+    background: transparent !important;
+    border: 0 !important;
     padding: 0;
     white-space: nowrap;
     overflow: hidden;

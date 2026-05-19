@@ -97,24 +97,35 @@
     }
   }
 
+  /** Prepend the original question to the resolve summary so the
+   *  trace step's collapsed body always reads "Q: <question> →
+   *  <answer>". Without this prefix the resolved trace just shows
+   *  "Chose: X" and the user (scrolling back through the thread)
+   *  has no clue WHAT they were asked about. We truncate the
+   *  question for compactness — full text still in the action
+   *  history on `p.action.question`. */
+  function summaryWithQuestion(answer: string): string {
+    const q = p.action.question.trim();
+    if (!q) return answer;
+    const compact = q.length > 140 ? q.slice(0, 140).trimEnd() + '…' : q;
+    return `Q: ${compact}\n→ ${answer}`;
+  }
+
   async function submit(): Promise<void> {
     if (!isPending) return;
     if (qk === 'text') {
       const t = otherText.trim();
       if (!t.length) return;
-      await resolveWith(t, [], t);
+      await resolveWith(summaryWithQuestion(t), [], t);
       return;
     }
     const labels = [...picked];
     const other = otherText.trim();
     if (labels.length === 0 && other.length === 0) return;
-    /* Summary fed back to the agent. Includes both clicked options
-     *  AND the free-form text when present, so the agent sees the
-     *  user's full intent — not just the chosen labels. */
     const parts: string[] = [];
     if (labels.length > 0) parts.push(`Chose: ${labels.join(', ')}`);
     if (other) parts.push(`Other: ${other}`);
-    await resolveWith(parts.join(' · '), labels, other);
+    await resolveWith(summaryWithQuestion(parts.join(' · ')), labels, other);
   }
 
   /** Confirm-card shortcut: click Yes / No and immediately resolve.
@@ -122,7 +133,7 @@
    *  click. */
   function confirm(answer: 'Yes' | 'No') {
     if (!isPending) return;
-    void resolveWith(answer, [answer]);
+    void resolveWith(summaryWithQuestion(answer), [answer]);
   }
 
   async function dismiss(): Promise<void> {

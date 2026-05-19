@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Woom",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "identifier": "com.woom.desktop",
   "build": {
     "beforeDevCommand": "pnpm dev",
@@ -48,7 +48,7 @@
       "binaries/woom-sentry",
       "binaries/woom-app"
     ],
-    "resources": ["../../../docs/*.md"],
+    "resources": ["../../../docs/*.md", "resources/swap-binary.sh"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -62,7 +62,7 @@
     "longDescription": "Woom is a focused, warm-lit workspace for software work. Tickets, pull requests, errors, agents, code, canvas, terminal — each gets a full window when it has your attention, and they all link together when you need them to.",
     "macOS": {
       "minimumSystemVersion": "13.0",
-      "entitlements": null,
+      "entitlements": "entitlements.plist",
       "exceptionDomain": null,
       "frameworks": null,
       "providerShortName": null,
@@ -74,9 +74,9 @@
       "active": true,
       "dialog": false,
       "endpoints": [
-        "https://woom.app/updates/{{target}}/{{arch}}/{{current_version}}"
+        "https://github.com/walpakhart/Woom/releases/latest/download/latest-mac.json"
       ],
-      "pubkey": "PLACEHOLDER_REPLACE_WITH_TAURI_SIGNER_OUTPUT"
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDg4RDU2MkE5Q0QyODZGREMKUldUY2J5ak5xV0xWaUVneDNlVjBlVmlIUFY3ai9VNDJtVHpKRDh3Rmh1LzBrVGgvQTRHNGNnV1AK"
     }
   }
 }

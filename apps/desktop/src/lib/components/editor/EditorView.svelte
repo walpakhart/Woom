@@ -1402,6 +1402,7 @@
                   class="ev-apply-pop"
                   style:left="{selection.anchor.x}px"
                   style:top="{selection.anchor.y}px"
+                  style:max-width="calc(100vw - {selection.anchor.x}px - 24px)"
                   role="toolbar"
                   aria-label="Apply selection to agent"
                 >
@@ -2129,7 +2130,12 @@
     border: 1px solid var(--border-hi);
     border-radius: 7px;
     box-shadow: 0 6px 20px -6px rgba(0, 0, 0, 0.55), 0 1px 0 0 rgba(0, 0, 0, 0.1);
-    white-space: nowrap;
+    /* Inline `max-width` (computed against the anchor's viewport x)
+     * keeps the popover from running past the editor's right edge
+     * when the session list is long. Buttons inside ellipsize their
+     * labels via `min-width: 0` + `text-overflow: ellipsis` below. */
+    min-width: 0;
+    overflow: hidden;
   }
   .ev-apply-pop-btn {
     display: inline-flex; align-items: center; gap: 6px;
@@ -2141,6 +2147,17 @@
     font-size: 12px; font-weight: 500;
     cursor: pointer;
     transition: background 100ms, border-color 100ms, color 100ms;
+    /* Cap each pill so 5+ sessions don't all fight to display full
+     * names. The leading icon + `Apply to ` prefix stays full-strength;
+     * the trailing session label ellipses when needed. */
+    min-width: 0;
+    max-width: 220px;
+  }
+  .ev-apply-pop-btn > span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
   }
   .ev-apply-pop-btn:hover {
     background: var(--accent-soft);

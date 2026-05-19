@@ -36,7 +36,7 @@ that:
 3. Stays alive across sessions — every canvas has an id, a name, a
    thumbnail; you can keep many canvases side-by-side, switch, archive,
    resume.
-4. Connects to the rest of Forge: drag a Jira ticket from `JiraColumn`
+4. Connects to the rest of Woom: drag a Jira ticket from `JiraColumn`
    onto a canvas → it lands as a **live card** that auto-refreshes from
    the API, like the inbox version. Drop a file from the editor's file
    tree → file card with click-to-open.
@@ -52,7 +52,7 @@ that:
    (tool calls).
 4. Multi-canvas: a library of canvases per workbench, create / open /
    rename / archive / duplicate / export.
-5. Live integration with existing Forge objects: drag-from-other-columns
+5. Live integration with existing Woom objects: drag-from-other-columns
    produces live cards that re-render when the source updates.
 6. Agent ↔ canvas link is per-session, set by drag (same UX as the
    editor link). A linked agent's MCP tools target that canvas.
@@ -65,12 +65,12 @@ that:
 ### 1.3 Non-Goals (v1)
 
 - **Real-time multi-user collaboration.** Canvas is single-player in v1
-  exactly like the rest of Forge. Workspace sharing / CRDT is post-v0.3
+  exactly like the rest of Woom. Workspace sharing / CRDT is post-v0.3
   alongside the team layer.
 - **Vector tools beyond what the agent needs.** No bezier handles, no
   pen tool with anchor editing, no boolean ops. We give: rectangles,
   ellipses, arrows, text, sticky notes, freehand strokes,
-  rendered-from-source diagrams (Mermaid / DOT / PlantUML), and Forge
+  rendered-from-source diagrams (Mermaid / DOT / PlantUML), and Woom
   live cards. That's the full v1 catalog.
 - **Image editing.** Pasted images are placed and resized but not
   cropped, masked, or filtered.
@@ -83,7 +83,7 @@ that:
 
 ## 2. Core Concepts
 
-Three entities make up a canvas. Mirrors how the rest of Forge models
+Three entities make up a canvas. Mirrors how the rest of Woom models
 things — flat, plain, no inheritance.
 
 ### 2.1 Canvas
@@ -307,8 +307,7 @@ The user said: "распологать как-то по пикселям вну�
 
 ### 4.3 Grid
 
-- Default grid step is 8 canvas px (matches the design system's 4px /
-  8px spacing scale from [UI.md §2.3](UI.md)).
+- Default grid step is 8 canvas px (matches the design system's 4 / 8 px spacing scale).
 - Rendered as dots (default) or lines (`background: 'grid'`).
 - Major grid mark every 8 grid steps (64 px) with brighter dot.
 - The grid step is per-canvas so a presentation canvas can use 16, a
@@ -379,7 +378,7 @@ Each kind defines its `props` shape. Below: the contract per kind.
 ```ts
 { fill: string|null; stroke: string|null; strokeWidth: 1|2|3; radius: number; }
 ```
-Default radius = 6 (chip), 10 (card), 14 (panel) per UI.md §2.3 — exposed
+Default radius = 6 (chip), 10 (card), 14 (panel) — exposed
 as named tokens to the agent (`radius: 'chip' | 'card' | 'panel' | <num>`).
 
 #### `ellipse`
@@ -489,9 +488,9 @@ for batch transforms.
 {}
 ```
 
-### 5.4 Forge live cards
+### 5.4 Woom live cards
 
-These are **projections of Forge inbox objects** — same data the
+These are **projections of Woom inbox objects** — same data the
 [GithubColumn](../apps/desktop/src/lib/components/workbench/GithubColumn.svelte)
 and [JiraColumn](../apps/desktop/src/lib/components/workbench/JiraColumn.svelte)
 render, just placed on the canvas. They auto-refresh on the same poll
@@ -565,7 +564,7 @@ from. Useful for "this is what the agent decided at step 3".
 Built-in, deterministic, exposed both as toolbar buttons and agent
 tools. Every algorithm gets a **selection** (or "all root shapes" if
 no selection) and produces new positions. Animations use the `gentle`
-spring preset from [UI.md §2.5](UI.md).
+spring preset .
 
 | Algorithm  | Inputs                            | Best for                          |
 |------------|-----------------------------------|-----------------------------------|
@@ -622,7 +621,7 @@ adds shapes off-screen and wants to draw the user's eye.
 
 ## 9. Drag-and-Drop Integration
 
-Canvas is a **drop target** for everything draggable in Forge. Drop
+Canvas is a **drop target** for everything draggable in Woom. Drop
 position becomes the new shape's center.
 
 | Source                    | Drop produces                                     |
@@ -648,7 +647,7 @@ Reverse — Canvas as a drag **source**:
   original ticket.
 
 Drop indicators reuse the existing accent-glow drop-zone style from
-[UI.md §4.3](UI.md).
+the design system.
 
 ---
 
@@ -995,7 +994,7 @@ migration with a confirm modal.
 
 ## 13. Keyboard
 
-Aligned with the rest of Forge ([UI.md](UI.md) — keyboard-first principle).
+Aligned with the rest of Woom.
 
 | Key                   | Action                                  |
 |-----------------------|-----------------------------------------|
@@ -1063,11 +1062,11 @@ Both are great. Both bring tradeoffs we don't want:
   but adds React + ReactDOM + tldraw bundle ≈ 600 KB gz). The tldraw
   store API is excellent for an agent (programmatic shape API, stable
   uuids, undo built-in) — the temptation is real. We pass because the
-  bundle cost violates Forge's existing budget and because the visual
+  bundle cost violates Woom's existing budget and because the visual
   language doesn't quite match (tldraw's defaults are bright; theming
   works but is friction).
 - **Excalidraw** has the wrong aesthetic — sketchy / hand-drawn — for
-  Forge's clean dark UI. Theming to "non-sketchy" fights the library.
+  Woom's clean dark UI. Theming to "non-sketchy" fights the library.
 
 ### 15.2 We build a Svelte-native renderer
 
@@ -1138,7 +1137,7 @@ Suggested milestones, sized for one engineer.
 - Library overlay (⌘P).
 - Archive / duplicate / export / import.
 
-### M-canvas-6 — Forge live cards (1 week)
+### M-canvas-6 — Woom live cards (1 week)
 
 - `jira-card`, `github-pr-card`, `github-issue-card`, `sentry-event-card`,
   `file-card`, `chat-message-card`.
@@ -1223,7 +1222,7 @@ Suggested milestones, sized for one engineer.
 - **Shape** — anything on a canvas with a bounding box.
 - **Edge** — connector between two shapes.
 - **Frame** — labeled rectangular region; children move with it.
-- **Live card** — shape that is a projection of a Forge object
+- **Live card** — shape that is a projection of a Woom object
   (Jira / PR / file / chat message), kept fresh from its source.
 - **Library** — the set of canvases for a workbench; persisted on disk.
 - **Agent link** — a `ClaudeSession` ↔ `Canvas` binding that exposes

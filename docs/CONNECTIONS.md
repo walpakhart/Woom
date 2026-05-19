@@ -11,7 +11,7 @@ the Connect view as "coming soon" placeholders only.
 > Woom's connection model is deliberately small. Tokens go in the
 > macOS Keychain. Status is a Tauri `invoke` per source — connected /
 > disconnected / connecting. There is no central OAuth roundtrip
-> infrastructure, and there never will be (`docs/ROADMAP_1.0.md §6`):
+> infrastructure, and there never will be:
 > GitHub uses a PAT, Jira uses email + API token, Sentry uses an
 > internal-integration token. PAT-only is the permanent shape of
 > Woom auth; we invest in token UX (rotation reminders, multi-
@@ -48,7 +48,7 @@ revocation path. No magic; no surprise re-auth roundtrips at runtime.
 ### 1.3 Non-Goals (v1)
 
 - **OAuth.** Permanent non-goal — every source is and stays token-
-  paste (`docs/ROADMAP_1.0.md §6`). Token UX investment instead:
+  paste. Token UX investment instead:
   scope guidance, rotation reminders, multi-account, diagnostics.
 - **Multiple accounts of the same source.** One GitHub, one Jira, one
   Sentry per Woom instance (multi-account is a 1.0 backlog

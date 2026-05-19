@@ -448,6 +448,39 @@
                   dashboard.
                 </p>
               </div>
+              <div class="wo-cap" data-tone="approval">
+                <div class="wo-cap-h">
+                  <span class="wo-cap-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5h7l4 4v10a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z"/><path d="M5 9v10a2 2 0 0 0 2 2h8"/><path d="M9 13h6M9 17h4"/></svg>
+                  </span>
+                  <span>SDD — Spec-Driven Development</span>
+                </div>
+                <p class="wo-cap-p">
+                  Type <span class="mono">/sdd &lt;task&gt;</span> in any chat.
+                  The agent drafts a spec, plans the work into phases,
+                  then executes each phase as a chained turn — pause,
+                  resume, or refine via the SDD card. Workspaces live
+                  in <span class="mono">~/Library/Application&nbsp;Support/com.woom.desktop/sdd-workspaces/</span>
+                  so you can pick them back up across sessions.
+                </p>
+              </div>
+              <div class="wo-cap" data-tone="recovery">
+                <div class="wo-cap-h">
+                  <span class="wo-cap-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>
+                  </span>
+                  <span>Auto-updates</span>
+                </div>
+                <p class="wo-cap-p">
+                  DMGs verified against an ed25519 public key baked
+                  into the binary. Settings → Updates shows
+                  current channel, last check, and the latest release
+                  notes. Choose <em>Install now</em> for an immediate
+                  relaunch or <em>Install on quit</em> to swap on next
+                  start. Snooze 24h or skip a specific version any
+                  time.
+                </p>
+              </div>
             </div>
 
             <div class="wo-row">

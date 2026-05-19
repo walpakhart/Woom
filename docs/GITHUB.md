@@ -67,7 +67,7 @@ clicking an item from the column or the tab opens the same component.
 - **Reactions UI.** API supports them but the app doesn't render them
   in v1.
 - **OAuth / GitHub Apps installation flow.** PAT only — by design
-  (`docs/ROADMAP_1.0.md §6`). Token UX investment goes into rotation
+ . Token UX investment goes into rotation
   reminders, multi-org PATs, and diagnostics instead.
 - **Server-side rate-limit batching.** We let it 403 and surface "rate
   limited" to the user.
@@ -373,7 +373,7 @@ Editor column or chat mention needs remote read access.
 ## 11. Authentication
 
 Only personal access tokens are supported. OAuth / GitHub App installs
-are a permanent non-goal (`docs/ROADMAP_1.0.md §6`); fine-grained PATs
+are a permanent non-goal; fine-grained PATs
 already give per-repo scope without the OAuth registration cost.
 
 ```rust

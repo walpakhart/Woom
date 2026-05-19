@@ -3,7 +3,7 @@ members = ["sidecars/woom-jira", "sidecars/woom-github", "sidecars/woom-memory",
 
 [package]
 name = "woom-desktop"
-version = "1.0.0"
+version = "0.1.0"
 description = "Woom — a focused, warm-lit workspace for software work"
 authors = ["Woom"]
 edition = "2021"
@@ -31,6 +31,8 @@ objc2-foundation = { version = "0.3", features = ["NSError", "NSString"] }
 objc2-local-authentication = { version = "0.3", features = ["LAContext", "LAError", "block2"] }
 block2 = "0.6"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+sha2 = "0.10"
+hex = "0.4"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "sync", "time"] }
 thiserror = "2"
 libc = "0.2"

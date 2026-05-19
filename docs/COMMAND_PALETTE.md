@@ -166,12 +166,12 @@ Section order is fixed by the order of `push` in the derivation. There
 is no relevance-based ranking; the user trusts the section ordering
 ("Views first, content last").
 
-This means a query of `"forge"` in a workspace with a "Forge"
+This means a query of `"forge"` in a workspace with a "Woom"
 workbench, the "forge" GitHub repo, multiple "forge" PRs, and several
 Jira tickets in projects starting with "FORGE-" will return rows
 ordered:
 
-1. Workbench "Forge" (if any).
+1. Workbench "Woom" (if any).
 2. Editor instances on `forge`.
 3. Non-editor columns linked to `forge`.
 4. GitHub repo `forge`.

@@ -6,13 +6,18 @@
   hardened runtime is opt-in and must be paired with notarization to
   get past Gatekeeper anyway).
 
-  The three flags below are the standard Tauri / WKWebView set:
+  The four flags below are the standard Tauri / WKWebView set:
     - allow-jit            : V8 JIT in the embedded webview
     - allow-unsigned-…     : legacy fallback for older macOS that don't
                              trust JIT-only signing
     - disable-library-     : load the externalBin sidecars + Tauri
       validation             frameworks without forcing each one to
                              share the parent's Team ID
+    - network.client       : Tauri updater fetches the JSON manifest +
+                             the DMG over HTTPS from GitHub Releases on
+                             startup. The hardened runtime blocks
+                             outbound sockets without this even though
+                             the webview's own fetches are allowed.
 -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -22,6 +27,8 @@
     <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
     <true/>
     <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+    <key>com.apple.security.network.client</key>
     <true/>
 </dict>
 </plist>

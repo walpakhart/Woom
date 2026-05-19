@@ -121,6 +121,24 @@
       ]
     },
     {
+      title: 'SDD — Spec-Driven Development',
+      rows: [
+        { keys: '/sdd <task>', label: 'Drafts a spec, plans phases, then executes each phase as a chained agent turn. Workspace lives outside the repo so trial work never pollutes git.' },
+        { keys: 'SDD card', label: 'Pause / Resume / Stop the run; click a phase to refine, restart, or jump back to spec / plan' },
+        { keys: 'workspace path', label: '~/Library/Application Support/com.woom.desktop/sdd-workspaces/<id>/' }
+      ]
+    },
+    {
+      title: 'Auto-updates',
+      rows: [
+        { keys: 'Settings → Updates', label: 'Current version, channel, last check time, latest release notes' },
+        { keys: 'Check now', label: 'Force a manifest fetch from the signed update endpoint' },
+        { keys: 'Install now', label: 'Download + verify ed25519 signature + sha256 + relaunch into the new build' },
+        { keys: 'Install on quit', label: 'Stage the download; swap binary on the next app start' },
+        { keys: 'Snooze 24h / Skip version', label: 'Hush this update; toggleable in Settings → Updates' }
+      ]
+    },
+    {
       title: 'Skills (Claude Code parity)',
       rows: [
         { keys: '~/.claude/skills/<name>/SKILL.md', label: 'User-global skill — frontmatter (name/description/argument-hint/allowed-tools/model) + body with $ARGUMENTS and ``!`<cmd>``` shell injection' },
@@ -261,7 +279,7 @@
         {/each}
       </div>
       <footer class="cheatsheet-foot">
-        <span class="cheatsheet-hint">Read the spec: <span class="mono">docs/ROADMAP_1.0.md</span></span>
+        <span class="cheatsheet-hint">Per-module specs in <span class="mono">docs/</span> · changelog in <span class="mono">CHANGELOG.md</span></span>
         {#if onOpenWelcome}
           <button class="cheatsheet-tour-btn" onclick={onOpenWelcome} type="button">
             New here? Take the tour <span class="mono">{shift}{mod} ?</span> →

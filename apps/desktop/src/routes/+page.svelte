@@ -178,6 +178,15 @@
   import { initDensity, toggleDensity } from '$lib/state/density.svelte';
   import { initBgTasks } from '$lib/state/bgTasks.svelte';
   import { initSdd, workspaceForSession, refreshSdd } from '$lib/state/sdd.svelte';
+  import {
+    initUpdatesStore,
+    updateState as updatesPhaseStore,
+    installNow as updatesInstallNow,
+    installOnQuit as updatesInstallOnQuit,
+    snooze as updatesSnooze,
+    skipVersion as updatesSkipVersion,
+  } from '$lib/state/updates.svelte';
+  import UpdateNotesPane from '$lib/components/ui/UpdateNotesPane.svelte';
   import { loadHookConfig, runHook } from '$lib/state/hooks.svelte';
   import { skillsState, refreshSkills, renderSkill } from '$lib/state/skills.svelte';
   import { loadClaudeMd } from '$lib/state/claudemd.svelte';
@@ -981,11 +990,91 @@
     }
   });
 
+  /* Auto-update UX wiring — drives the sticky toast + release-notes
+   * pane off the `updateState.phase` store from `$lib/state/updates`.
+   * Sticky toast appears when a new version is available; clicking
+   * "View" opens the UpdateNotesPane lightbox. Phase 4 of the SDD
+   * update-system workspace (`sdd-2508eeb82e`). */
+  let showUpdateNotesPane = $state(false);
+  let lastToastedVersion = $state<string | null>(null);
+  let lastFailedReason = $state<string | null>(null);
+  $effect(() => {
+    const phase = updatesPhaseStore.phase;
+
+    // Failed state — surface a red toast with a "Open releases page"
+    // recovery action. Dedup by reason so a poll loop emitting the
+    // same failure twice doesn't stack toasts. Phase 5 task 5.
+    if (phase.kind === 'failed') {
+      if (lastFailedReason === phase.reason) return;
+      lastFailedReason = phase.reason;
+      notify({
+        kind: 'error',
+        title: 'Update failed',
+        body: phase.reason,
+        ttlMs: null,
+        actions: [
+          {
+            label: 'Open releases page',
+            onClick: () => {
+              const url = phase.version
+                ? `https://github.com/walpakhart/Woom/releases/tag/v${phase.version}`
+                : 'https://github.com/walpakhart/Woom/releases';
+              void invoke('plugin:opener|open_url', { url }).catch(() => {});
+            },
+          },
+        ],
+      });
+      return;
+    }
+
+    if (phase.kind !== 'available') {
+      // Reset the dedup gates when the live state goes back to
+      // idle/up-to-date so a future re-emit of the same version
+      // (or the same failure after a manual retry) re-arms cleanly.
+      if (phase.kind !== 'snoozed' && phase.kind !== 'skipped') {
+        lastToastedVersion = null;
+        lastFailedReason = null;
+        showUpdateNotesPane = false;
+      }
+      return;
+    }
+    // Dedup at the version level — same version emitted twice by the
+    // poll loop reuses the existing toast (toaster.svelte's own dedup
+    // refreshes the TTL, but actions captured the OLD closure so we
+    // bail entirely here when we already toasted this version).
+    if (lastToastedVersion === phase.version) return;
+    lastToastedVersion = phase.version;
+    notify({
+      kind: 'info',
+      title: `Woom ${phase.version} available`,
+      body: 'New release ready to install.',
+      ttlMs: null,
+      actions: [
+        { label: 'View', onClick: () => { showUpdateNotesPane = true; } },
+        { label: 'Snooze 24h', onClick: () => { void updatesSnooze(24); } },
+        { label: 'Skip', onClick: () => { void updatesSkipVersion(phase.version); } },
+      ],
+    });
+  });
+
   onMount(async () => {
     /* Re-apply the persisted theme on boot — the SSR shell rendered
        with default `:root` vars, this flips `<html data-theme="…">`
        so the saved palette wins on first paint. */
     initTheme();
+    /* Updater auto-check default — OFF for now. Phase 1 of the SDD
+     * update-system workspace (`sdd-2508eeb82e`) lands the manifest +
+     * pubkey scaffolding; Phase 3 reads this key from a real Rust
+     * settings store. Until then we set a localStorage default so any
+     * Phase 4 UI that gates on the flag finds an explicit value
+     * instead of `null`. NEVER overwrite an existing setting — the
+     * user may have flipped it on after we ship. */
+    try {
+      if (typeof localStorage !== 'undefined' &&
+          localStorage.getItem('woom.updates.auto_check') === null) {
+        localStorage.setItem('woom.updates.auto_check', 'false');
+      }
+    } catch { /* localStorage can throw in some sandboxed contexts; safe to ignore */ }
     // Install a window-level dragend/drop listener that clears the
     // drag payload on any cancel — defense in depth against future
     // drag sources forgetting their own ondragend wiring.
@@ -995,6 +1084,11 @@
     // refreshes when a process spawns / exits anywhere in the app.
     void initBgTasks();
     void initSdd();
+    /* Updater state store — subscribes to the `update:state` Tauri
+     * event so the Settings card + the Phase 4 toast read live state
+     * from the Rust-side background poll. No-op if init has already
+     * fired (HMR re-mount safety). */
+    void initUpdatesStore();
     // Hooks — load the user's `hooks.json` config so the lifecycle
     // call sites (UserPromptSubmit / Stop / SessionStart later) can
     // dispatch without an IPC stall on the first invocation.
@@ -5836,6 +5930,23 @@
   bind:open={symbolPickerOpen}
   setView={(v) => (view = v)}
 />
+
+{#if showUpdateNotesPane && updatesPhaseStore.phase.kind === 'available'}
+  <UpdateNotesPane
+    version={updatesPhaseStore.phase.version}
+    notes={updatesPhaseStore.phase.notes}
+    pubDate={updatesPhaseStore.phase.pub_date}
+    onInstallNow={() => {
+      showUpdateNotesPane = false;
+      void updatesInstallNow();
+    }}
+    onInstallOnQuit={() => {
+      showUpdateNotesPane = false;
+      void updatesInstallOnQuit();
+    }}
+    onClose={() => { showUpdateNotesPane = false; }}
+  />
+{/if}
 
 {#if agentDashboardOpen}
   <AgentDashboard

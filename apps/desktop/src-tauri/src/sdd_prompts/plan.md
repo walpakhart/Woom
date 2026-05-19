@@ -95,7 +95,23 @@ that can be executed sequentially.
 - `status: draft` on plan.md — user approves via UI.
 - Phases must be **sequential** (depends_on of phase N is always
   `[N-1]` for v1 — no parallel waves yet).
-- Don't be ambitious about phase count. 3 phases is usually right.
-  More than 6 means you should re-scope the spec, not the plan.
+- **Phase count matches scope.** For a tiny feature, 2-3 phases is
+  right. For an ambitious project (game engine, multi-service
+  refactor, end-to-end product feature), 6-10 phases with detailed
+  per-phase tasks is normal — don't artificially compress. The Woom
+  UI renders plans + phases in a fullscreen lightbox, so depth is
+  readable.
+- **Per-phase depth.** Each phase file should be RICH: spell out
+  every file you'll touch, the exact functions/classes/components,
+  data shapes, API contracts, migration steps, fallbacks, rollback
+  story. A phase that just says "build the API" is too vague — it
+  should have ~5-15 numbered tasks, each with `Files`, `Acceptance`,
+  and where useful a code-fenced snippet showing the shape.
+- Plan-level **Approach** section should be a real design doc, not
+  a one-paragraph hand-wave: cover the architecture decisions, the
+  alternatives you ruled out, data flow, threading / async model,
+  failure modes, security posture if relevant. Use sub-headings
+  (`### Storage`, `### Rendering`, `### Networking`) when the
+  surface area warrants it.
 - Use the exact filename pattern `phases/NN-slug.md` so the orchestrator
   can parse phase number from the filename.

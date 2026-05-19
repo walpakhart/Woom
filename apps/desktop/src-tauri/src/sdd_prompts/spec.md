@@ -70,4 +70,18 @@ is to capture WHAT the user wants and WHY — not to write code.
   NEVER write `status: approved` yourself.
 - Spec is about WHAT and WHY. No file paths, no APIs, no library
   choices — those belong in the plan.
-- Keep it tight. A 2-page spec is a bad spec; aim for half a page.
+- **Length matches complexity.** A 3-line spec for a 1-line CSS tweak
+  is correct; a 3-line spec for "build a multiplayer game with
+  physics" is a bad spec. For ambitious projects, write THOROUGHLY:
+  detailed user stories with edge cases, exhaustive functional +
+  non-functional requirements (perf budgets, target hardware,
+  platform constraints, accessibility, localisation), explicit
+  in-scope / out-of-scope lists, multi-paragraph success criteria
+  with measurable metrics, and a real Open Questions section. The
+  Woom UI now has a fullscreen lightbox for reading long specs —
+  don't truncate ambition to fit a chat column. Don't pad either:
+  every line must carry information.
+- Use Markdown structure liberally — sub-headings (`###`), tables,
+  bulleted lists, code fences for example payloads or shapes. The
+  Woom Markdown renderer handles GFM, callouts, and syntax-
+  highlighted fenced code blocks.

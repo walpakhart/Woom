@@ -92,6 +92,41 @@
   --diff-add-stroke: #A8D9B8;
   --diff-rem: rgba(232, 130, 100, 0.10);
   --diff-rem-stroke: #E88264;
+  /* GitHub-style diff palette for the side-by-side `DiffView`. The
+   * `--diff-*-stroke` greens / clays above are theme-personality
+   * colors (used by chip badges, change-bar gutters, sticky-note
+   * surfaces); they're too pale + WRONG hue for actual diff bodies.
+   *
+   * Match GitHub's primer-dark palette EXACTLY: both line-wash and
+   * token-highlight derive from the SAME base hue (success-emphasis
+   * #2ea043 / danger-emphasis #f85149), the only difference is alpha
+   * — 15% for whole-line wash, 40% for inline tokens. Earlier we
+   * used two unrelated opaque hex values where the token was a far
+   * more saturated green/red than the line, which made char-level
+   * highlights "вырвиглазны". Same-hue + alpha keeps the eye on
+   * "what changed", not on the color shift between line and token.
+   *
+   * Translucent values stack on the editor background (--bg-1)
+   * instead of competing with it — exactly how GitHub renders
+   * .blob-code-addition vs .x.added-line-bg. */
+  --diff-add-line: rgba(46, 160, 67, 0.15);
+  --diff-add-token: rgba(46, 160, 67, 0.40);
+  --diff-rem-line: rgba(248, 81, 73, 0.15);
+  --diff-rem-token: rgba(248, 81, 73, 0.40);
+
+  /* Syntax-highlight palette for DiffView's grid renderer. Tuned to
+   * stay readable on top of the diff line washes above (15% red/green)
+   * and the neutral `--bg-0` body. GitHub-dark-ish tones. */
+  --diff-tok-keyword: #ff7b72;
+  --diff-tok-string: #a5d6ff;
+  --diff-tok-comment: #8b949e;
+  --diff-tok-number: #79c0ff;
+  --diff-tok-type: #ffa657;
+  --diff-tok-function: #d2a8ff;
+  --diff-tok-property: #79c0ff;
+  --diff-tok-name: #c9d1d9;
+  --diff-tok-tag: #7ee787;
+  --diff-tok-punct: #c9d1d9;
 
   /* Semantic. */
   --success: #A8D9B8;
@@ -236,6 +271,30 @@
      "almost background". */
   --text-2: #345A4C;
   --text-mute: #5C7A6F;
+
+  /* Diff palette for cream surface. Same OPAQUE strategy as the dark
+   * theme — borrowed from GitHub's primer-light primitives. Pale
+   * sage-leaning green for added lines, pale rose for removed; deeper
+   * variants for inline-token highlights. Translucent layers would
+   * stack into solid blocks of color when a chunk has many changed
+   * lines in a row; opaque keeps the wash even regardless of chunk
+   * size, like GitHub.com. */
+  --diff-add-line: #e6ffec;
+  --diff-add-token: #abf2bc;
+  --diff-rem-line: #ffebe9;
+  --diff-rem-token: #ffafa9;
+
+  /* GitHub light syntax palette — Primer/light defaults. */
+  --diff-tok-keyword: #cf222e;
+  --diff-tok-string: #0a3069;
+  --diff-tok-comment: #6e7781;
+  --diff-tok-number: #0550ae;
+  --diff-tok-type: #953800;
+  --diff-tok-function: #8250df;
+  --diff-tok-property: #0550ae;
+  --diff-tok-name: #1f2328;
+  --diff-tok-tag: #116329;
+  --diff-tok-punct: #24292f;
 }
 
 /* (The previous separate `:root[data-theme='dark']` block has been

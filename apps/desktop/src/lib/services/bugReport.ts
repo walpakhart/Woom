@@ -28,7 +28,7 @@ export interface BugReportInput {
   /** Caller-supplied app version string. Frontend doesn't have a
    *  reliable way to read `tauri.conf.json > version` at runtime
    *  without an extra IPC, so we accept it from the caller (which
-   *  already shows it as `Woom 1.0.0` in Settings). */
+   *  already shows it as `Woom 0.1.0` in Settings). */
   appVersion: string;
 }
 
