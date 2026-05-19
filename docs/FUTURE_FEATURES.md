@@ -1,17 +1,13 @@
-# Woom — Future Features (post-1.0 backlog)
+# Woom — Future Features (post-0.1 backlog)
 
-**Version:** 0.1
-**Last updated:** 2026-04-29
-**Status:** ideas + sketches *outside* the current 10 module specs.
+**Status:** ideas and sketches *outside* the shipping module specs
+(Agents, Editor, Canvas, Workbench, Command Palette, Connections,
+Jira, GitHub, Sentry, MCP). Per-version release notes live in
+[`../CHANGELOG.md`](../CHANGELOG.md); the shipping runbook in
+[`RELEASES.md`](RELEASES.md).
 
-> 1.0 fixes what we shipped (`docs/ROADMAP_1.0.md`). This file fixes
-> what we **didn't** ship at all — new pillars, sources, surfaces, and
-> agent capabilities that don't live inside Editor / Agents / GitHub /
-> Jira / Sentry / Workbench / Connections / Command Palette / MCP /
-> Canvas as those modules exist today.
->
-> Treat this as a **menu**, not a roadmap. Things move from here into
-> a real roadmap once we pick them.
+This file is a **menu**, not a roadmap. Entries move out of here once
+we commit to building them.
 
 Each entry has:
 
@@ -19,7 +15,7 @@ Each entry has:
 - **Anatomy** — concrete sketch, where it slots in.
 - **Effort** — `S` (≤1 wk), `M` (1–3 wk), `L` (3–6 wk), `XL` (6+ wk).
 - **Value** — `essential` / `important` / `nice-to-have` (subjective).
-- **Depends on** — 1.0 capabilities this assumes are shipped.
+- **Depends on** — shipping capabilities this assumes are in place.
 
 ---
 
@@ -40,7 +36,7 @@ is well-trodden; the cost is mostly per-source domain modelling.
 - **Effort:** L. Slack's surface is huge; we ship channels + threads
   + DMs only.
 - **Value:** essential — it's where every conversation finishes.
-- **Depends on:** Slack bot-token / user-token in Keychain (Forge is
+- **Depends on:** Slack bot-token / user-token in Keychain (Woom is
   PAT-only — no OAuth, see ROADMAP §6); §2.7.1 multi-account so users
   can connect more than one Slack workspace.
 
@@ -62,7 +58,7 @@ is well-trodden; the cost is mostly per-source domain modelling.
   releases` sections; same propose-* shape.
 - **Effort:** M (mostly remap the GitHub adapter).
 - **Value:** important.
-- **Depends on:** GitHub PAT pattern (Forge is PAT-only; GitLab uses
+- **Depends on:** GitHub PAT pattern (Woom is PAT-only; GitLab uses
   Personal Access Tokens with the same Keychain shape).
 
 ### A.4 Notion
@@ -475,7 +471,7 @@ Programmable Woom — let users automate the boring routes.
   list / edit / disable; the watch-mode infrastructure (§C.1) is
   this same engine.
 - **Effort:** L.
-- **Value:** essential for power users — Forge becomes scriptable.
+- **Value:** essential for power users — Woom becomes scriptable.
 
 ### E.2 Workflow templates
 
@@ -766,7 +762,7 @@ Woom has rich data on what the user does. Surface it back.
 
 ### K.1 Windows + Linux
 
-- **Pitch:** Currently macOS only. Forge needs to be cross-platform
+- **Pitch:** Currently macOS only. Woom needs to be cross-platform
   for an ecosystem move.
 - **Anatomy:** Tauri already cross-builds; effort is in shell-out
   paths (Keychain replacements per OS), notarisation per OS, file-

@@ -56,13 +56,31 @@
   let prBase = $state('');
   let lastPrUrl = $state<string | null>(null);
 
-  onMount(async () => {
-    ghAvailable = await invoke<boolean>('pr_create_available').catch(() => false);
+  /** Cross-component "open new-branch flow" handler. Fired by the
+   *  app-level ⌘⇧B keybinding so the user can create a branch from
+   *  anywhere in the editor surface without hunting for the GitPanel
+   *  with their cursor. */
+  function onNewBranchHotkey() {
+    if (!repo) return;
+    showBranches = true;
+    creating = true;
+    newBranchFrom = '';
+  }
+
+  onMount(() => {
+    /* Probe gh availability without blocking the listener wire-up
+     *  below. async-onMount swallows the cleanup return, so we keep
+     *  this body sync. */
+    void invoke<boolean>('pr_create_available')
+      .then((v) => { ghAvailable = v; })
+      .catch(() => { ghAvailable = false; });
+    window.addEventListener('woom:editor:new-branch', onNewBranchHotkey);
     // NOTE: we intentionally do NOT listen to `fs:changed` here. EditorView
     // owns the single subscription, debounces bursts, and hands us results
     // via `onStatusChange`. Double-listening caused overlapping `git status`
     // calls under Vite HMR / Claude multi-file edits / git's own index-lock
     // writes — a feedback loop that hung the UI.
+    return () => window.removeEventListener('woom:editor:new-branch', onNewBranchHotkey);
   });
 
   export async function refresh() {
@@ -632,9 +650,24 @@
     display: flex; align-items: stretch;
     width: 100%;
     transition: background 80ms;
+    /* Hairline left rail telegraphs the row's git state at a glance —
+       unstaged rows get a neutral muted rail, staged rows get the
+       accent. Same grammar as the inline chat cards (left stripe +
+       quiet tint), keeps the UI internally consistent. */
+    border-left: 2px solid transparent;
   }
-  .gp-file-row:hover { background: var(--bg-2); }
+  .gp-file-row:hover { background: color-mix(in srgb, var(--accent) 5%, var(--bg-2)); }
   .gp-file-row:hover .gp-file-act { opacity: 1; }
+  /* Staged rows — faint accent tint + full-tone rail so they read as
+     "queued for commit" even when no row is hovered. */
+  .gp-file-row--staged {
+    background: color-mix(in srgb, var(--accent) 4%, transparent);
+    border-left-color: color-mix(in srgb, var(--accent) 65%, transparent);
+  }
+  .gp-file-row--staged:hover {
+    background: color-mix(in srgb, var(--accent) 9%, transparent);
+    border-left-color: var(--accent);
+  }
   .gp-file {
     display: flex; align-items: center; gap: 8px;
     flex: 1; padding: 3px 12px;

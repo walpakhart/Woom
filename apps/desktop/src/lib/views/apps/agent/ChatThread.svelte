@@ -10,6 +10,8 @@
   import Markdown from '$lib/components/ui/Markdown.svelte';
   import ClaudeActionCard from '$lib/components/agent/ClaudeActionCard.svelte';
   import QuestionCard from '$lib/components/agent/QuestionCard.svelte';
+  import SddCard from '$lib/components/agent/SddCard.svelte';
+  import { workspaceForSession } from '$lib/state/sdd.svelte';
   import CardContextMenu, { type MenuItem } from '$lib/views/apps/_shared/CardContextMenu.svelte';
   import { notify } from '$lib/state/toaster.svelte';
   import { setDragPayload } from '$lib/state/drag.svelte';
@@ -33,12 +35,29 @@
      *  worktree / linked editor, so all we have to do here is plumb
      *  the path through. */
     onOpenFile?: (path: string) => void;
+    /** SDD card "advance" → stamp the next prompt into composer + fire
+     *  the same send pipeline a manual user message uses. Wired up from
+     *  +page.svelte; null when the parent hasn't plumbed it (e.g. tests). */
+    onSddAdvance?: (sessionId: string, prompt: string) => void;
   }
   let p: Props = $props();
 
   const sess = $derived(
     sessionsState.list.find((s) => s.id === sessionsState.activeIds[p.kind]) ?? null
   );
+
+  /* Index of the LAST message in the visible stream (skipping hidden
+   *  orchestration messages). Used to anchor action cards + SDD card
+   *  inline at the natural conversation position — they render right
+   *  after the latest message so they scroll WITH the chat instead
+   *  of living in a separate trailing block at the bottom. */
+  const lastVisibleIndex = $derived.by(() => {
+    const list = sess?.messages ?? [];
+    for (let i = list.length - 1; i >= 0; i--) {
+      if (!list[i].hidden) return i;
+    }
+    return -1;
+  });
 
   const elapsed = $derived.by(() => {
     if (!p.thinkingStartedAt || !sess?.sending) return '';
@@ -278,6 +297,7 @@
     | 'read' | 'edit' | 'write' | 'create' | 'delete'
     | 'bash' | 'grep' | 'glob' | 'webfetch' | 'websearch'
     | 'todo' | 'todos' | 'switch_cwd' | 'commit' | 'pr'
+    | 'ask'
     | 'mcp' | 'unknown';
 
   type ToolHint = {
@@ -354,6 +374,7 @@
     if (verb === 'switch cwd') return { kind: 'switch_cwd', label: 'Switch cwd', target: primary, scope };
     if (verb === 'commit') return { kind: 'commit', label: 'Commit', target: primary, scope };
     if (verb === 'open pr') return { kind: 'pr', label: 'PR', target: primary, scope };
+    if (verb === 'ask') return { kind: 'ask', label: 'Ask', target: primary, scope };
     if (verb === 'notebook edit') return { kind: 'edit', label: 'Notebook', target: primary, scope };
     if (verb === 'using bash…' || verb === 'propose bash…') {
       return { kind: 'bash', label: 'Bash', target: primary, scope };
@@ -373,6 +394,54 @@
       target: primary,
       scope,
     };
+  }
+
+  /** Set of pending question-action ids that are already anchored to
+   *  a `_ask_` trace step in the current session — so the
+   *  `inlineActions` snippet at the bottom of the message body doesn't
+   *  render them a second time. Walks every message's events once on
+   *  change of `sess.messages` / `sess.actions`. Cheap: bounded by
+   *  trace-segment count, and most messages have zero asks. */
+  const anchoredQuestionIds = $derived.by(() => {
+    const ids = new Set<string>();
+    if (!sess) return ids;
+    for (const msg of sess.messages) {
+      if (!msg.events) continue;
+      for (const ev of msg.events) {
+        if (ev.kind !== 'trace') continue;
+        for (const seg of ev.segments) {
+          const parsed = parseTraceSegment(seg);
+          if (parsed.kind !== 'tool' || parsed.output) continue;
+          const hint = parseToolHint(parsed.cmd);
+          if (hint.kind !== 'ask') continue;
+          const q = pendingQuestionForAskHint(hint.target);
+          if (q) ids.add(q.id);
+        }
+      }
+    }
+    return ids;
+  });
+
+  /** Find the pending `question` action whose question text matches
+   *  the given `_ask_` trace hint. Used to anchor the QuestionCard at
+   *  the trace-step slot instead of trailing at the message bottom.
+   *  Match strategy: prefix compare against the hint's truncated text
+   *  AND the action's full question, in both directions, so an
+   *  ellipsised hint still locks onto its long-form action. */
+  function pendingQuestionForAskHint(
+    probe: string
+  ): Extract<ClaudeAction, { kind: 'question' }> | null {
+    if (!sess || !probe) return null;
+    const trimmed = probe.replace(/…$/, '').trim();
+    if (!trimmed) return null;
+    for (const a of sess.actions) {
+      if (a.kind !== 'question' || a.status !== 'pending') continue;
+      const aq = a.question.trim();
+      if (aq === trimmed) return a;
+      if (aq.startsWith(trimmed)) return a;
+      if (trimmed.startsWith(aq.slice(0, Math.min(80, aq.length)))) return a;
+    }
+    return null;
   }
 
   function diffStats(oldText: string, newText: string): { add: number; rem: number } {
@@ -468,8 +537,57 @@
       </div>
     {/if}
 
+    <!-- Inline cards (SDD + question / propose_*) live INSIDE the
+         current message's body so they inherit the byline-column
+         indent and scroll naturally with the prose, instead of
+         floating full-width below the conversation. Rendered once,
+         under whichever message is `lastVisibleIndex`. -->
+    {#snippet inlineActions()}
+      {#if workspaceForSession(sess.id)}
+        {@const sddWs = workspaceForSession(sess.id)}
+        {#if sddWs}
+          <div class="action-wrap">
+            <SddCard
+              workspace={sddWs}
+              onAdvance={(prompt) => p.onSddAdvance?.(sess.id, prompt)}
+            />
+          </div>
+        {/if}
+      {/if}
+
+      {#each sess.actions as action (action.id)}
+        {#if action.kind === 'question' && anchoredQuestionIds.has(action.id)}
+          <!-- Already rendered inline at its `_ask_` trace step.
+               Skip the bottom-of-body fallback to avoid duplicate
+               cards. -->
+        {:else}
+        <div class="action-wrap">
+          {#if action.kind === 'question'}
+            <QuestionCard
+              {action}
+              onUpdate={(patch) => p.onUpdateAction(sess.id, action.id, patch)}
+              onDismiss={() => p.onRemoveAction(sess.id, action.id)}
+            />
+          {:else}
+            <ClaudeActionCard
+              {action}
+              onUpdate={(patch) => p.onUpdateAction(sess.id, action.id, patch)}
+              onDismiss={() => p.onRemoveAction(sess.id, action.id)}
+              onExecute={() => p.onExecuteAction(sess.id, action)}
+              onOpenPrInWoom={(url) => p.onOpenPrInWoom(url, action.kind === 'pr' ? action : null)}
+              {repoCwd}
+            />
+          {/if}
+        </div>
+        {/if}
+      {/each}
+    {/snippet}
+
     {#each sess.messages as msg, i (i)}
-      {#if msg.role === 'user'}
+      {#if msg.hidden}
+        <!-- Hidden orchestration traffic (SDD phase prompts) — agent
+             CLI sees it via --resume, the user doesn't. Skipped entirely. -->
+      {:else if msg.role === 'user'}
         <article
           class="msg msg--user"
           oncontextmenu={(e) => openMsgCtxMenu(e, msg, i)}
@@ -514,6 +632,7 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 4v5h-5"/></svg>
               </button>
             </div>
+            {#if i === lastVisibleIndex}{@render inlineActions()}{/if}
           </div>
         </article>
       {:else if msg.role === 'assistant'}
@@ -557,15 +676,19 @@
                 {#if ev.kind === 'text'}
                   {#if ev.body}<Markdown source={ev.body} onOpenFile={p.onOpenFile} />{/if}
                 {:else if ev.kind === 'trace'}
-                  <details class="trace" open>
+                  <details class="trace" class:trace--single={ev.segments.length === 1} open>
+                    <!-- Summary stays in the DOM for a11y (focus + Enter
+                         toggle), but is hidden via CSS when there's
+                         only one step — single calls render straight
+                         under the prose, no "1 step" header noise.
+                         The carets / glyphs collapse to text-glyph
+                         dimensions; bg + bottom border were dropped
+                         in phase 1 already. -->
                     <summary class="trace-head">
-                      <span class="trace-check" aria-hidden="true">
-                        <svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                      <span class="trace-head-caret" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg>
                       </span>
                       <span class="trace-head-label"><strong>{ev.segments.length}</strong> step{ev.segments.length === 1 ? '' : 's'}</span>
-                      <span class="trace-head-caret" aria-hidden="true">
-                        <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg>
-                      </span>
                     </summary>
                     <div class="trace-body">
                       {#snippet toolIcon(kind: string)}
@@ -593,6 +716,11 @@
                           <!-- Three-line checklist with a tick on the first
                                row — telegraphs "agent's plan" at a glance. -->
                           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 11 8 15 4"/><line x1="3" y1="6" x2="6" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+                        {:else if kind === 'ask'}
+                          <!-- Speech bubble + question mark — the
+                               resolved trace step shows what the
+                               agent asked and what the user picked. -->
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
                         {:else if kind === 'mcp'}
                           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5 12 2"/><line x1="12" y1="22" x2="12" y2="12"/><line x1="22" y1="8.5" x2="12" y2="12"/><line x1="2" y1="8.5" x2="12" y2="12"/></svg>
                         {:else}
@@ -634,11 +762,43 @@
                               </summary>
                               <pre class="trace-out-body mono">{parsed.output}</pre>
                             </details>
+                          {:else if hint.kind === 'ask'}
+                            <!-- `ask_user_question` running: swap the trace
+                                 row for the interactive QuestionCard
+                                 inline at the EXACT step position, so
+                                 the prompt reads as part of the agent's
+                                 turn (same vertical slot as the tool
+                                 call), not as a separate panel at the
+                                 bottom of the message. Match by question
+                                 prefix — wait_id ↔ tool_use_id linkage
+                                 doesn't exist in our IPC, so we lean on
+                                 the question text. -->
+                            {@const pendingQ = pendingQuestionForAskHint(hint.target)}
+                            {#if pendingQ}
+                              <QuestionCard
+                                action={pendingQ}
+                                onUpdate={(patch) => p.onUpdateAction(sess.id, pendingQ.id, patch)}
+                                onDismiss={() => p.onRemoveAction(sess.id, pendingQ.id)}
+                              />
+                            {:else}
+                              <div class="trace-step trace-step--ask" data-status="running">
+                                <div class="trace-cmd-row">
+                                  <span class="trace-cmd-icon" aria-hidden="true">
+                                    {@render toolIcon('ask')}
+                                  </span>
+                                  <span class="trace-cmd-label mono">{hint.label}</span>
+                                  {#if hint.target}
+                                    <code class="trace-cmd-target mono" title={hint.target}>{hint.target}</code>
+                                  {/if}
+                                </div>
+                              </div>
+                            {/if}
                           {:else}
-                            <!-- No output (yet): still render the row, just
-                                 non-interactive (matches a streaming step
-                                 before its result lands). -->
-                            <div class="trace-step trace-step--{hint.kind}">
+                            <!-- No output (yet): streaming row.
+                                 `data-status="running"` triggers the
+                                 leading-glyph pulse animation so the
+                                 user sees this step is in-flight. -->
+                            <div class="trace-step trace-step--{hint.kind}" data-status="running">
                               <div class="trace-cmd-row">
                                 <span class="trace-cmd-icon" aria-hidden="true">
                                   {@render toolIcon(hint.kind)}
@@ -651,7 +811,7 @@
                                   <span class="trace-cmd-scope mono">{hint.scope}</span>
                                 {/if}
                                 {#if fallbackBash}
-                                  <code class="trace-cmd-target mono">{fallbackBash}</code>
+                                  <code class="trace-cmd-target mono" title={fallbackBash}>{fallbackBash}</code>
                                 {/if}
                               </div>
                             </div>
@@ -718,34 +878,15 @@
                 {Math.round(msg.usage.contextSize / 1000)}K context · {msg.usage.outputTokens} out
               </div>
             {/if}
+            {#if i === lastVisibleIndex}{@render inlineActions()}{/if}
           </div>
         </article>
       {:else}
         <article class="msg msg--system">
           <div class="msg-system">{msg.content}</div>
+          {#if i === lastVisibleIndex}{@render inlineActions()}{/if}
         </article>
       {/if}
-    {/each}
-
-    {#each sess.actions as action (action.id)}
-      <div class="action-wrap">
-        {#if action.kind === 'question'}
-          <QuestionCard
-            {action}
-            onUpdate={(patch) => p.onUpdateAction(sess.id, action.id, patch)}
-            onDismiss={() => p.onRemoveAction(sess.id, action.id)}
-          />
-        {:else}
-          <ClaudeActionCard
-            {action}
-            onUpdate={(patch) => p.onUpdateAction(sess.id, action.id, patch)}
-            onDismiss={() => p.onRemoveAction(sess.id, action.id)}
-            onExecute={() => p.onExecuteAction(sess.id, action)}
-            onOpenPrInWoom={(url) => p.onOpenPrInWoom(url, action.kind === 'pr' ? action : null)}
-            {repoCwd}
-          />
-        {/if}
-      </div>
     {/each}
   </div>
 {/if}
@@ -800,18 +941,18 @@
     color: var(--accent-bright);
   }
 
-  /* User message — soft bg + 2px clay stripe on the left. The
-     `position: relative` anchor lets the absolute-positioned hover
-     actions float at the top-right without inflating the bubble's
-     resting height. */
+  /* User message — flat blockquote-style on the prose surface.
+     Same chrome grammar as SddCard / Markdown.svelte blockquote:
+     3px accent stripe + accent-soft tint + rounded only on the
+     right. No full border, no gradient bg. User's text reads as
+     part of the typographic surface, not as a chat bubble widget. */
   .msg--user .msg-body {
     position: relative;
-    padding: 12px 16px 12px 18px;
-    background: linear-gradient(180deg, var(--bg-2),
-      color-mix(in srgb, var(--bg-2) 90%, var(--accent-soft)));
-    border: 1px solid var(--border);
-    border-left: 2px solid var(--accent);
-    border-radius: 10px;
+    padding: 8px 14px 9px;
+    background: var(--accent-soft);
+    border: 0;
+    border-left: 3px solid var(--accent);
+    border-radius: 0 6px 6px 0;
   }
 
   /* Hover actions sit BELOW the bubble (not over it) — small, naked
@@ -919,89 +1060,118 @@
     padding: 4px 12px;
   }
 
-  /* Trace card — outer rounded bubble that holds the head row plus
-     a stack of step sub-bubbles when expanded. The bubble has a soft
-     bg + brand-tinted left stripe so it stands apart from prose. */
+  /* Trace cluster — outer marker for a run of tool-call steps from
+     one assistant turn. Single soft left stripe groups the run as a
+     cluster; the inner per-step rows render as flat text lines on
+     the prose surface, NOT as bordered widgets. Spec ref:
+     "annotated text lines, not boxed widgets". */
   .trace {
     display: block;
     margin: 6px 0;
-    max-width: 720px;
-    background: linear-gradient(180deg,
-      color-mix(in srgb, var(--app-tone, var(--src-claude)) 4%, var(--bg-2)),
-      var(--bg-2));
-    border: 1px solid var(--border);
-    border-left: 2px solid color-mix(in srgb, var(--app-tone, var(--src-claude)) 70%, var(--border));
-    border-radius: 10px;
-    overflow: hidden;
+    /* Span the full message-body column so trace rows align with the
+     * Edit / Write diff cards rendered alongside — earlier 720px cap
+     * left bash / read / grep rows visually short of the right edge
+     * while edit-cards ran to the chat-column boundary, producing a
+     * jagged right-margin in the trace. Uniform width reads cleaner. */
+     width: 100%;
+    border: 0;
+    background: transparent;
+    border-radius: 0;
+    border-left: 2px solid color-mix(in srgb, var(--accent) 25%, transparent);
+    padding-left: 12px;
   }
+  /* Outer "N steps" head — quiet text prefix above the run.
+     Caret + label only, no bg, no border, no separator. Hidden via
+     `.trace--single` when there's exactly one step (the modifier is
+     set on `<details>` from the markup based on segments.length). */
   .trace-head {
-    display: flex; align-items: center; gap: 8px;
-    padding: 8px 12px;
-    font-size: 12px;
-    color: var(--text-1);
+    display: flex; align-items: baseline; gap: 5px;
+    padding: 0;
+    font-size: 11.5px;
+    color: var(--text-mute);
     cursor: pointer;
     user-select: none;
     list-style: none;
   }
   .trace-head::-webkit-details-marker { display: none; }
   .trace-head::marker { content: ''; }
-  .trace-head:hover { background: color-mix(in srgb, var(--app-tone, var(--src-claude)) 5%, transparent); }
-  .trace-check {
-    width: 15px; height: 15px;
-    display: grid; place-items: center;
-    background: color-mix(in srgb, var(--success) 22%, transparent);
-    color: var(--success);
-    border-radius: 50%;
-    flex-shrink: 0;
-  }
+  .trace-head:hover { color: var(--text-1); }
+  .trace--single > .trace-head { display: none; }
   .trace-head-label {
-    font-size: 12px;
-    color: var(--text-1);
-    flex: 1;
+    font-size: 11.5px;
+    color: var(--text-mute);
   }
   .trace-head :global(strong) {
-    color: var(--text-0);
-    font-weight: 600;
-    margin-right: 2px;
+    color: var(--text-1);
+    font-weight: 500;
+    margin-right: 1px;
   }
+  /* Leading ▸ caret on the head — rotates to ▾ when the run is open.
+     Matches the per-step caret rotation; same visual grammar. */
   .trace-head-caret {
     color: var(--text-mute);
-    display: grid; place-items: center;
+    display: inline-grid; place-items: center;
     transition: transform 160ms;
+    transform: translateY(1px);
+    opacity: 0.7;
   }
-  .trace[open] .trace-head-caret { transform: rotate(180deg); }
-  .trace[open] .trace-head { border-bottom: 1px solid var(--border); }
+  .trace[open] .trace-head-caret { transform: translateY(1px) rotate(90deg); }
+  /* No bottom border when open — flat continuation into step lines. */
   .trace-body {
-    padding: 10px 12px 12px;
+    padding: 2px 0 4px;
     display: flex; flex-direction: column;
-    gap: 10px;
+    gap: 1px;
   }
-  /* Step card — single rounded container that owns the per-kind tone.
-     When there's an output, .trace-step is a <details> element whose
-     <summary> is the command row and whose body is the inline output.
-     One container = one visual unit instead of two stacked pills. */
+  /* Step row — flat text line. No border, no bg, no hover panel; just
+     glyph + label + target + scope + meta + caret on one baseline.
+     `--step-tone` lives on for the glyph color only. */
   .trace-step {
     --step-tone: var(--accent-bright);
     display: flex; flex-direction: column;
-    background: var(--bg-1);
-    border: 1px solid var(--border);
-    border-left: 2px solid color-mix(in srgb, var(--step-tone) 65%, var(--border));
-    border-radius: 7px;
+    background: transparent;
+    border: 0;
+    border-radius: 0;
     overflow: hidden;
-    transition: border-color 120ms, background 120ms;
+    transition: none;
   }
   .trace-step--has-output { cursor: pointer; }
-  .trace-step--has-output:hover {
-    border-color: color-mix(in srgb, var(--step-tone) 32%, var(--border));
+  .trace-step--has-output:hover .trace-cmd-label { color: var(--text-0); }
+
+  /* In-flight pulse — slow 1.2s opacity oscillation on the leading
+     glyph only; rest of the row stays steady so the eye doesn't
+     get tugged by a whole flashing line. Stamped via `data-status="running"`
+     from the streaming-branch markup; completed rows drop the
+     attribute, so the animation auto-stops when output lands. */
+  @keyframes trace-pulse {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.35; }
   }
-  /* Command row — leading per-tool icon + verb chip + monospace target.
-     The icon's hue uses the parent's --step-tone; everything else stays
-     neutral so a long list of steps reads as a coherent script. */
+  .trace-step[data-status="running"] .trace-cmd-icon {
+    animation: trace-pulse 1.2s ease-in-out infinite;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .trace-step[data-status="running"] .trace-cmd-icon { animation: none; opacity: 0.7; }
+  }
+
+  /* Error state — DEFERRED. The plan called for swapping glyph +
+     label to `var(--error)` via `data-status="error"`, but
+     `parseTraceSegment` doesn't currently expose an error flag (no
+     exit-code / stderr-marker plumbing), so no markup branch can
+     stamp the attribute. Wiring lands separately; the CSS rule was
+     dropped here to keep svelte-check clean instead of leaving a
+     dead selector. When detection lands, re-add:
+       `.trace-step[data-status="error"] { --step-tone: var(--error); }`
+       `.trace-step[data-status="error"] .trace-cmd-label,`
+       `.trace-step[data-status="error"] .trace-cmd-target { color: var(--error); }` */
+  /* Command row — single flex line at prose line-height. Icon column is
+     a fixed-width text-glyph slot; no chip background. Items align
+     on the baseline so the glyph + label + target read as one strip
+     of text. */
   .trace-cmd-row {
-    display: flex; align-items: center; gap: 9px;
-    padding: 7px 11px;
+    display: flex; align-items: baseline; gap: 6px;
+    padding: 0;
     min-width: 0;
-    transition: background 120ms;
+    line-height: 1.55;
   }
   .trace-cmd-row--toggle {
     list-style: none;
@@ -1009,50 +1179,67 @@
   }
   .trace-cmd-row--toggle::-webkit-details-marker { display: none; }
   .trace-cmd-row--toggle::marker { content: ''; }
-  .trace-step--has-output:hover .trace-cmd-row--toggle {
-    background: color-mix(in srgb, var(--step-tone) 6%, transparent);
-  }
   .trace-cmd-icon {
     flex-shrink: 0;
-    width: 22px; height: 22px;
-    display: grid; place-items: center;
-    border-radius: 6px;
+    width: 14px; height: 14px;
+    display: inline-grid; place-items: center;
     color: var(--step-tone);
-    background: color-mix(in srgb, var(--step-tone) 14%, transparent);
-    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--step-tone) 22%, transparent);
+    background: transparent;
+    box-shadow: none;
+    /* Lift slightly so SVG aligns with text baseline. */
+    transform: translateY(2px);
   }
-  .trace-cmd-icon svg { width: 13px; height: 13px; }
+  .trace-cmd-icon svg { width: 12px; height: 12px; }
   .trace-cmd-label {
     flex-shrink: 0;
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--step-tone);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    line-height: 1.2;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-2);
+    text-transform: lowercase;
+    letter-spacing: 0;
+    line-height: 1.55;
   }
   .trace-cmd-target {
     flex: 1; min-width: 0;
+    /* Soft cap kept generous (~140ch) so long bash / grep targets
+     *  stay readable end-to-end before truncation kicks in. Caller's
+     *  `title=` attr preserves the full string for hover. */
+    max-width: 140ch;
     font-size: 12px;
-    color: var(--text-0);
-    background: transparent;
-    border: none;
+    /* Drop the inline-code chip chrome inherited from prose-level
+     *  `code` styling (bg + border). Trace targets read as bare
+     *  mono text — color carries the per-step tone via `--step-tone`
+     *  instead of a gray pill. */
+    color: var(--step-tone, var(--text-1));
+    background: transparent !important;
+    border: 0 !important;
     padding: 0;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    /* Right-side ellipsis bites filenames; flip the direction so the
-       basename stays visible on long absolute paths.
-       (`apps/desktop/src/lib/components/editor/codemirrorLang.ts` →
-       `…/lib/components/editor/codemirrorLang.ts` instead of
-       `apps/desktop/src/lib/components/editor/codemir…`.) */
-    direction: rtl;
+    /* Default LTR ellipsis — right-truncates with `…` at the end.
+       Path-shaped kinds (read/edit/write/create/delete) flip to RTL
+       below so basenames stay visible on long absolute paths.
+       (`apps/desktop/.../codemirrorLang.ts` →
+       `…/codemirrorLang.ts`.) Bash / grep / shell-command kinds
+       keep LTR so the verb at the start of the command stays
+       visible — RTL on bash produced `…d /Users/... && git` which
+       hid `cd` and clipped the tail under the meta. */
+    direction: ltr;
     text-align: left;
+  }
+  .trace-step--read .trace-cmd-target,
+  .trace-step--edit .trace-cmd-target,
+  .trace-step--write .trace-cmd-target,
+  .trace-step--create .trace-cmd-target,
+  .trace-step--delete .trace-cmd-target,
+  .trace-step--glob .trace-cmd-target {
+    direction: rtl;
     unicode-bidi: plaintext;
   }
-  /* When the card is open, drop the truncation so the user sees the
-     entire command above the output — they clicked precisely because
-     they wanted the full picture. */
+  /* When the row is open, drop the truncation so the user sees the
+     entire command above the output. */
   .trace-step[open] .trace-cmd-target {
     direction: ltr;
     white-space: pre-wrap;
@@ -1064,11 +1251,11 @@
     flex-shrink: 0;
     font-size: 11px;
     color: var(--text-mute);
-    line-height: 1.4;
+    line-height: 1.55;
   }
   .trace-cmd-meta {
     flex-shrink: 0;
-    font-size: 10px;
+    font-size: 10.5px;
     color: var(--text-mute);
     margin-left: auto;
     padding-left: 6px;
@@ -1078,8 +1265,9 @@
     display: inline-grid; place-items: center;
     color: var(--text-mute);
     transition: transform 140ms;
+    opacity: 0.6;
   }
-  .trace-step[open] .trace-cmd-caret { transform: rotate(180deg); }
+  .trace-step[open] .trace-cmd-caret { transform: rotate(180deg); opacity: 0.9; }
   /* Per-kind hue overrides. Read = info blue, mutations = warm
      editor-orange, search = mint, web = teal, mcp = lavender,
      cwd/commit/pr = jira blue. Keeps the sequence scannable
@@ -1098,23 +1286,25 @@
   .trace-step--pr         { --step-tone: var(--src-jira); }
   .trace-step--switch_cwd { --step-tone: var(--src-jira); }
   .trace-step--mcp        { --step-tone: var(--src-github); }
-  /* Inline output body — separated from the command row by a thin
-     divider only when expanded. Same background as the row so the
-     two read as one card (no nested-pill double-border look). */
-  .trace-step[open] .trace-out-body {
-    border-top: 1px solid color-mix(in srgb, var(--step-tone) 18%, var(--border));
-  }
+  /* Expanded output — indented mono continuation under the row. No
+     box, no separator divider, no bg fill. A dashed left stripe sits
+     under the step row's icon column, so the eye associates the
+     continuation with its parent. Matches Markdown.svelte's
+     blockquote pattern but inset further to nest inside the trace
+     cluster's outer stripe. */
   .trace-out-body {
-    margin: 0;
-    padding: 9px 11px;
-    font-size: 11px;
-    line-height: 1.5;
-    color: var(--text-1);
+    margin: 2px 0 4px 20px;
+    padding-left: 12px;
+    border-left: 1px dashed color-mix(in srgb, var(--step-tone) 35%, transparent);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11.5px;
+    line-height: 1.55;
+    color: var(--text-2);
     white-space: pre-wrap;
     word-break: break-word;
-    max-height: 360px;
-    overflow: auto;
-    background: color-mix(in srgb, var(--step-tone) 4%, var(--bg-1));
+    max-height: 320px;
+    overflow-y: auto;
+    background: transparent;
   }
   /* Plain text segment fallback — markdown-rendered. */
   .trace-line {
@@ -1137,75 +1327,90 @@
     
   }
 
-  /* Edit card — collapsible file pill. Header: tag + path + +/- stats +
-     status + caret. Body: real LCS diff with line numbers + glyph. */
+  /* Edit card — flat file-edit line on the prose surface, same
+     grammar as trace step rows. No box, no full border, no bg fill;
+     just a 2px editor-tone left stripe + 12px indent so the file
+     edit reads as an annotation in the conversation. Expanded body
+     (diff) keeps its content but loses the wrapper bg. */
   .edit-card {
     margin: 6px 0;
-    background: var(--bg-2);
-    border: 1px solid var(--border);
-    border-left: 2px solid var(--src-editor);
-    border-radius: 8px;
+    border-left: 2px solid color-mix(in srgb, var(--src-editor) 70%, transparent);
+    padding-left: 12px;
+    background: transparent;
+    border-radius: 0;
     font-size: 12.5px;
-    overflow: hidden;
   }
   .edit-card-head {
-    display: flex; align-items: center;
-    gap: 12px;
-    padding: 10px 14px;
+    display: flex; align-items: baseline;
+    gap: 8px;
+    padding: 0;
     cursor: pointer;
     user-select: none;
     list-style: none;
+    line-height: 1.55;
   }
   .edit-card-head::-webkit-details-marker { display: none; }
   .edit-card-head::marker { content: ''; }
-  .edit-card[open] .edit-card-head {
-    border-bottom: 1px solid var(--border);
-    background: linear-gradient(180deg,
-      color-mix(in srgb, var(--src-editor) 5%, transparent),
-      transparent);
-  }
+  /* No head bg on open — flat continuation into the diff body. */
   .edit-card[open] .edit-expand svg { transform: rotate(180deg); }
+  /* Tag reads as a lowercase mono prefix, not a chip. */
   .edit-tag {
-    display: inline-flex; align-items: center;
-    padding: 2px 7px;
-    font-size: 10px; font-weight: 600;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
-    background: var(--bg-3);
-    border-radius: 4px;
-    color: var(--text-2);
+    display: inline-flex; align-items: baseline;
+    padding: 0;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0;
+    text-transform: lowercase;
+    background: transparent;
+    border-radius: 0;
+    color: var(--src-editor);
     flex-shrink: 0;
   }
   .edit-tag--add { color: var(--diff-add-stroke); }
   .edit-tag--rem { color: var(--diff-rem-stroke); }
   .edit-path {
     font-size: 12px;
-    color: var(--text-0);
+    color: var(--text-1);
     flex: 1;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    direction: rtl;
+    text-align: left;
+    unicode-bidi: plaintext;
   }
-  .edit-stats { display: flex; gap: 8px; font-size: 11px; }
+  .edit-card[open] .edit-path {
+    direction: ltr;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+  .edit-stats { display: flex; gap: 8px; font-size: 10.5px; }
   .edit-stats .add { color: var(--diff-add); }
   .edit-stats .rem { color: var(--diff-rem); }
+  /* Status reads as muted text — "applied", "pending" — not a pill. */
   .edit-status {
-    font-size: 9.5px; color: var(--text-mute);
-    text-transform: uppercase; letter-spacing: 0.08em;
-    padding: 1px 5px;
-    border-radius: 3px;
-    background: var(--bg-3);
-    border: 1px solid var(--border);
+    font-size: 10px;
+    color: var(--text-mute);
+    text-transform: lowercase;
+    letter-spacing: 0;
+    padding: 0;
+    border-radius: 0;
+    background: transparent;
+    border: 0;
   }
   .edit-expand {
     color: var(--text-mute);
     display: inline-grid; place-items: center;
     transition: transform 160ms;
+    opacity: 0.6;
   }
   .edit-expand svg { transition: transform 160ms; }
 
+  /* Expanded diff body — same indent as the head, no wrapper bg. */
   .edit-card-body {
     max-height: 480px;
     overflow: auto;
-    background: var(--bg-1);
+    background: transparent;
+    margin-top: 4px;
   }
   .diff {
     display: block;

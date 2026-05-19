@@ -21,7 +21,7 @@ ground-truth spec, not a forward-looking proposal.
 ### 1.1 Vision
 
 The Editor column is **not** trying to replace VS Code or Cursor IDE.
-Forge already runs Cursor and Claude as sidecars, and Cursor IDE itself
+Woom already runs Cursor and Claude as sidecars, and Cursor IDE itself
 is a fully-featured editor we have no interest in re-implementing. The
 column has a narrower job:
 

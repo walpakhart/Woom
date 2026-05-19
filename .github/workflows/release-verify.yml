@@ -1,0 +1,62 @@
+# PR-time verify — proves the release pipeline still works without
+# actually publishing anything. Runs on every PR against main; the
+# build step exercises sidecar compilation + tauri bundle but stops
+# short of notarize / publish (no Apple creds in PR forks anyway).
+#
+# Phase reference: SDD workspace `sdd-2508eeb82e`, phase 2 task 9.
+# Pubkey ↔ private-key parity smoke test wired in phase 5.
+
+name: Release verify
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  verify-build:
+    name: Build + manifest dry-run
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node + pnpm
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.17.1
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Cache cargo + target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            apps/desktop/src-tauri
+
+      - name: Install JS deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Type-check frontend
+        run: pnpm -C apps/desktop check
+
+      - name: Build (ad-hoc signing — no Apple creds in PR context)
+        run: |
+          pnpm sidecars:release
+          pnpm --filter @woom/desktop tauri build --target universal-apple-darwin --bundles dmg
+
+      - name: Manifest dry-run
+        run: |
+          VERSION=$(node -p "require('./apps/desktop/package.json').version")
+          node scripts/make-manifest.mjs \
+            --dmg "apps/desktop/src-tauri/target/universal-apple-darwin/release/bundle/dmg/Woom_${VERSION}_universal.dmg" \
+            --version "$VERSION" \
+            --repo "${{ github.repository }}" \
+            --dry-run

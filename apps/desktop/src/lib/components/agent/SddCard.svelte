@@ -1,0 +1,1280 @@
+<script lang="ts">
+  /* SDD inline card — renders the workspace as part of the chat thread.
+   *
+   * One card per session (the per-session SDD workspace), with a stage-
+   * specific body + action buttons. Clicking [Approve & continue] /
+   * [Start phase N] / [Next phase] fires `onAdvance(prompt)` which the
+   * parent uses to populate the composer + fire the same send pipeline
+   * a manual user message uses — so SDD doesn't have its own out-of-
+   * band send path; it just stamps text into the composer.
+   *
+   * Visual language: same chrome as QuestionCard (left accent stripe,
+   * subtle hover, low-prominence so the chat stays the focus). Body
+   * markdown rendered via Markdown.svelte.
+   */
+  import { fly } from 'svelte/transition';
+  import { cubicOut } from 'svelte/easing';
+  import Markdown from '$lib/components/ui/Markdown.svelte';
+  import {
+    type SddWorkspace,
+    approveSdd,
+    buildAmendPrompt,
+    pauseSdd,
+    resumeSdd,
+    stopSdd,
+    discardSdd,
+    saveSddBody,
+    retrySddPhase,
+    buildPromptForStage,
+    targetKey,
+    stashUndo,
+    popUndo,
+    sddState,
+  } from '$lib/state/sdd.svelte';
+  import { sessionsState } from '$lib/state/sessions.svelte';
+  import { diffMarkdown, renderDiffHtml } from '$lib/util/markdownDiff';
+
+  interface Props {
+    workspace: SddWorkspace;
+    /** Stamp the next prompt into composer + fire send. Parent wires
+     *  this to its `setSessionInput` + `sendClaudeMessage()` flow. */
+    onAdvance: (prompt: string) => void | Promise<void>;
+  }
+  let p: Props = $props();
+
+  /* Collapsed body preview by default — spec/plan can be long. User
+   *  clicks the section to expand. Persists per-stage (so unique to
+   *  this render, not the workspace globally — re-mount resets). */
+  let bodyOpen = $state(false);
+  /* Lightbox / fullscreen reading mode. Opens the spec / plan / phase
+   *  body as a viewport-cover overlay (a-la Telegram photo viewer),
+   *  so long documents are actually readable instead of cramped into
+   *  the chat column. Esc closes; same dismissal as DiffView's
+   *  full-screen toggle. */
+  let fullscreen = $state(false);
+  function openFullscreen() {
+    bodyOpen = true;
+    fullscreen = true;
+  }
+  function closeFullscreen() { fullscreen = false; }
+  function onFullscreenKey(e: KeyboardEvent) {
+    if (e.key === 'Escape' && fullscreen) {
+      e.preventDefault();
+      closeFullscreen();
+    }
+  }
+  $effect(() => {
+    if (!fullscreen) return;
+    window.addEventListener('keydown', onFullscreenKey);
+    return () => window.removeEventListener('keydown', onFullscreenKey);
+  });
+  /* Edit mode — swap the rendered Markdown for a textarea. The user
+   *  can tweak the agent's spec/plan/phase content before approving.
+   *  YAML frontmatter on disk is preserved by the Rust side. */
+  let editMode = $state(false);
+  let editDraft = $state('');
+  /* Agent's last-saved body at the moment edit mode was entered. Used
+   *  by the diff-split and diff-unified views to show "what changed
+   *  vs the draft". Captured ONCE on `startEdit()` so toggling views
+   *  is instant + never re-reads the file. Cleared on cancel / save. */
+  let editOriginal = $state('');
+  /* Which sub-view of edit mode is active — plain `edit` (textarea),
+   *  `diff-split` (read-only original | editable draft), or
+   *  `diff-unified` (single-pane jsdiff-rendered HTML). */
+  type EditView = 'edit' | 'diff-split' | 'diff-unified';
+  let editView = $state<EditView>('edit');
+  /* Refs for the split view's two panes — wired so the `onscroll`
+   *  handler can copy proportional scroll position between them. */
+  let splitOriginalEl: HTMLPreElement | null = $state(null);
+  let splitDraftEl: HTMLTextAreaElement | null = $state(null);
+  /* Cached unified-diff HTML — recomputed on every keystroke via
+   *  `$derived`. For a typical plan (~200 lines) this is cheap;
+   *  jsdiff's diffLines is O(n*m) but bounded by line count. */
+  const unifiedDiffHtml = $derived.by(() => {
+    if (editView !== 'diff-unified') return '';
+    return renderDiffHtml(diffMarkdown(editOriginal, editDraft));
+  });
+
+  /* Local "advance in flight" gate. Set true the moment the user
+   *  clicks the primary CTA so a double-click can't fire two agent
+   *  turns. Cleared automatically when the workspace stage changes
+   *  (i.e. the agent has touched something — watcher emitted a
+   *  rebuild). Prevents the stuck-queue bug where ~20 phase-execute
+   *  prompts ended up in `pendingQueue` because the user kept
+   *  clicking while the first turn was streaming. */
+  let advanceClicked = $state(false);
+  // svelte-ignore state_referenced_locally
+  let lastStageKind = $state(p.workspace.stage.kind);
+  $effect(() => {
+    if (p.workspace.stage.kind !== lastStageKind) {
+      lastStageKind = p.workspace.stage.kind;
+      advanceClicked = false;
+      /* Drop any phase peek when the natural stage advances — the
+       *  user's intent was "show me phase N right now"; once N is
+       *  done and N+1 is the focus, the override is stale. */
+      selectedPhaseOverride = null;
+      /* Auto-open the body section when the workflow completes so
+       *  the user doesn't have to chevron-expand to see the final
+       *  summary. Mirror behaviour for Failed so the failure
+       *  reason / last phase context is visible immediately. */
+      if (
+        p.workspace.stage.kind === 'complete' ||
+        p.workspace.stage.kind === 'failed'
+      ) {
+        bodyOpen = true;
+      }
+    }
+  });
+
+  /* 1-second tick — drives the undo affordance's countdown display.
+   *  Cheap; only lives while the card is mounted. Same pattern as
+   *  PreviewPane's elapsed-time tick. */
+  let now = $state(Date.now());
+  $effect(() => {
+    const t = setInterval(() => { now = Date.now(); }, 1000);
+    return () => clearInterval(t);
+  });
+
+  /* Undo affordance state — derived from the store slot for the
+   *  CURRENT stage's target. Only one undo per file is tracked at a
+   *  time; switching stages picks the right slot via `targetKey`.
+   *  30-second window; after that the slot stays (until the agent
+   *  rewrites or a fresh save replaces it) but the affordance hides. */
+  const UNDO_WINDOW_MS = 30_000;
+  const undoSlot = $derived.by(() => {
+    const t = editTarget();
+    if (!t) return null;
+    const slots = sddState.undoByWorkspace[p.workspace.id];
+    if (!slots) return null;
+    return slots[targetKey(t)] ?? null;
+  });
+  const undoSecondsLeft = $derived.by(() => {
+    if (!undoSlot) return 0;
+    const left = Math.ceil((undoSlot.savedAt + UNDO_WINDOW_MS - now) / 1000);
+    return Math.max(0, left);
+  });
+  const undoVisible = $derived(undoSlot !== null && undoSecondsLeft > 0);
+
+  const stage = $derived(p.workspace.stage);
+  /* Session-busy derived from the linked chat session. While the
+   *  agent is mid-turn we DON'T offer the Approve button — clicking
+   *  during a streaming reply caused the race-window bugs. UI shows
+   *  "agent working…" instead so the user knows why it's quiet. */
+  const linkedSession = $derived(
+    sessionsState.list.find((s) => s.id === p.workspace.session_id) ?? null
+  );
+  const sessionSending = $derived(!!linkedSession?.sending);
+  const isAwaitingApproval = $derived(
+    !sessionSending &&
+      (stage.kind === 'spec_ready' || stage.kind === 'plan_ready' || stage.kind === 'phase_done')
+  );
+  const isInFlight = $derived(
+    sessionSending ||
+      stage.kind === 'drafting' || stage.kind === 'planning' || stage.kind === 'phase_running'
+  );
+  const isTerminal = $derived(
+    stage.kind === 'complete' || stage.kind === 'stopped' || stage.kind === 'failed'
+  );
+  const isPaused = $derived(stage.kind === 'paused');
+
+  function stageLabel(): string {
+    switch (stage.kind) {
+      case 'drafting': return 'Drafting spec';
+      case 'spec_ready': return 'Spec ready';
+      case 'planning': return 'Drafting plan';
+      case 'plan_ready': return 'Plan ready';
+      case 'phase_running': return `Phase ${stage.phase} running`;
+      case 'phase_done': return `Phase ${stage.phase} done`;
+      case 'complete': return 'All phases done';
+      case 'paused': return 'Paused';
+      case 'stopped': return 'Stopped';
+      case 'failed': return 'Failed';
+    }
+  }
+
+  function stageTone(): 'live' | 'ok' | 'warn' | 'dim' {
+    if (isInFlight) return 'live';
+    if (stage.kind === 'failed' || stage.kind === 'stopped') return 'warn';
+    if (stage.kind === 'complete') return 'ok';
+    return 'dim';
+  }
+
+  /* Resolve the prompt for the next agent turn. Called by the action
+   *  buttons (Approve / Continue / Start phase). The Rust side advances
+   *  the workspace stage first, then we ask for the prompt the new
+   *  stage needs. */
+  async function advance() {
+    /* Guard re-entry — once a click is in flight, ignore further
+     *  clicks until the stage changes. */
+    if (advanceClicked) return;
+    advanceClicked = true;
+    /* Flip the appropriate approve gate. After flipping, we re-build
+     *  the prompt against the FRESH workspace state — the awaited
+     *  approve call returns the new workspace, so we use it. */
+    let fresh = p.workspace;
+    if (stage.kind === 'spec_ready') {
+      const w = await approveSdd(p.workspace.id, 'spec');
+      if (w) fresh = w;
+    } else if (stage.kind === 'plan_ready' || stage.kind === 'phase_done') {
+      // Plan_ready may need an approve flip; phase_done doesn't.
+      if (stage.kind === 'plan_ready') {
+        const w = await approveSdd(p.workspace.id, 'plan');
+        if (w) fresh = w;
+      }
+    }
+    const prompt = await buildPromptForStage(fresh);
+    if (prompt) {
+      void p.onAdvance(prompt);
+    } else {
+      /* No prompt to send (e.g. all phases done already) — release
+       *  the gate so the button is usable for the next stage. */
+      advanceClicked = false;
+    }
+  }
+
+  /* Body chunk to preview — show spec for spec_ready, plan for
+   *  plan_ready, current phase's body for phase_running, prior phase
+   *  summary for phase_done. */
+  function bodyForStage(): { title: string; markdown: string } | null {
+    if (stage.kind === 'spec_ready' && p.workspace.spec_body) {
+      return { title: 'spec.md', markdown: p.workspace.spec_body };
+    }
+    if (stage.kind === 'plan_ready' && p.workspace.plan_body) {
+      return { title: 'plan.md', markdown: p.workspace.plan_body };
+    }
+    if (stage.kind === 'phase_running') {
+      const ph = p.workspace.phases.find((x) => x.number === stage.phase);
+      if (ph) return { title: `phases/${ph.slug}.md`, markdown: ph.body };
+    }
+    if (stage.kind === 'phase_done') {
+      const ph = p.workspace.phases.find((x) => x.number === stage.phase);
+      if (ph?.summary) return { title: `results/${ph.slug}-result.md`, markdown: ph.summary };
+      if (ph) return { title: `phases/${ph.slug}.md`, markdown: ph.body };
+    }
+    if (stage.kind === 'complete') {
+      /* Prefer the agent's wrap-up (SUMMARY.md) when present — it's
+       *  the curated digest. Fall back to concatenated phase
+       *  summaries while the summary is still being written. */
+      if (p.workspace.summary_body) {
+        return { title: 'SUMMARY.md', markdown: p.workspace.summary_body };
+      }
+      const all = p.workspace.phases
+        .map((ph) => `### Phase ${ph.number}: ${ph.title}\n\n${ph.summary ?? '_no summary written_'}\n`)
+        .join('\n');
+      return { title: 'all phases', markdown: all || '_no phase summaries — waiting for wrap-up…_' };
+    }
+    return null;
+  }
+
+  /** Phase-pill click override. When set, the body slot renders the
+   *  phase's plan section + result (if the phase has run) instead of
+   *  whatever the natural stage points at. Click a pill to peek;
+   *  click again to deselect; auto-resets when the stage advances
+   *  (see the lastStageKind effect above). */
+  let selectedPhaseOverride = $state<number | null>(null);
+
+  /** Compose a phase's body — plan section first, result/summary
+   *  appended below when the phase has completed. Renders as a real
+   *  document, so the lightbox view of a single phase shows the
+   *  agent's intent + what shipped side-by-side. */
+  function phaseBody(num: number): { title: string; markdown: string } | null {
+    const ph = p.workspace.phases.find((x) => x.number === num);
+    if (!ph) return null;
+    const parts: string[] = [];
+    parts.push(`# Phase ${ph.number}: ${ph.title}`);
+    parts.push(`_Status: **${ph.status}**_`);
+    parts.push('');
+    parts.push('## Plan');
+    parts.push(ph.body?.trim() || '_no plan body yet_');
+    if (ph.summary && ph.summary.trim()) {
+      parts.push('');
+      parts.push('## Result');
+      parts.push(ph.summary.trim());
+    }
+    return { title: `phases/${ph.slug}.md`, markdown: parts.join('\n') };
+  }
+
+  const body = $derived(
+    selectedPhaseOverride !== null ? phaseBody(selectedPhaseOverride) : bodyForStage()
+  );
+
+  /** Click a phase pill to peek at its plan + result. Re-clicking
+   *  the same pill (or the natural-stage pill) clears the override. */
+  function togglePhase(num: number) {
+    if (selectedPhaseOverride === num) {
+      selectedPhaseOverride = null;
+    } else {
+      selectedPhaseOverride = num;
+      bodyOpen = true;
+    }
+  }
+
+  /* "Next phase" lookup for the [Start phase N] / [Next phase] buttons.
+   *  When in plan_ready, points to phase 1; when in phase_done, points
+   *  to the next pending phase. */
+  const nextPhase = $derived(p.workspace.phases.find((ph) => ph.status === 'pending'));
+
+  function actionLabel(): string {
+    if (stage.kind === 'spec_ready') return 'Approve spec · draft plan';
+    if (stage.kind === 'plan_ready') return nextPhase ? `Approve plan · start phase ${nextPhase.number}` : 'Approve plan';
+    if (stage.kind === 'phase_done') return nextPhase ? `Continue · phase ${nextPhase.number}` : 'Done';
+    return '';
+  }
+
+  /* Edit-mode helpers. Save target depends on current stage — spec
+   *  when SpecReady, plan when PlanReady, current phase otherwise. */
+  function editTarget(): { kind: 'spec' } | { kind: 'plan' } | { kind: 'phase'; number: number } | null {
+    if (stage.kind === 'spec_ready') return { kind: 'spec' };
+    if (stage.kind === 'plan_ready') return { kind: 'plan' };
+    if (stage.kind === 'phase_running' || stage.kind === 'phase_done') {
+      return { kind: 'phase', number: stage.phase };
+    }
+    return null;
+  }
+  function startEdit() {
+    if (!body) return;
+    editDraft = body.markdown;
+    /* Snapshot the agent's last-saved body BEFORE any user edits land
+     *  on `editDraft`. Used by diff-split (read-only left pane) and
+     *  diff-unified (jsdiff base) so toggling views never re-reads
+     *  the file. */
+    editOriginal = body.markdown;
+    editView = 'edit';
+    editMode = true;
+    bodyOpen = true;
+  }
+  function cancelEdit() {
+    editMode = false;
+    editDraft = '';
+    editOriginal = '';
+    editView = 'edit';
+  }
+  async function saveEdit() {
+    const t = editTarget();
+    if (!t) return;
+    /* Snapshot pre-save body into the undo store BEFORE the network
+     *  call. Skipped when the draft is identical to the original —
+     *  no point flashing an Undo affordance for a no-op save. */
+    if (editOriginal !== editDraft) {
+      stashUndo(p.workspace.id, targetKey(t), editOriginal);
+    }
+    await saveSddBody(p.workspace.id, t, editDraft);
+    editMode = false;
+    editDraft = '';
+    editOriginal = '';
+    editView = 'edit';
+  }
+
+  /** Restore the pre-save body for the current stage's target.
+   *  Reads + clears the slot, then calls `saveSddBody` to write it
+   *  back. The watcher's `sdd:changed` event will refresh the card.
+   *  Caller must verify a slot exists (button only renders when it
+   *  does) — defence-in-depth handled here by a null-guard. */
+  async function onUndo() {
+    const t = editTarget();
+    if (!t) return;
+    const key = targetKey(t);
+    const prev = popUndo(p.workspace.id, key);
+    if (prev == null) return;
+    await saveSddBody(p.workspace.id, t, prev);
+  }
+
+  /* Sync-scroll between the split panes — proportional so when one
+   *  is taller (e.g. the textarea wraps differently than the <pre>)
+   *  both reach end at the same time. Source pane is whichever just
+   *  fired `onscroll`; target gets `scrollTop = ratio * targetMax`. */
+  function syncScroll(source: HTMLElement, target: HTMLElement | null) {
+    if (!target) return;
+    const sMax = source.scrollHeight - source.clientHeight;
+    const tMax = target.scrollHeight - target.clientHeight;
+    if (sMax <= 0 || tMax <= 0) return;
+    const ratio = source.scrollTop / sMax;
+    /* Skip if the target is already at the matching ratio — avoids a
+     *  feedback loop where setting `scrollTop` re-fires the other
+     *  pane's `onscroll` handler. */
+    const want = Math.round(ratio * tMax);
+    if (Math.abs(target.scrollTop - want) <= 1) return;
+    target.scrollTop = want;
+  }
+
+  /* Amend-mode — inline textarea that lets the user describe a change
+   *  to the CURRENT artifact (spec / plan / phase). On submit we
+   *  build the amend prompt and fire it through the normal send
+   *  pipeline, so the agent edits files in place instead of writing
+   *  a new spec from scratch. Different gesture from `editMode`
+   *  (which is direct file editing) — amend is "tell the agent what
+   *  to change, let it patch". */
+  let amendMode = $state(false);
+  let amendDraft = $state('');
+  function startAmend() {
+    amendMode = true;
+    amendDraft = '';
+  }
+  function cancelAmend() {
+    amendMode = false;
+    amendDraft = '';
+  }
+  async function sendAmend() {
+    const change = amendDraft.trim();
+    if (!change || advanceClicked) return;
+    advanceClicked = true;
+    const prompt = await buildAmendPrompt(p.workspace, change);
+    amendMode = false;
+    amendDraft = '';
+    void p.onAdvance(prompt);
+  }
+
+  async function onPause() { await pauseSdd(p.workspace.id); }
+  async function onResume() { await resumeSdd(p.workspace.id); }
+  async function onStop() { await stopSdd(p.workspace.id); }
+  async function onRetry() {
+    if (advanceClicked) return;
+    advanceClicked = true;
+    /* Retry button shows on Failed stage. Pick the phase that's
+     *  marked failed (there's at most one in sequential mode) and
+     *  reset its status — derive_stage flips us back to PhaseDone
+     *  for the prior phase, so the next advance re-issues this one. */
+    const failed = p.workspace.phases.find((ph) => ph.status === 'failed');
+    if (failed) {
+      const fresh = await retrySddPhase(p.workspace.id, failed.number);
+      if (fresh) {
+        const prompt = await buildPromptForStage(fresh);
+        if (prompt) {
+          void p.onAdvance(prompt);
+          return;
+        }
+      }
+    }
+    advanceClicked = false;
+  }
+  async function onDiscard() {
+    if (!confirm('Discard this SDD workspace? All temp files will be deleted.')) {
+      /* Note: same Tauri webview confirm caveat as PreviewPane — Tauri
+       *  returns undefined here, so this `confirm()` always falls
+       *  through. That's fine for now (discard is cheap to recreate);
+       *  if we want real confirmation we'll swap in a custom modal. */
+    }
+    await discardSdd(p.workspace.id);
+  }
+</script>
+
+<aside
+  class="sdd-card"
+  class:sdd-card--full={fullscreen}
+  data-tone={stageTone()}
+  in:fly={{ y: 8, duration: 180, easing: cubicOut }}
+>
+  <header class="sdd-head">
+    <span class="sdd-glyph" aria-hidden="true">SDD</span>
+    <span class="sdd-stage">{stageLabel()}</span>
+    {#if isInFlight}
+      <span class="sdd-spin" aria-label="Agent working"></span>
+    {/if}
+    <span class="sdd-id mono">{p.workspace.id}</span>
+    {#if fullscreen}
+      <button
+        type="button"
+        class="sdd-close"
+        onclick={closeFullscreen}
+        title="Close fullscreen (Esc)"
+        aria-label="Close fullscreen"
+      >
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
+          <path d="M6 6l12 12M6 18L18 6"/>
+        </svg>
+      </button>
+    {/if}
+  </header>
+
+  <div class="sdd-prompt-line">
+    <span class="sdd-prompt-label">Ask:</span>
+    <span class="sdd-prompt-text">{p.workspace.user_prompt}</span>
+  </div>
+
+  {#if p.workspace.phases.length > 0}
+    <div class="sdd-phases">
+      {#each p.workspace.phases as ph (ph.number)}
+        <button
+          type="button"
+          class="sdd-phase-pill"
+          class:sdd-phase-pill--selected={selectedPhaseOverride === ph.number}
+          data-status={ph.status}
+          title="{ph.title} · {ph.status} · click to peek plan + result"
+          aria-pressed={selectedPhaseOverride === ph.number}
+          onclick={() => togglePhase(ph.number)}
+        >
+          <span class="sdd-phase-num mono">{ph.number}</span>
+          <span class="sdd-phase-title">{ph.title}</span>
+          {#if ph.summary && ph.summary.trim()}
+            <!-- Tiny dot signals "has a written result you can read" so
+                 the user knows pills carry post-run content. -->
+            <span class="sdd-phase-dot" aria-hidden="true">●</span>
+          {/if}
+        </button>
+      {/each}
+      {#if selectedPhaseOverride !== null}
+        <button
+          type="button"
+          class="sdd-phase-reset"
+          onclick={() => (selectedPhaseOverride = null)}
+          title="Back to the current stage's body"
+        >back to stage</button>
+      {/if}
+    </div>
+  {/if}
+
+  {#if body}
+    <div class="sdd-body">
+      <div class="sdd-body-row">
+        <button
+          type="button"
+          class="sdd-body-toggle"
+          onclick={() => (bodyOpen = !bodyOpen)}
+          aria-expanded={bodyOpen}
+        >
+          <svg class="sdd-chev" class:open={bodyOpen} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+            <path d="M9 6l6 6-6 6"/>
+          </svg>
+          <span class="mono">{body.title}</span>
+        </button>
+        {#if editMode}
+          <!-- View switch lives inline next to the file title — three
+               muted text-buttons separated by ·, no pill chrome. Active
+               state is just "color: text-0". Reads as a switch within
+               the line, not a panel above it. -->
+          <span class="sdd-view-switch" role="tablist" aria-label="Edit view">
+            <button
+              type="button"
+              class="sdd-view-tab"
+              class:active={editView === 'edit'}
+              role="tab"
+              aria-selected={editView === 'edit'}
+              onclick={() => (editView = 'edit')}
+            >edit</button>
+            <span class="sdd-view-sep" aria-hidden="true">·</span>
+            <button
+              type="button"
+              class="sdd-view-tab"
+              class:active={editView === 'diff-split'}
+              role="tab"
+              aria-selected={editView === 'diff-split'}
+              onclick={() => (editView = 'diff-split')}
+            >split</button>
+            <span class="sdd-view-sep" aria-hidden="true">·</span>
+            <button
+              type="button"
+              class="sdd-view-tab"
+              class:active={editView === 'diff-unified'}
+              role="tab"
+              aria-selected={editView === 'diff-unified'}
+              onclick={() => (editView = 'diff-unified')}
+            >diff</button>
+          </span>
+        {:else if editTarget()}
+          <button type="button" class="sdd-edit-toggle" onclick={startEdit} title="Edit before approving">
+            edit ✎
+          </button>
+        {/if}
+        <!-- Expand to fullscreen — spec / plan / phase docs are
+             often long; reading them in a 60-char chat column is
+             painful. ⛶ pops them into a viewport-cover overlay so
+             the user can actually read end-to-end without scroll
+             gymnastics. -->
+        <button
+          type="button"
+          class="sdd-expand"
+          onclick={openFullscreen}
+          title="Open fullscreen (Esc to close)"
+          aria-label="Open fullscreen"
+        >
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>
+          </svg>
+        </button>
+      </div>
+      {#if bodyOpen}
+        {#if editMode}
+          <div class="sdd-body-edit">
+            {#if editView === 'edit'}
+              <textarea
+                class="sdd-edit-area mono"
+                bind:value={editDraft}
+                spellcheck="false"
+                rows="14"
+              ></textarea>
+            {:else if editView === 'diff-split'}
+              <div class="sdd-diff-split">
+                <pre
+                  bind:this={splitOriginalEl}
+                  class="sdd-edit-area sdd-edit-area--readonly mono"
+                  onscroll={(e) => syncScroll(e.currentTarget, splitDraftEl)}
+                >{editOriginal}</pre>
+                <textarea
+                  bind:this={splitDraftEl}
+                  bind:value={editDraft}
+                  class="sdd-edit-area mono"
+                  spellcheck="false"
+                  rows="14"
+                  onscroll={(e) => syncScroll(e.currentTarget, splitOriginalEl)}
+                ></textarea>
+              </div>
+            {:else}
+              <div class="sdd-diff-unified">
+                {@html unifiedDiffHtml}
+              </div>
+            {/if}
+          </div>
+        {:else}
+          <div class="sdd-body-content">
+            <Markdown source={body.markdown} />
+          </div>
+        {/if}
+      {/if}
+    </div>
+  {/if}
+
+  {#if stage.kind === 'failed'}
+    <div class="sdd-failed">
+      <strong>Failed:</strong> {stage.reason}
+    </div>
+  {/if}
+
+  {#if amendMode}
+    <!-- Amend panel — user describes a change to the CURRENT artifact;
+         on send the agent gets an "edit existing files" prompt instead
+         of the natural next-stage prompt. Cancels back to the normal
+         actions row. -->
+    <div class="sdd-amend">
+      <label class="sdd-amend-label">
+        <span class="sdd-amend-hint">Describe the change. Agent will edit `{p.workspace.root.split('/').pop()}` in place — spec / plan / current phase — instead of starting over.</span>
+        <textarea
+          class="sdd-amend-area mono"
+          bind:value={amendDraft}
+          placeholder="e.g. drop phase 4, retitle phase 2 to “Combat”, replace Unity with Godot, add an audio router task…"
+          rows="4"
+          spellcheck="false"
+          {@attach (node: HTMLTextAreaElement) => node.focus()}
+          onkeydown={(e) => {
+            if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); void sendAmend(); }
+            if (e.key === 'Escape') { e.preventDefault(); cancelAmend(); }
+          }}
+        ></textarea>
+      </label>
+    </div>
+  {/if}
+
+  <footer class="sdd-actions">
+    {#if editMode}
+      <!-- Edit-mode footer merges into the card's main actions row —
+           cancel + save sit alongside Discard as siblings of the same
+           grammar (text-buttons + accent-pill primary), no separate
+           edit-actions bar competing for attention. -->
+      <button type="button" class="sdd-btn" onclick={cancelEdit}>cancel</button>
+      <button type="button" class="sdd-btn sdd-btn--primary" onclick={saveEdit}>save</button>
+    {:else if amendMode}
+      <button type="button" class="sdd-btn" onclick={cancelAmend}>cancel</button>
+      <button
+        type="button"
+        class="sdd-btn sdd-btn--primary"
+        disabled={!amendDraft.trim() || advanceClicked}
+        onclick={sendAmend}
+        title="⌘↵"
+      >{advanceClicked ? 'sending…' : 'Send change'}</button>
+    {:else}
+      {#if isAwaitingApproval}
+        <button class="sdd-btn sdd-btn--primary" disabled={advanceClicked} onclick={advance}>
+          {advanceClicked ? 'sending…' : actionLabel()}
+        </button>
+      {/if}
+      {#if isInFlight}
+        <button class="sdd-btn" onclick={onPause}>Pause</button>
+      {/if}
+      {#if isPaused}
+        <button class="sdd-btn sdd-btn--primary" onclick={onResume}>Resume</button>
+      {/if}
+      {#if stage.kind === 'failed'}
+        <button class="sdd-btn sdd-btn--primary" disabled={advanceClicked} onclick={onRetry}>Retry phase</button>
+      {/if}
+      {#if !isTerminal && !isInFlight}
+        <!-- Amend affordance — only when the workspace is in a settled
+             state (drafting/spec_ready/plan_ready/phase_done). During
+             in-flight the agent is busy; let it finish before
+             corrections. Discard / Stop still available. -->
+        <button class="sdd-btn" onclick={startAmend} title="Tell the agent to change the current spec / plan / phase in place">
+          ✎ Amend
+        </button>
+      {/if}
+      {#if undoVisible}
+        <button class="sdd-btn" onclick={onUndo} title="Restore the body that was there before your last save">
+          ↶ Undo last edit ({undoSecondsLeft}s)
+        </button>
+      {/if}
+      {#if !isTerminal}
+        <button class="sdd-btn" onclick={onStop}>Stop</button>
+      {/if}
+    {/if}
+    <button class="sdd-btn sdd-btn--mute" onclick={onDiscard}>Discard</button>
+  </footer>
+</aside>
+
+<style>
+  /* SDD card visual language — modelled on Markdown.svelte's
+   *  blockquote treatment (subtle accent-tinted bg + left stripe,
+   *  no full border, rounded only on the right). The card should
+   *  feel like a rich element WITHIN the message stream, not a
+   *  modal pinned on top — same way a markdown table or quote
+   *  reads as content rather than an interrupt-y proposal.
+   *  Atmosphere: warm accent tint says "agent is offering you a
+   *  decision here", typography matches surrounding prose. */
+  /* Quiet blockquote — same grammar as `.cac` / `.qc`. No tint, no
+   *  rounded right edge; the left accent rail does all the heavy
+   *  lifting, typography matches surrounding prose. Per-tone variants
+   *  shift the rail colour only, so a live / warn / ok SDD phase
+   *  still reads as the SAME element with a different mood. */
+  .sdd-card {
+    border-left: 2px solid color-mix(in srgb, var(--accent) 75%, transparent);
+    background: transparent;
+    padding: 4px 0 6px 14px;
+    display: flex; flex-direction: column;
+    gap: 8px;
+    min-width: 0;
+    color: var(--text-1);
+    font-size: 13.5px;
+    line-height: 1.55;
+    transition: background 160ms, border-left-color 160ms;
+  }
+  .sdd-card:hover { background: color-mix(in srgb, var(--accent) 4%, transparent); }
+  .sdd-card:focus-within { border-left-color: var(--accent); }
+  .sdd-card[data-tone="live"] {
+    border-left-color: color-mix(in srgb, #66d39a 75%, transparent);
+  }
+  .sdd-card[data-tone="live"]:hover {
+    background: color-mix(in srgb, #66d39a 4%, transparent);
+  }
+  .sdd-card[data-tone="warn"] {
+    border-left-color: color-mix(in srgb, #e0b16c 75%, transparent);
+  }
+  .sdd-card[data-tone="warn"]:hover {
+    background: color-mix(in srgb, #e0b16c 4%, transparent);
+  }
+  .sdd-card[data-tone="ok"] {
+    border-left-color: color-mix(in srgb, var(--accent) 75%, transparent);
+  }
+
+  /* Byline row reads like prose: "SDD · stage label · spinner · id".
+   *  No header chrome, no chip backgrounds — typography carries the
+   *  hierarchy. */
+  .sdd-head {
+    display: flex; align-items: center;
+    gap: 8px;
+    font-size: 12px;
+  }
+  .sdd-glyph {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    color: var(--accent-bright);
+    text-transform: uppercase;
+  }
+  .sdd-glyph::after {
+    content: '·';
+    color: var(--text-mute);
+    margin-left: 8px;
+    font-weight: 400;
+  }
+  .sdd-stage {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-0);
+  }
+  .sdd-spin {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    border: 1.5px solid var(--border-neutral-hi);
+    border-top-color: var(--accent);
+    animation: sdd-spin 700ms linear infinite;
+  }
+  @keyframes sdd-spin { to { transform: rotate(360deg); } }
+  .sdd-id {
+    font-size: 10px;
+    color: var(--text-mute);
+    margin-left: auto;
+    font-family: 'JetBrains Mono', monospace;
+    opacity: 0.6;
+  }
+
+  .sdd-prompt-line {
+    display: flex; gap: 6px;
+    font-size: 13px;
+    line-height: 1.55;
+    color: var(--text-1);
+    font-style: italic;
+  }
+  .sdd-prompt-label {
+    color: var(--text-mute);
+    font-weight: 500;
+    flex-shrink: 0;
+    font-style: normal;
+  }
+  .sdd-prompt-text {
+    color: var(--text-1);
+    overflow-wrap: anywhere;
+  }
+
+  .sdd-phases {
+    display: flex; flex-wrap: wrap; gap: 5px;
+  }
+  /* Phase pills look like inline code spans — same font + bg
+   *  language as `<code>` from prose. Reinforces "this is part of the
+   *  message" feel rather than "this is UI chrome". */
+  .sdd-phase-pill {
+    display: inline-flex; align-items: center;
+    gap: 5px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10.5px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    border: 1px solid var(--border-neutral-hi);
+    background: var(--bg-2);
+    color: var(--text-2);
+    cursor: pointer;
+    transition: background 120ms, border-color 120ms, color 120ms;
+  }
+  .sdd-phase-pill:hover {
+    background: var(--bg-3);
+    border-color: var(--border-hi);
+    color: var(--text-0);
+  }
+  /* Selected (currently peeking this phase) — accent ring + brighter
+   *  text, so the user can see WHICH pill drove the body content. */
+  .sdd-phase-pill--selected {
+    border-color: var(--accent) !important;
+    background: color-mix(in srgb, var(--accent) 22%, var(--bg-2)) !important;
+    color: var(--text-0) !important;
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent);
+  }
+  .sdd-phase-dot {
+    margin-left: 2px;
+    font-size: 8px;
+    color: var(--accent-bright);
+    opacity: 0.85;
+  }
+  .sdd-phase-reset {
+    margin-left: 4px;
+    background: transparent;
+    border: 0;
+    color: var(--text-mute);
+    font-size: 11px;
+    cursor: pointer;
+    padding: 1px 4px;
+    border-radius: 3px;
+    transition: color 120ms, background 120ms;
+  }
+  .sdd-phase-reset:hover {
+    color: var(--accent-bright);
+    background: color-mix(in srgb, var(--accent) 8%, transparent);
+  }
+  .sdd-phase-pill[data-status="running"] {
+    color: #66d39a;
+    border-color: color-mix(in srgb, #66d39a 50%, var(--border-neutral));
+    background: color-mix(in srgb, #66d39a 10%, var(--bg-2));
+  }
+  .sdd-phase-pill[data-status="done"] {
+    color: var(--text-0);
+    border-color: color-mix(in srgb, var(--accent) 40%, var(--border-neutral));
+    background: color-mix(in srgb, var(--accent) 10%, var(--bg-2));
+  }
+  .sdd-phase-pill[data-status="failed"] {
+    color: #e0b16c;
+    border-color: color-mix(in srgb, #e0b16c 40%, var(--border-neutral));
+    background: color-mix(in srgb, #e0b16c 8%, var(--bg-2));
+  }
+  .sdd-phase-num {
+    font-size: 10px;
+    color: var(--text-mute);
+    font-weight: 700;
+  }
+
+  .sdd-body {
+    display: flex; flex-direction: column;
+    gap: 6px;
+  }
+  .sdd-body-row {
+    display: flex; align-items: center;
+    gap: 14px;
+  }
+  /* Edit toggle — text-link aesthetic, sits next to the file-title
+   *  chevron. Same hover behaviour as the other text-buttons. */
+  .sdd-edit-toggle {
+    border: 0;
+    background: transparent;
+    color: var(--text-mute);
+    cursor: pointer;
+    font-size: 11px;
+    padding: 1px 0;
+    transition: color 120ms;
+  }
+  .sdd-edit-toggle:hover {
+    color: var(--accent-bright);
+  }
+
+  /* Expand-to-fullscreen icon. Sits at the row's right edge as a
+   *  square glyph button — same vocabulary as DiffView's ⛶ control
+   *  so the gesture transfers between surfaces. */
+  .sdd-expand {
+    margin-left: auto;
+    border: 0;
+    background: transparent;
+    color: var(--text-mute);
+    cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 22px; height: 22px;
+    border-radius: 4px;
+    transition: background 100ms, color 100ms;
+  }
+  .sdd-expand:hover {
+    background: color-mix(in srgb, var(--accent) 8%, transparent);
+    color: var(--accent-bright);
+  }
+
+  /* Close-X button — only shown in fullscreen mode. Sits at the
+   *  right edge of the header where the sdd-id chip normally lives.
+   *  Same square-glyph treatment as .sdd-expand. */
+  .sdd-close {
+    margin-left: 4px;
+    border: 0;
+    background: transparent;
+    color: var(--text-mute);
+    cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 24px; height: 24px;
+    border-radius: 4px;
+    transition: background 100ms, color 100ms;
+  }
+  .sdd-close:hover {
+    background: color-mix(in srgb, var(--error) 14%, transparent);
+    color: var(--error);
+  }
+
+  /* Lightbox / fullscreen mode — pulls the card out of the chat
+   *  scroll, pins it as a viewport-cover panel. Mostly opaque at rest
+   *  so spec / plan text is readable without chat bleed-through; hint
+   *  of translucency + blur keeps the "overlay" feel. Hover/focus goes
+   *  fully solid for active reading. Close via × in header or Esc. */
+  .sdd-card--full {
+    position: fixed;
+    inset: 4vh 4vw;
+    z-index: 1000;
+    max-width: none;
+    /* Near-opaque bg — was 55% which leaked the chat through the body
+     * text. 96% keeps a sliver of see-through so the overlay still
+     * feels like a lightbox, but reading is no longer painful. Heavier
+     * blur kills any residual focus-fighting from chat behind. */
+    background: color-mix(in srgb, var(--bg-1) 96%, transparent);
+    border-left: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35);
+    border-radius: 8px;
+    padding: 18px 28px 20px;
+    overflow: hidden;
+    display: flex; flex-direction: column;
+    backdrop-filter: blur(12px);
+    transition: background 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
+  }
+  .sdd-card--full:hover,
+  .sdd-card--full:focus-within {
+    background: var(--bg-1);
+    border-left-color: var(--accent);
+    box-shadow: 0 14px 44px rgba(0, 0, 0, 0.45);
+  }
+  .sdd-card--full .sdd-body {
+    flex: 1 1 0; min-height: 0;
+    display: flex; flex-direction: column;
+  }
+  /* Pin the action footer to the bottom of the fullscreen card. Without
+   * this the flex column lets the actions row hug whatever came
+   * before it, leaving empty space below — chat behind shows through
+   * and the card reads as half-filled. */
+  .sdd-card--full .sdd-actions { margin-top: auto; }
+  /* Fullscreen reading column — drop the line-length cap so the body
+   *  fills the entire card width. The chat thread behind doesn't read
+   *  as the foreground (the card's translucent bg already segregates
+   *  them visually), so a wider measure makes better use of the
+   *  fullscreen real estate. Pad sides instead of capping width. */
+  .sdd-card--full .sdd-body-content {
+    flex: 1 1 0; min-height: 0;
+    /* Override the 360px cap from the inline-mode rule above —
+     * in fullscreen the body fills whatever vertical space the
+     * card's flex column gives it. */
+    max-height: none;
+    /* Drop the inline-quote chrome (left rule + indent + tint
+     * border) for fullscreen reading — at this scale it reads as
+     * unnecessary chrome between the heading and the text. */
+    border-left: 0;
+    padding: 0 24px;
+    margin-top: 4px;
+    overflow-y: auto;
+    font-size: 15px;
+    line-height: 1.75;
+    width: 100%;
+    max-width: none;
+  }
+  .sdd-card--full .sdd-body-content :global(p),
+  .sdd-card--full .sdd-body-content :global(li) { font-size: 15px; }
+  .sdd-card--full .sdd-body-content :global(h1) { font-size: 24px; margin-top: 24px; }
+  .sdd-card--full .sdd-body-content :global(h2) { font-size: 20px; margin-top: 22px; }
+  .sdd-card--full .sdd-body-content :global(h3) { font-size: 17px; margin-top: 18px; }
+  .sdd-card--full .sdd-body-content :global(pre) { font-size: 13.5px; line-height: 1.55; }
+  .sdd-card--full .sdd-body-content :global(table) { width: 100%; }
+  .sdd-card--full .sdd-body-edit {
+    flex: 1; min-height: 0;
+    display: flex; flex-direction: column;
+    width: 100%;
+    max-width: none;
+  }
+  .sdd-card--full .sdd-edit-area {
+    flex: 1;
+    min-height: 0;
+    height: auto;
+    font-size: 14px;
+    line-height: 1.7;
+  }
+
+  /* Edit-mode textarea — fills the body slot while editing. mono +
+   *  subtle accent border to feel like an "agent's draft you're
+   *  amending" rather than a generic form input. */
+  .sdd-body-edit {
+    display: flex; flex-direction: column;
+    gap: 6px;
+  }
+  /* Edit area — drop the heavy mono frame. Reads as a continuation
+   *  of the card's body rather than a form-input transplanted in.
+   *  Bg is a touch darker than the card's accent-tint to signal
+   *  editability without breaking the surface. Left border-stripe
+   *  echoes the card's outer accent stripe (recursive structure). */
+  .sdd-edit-area {
+    width: 100%;
+    min-height: 240px;
+    padding: 6px 0 6px 12px;
+    border: 0;
+    border-left: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
+    background: color-mix(in srgb, var(--bg-0) 70%, transparent);
+    color: var(--text-0);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    line-height: 1.55;
+    resize: vertical;
+    outline: 0;
+  }
+  .sdd-edit-area:focus {
+    border-left-color: var(--accent);
+    background: color-mix(in srgb, var(--bg-0) 85%, transparent);
+  }
+  /* Read-only `<pre>` for the split view's left pane — same metrics
+   *  as the textarea so visible line alignment tracks. */
+  .sdd-edit-area--readonly {
+    white-space: pre-wrap;
+    overflow-y: auto;
+    overflow-x: hidden;
+    word-break: break-word;
+    color: var(--text-2);
+    margin: 0;
+    cursor: default;
+    resize: none;
+    user-select: text;
+  }
+  .sdd-edit-area--readonly:focus { border-left-color: color-mix(in srgb, var(--accent) 30%, transparent); }
+
+  /* Inline view switch — three text-buttons separated by · in the
+   *  same body-row as the file title. No pill chrome, no panel —
+   *  reads as a typographic switch within the line. Active state is
+   *  just color: text-0; inactive stays text-mute. */
+  .sdd-view-switch {
+    display: inline-flex; align-items: baseline;
+    gap: 4px;
+    margin-left: auto;
+    font-size: 11px;
+    color: var(--text-mute);
+  }
+  .sdd-view-tab {
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--text-mute);
+    font-size: 11px;
+    cursor: pointer;
+    transition: color 120ms;
+  }
+  .sdd-view-tab:hover { color: var(--accent-bright); }
+  .sdd-view-tab.active { color: var(--text-0); }
+  .sdd-view-sep {
+    color: var(--text-mute);
+    opacity: 0.5;
+    user-select: none;
+  }
+
+  /* Side-by-side split — fixed two-column grid so original (left)
+   *  and draft (right) keep equal width. min-width: 0 on grid
+   *  children prevents long lines from forcing overflow. */
+  .sdd-diff-split {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+  }
+  .sdd-diff-split > * { min-width: 0; }
+
+  /* Unified diff — no separate box, just spacing. The renderer's
+   *  inner `<pre class="diff-block">` carries its own padding via
+   *  Markdown.svelte's global rules; we just provide the scroll
+   *  cap + sit on the same accent-tinted card bg. */
+  .sdd-diff-unified {
+    min-height: 240px;
+    max-height: 480px;
+    overflow-y: auto;
+    padding-left: 12px;
+    border-left: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  }
+  .sdd-diff-unified :global(pre.diff-block) {
+    margin: 0;
+    border: 0;
+    background: transparent;
+    padding: 0;
+  }
+  /* Failed banner — uses warn-tone red accents inside the card, sits
+   *  above the actions row so the user sees WHY before they decide
+   *  whether to retry. */
+  .sdd-failed {
+    padding: 6px 10px;
+    border-left: 2px solid var(--error);
+    background: color-mix(in srgb, var(--error) 10%, transparent);
+    border-radius: 3px;
+    color: var(--text-1);
+    font-size: 12px;
+    line-height: 1.5;
+  }
+  .sdd-failed strong { color: var(--error); }
+  /* Body toggle is a text-link, not a button — keeps the "inline
+   *  prose" feel. Chevron + filename hint at expandability without
+   *  shouting. */
+  .sdd-body-toggle {
+    display: inline-flex; align-items: center;
+    gap: 5px;
+    padding: 1px 0;
+    border: 0;
+    background: transparent;
+    color: var(--text-mute);
+    cursor: pointer;
+    font-size: 11.5px;
+    align-self: flex-start;
+    transition: color 120ms;
+  }
+  .sdd-body-toggle:hover {
+    color: var(--accent-bright);
+  }
+  .sdd-chev {
+    width: 10px; height: 10px;
+    transition: transform 180ms;
+  }
+  .sdd-chev.open { transform: rotate(90deg); }
+
+  /* Expanded body renders as a quote-within-quote — slightly inset,
+   *  bordered on the left, transparent bg so the parent accent tint
+   *  stays visible. Reads like a "this is what the agent wrote" excerpt
+   *  inside the SDD frame. */
+  .sdd-body-content {
+    padding: 4px 0 4px 12px;
+    border-left: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
+    max-height: 360px;
+    overflow-y: auto;
+    margin-top: 2px;
+  }
+
+  /* Actions row — buttons stay typographic but now have a visible
+   *  hairline + readable text color so the user can find them
+   *  without squinting. Earlier version was `color: text-mute` over
+   *  a transparent bg, which on the SDD card's accent-tinted surface
+   *  read as near-invisible. Primary CTA carries a real fill + border
+   *  so it pops at first glance. */
+  .sdd-actions {
+    display: flex; align-items: center;
+    gap: 8px;
+    margin-top: 6px;
+  }
+  .sdd-btn {
+    padding: 4px 10px;
+    border-radius: 5px;
+    border: 1px solid var(--border-neutral-hi);
+    background: var(--bg-2);
+    color: var(--text-1);
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 120ms, color 120ms, border-color 120ms;
+  }
+  .sdd-btn:hover:not(:disabled) {
+    color: var(--text-0);
+    background: var(--bg-3);
+    border-color: var(--border-hi);
+  }
+  .sdd-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  /* Primary CTA — accent fill with a saturated stroke so it reads as
+   *  THE action on the card. Bumped fill % vs the prior soft tint so
+   *  it doesn't disappear into the card's own accent-tinted surface. */
+  .sdd-btn--primary {
+    padding: 4px 14px;
+    border-radius: 5px;
+    background: var(--accent);
+    border: 1px solid var(--accent);
+    color: var(--accent-fg);
+    font-weight: 600;
+    font-size: 12px;
+  }
+  .sdd-btn--primary:hover:not(:disabled) {
+    background: var(--accent-bright);
+    border-color: var(--accent-bright);
+    color: var(--accent-fg);
+  }
+  /* Discard — pushed to the far right + tinted with error edge so
+   *  it reads as a destructive escape hatch without screaming. */
+  .sdd-btn--mute {
+    margin-left: auto;
+    color: var(--text-2);
+    border-color: var(--border-neutral);
+    background: transparent;
+  }
+  .sdd-btn--mute:hover:not(:disabled) {
+    color: var(--error);
+    border-color: color-mix(in srgb, var(--error) 55%, transparent);
+    background: color-mix(in srgb, var(--error) 8%, transparent);
+  }
+
+  /* Amend panel — quiet inline form. Same blockquote grammar as the
+   * card itself: left accent rail + transparent bg + a single
+   * textarea. Reads as "type a change" alongside the card content,
+   * not as a modal popup. */
+  .sdd-amend {
+    margin-top: 4px;
+    padding: 6px 0 4px 12px;
+    border-left: 2px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  }
+  .sdd-amend-label { display: flex; flex-direction: column; gap: 4px; }
+  .sdd-amend-hint {
+    font-size: 11px;
+    color: var(--text-mute);
+    line-height: 1.45;
+  }
+  .sdd-amend-area {
+    width: 100%;
+    padding: 6px 8px;
+    border: 1px solid var(--border-neutral-hi);
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--bg-0) 70%, transparent);
+    color: var(--text-0);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12.5px;
+    line-height: 1.55;
+    resize: vertical;
+    outline: 0;
+  }
+  .sdd-amend-area:focus { border-color: var(--accent); }
+</style>

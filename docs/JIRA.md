@@ -5,7 +5,7 @@
 **Status:** describes shipping behaviour. Atlassian Cloud only; Server
 / Data Center is not supported. Authentication is workspace + email +
 API token. PAT-only by design — Woom does not ship OAuth for any
-source (`docs/ROADMAP_1.0.md §6`).
+source.
 
 > The Jira column is the inbox of issues you should be looking at, with
 > per-instance filters that translate into JQL the way you'd write it
@@ -51,7 +51,7 @@ buttons), assignee, priority, labels, worklogs.
 
 - **Atlassian Server / DC.** Cloud only.
 - **OAuth** with Atlassian. Permanent non-goal — every source uses
-  PATs (`docs/ROADMAP_1.0.md §6`). Token UX is invested in instead:
+  PATs. Token UX is invested in instead:
   rotation reminders, multi-account, diagnostics.
 - **Custom fields** beyond the standard set surfaced in `JiraDetail`.
 - **Native JQL editor** in the column. Use the global Search if you
@@ -273,7 +273,7 @@ Logical key: `JIRA_KEY = "jira"`. Stored as JSON `{ workspace, email, token }`.
 on `InvalidToken`.
 
 The Connect modal collects all three fields (`JiraConnectModal.svelte`).
-There is no OAuth path — that's by design (`docs/ROADMAP_1.0.md §6`).
+There is no OAuth path — that's by design.
 Disconnect: `jira_disconnect`.
 
 ---

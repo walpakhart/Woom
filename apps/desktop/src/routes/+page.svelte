@@ -177,6 +177,16 @@
   import { initScale } from '$lib/state/scale.svelte';
   import { initDensity, toggleDensity } from '$lib/state/density.svelte';
   import { initBgTasks } from '$lib/state/bgTasks.svelte';
+  import { initSdd, workspaceForSession, refreshSdd } from '$lib/state/sdd.svelte';
+  import {
+    initUpdatesStore,
+    updateState as updatesPhaseStore,
+    installNow as updatesInstallNow,
+    installOnQuit as updatesInstallOnQuit,
+    snooze as updatesSnooze,
+    skipVersion as updatesSkipVersion,
+  } from '$lib/state/updates.svelte';
+  import UpdateNotesPane from '$lib/components/ui/UpdateNotesPane.svelte';
   import { loadHookConfig, runHook } from '$lib/state/hooks.svelte';
   import { skillsState, refreshSkills, renderSkill } from '$lib/state/skills.svelte';
   import { loadClaudeMd } from '$lib/state/claudemd.svelte';
@@ -922,9 +932,20 @@
     }
     if (p.kind === 'question') {
       const opts = Array.isArray(px.options) ? px.options : [];
+      /* The sidecar normalises `kind` for us (single/multi/text/confirm),
+       * but older serialised sessions may still carry only `multi_select`
+       * — derive from that as a fallback so resumed turns keep working. */
+      const rawKind = typeof px.kind === 'string' ? px.kind : '';
+      const questionKind: 'single' | 'multi' | 'text' | 'confirm' =
+        rawKind === 'multi'   ? 'multi'   :
+        rawKind === 'text'    ? 'text'    :
+        rawKind === 'confirm' ? 'confirm' :
+        rawKind === 'single'  ? 'single'  :
+        px.multi_select === true ? 'multi' : 'single';
       return {
         id,
         kind: 'question',
+        questionKind,
         question: String(px.question ?? ''),
         header: typeof px.header === 'string' ? px.header : undefined,
         options: opts
@@ -935,7 +956,7 @@
                   : undefined }
             : { label: String(o) }))
           .filter((o) => o.label.length > 0),
-        multiSelect: px.multi_select === true,
+        multiSelect: questionKind === 'multi',
         status: 'pending',
         waitId: p.wait_id
       };
@@ -969,11 +990,91 @@
     }
   });
 
+  /* Auto-update UX wiring — drives the sticky toast + release-notes
+   * pane off the `updateState.phase` store from `$lib/state/updates`.
+   * Sticky toast appears when a new version is available; clicking
+   * "View" opens the UpdateNotesPane lightbox. Phase 4 of the SDD
+   * update-system workspace (`sdd-2508eeb82e`). */
+  let showUpdateNotesPane = $state(false);
+  let lastToastedVersion = $state<string | null>(null);
+  let lastFailedReason = $state<string | null>(null);
+  $effect(() => {
+    const phase = updatesPhaseStore.phase;
+
+    // Failed state — surface a red toast with a "Open releases page"
+    // recovery action. Dedup by reason so a poll loop emitting the
+    // same failure twice doesn't stack toasts. Phase 5 task 5.
+    if (phase.kind === 'failed') {
+      if (lastFailedReason === phase.reason) return;
+      lastFailedReason = phase.reason;
+      notify({
+        kind: 'error',
+        title: 'Update failed',
+        body: phase.reason,
+        ttlMs: null,
+        actions: [
+          {
+            label: 'Open releases page',
+            onClick: () => {
+              const url = phase.version
+                ? `https://github.com/walpakhart/Woom/releases/tag/v${phase.version}`
+                : 'https://github.com/walpakhart/Woom/releases';
+              void invoke('plugin:opener|open_url', { url }).catch(() => {});
+            },
+          },
+        ],
+      });
+      return;
+    }
+
+    if (phase.kind !== 'available') {
+      // Reset the dedup gates when the live state goes back to
+      // idle/up-to-date so a future re-emit of the same version
+      // (or the same failure after a manual retry) re-arms cleanly.
+      if (phase.kind !== 'snoozed' && phase.kind !== 'skipped') {
+        lastToastedVersion = null;
+        lastFailedReason = null;
+        showUpdateNotesPane = false;
+      }
+      return;
+    }
+    // Dedup at the version level — same version emitted twice by the
+    // poll loop reuses the existing toast (toaster.svelte's own dedup
+    // refreshes the TTL, but actions captured the OLD closure so we
+    // bail entirely here when we already toasted this version).
+    if (lastToastedVersion === phase.version) return;
+    lastToastedVersion = phase.version;
+    notify({
+      kind: 'info',
+      title: `Woom ${phase.version} available`,
+      body: 'New release ready to install.',
+      ttlMs: null,
+      actions: [
+        { label: 'View', onClick: () => { showUpdateNotesPane = true; } },
+        { label: 'Snooze 24h', onClick: () => { void updatesSnooze(24); } },
+        { label: 'Skip', onClick: () => { void updatesSkipVersion(phase.version); } },
+      ],
+    });
+  });
+
   onMount(async () => {
     /* Re-apply the persisted theme on boot — the SSR shell rendered
        with default `:root` vars, this flips `<html data-theme="…">`
        so the saved palette wins on first paint. */
     initTheme();
+    /* Updater auto-check default — OFF for now. Phase 1 of the SDD
+     * update-system workspace (`sdd-2508eeb82e`) lands the manifest +
+     * pubkey scaffolding; Phase 3 reads this key from a real Rust
+     * settings store. Until then we set a localStorage default so any
+     * Phase 4 UI that gates on the flag finds an explicit value
+     * instead of `null`. NEVER overwrite an existing setting — the
+     * user may have flipped it on after we ship. */
+    try {
+      if (typeof localStorage !== 'undefined' &&
+          localStorage.getItem('woom.updates.auto_check') === null) {
+        localStorage.setItem('woom.updates.auto_check', 'false');
+      }
+    } catch { /* localStorage can throw in some sandboxed contexts; safe to ignore */ }
     // Install a window-level dragend/drop listener that clears the
     // drag payload on any cancel — defense in depth against future
     // drag sources forgetting their own ondragend wiring.
@@ -982,6 +1083,12 @@
     // listener so the Preview pane (right side of Claude/Cursor solo)
     // refreshes when a process spawns / exits anywhere in the app.
     void initBgTasks();
+    void initSdd();
+    /* Updater state store — subscribes to the `update:state` Tauri
+     * event so the Settings card + the Phase 4 toast read live state
+     * from the Rust-side background poll. No-op if init has already
+     * fired (HMR re-mount safety). */
+    void initUpdatesStore();
     // Hooks — load the user's `hooks.json` config so the lifecycle
     // call sites (UserPromptSubmit / Stop / SessionStart later) can
     // dispatch without an IPC stall on the first invocation.
@@ -2417,6 +2524,27 @@
       } else if (withArgs.name === 'loop') {
         await startLoopFromSlash(session, withArgs.args);
         void scrollChatBottom();
+      } else if (withArgs.name === 'sdd') {
+        /* /sdd <prompt> — split the visible user-message from the
+         *  agent-facing template. User's ASK appears in the chat as
+         *  a normal user bubble (the thing they actually typed). The
+         *  multi-paragraph spec-writer template is sent SILENTLY via
+         *  `sendClaudeMessage({ silent: true })` — agent's CLI sees
+         *  it through --resume history, the visible thread skips it.
+         *  Card progress is the user-facing indicator from here on. */
+        appendSessionMessage(session.id, {
+          role: 'user',
+          content: withArgs.args,
+          at: new Date().toISOString()
+        });
+        const { startSddFromSlash } = await import('$lib/services/slashCommands');
+        const rendered = await startSddFromSlash(session, withArgs.args);
+        if (rendered) {
+          updateSession(session.id, { input: rendered });
+          await Promise.resolve();
+          await sendClaudeMessage({ silent: true });
+        }
+        void scrollChatBottom();
       }
       return true;
     }
@@ -2479,7 +2607,36 @@
   // in-progress text survives the queue firing.
   const queueSavedDrafts = new Map<string, { text: string; mentions: Mention[] }>();
 
-  async function sendClaudeMessage() {
+  /** SDD card "Approve & continue" / "Next phase" click handler.
+   *  Pushes the next-stage prompt into the agent's CLI session
+   *  SILENTLY — the giant phase/plan/spec template is recorded in the
+   *  agent's `--resume` transcript so context inheritance works, but
+   *  the visible chat thread skips it via `hidden: true`. Agent's
+   *  reply stays visible (usually a short "Phase N done.").
+   *
+   *  We still go through `sendClaudeMessage` (with `silent: true`) so
+   *  all the post-turn plumbing — sending=false, statusline refresh,
+   *  SDD refresh, queue drain — runs identically to a manual user
+   *  turn. SDD shouldn't fork a parallel pipeline; it just gets to
+   *  borrow the existing one. */
+  async function onSddAdvance(sessionId: string, prompt: string): Promise<void> {
+    const s = sessionsState.list.find((x) => x.id === sessionId);
+    if (!s) return;
+    updateSession(sessionId, { input: prompt });
+    await Promise.resolve();
+    await sendClaudeMessage({ silent: true });
+  }
+
+  /** Options for `sendClaudeMessage`. `silent` is used by the SDD
+   *  orchestrator to push phase prompts into the agent's CLI session
+   *  WITHOUT polluting the visible chat with the giant template — the
+   *  user-message bubble is marked `hidden: true` so ChatThread skips
+   *  it. Agent's reply stays visible (it's short and useful — usually
+   *  "Phase N done."). Skips slash-command parsing, the UserPromptSubmit
+   *  hook, and mention baking — SDD prompts are internal and shouldn't
+   *  go through user-prompt-shaped middleware. */
+  type SendOpts = { silent?: boolean };
+  async function sendClaudeMessage(opts: SendOpts = {}) {
     const s = activeSession;
     if (!s) return;
     /* Queue while a turn is in flight: instead of dropping the click,
@@ -2492,6 +2649,22 @@
        are pending mentions we still queue but warn — the mentions
        stay attached for now and the next free moment uses them. */
     if (s.sending) {
+      /* SDD silent prompts shouldn't go into the visible-chat queue
+       *  (would replay as user messages later) — but dropping them
+       *  outright caused a stuck-spinner bug when the user clicked
+       *  Approve milliseconds before the prior turn's `sending: false`
+       *  landed. Park the prompt in a dedicated single-slot store
+       *  keyed by session; the post-turn drain at the bottom of this
+       *  function picks it up as soon as the session frees up. */
+      if (opts.silent) {
+        const promptText = s.input.trim();
+        if (promptText) {
+          const { setPendingSilent } = await import('$lib/state/sdd.svelte');
+          setPendingSilent(s.id, promptText);
+        }
+        updateSession(s.id, { input: '' });
+        return;
+      }
       const draft = s.input.trim();
       if (!draft && s.mentions.length === 0) return;
       const entry = { text: draft, mentions: [...s.mentions] };
@@ -2509,36 +2682,36 @@
      * call. `parseSlashCommand` only matches when the WHOLE message
      * is the command, so a regular message that happens to start
      * with `/` falls through to the normal path. */
-    if (await handleSlashCommand(text, s)) return;
+    if (!opts.silent && (await handleSlashCommand(text, s))) return;
     const id = s.id;
     const kind = (s.agentKind ?? 'claude') as 'claude' | 'cursor';
     /* UserPromptSubmit hook — runs *before* the message is stamped
-       on the thread and sent upstream. Two outcomes we honor today:
-         - `blocked: true` → abort the send; surface feedback as a
-           muted system message so the user knows why.
-         - any other → continue. (Phase 2.1 wires `updated_prompt`
-           rewrite — would need to thread the rewritten text through
-           the mention-baker and prompt assembler below.) */
-    try {
-      const hookOut = await runHook('UserPromptSubmit', {
-        session_id: id,
-        agent_kind: kind,
-        prompt: text,
-        cwd: s.cwd ?? null,
-        worktree_path: s.worktreePath ?? null
-      });
-      if (hookOut.blocked) {
-        appendSessionMessage(id, {
-          role: 'assistant',
-          content: `_Blocked by hook: ${hookOut.feedback.join('; ') || '(no reason given)'}_`,
-          at: new Date().toISOString()
+       on the thread and sent upstream. Skipped on `silent` (SDD)
+       turns because the prompt is orchestrator-generated, not user-
+       authored — UserPromptSubmit hooks expect to see real user
+       intent. */
+    if (!opts.silent) {
+      try {
+        const hookOut = await runHook('UserPromptSubmit', {
+          session_id: id,
+          agent_kind: kind,
+          prompt: text,
+          cwd: s.cwd ?? null,
+          worktree_path: s.worktreePath ?? null
         });
-        return;
+        if (hookOut.blocked) {
+          appendSessionMessage(id, {
+            role: 'assistant',
+            content: `_Blocked by hook: ${hookOut.feedback.join('; ') || '(no reason given)'}_`,
+            at: new Date().toISOString()
+          });
+          return;
+        }
+      } catch (err) {
+        /* Hook IPC failed — log + continue. Better to send the message
+           than to silently swallow it on a config glitch. */
+        console.warn('UserPromptSubmit hook failed', err);
       }
-    } catch (err) {
-      /* Hook IPC failed — log + continue. Better to send the message
-         than to silently swallow it on a config glitch. */
-      console.warn('UserPromptSubmit hook failed', err);
     }
     // Snapshot the mentions BEFORE clearing so we can still bake them into
     // the prompt below + stamp the image refs onto the user-message bubble
@@ -2557,7 +2730,8 @@
       role: 'user',
       content: text,
       at: new Date().toISOString(),
-      ...(userImages.length ? { images: userImages } : {})
+      ...(userImages.length ? { images: userImages } : {}),
+      ...(opts.silent ? { hidden: true } : {})
     });
     // Auto-title from first user message when chat had no mentions
     const curr = sessionsState.list.find((x) => x.id === id);
@@ -2922,6 +3096,30 @@
       (m, i) => i === finalSess.messages.length - 1 && m.role === 'assistant' && m.content.startsWith('**Claude failed:')
     );
     updateSession(id, { sending: false });
+    /* SDD refresh — if the session has an active SDD workspace, the
+     *  agent's just-completed turn likely wrote a spec/plan/phase file.
+     *  Re-read the workspace from disk so the inline card reflects the
+     *  new state (stage transition, new phases, status flips, etc.).
+     *  Fire-and-forget; the resulting `sdd:changed:<id>` event will
+     *  update the reactive store. */
+    {
+      const sddWs = workspaceForSession(id);
+      if (sddWs) {
+        void refreshSdd(sddWs.id).then(async (fresh) => {
+          /* Auto-fire the workflow summary once the last phase
+           *  completes. `buildPromptForStage` returns the summary
+           *  template only when stage='complete' AND no SUMMARY.md
+           *  exists yet — so this fires exactly once per workspace.
+           *  Silent send, same lane as Approve clicks. */
+          if (!fresh) return;
+          if (fresh.stage.kind !== 'complete') return;
+          if (fresh.summary_body) return;
+          const { buildPromptForStage } = await import('$lib/state/sdd.svelte');
+          const prompt = await buildPromptForStage(fresh);
+          if (prompt) await onSddAdvance(id, prompt);
+        });
+      }
+    }
     /* Stop hook — fires on every normal turn completion (errored OR
        not). Hooks can use this for notifications, log archival, or
        conditional `/loop`-style behavior. Failures swallow so a bad
@@ -2971,7 +3169,48 @@
          active-session flip is a feature, not a bug: the user is
          intentionally driving this session forward. */
       const sessAfterDrain = sessionsState.list.find((x) => x.id === id);
-      const queue = sessAfterDrain?.pendingQueue ?? [];
+      /* Drain any deferred silent SDD prompt for this session BEFORE
+       *  the visible queue. The user clicked Approve mid-turn; now
+       *  that the session is free, fire the silent send. Single slot,
+       *  so a sequence of clicks always lands on the most-recent
+       *  stage-derived prompt — the right one. Skip if a regular
+       *  visible message is also queued (shouldn't happen in practice
+       *  but rather lose the silent than collide with user intent). */
+      {
+        const { popPendingSilent } = await import('$lib/state/sdd.svelte');
+        const deferred = popPendingSilent(id);
+        if (deferred && (sessAfterDrain?.pendingQueue?.length ?? 0) === 0) {
+          updateSession(id, { input: deferred });
+          queueMicrotask(() => {
+            void sendClaudeMessage({ silent: true });
+          });
+          /* Skip the normal pendingQueue drain below — the silent send
+           *  we just fired will retrigger this whole `finally` block,
+           *  which will pick up the next queue entry (if any) then. */
+          return;
+        }
+      }
+      /* Stripe SDD orchestrator templates out of the queue — they
+       *  should never have been here (silent prompts now bail before
+       *  enqueue) but historical sessions may have stuck copies, and
+       *  the cost of an over-eager filter is zero: SDD prompts are
+       *  always re-derived from the workspace stage, so a user re-
+       *  click rebuilds the right one. Markers cover the three
+       *  template headers from `sdd_prompts/{spec,plan,phase}.md`. */
+      const rawQueue = sessAfterDrain?.pendingQueue ?? [];
+      const queue = rawQueue.filter((entry) => {
+        const t = entry.text.trimStart();
+        return !(
+          t.startsWith('# SDD Phase 1 — Write the spec') ||
+          t.startsWith('# SDD Phase 2 — Write the plan') ||
+          t.startsWith('# SDD Phase 3+ — Execute phase')
+        );
+      });
+      if (queue.length !== rawQueue.length) {
+        /* Drop the SDD entries from the persisted queue so they
+         *  don't re-appear on the next drain. */
+        updateSession(id, { pendingQueue: queue });
+      }
       if (queue.length > 0) {
         const [nextEntry, ...rest] = queue;
         // Save the user's current draft once (on first drain) so we can
@@ -4678,6 +4917,19 @@
       e.preventDefault();
       symbolPickerOpen = !symbolPickerOpen;
     } else if (
+      (e.metaKey || e.ctrlKey) && e.shiftKey &&
+      (e.key === 'b' || e.key === 'B' || e.code === 'KeyB') &&
+      view === 'editorApp'
+    ) {
+      /* ⇧⌘B — create a new git branch from anywhere in the editor
+       * surface. Dispatches a window-level event the GitPanel listens
+       * for: it pops the branch picker open, flips to "create" mode,
+       * and the new-branch-name input auto-focuses via its attach
+       * directive. Scoped to the editor solo so the binding doesn't
+       * fire while the user is buried in a chat / canvas / terminal. */
+      e.preventDefault();
+      window.dispatchEvent(new CustomEvent('woom:editor:new-branch'));
+    } else if (
       (e.metaKey || e.ctrlKey) &&
       !e.shiftKey && !e.altKey &&
       (e.key === '[' || e.code === 'BracketLeft') &&
@@ -5498,6 +5750,7 @@
           onDragOver={(e) => onAgentDragOver(APP_INSTANCE_IDS.claude, 'claude', e)}
           onDrop={(e) => onAgentDrop(APP_INSTANCE_IDS.claude, 'claude', e)}
           onDragLeave={() => onAgentDragLeave(APP_INSTANCE_IDS.claude)}
+          onSddAdvance={onSddAdvance}
         />
       {/if}
 
@@ -5540,6 +5793,7 @@
           onDragOver={(e) => onAgentDragOver(APP_INSTANCE_IDS.cursor, 'cursor', e)}
           onDrop={(e) => onAgentDrop(APP_INSTANCE_IDS.cursor, 'cursor', e)}
           onDragLeave={() => onAgentDragLeave(APP_INSTANCE_IDS.cursor)}
+          onSddAdvance={onSddAdvance}
         />
       {/if}
 
@@ -5676,6 +5930,23 @@
   bind:open={symbolPickerOpen}
   setView={(v) => (view = v)}
 />
+
+{#if showUpdateNotesPane && updatesPhaseStore.phase.kind === 'available'}
+  <UpdateNotesPane
+    version={updatesPhaseStore.phase.version}
+    notes={updatesPhaseStore.phase.notes}
+    pubDate={updatesPhaseStore.phase.pub_date}
+    onInstallNow={() => {
+      showUpdateNotesPane = false;
+      void updatesInstallNow();
+    }}
+    onInstallOnQuit={() => {
+      showUpdateNotesPane = false;
+      void updatesInstallOnQuit();
+    }}
+    onClose={() => { showUpdateNotesPane = false; }}
+  />
+{/if}
 
 {#if agentDashboardOpen}
   <AgentDashboard

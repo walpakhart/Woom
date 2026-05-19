@@ -139,6 +139,14 @@ export type ClaudeMessage = {
       entry holds the absolute path (rendered via `convertFileSrc`) and the
       basename for the alt text. Only set on `role: 'user'` messages. */
   images?: { path: string; name: string }[];
+  /** When true, the chat thread DOES NOT render this message — it's
+   *  invisible orchestration traffic that the agent's CLI transcript
+   *  needs to see (so `--resume` history stays correct) but the user
+   *  shouldn't have to scroll past. Set by SDD when phase prompts are
+   *  injected: the giant spec/plan/phase template lives on the agent's
+   *  side but stays out of the user's visible chat. Pure UX filter —
+   *  search / export / hydrate all treat hidden + visible alike. */
+  hidden?: boolean;
 };
 
 export type Mention = {
@@ -217,14 +225,23 @@ export type ClaudeAction =
   | {
       id: string;
       kind: 'question';
+      /** Shape of the question card:
+       *   - `single`  — radio list, click auto-submits.
+       *   - `multi`   — checkbox list + Submit button.
+       *   - `text`    — free-form input only, no clickable options.
+       *   - `confirm` — Yes / No buttons, no `options` needed.
+       *  Defaults to `single` (or `multi` when the legacy
+       *  `multi_select=true` flag was set). */
+      questionKind: 'single' | 'multi' | 'text' | 'confirm';
       /** The literal question text — rendered as the card's header. */
       question: string;
       /** Short context blurb shown above the option list (optional). */
       header?: string;
-      /** 2-4 mutually-exclusive options. Each rendered as a button.
-       *  Selecting one resolves the MCP tool with the chosen `label`. */
+      /** Clickable options. Empty for `questionKind=text|confirm`. */
       options: { label: string; description?: string }[];
-      /** True when the user may select multiple. Default false. */
+      /** Legacy mirror of `questionKind === 'multi'` — kept for
+       *  back-compat with older serialised sessions. New code should
+       *  read `questionKind`. */
       multiSelect?: boolean;
       status: 'pending' | 'executing' | 'done' | 'error';
       /** Chosen label(s) — set on submit. Surfaces in the executed-card

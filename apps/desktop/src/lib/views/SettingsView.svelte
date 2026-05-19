@@ -1,7 +1,13 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
   import { openPath, openUrl } from '@tauri-apps/plugin-opener';
-  import { check, type Update } from '@tauri-apps/plugin-updater';
+  import {
+    updateState as updatesStore,
+    checkNow as updatesCheckNow,
+    installNow as updatesInstallNow,
+    setAutoCheck as updatesSetAutoCheck,
+    clearSkip as updatesClearSkip,
+  } from '$lib/state/updates.svelte';
   import { marked } from 'marked';
   import { buildBugReport, bugReportGithubIssueUrl } from '$lib/services/bugReport';
   import { resetWelcome, welcomeState } from '$lib/state/welcome.svelte';
@@ -476,74 +482,91 @@
   /* throws — both surfaced here as a friendly status.                 */
   /* ------------------------------------------------------------------ */
 
-  let updateCheckBusy = $state(false);
-  let updateInstallBusy = $state(false);
-  let updateLastCheckedAt = $state<string | null>(null);
-  let updateAvailable = $state<Update | null>(null);
-  let updateStatusMessage = $state<string | null>(null);
-  /* 0..1 progress when a download is in flight; null when idle. */
-  let updateDownloadProgress = $state<number | null>(null);
-  let updateDownloadTotal = $state<number | null>(null);
-  let updateInstalledOk = $state(false);
+  /* Updater UI is fully driven by the Rust-side state store now. Every
+   * `$state` below this block migrated to `$derived` so the toast, the
+   * Settings card, and any future release-notes overlay read from the
+   * same source of truth (`updateState` from `$lib/state/updates.svelte`).
+   * The store is initialised once on app mount in `+page.svelte` via
+   * `initUpdatesStore()`. */
+  const updateCheckBusy = $derived(updatesStore.phase.kind === 'checking');
+  const updateInstallBusy = $derived(
+    updatesStore.phase.kind === 'downloading' ||
+      updatesStore.phase.kind === 'verifying' ||
+      updatesStore.phase.kind === 'installing'
+  );
+  const updateLastCheckedAt = $derived(
+    updatesStore.settings.last_checked_at_ms
+      ? new Date(updatesStore.settings.last_checked_at_ms).toISOString()
+      : null
+  );
+  /* Match the old `{ version, body }` shape so the template's
+   * `updateAvailable.version` / `updateAvailable.body` bindings keep
+   * working without a markup rewrite. */
+  const updateAvailable = $derived.by(() => {
+    const p = updatesStore.phase;
+    if (p.kind !== 'available') return null;
+    return { version: p.version, body: p.notes };
+  });
+  const updateInstalledOk = $derived(updatesStore.phase.kind === 'installed_pending_quit');
+  const updateDownloadProgress = $derived.by(() => {
+    const p = updatesStore.phase;
+    if (p.kind !== 'downloading') return null;
+    if (!p.total || p.total <= 0) return null;
+    return Math.min(1, p.downloaded / p.total);
+  });
+  const updateDownloadTotal = $derived(
+    updatesStore.phase.kind === 'downloading' ? updatesStore.phase.total : null
+  );
+  const updateStatusMessage = $derived.by(() => {
+    const p = updatesStore.phase;
+    switch (p.kind) {
+      case 'idle': return null;
+      case 'checking': return 'Checking for updates…';
+      case 'up_to_date': return 'You’re on the latest version.';
+      case 'available': return `Update ${p.version} ready to install.`;
+      case 'snoozed': return `Update ${p.version} snoozed.`;
+      case 'skipped': return `Update ${p.version} skipped.`;
+      case 'downloading': return p.total
+        ? `Downloading ${p.version}… ${Math.round((p.downloaded / p.total) * 100)}%`
+        : `Downloading ${p.version}…`;
+      case 'verifying': return `Verifying ${p.version}…`;
+      case 'installing': return `Installing ${p.version}…`;
+      case 'installed_pending_quit':
+        return 'Update installed. Quit and reopen Woom to finish.';
+      case 'failed': return `Couldn’t check for updates: ${p.reason}`;
+    }
+  });
 
   async function checkForUpdates() {
-    updateCheckBusy = true;
-    updateStatusMessage = null;
     try {
-      const u = await check();
-      updateLastCheckedAt = new Date().toISOString();
-      if (u) {
-        updateAvailable = u;
-        updateStatusMessage = `Update ${u.version} ready to install.`;
-      } else {
-        updateAvailable = null;
-        updateStatusMessage = 'You’re on the latest version.';
-      }
+      await updatesCheckNow();
     } catch (e) {
-      /* The PLACEHOLDER pubkey + unreachable endpoint will land here
-       * until a real signing key is wired up; surface as a hint
-       * rather than a scary error. */
-      updateAvailable = null;
-      updateStatusMessage = `Couldn’t check for updates: ${
-        typeof e === 'string' ? e : (e as Error).message ?? 'unknown error'
-      }`;
-    } finally {
-      updateCheckBusy = false;
+      notifyError(e, { title: 'Update check failed' });
     }
   }
 
   async function installUpdate() {
-    if (!updateAvailable) return;
-    updateInstallBusy = true;
-    updateDownloadProgress = 0;
-    updateDownloadTotal = null;
+    if (updatesStore.phase.kind !== 'available') return;
     try {
-      let downloaded = 0;
-      await updateAvailable.downloadAndInstall((event) => {
-        if (event.event === 'Started') {
-          updateDownloadTotal =
-            typeof event.data.contentLength === 'number'
-              ? event.data.contentLength
-              : null;
-          downloaded = 0;
-          updateDownloadProgress = 0;
-        } else if (event.event === 'Progress') {
-          downloaded += event.data.chunkLength;
-          if (updateDownloadTotal && updateDownloadTotal > 0) {
-            updateDownloadProgress = Math.min(1, downloaded / updateDownloadTotal);
-          }
-        } else if (event.event === 'Finished') {
-          updateDownloadProgress = 1;
-        }
-      });
-      updateInstalledOk = true;
-      updateStatusMessage = 'Update installed. Quit and reopen Woom to finish.';
+      await updatesInstallNow();
     } catch (e) {
-      updateStatusMessage = `Install failed: ${
-        typeof e === 'string' ? e : (e as Error).message ?? 'unknown error'
-      }`;
-    } finally {
-      updateInstallBusy = false;
+      notifyError(e, { title: 'Install failed' });
+    }
+  }
+
+  async function toggleAutoCheck(enabled: boolean) {
+    try {
+      await updatesSetAutoCheck(enabled);
+    } catch (e) {
+      notifyError(e, { title: 'Settings update failed' });
+    }
+  }
+
+  async function clearSkippedVersion() {
+    try {
+      await updatesClearSkip();
+    } catch (e) {
+      notifyError(e, { title: 'Clear skip failed' });
     }
   }
 
@@ -643,7 +666,7 @@
   function refreshBugReportPreview() {
     bugReportPreview = buildBugReport({
       description: bugReportDescription,
-      appVersion: 'Woom 1.0.0'
+      appVersion: 'Woom 0.1.0'
     });
   }
 
@@ -1105,13 +1128,13 @@
       <header class="card-head">
         <h2 class="card-title">Updates</h2>
         <p class="card-sub">
-          Auto-update channel for new Woom builds. Signed and notarized releases pull from the public manifest configured in <span class="mono">tauri.conf.json</span>.
+          Auto-update channel for new Woom builds. Releases pull from the public manifest configured in <span class="mono">tauri.conf.json</span> and are verified against an ed25519 public key.
         </p>
       </header>
       <div class="grid">
         <div class="stat">
           <div class="stat-label">Current version</div>
-          <div class="stat-value mono">Woom 1.0.0</div>
+          <div class="stat-value mono">Woom 0.1.0</div>
         </div>
         <div class="stat">
           <div class="stat-label">Last checked</div>
@@ -1128,7 +1151,22 @@
         >
           {updateCheckBusy ? 'Checking…' : 'Check for updates'}
         </button>
+        <label class="update-toggle">
+          <input
+            type="checkbox"
+            checked={updatesStore.settings.auto_check_enabled}
+            onchange={(e) => void toggleAutoCheck((e.currentTarget as HTMLInputElement).checked)}
+          />
+          Auto-check on launch + every 6h
+        </label>
       </div>
+      {#if updatesStore.settings.skipped_version}
+        <div class="update-skip-row">
+          <span class="update-skip-label">Skipped version</span>
+          <span class="mono">{updatesStore.settings.skipped_version}</span>
+          <button class="btn-link" onclick={clearSkippedVersion}>clear skip</button>
+        </div>
+      {/if}
       {#if updateStatusMessage}
         <div class="update-status" class:update-status--ready={updateAvailable !== null} class:update-status--installed={updateInstalledOk}>
           {updateStatusMessage}
@@ -1346,7 +1384,7 @@
       <div class="grid">
         <div class="stat">
           <div class="stat-label">Build</div>
-          <div class="stat-value mono">Woom 1.0.0 · aarch64</div>
+          <div class="stat-value mono">Woom 0.1.0 · aarch64</div>
         </div>
         <div class="stat">
           <div class="stat-label">Storage keys</div>

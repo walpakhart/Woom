@@ -258,7 +258,7 @@ There is **no** `mcp_auth` tool in the `user-woom-*` directories.
 The `mcp_auth` concept (a tool an MCP server exposes for its own
 credential round-trip) is unused here — Woom owns the auth,
 sidecars read what they're told. Woom itself is PAT-only across
-the board (`docs/ROADMAP_1.0.md §6`); a future `mcp_auth` is for
+the board; a future `mcp_auth` is for
 third-party / community servers we don't ship, not for our own.
 
 ---

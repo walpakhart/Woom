@@ -87,6 +87,7 @@
     /** Click on a file/dir reference inside a chat bubble — opens it
      *  in the linked editor (or the active editor instance). */
     onOpenFile?: (path: string) => void;
+    onSddAdvance?: (sessionId: string, prompt: string) => void;
   }
   let p: Props = $props();
 
@@ -209,6 +210,7 @@
                 onStartEditMessage={p.onStartEditMessage}
                 onResendMessage={p.onResendMessage}
                 onOpenFile={p.onOpenFile}
+                onSddAdvance={p.onSddAdvance}
               />
               <Composer
                 kind={p.kind}
@@ -278,6 +280,7 @@
               onStartEditMessage={p.onStartEditMessage}
               onResendMessage={p.onResendMessage}
               onOpenFile={p.onOpenFile}
+              onSddAdvance={p.onSddAdvance}
             />
             <Composer
               kind={p.kind}
@@ -387,8 +390,15 @@
   .sa-end-grid {
     display: grid;
     grid-template-columns: minmax(0, 1fr) 44px;
+    /* `minmax(0, 1fr)` on the row track prevents the grid item (chat
+       pane with its long ChatThread) from forcing the row taller than
+       the viewport — without it, `grid-template-rows` defaults to
+       `auto`, the row grows to fit content, and Composer slides off
+       the bottom of the screen on long sessions. */
+    grid-template-rows: minmax(0, 1fr);
     gap: var(--app-gap, 14px);
     width: 100%; height: 100%;
+    min-height: 0;
     transition: grid-template-columns var(--dur-base) var(--ease-out);
   }
   /* Outer grid wraps midStack + the 44px preview rail when preview
@@ -397,9 +407,23 @@
   .sa-outer-grid {
     display: grid;
     grid-template-columns: minmax(0, 1fr) 44px;
+    /* See .sa-end-grid above — row track must be capped at viewport
+       height or the inner midStack (chat pane) overflows and pushes
+       the composer off-screen when Preview pane collapses. */
+    grid-template-rows: minmax(0, 1fr);
     gap: var(--app-gap, 14px);
     width: 100%; height: 100%;
+    min-height: 0;
     transition: grid-template-columns var(--dur-base) var(--ease-out);
+  }
+  /* Grid children must also opt-in to `min-height: 0` so their
+     internal flex containers (`.sa-chat` etc.) honour the row cap.
+     CSS grid sets `min-height: auto` by default on items, which
+     defeats the row track's `minmax(0, 1fr)` constraint. */
+  .sa-outer-grid > :global(*),
+  .sa-end-grid > :global(*) {
+    min-height: 0;
+    min-width: 0;
   }
   /* Discriminator class for future per-rail styling (e.g. tone shift).
      Empty for now — keeps the selector in place so JS code that toggles

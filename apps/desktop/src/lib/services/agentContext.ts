@@ -73,6 +73,26 @@ export function buildAgentAppContext(callingSessionId: string): string {
   // once per session and saves multiple thousand tokens per
   // "list my PRs" / "find issues mentioning X" / "show recent
   // errors" turn.
+  // Ask-user-question discipline. Default Claude behaviour is to
+  // pose clarifications in prose ("Confirm? A / B / C"), which ends
+  // the turn + forces a re-context on the next message AND skips
+  // Woom's interactive card UI. Push the agent toward the MCP tool
+  // for any branch-point that the user's preference will resolve.
+  lines.push('');
+  lines.push(
+    'User-clarification discipline. When you need a binary choice '
+      + '("proceed / abort"), a small option set ("which of A / B / '
+      + 'C"), or a yes/no confirmation from the user — USE the '
+      + '`mcp__app__ask_user_question` tool, NOT prose. Prose like '
+      + '"Confirm?" ends your turn and loses the structured-card UX. '
+      + 'The tool BLOCKS until the user picks (or types an "Other") '
+      + 'and returns their answer in the SAME turn, so you reason '
+      + 'about the choice immediately and continue. Reserve prose for '
+      + 'open-ended questions and explanations. Don\'t use it for '
+      + 'destructive-action confirmation (that\'s `propose_bash` / '
+      + '`propose_commit` / `propose_pr` — they have approval semantics).'
+  );
+
   lines.push('');
   lines.push(
     'Search/list discipline (applies to ALL data sources). When the '

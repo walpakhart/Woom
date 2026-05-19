@@ -53,7 +53,7 @@ roll in, the user clicks one, sees the latest stack frame + breadcrumbs
   GitHub/Jira tick.
 - **Cross-org views.** One Sentry connection at a time.
 - **OAuth.** Internal integration tokens only — by design
-  (`docs/ROADMAP_1.0.md §6`).
+ .
 
 ---
 

@@ -1,14 +1,15 @@
 {
   "name": "woom",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "private": true,
   "description": "Woom — a focused, warm-lit workspace for software work.",
   "scripts": {
     "sidecars:debug": "cargo build --manifest-path apps/desktop/src-tauri/Cargo.toml -p woom-jira -p woom-github -p woom-memory -p woom-sentry -p woom-app && bash scripts/copy-sidecars.sh debug",
     "sidecars:release": "cargo build --manifest-path apps/desktop/src-tauri/Cargo.toml -p woom-jira -p woom-github -p woom-memory -p woom-sentry -p woom-app --release && bash scripts/copy-sidecars.sh release",
+    "sidecars:release:universal": "bash scripts/build-sidecars-universal.sh",
     "dev": "pnpm sidecars:debug && pnpm --filter @woom/desktop tauri dev",
     "build": "pnpm sidecars:release && pnpm --filter @woom/desktop tauri build",
-    "build:universal": "pnpm sidecars:release && pnpm --filter @woom/desktop tauri build --target universal-apple-darwin",
+    "build:universal": "pnpm sidecars:release:universal && pnpm --filter @woom/desktop tauri build --target universal-apple-darwin",
     "check": "pnpm --filter @woom/desktop check"
   },
   "engines": {

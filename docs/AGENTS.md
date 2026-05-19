@@ -57,7 +57,7 @@ Three things matter:
 
 ### 1.3 Non-Goals (v1)
 
-- **First-party model serving.** Forge calls CLI tools that do their
+- **First-party model serving.** Woom calls CLI tools that do their
   own auth and routing — we never see API keys.
 - **Multi-model orchestration.** One agent kind per column. Cross-agent
   hand-offs are user-driven (drag a chat message, send to the other
@@ -642,7 +642,7 @@ the string in old comments, it's stale.
 3. **No per-session JSON on disk.** Single bad write to localStorage
    can lose all sessions; persistence layer needs hardening.
 4. **No structured slash commands** in v1; could expose
-   `/compact`, `/clear`, `/checkout <branch>` purely as Forge UX.
+   `/compact`, `/clear`, `/checkout <branch>` purely as Woom UX.
 5. **Session search** is missing — chat tabs grow indefinitely.
 6. **Codex / Aider / Copilot** are placeholders only; building them
    means a new sidecar adapter, plus disambiguating `agentKind`.

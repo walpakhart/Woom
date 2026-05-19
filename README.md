@@ -4,13 +4,22 @@
 > GitHub PRs, code editor, and Claude/Cursor agents in one window —
 > everything a drag away.
 
-**Status:** 1.0 GA. Workbench, agents (Claude + Cursor), editor, and
-canvas all ship; team / cloud sync features are post-1.0. The full
-1.0 plan and what was cut lives in [`docs/ROADMAP_1.0.md`](docs/ROADMAP_1.0.md).
+**Status:** 0.1.0 — first public release. Solos (Home, Jira, GitHub,
+Sentry, Claude, Cursor, Editor, Canvas, Terminal), agents (Claude +
+Cursor with MCP toolbox), built-in editor with multi-agent diff
+review, canvas, terminal, SDD (Spec-Driven Development) orchestrator,
+signed macOS auto-updates, and persistent memory all ship. Team /
+cloud sync are post-0.1. Forward-looking backlog lives in
+[`docs/FUTURE_FEATURES.md`](docs/FUTURE_FEATURES.md); release runbook
+in [`docs/RELEASES.md`](docs/RELEASES.md); per-version notes in
+[`CHANGELOG.md`](CHANGELOG.md).
 
-**Platform:** macOS 13+ only. Ships as a signed & notarized `.app`
-bundle (Universal binary: Apple Silicon + Intel). Windows and Linux
-are post-v1.0.
+**Platform:** macOS 13+ only. Universal `.app` bundle (Apple Silicon
++ Intel). Distributed as an ad-hoc-signed DMG — on first launch
+right-click the app and choose Open (Gatekeeper warning is expected;
+the build is not Apple-notarized). Auto-updates are protected by an
+ed25519 signature independent of Apple's chain. Windows and Linux are
+out of scope.
 
 ## Quick start
 
@@ -43,37 +52,47 @@ woom/
 └── pnpm-workspace.yaml    # monorepo root
 ```
 
-## Documents
+## Documentation
 
-- [docs/SPEC.md](docs/SPEC.md) — architecture, stack, auth model, macOS packaging
-- [docs/UI.md](docs/UI.md) — visual language, wireframes, interactions
-- [docs/REPOS.md](docs/REPOS.md) — local repo management (GitHub Desktop-style)
-- [docs/RULES.md](docs/RULES.md) — rules for Claude runs (current scope: single global ruleset)
-- [docs/MVP.md](docs/MVP.md) — milestones, scope cuts, post-MVP roadmap
+Per-module specs in [`docs/`](docs/):
 
-## v0.1 scope (single-player)
+- [`AGENTS.md`](docs/AGENTS.md) — Claude / Cursor adapter, sessions, slash commands, MCP toolbox
+- [`EDITOR.md`](docs/EDITOR.md) — CodeMirror 6 editor, file tree, git panel, diff review
+- [`CANVAS.md`](docs/CANVAS.md) — whiteboard primitives, layouts, live cards, agent integration
+- [`WORKBENCH.md`](docs/WORKBENCH.md) — solo layout, drag-drop, snap-resize
+- [`COMMAND_PALETTE.md`](docs/COMMAND_PALETTE.md) — fuzzy search, MRU, pinned items
+- [`CONNECTIONS.md`](docs/CONNECTIONS.md) — PAT-only auth, Keychain, token rotation, diagnostics
+- [`JIRA.md`](docs/JIRA.md) · [`GITHUB.md`](docs/GITHUB.md) · [`SENTRY.md`](docs/SENTRY.md) — per-source columns, filters, mutations
+- [`MCP.md`](docs/MCP.md) — bundled sidecars, `--mcp-config` shape, user-server merge
+- [`RELEASES.md`](docs/RELEASES.md) — signing, notarization, auto-update runbook
+- [`FUTURE_FEATURES.md`](docs/FUTURE_FEATURES.md) — post-0.1 backlog
 
-| Feature       | What we support                                                       |
-|---------------|-----------------------------------------------------------------------|
-| Jira          | Tickets, comments, transitions, worklogs (live API; no offline cache) |
+## 0.1.0 scope
+
+| Feature        | What we support                                                       |
+|----------------|-----------------------------------------------------------------------|
+| Jira           | Tickets, comments, transitions, worklogs, sprints (live API)          |
 | GitHub        | PRs, issues, reviews, comments, merge, draft PR creation              |
-| Claude Code   | Headless `claude -p` with MCP sidecars + streaming + worktree-isolated runs |
-| Cursor        | Headless `cursor-agent` with session resume + model picker            |
-| Repositories  | Clone, fetch, branches, worktrees, commit, push, PR creation          |
-| Editor        | Built-in CodeMirror 6 editor with file tree, git panel, diff viewer   |
-| Rules         | Single global ruleset injected into every run via `--append-system-prompt` |
-| Connections   | Personal access tokens (GitHub PAT, Jira API token), stored in macOS Keychain with Touch ID gate |
-| Notifications | macOS Notification Center on Claude/Cursor run completion             |
+| Sentry         | Issues, events, breadcrumbs, releases, triage from the inbox          |
+| Claude Code    | Headless `claude -p` with MCP sidecars + streaming + worktree-isolated runs |
+| Cursor         | Headless `cursor-agent` with session resume + model picker            |
+| Editor         | CodeMirror 6 — file tree, git panel, multi-agent diff review, quick-open, symbol outline, find-in-files, markdown/image preview |
+| Canvas         | Boxes, arrows, mermaid, dagre/grid auto-layout, live source cards     |
+| Terminal       | Real `/bin/zsh` PTY instances drivable by agents via MCP              |
+| SDD            | Spec-Driven Development orchestrator — `/sdd <task>` drafts a spec, plans phases, executes each phase as a chained agent turn |
+| Memory         | Long-term SQLite FTS5 store; auto-recall at session start; per-chat distill on delete |
+| Rules          | Global ruleset injected into every run via `--append-system-prompt`   |
+| Connections    | Personal access tokens (GitHub PAT, Jira / Sentry API tokens) in macOS Keychain with Touch ID gate |
+| Auto-updates   | ed25519-signed DMGs, manifest-driven, install-now / install-on-quit, snooze + skip controls in Settings |
+| Notifications  | macOS Notification Center on Claude / Cursor run completion           |
 
-## Cut from v0.1 (originally in spec)
+## Out of scope for 0.1.0
 
-- **Slack source** — not implemented; revisit post-v1 once core flow is solid.
-- **OAuth PKCE** — manual PAT is a deliberate choice; each user enters their own token, no app-wide OAuth client to register or rotate.
-- **Per-scope `.forge/rules.md` parser** — current model is one global ruleset; per-scope composition is post-v1.
-- **SQLite-backed object cache & event log** — everything is live API + localStorage in v0.1.
-- **Workspace / member / shared sources** — team layer is post-v0.3.
-- **Output drop zones** (Slack/Jira-comment/GitHub-PR-draft) and saveable workflows — post-v1.
-- **Linear, Teams, Notion** — never in v0.1.
+- **OAuth** — permanent non-goal across every source. Manual PAT entry is the supported flow; tokens live in macOS Keychain behind a Touch ID gate.
+- **Slack, Linear, Teams, Notion, GitLab, Asana, Codex, Aider, Copilot** — placeholders only in the Connect modal; see `docs/FUTURE_FEATURES.md`.
+- **Team / cloud sync, multi-user workspaces, real-time collaboration.**
+- **Windows / Linux builds.** macOS 13+ only.
+- **LSP / IntelliSense in the editor, Sentry performance / transactions, Confluence, mobile.**
 
 ## License
 

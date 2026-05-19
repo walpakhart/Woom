@@ -79,7 +79,9 @@
   }
 
   async function handleKill(id: string) {
-    if (!confirm('Kill this process?')) return;
+    /* No confirm dialog — Tauri webview blocks native `window.confirm()`
+     *  (returns undefined synchronously). Killing a tracked bg task is
+     *  cheap to undo via `restart` anyway, so a single click is fine. */
     await killBgTask(id);
   }
 
@@ -122,6 +124,25 @@
       await openInOs(url);
     } catch {
       window.open(url, '_blank');
+    }
+  }
+
+  /* Open in standalone Tauri WebviewWindow — full-fidelity preview
+   *  (real cursor / scroll / DevTools) without the iframe sandbox
+   *  limitations. Window label = `preview-<task_id>`, so reopening
+   *  focuses the existing window instead of spawning duplicates. */
+  async function openInWindow(task: BgTask) {
+    const url = primaryUrl(task);
+    if (!url) return;
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('preview_open_window', {
+        taskId: task.id,
+        url,
+        title: `${task.label} · ${url}`
+      });
+    } catch (e) {
+      notify({ kind: 'error', title: 'Preview window', body: String(e) });
     }
   }
 
@@ -198,9 +219,6 @@
      is currently viewing — feels like "the preview just lit up". */
   type DetailTab = 'logs' | 'preview';
   let detailTabByTask = $state<Record<string, DetailTab>>({});
-  /** Track which tasks have ever auto-switched so a manual "go back to
-   *  logs" sticks even when more URLs land later. */
-  let autoSwitchedTasks = $state<Set<string>>(new Set());
 
   function detailTab(id: string): DetailTab {
     return detailTabByTask[id] ?? 'logs';
@@ -209,17 +227,15 @@
     detailTabByTask[id] = tab;
   }
 
-  $effect(() => {
-    if (!activeTask) return;
-    const url = primaryUrl(activeTask);
-    if (!url) return;
-    if (autoSwitchedTasks.has(activeTask.id)) return;
-    /* First URL detection on this task — flip to preview tab and
-     *  remember we did so. User can flip back to logs and we won't
-     *  override again on subsequent URLs. */
-    setDetailTab(activeTask.id, 'preview');
-    autoSwitchedTasks.add(activeTask.id);
-  });
+  /* NOTE: previously we auto-flipped to the `preview` tab on first URL
+   *  detection. Removed — auto-loading an iframe at `http://localhost:PORT`
+   *  inside Tauri's WKWebView competes with main UI for the renderer
+   *  thread on macOS (single WebContent process for same-app webviews).
+   *  Vite/Next dev servers run HEAVY JS on first paint (HMR client,
+   *  module graph fetch); pairing that with a high-rate IPC event
+   *  stream from `bg:line:<id>` froze the whole app. User now chooses
+   *  explicitly: click `preview` tab for inline iframe, or `pop out ↗`
+   *  for a separate Tauri window (different renderer process). */
 
   /** `bust` query param so a manual "reload" button forces the iframe
    *  to re-fetch without changing the src URL meaningfully. */
@@ -238,7 +254,7 @@
 </script>
 
 <aside class="pv app-pane" in:fly={{ x: 24, duration: 220, easing: cubicOut }}>
-  <header class="pv-head">
+  <header class="app-pane-head pv-head">
     <button
       class="pv-collapse-btn"
       onclick={p.onCollapse}
@@ -249,8 +265,8 @@
         <path d="M10 6l6 6-6 6"/>
       </svg>
     </button>
-    <span class="pv-head-h">Preview</span>
-    <span class="pv-head-count mono">{tasks.length}</span>
+    <span class="app-pane-head-h">Preview</span>
+    <span class="app-pane-head-meta mono">{tasks.length}</span>
   </header>
 
   <div
@@ -386,7 +402,8 @@
           {/if}
           <div class="pv-webview-foot mono">
             <span>{primaryUrl(activeTask)}</span>
-            <button class="pv-link-btn" onclick={() => openUrl(primaryUrl(activeTask) ?? '')}>open in browser ↗</button>
+            <button class="pv-link-btn" onclick={() => openInWindow(activeTask)} title="Open in a separate Woom window (real cursor / scroll / DevTools)">pop out ↗</button>
+            <button class="pv-link-btn" onclick={() => openUrl(primaryUrl(activeTask) ?? '')} title="Open in your default browser">browser ↗</button>
           </div>
         </div>
       {:else}
@@ -419,27 +436,13 @@
     min-width: 0;
   }
 
-  /* Head bar: tight, pane-head vocabulary borrowed from CanvasApp.
-     Collapse button leftmost (so it lines up with the worktree side's
-     existing chevron pattern). */
+  /* Head bar: uses canonical .app-pane-head + .app-pane-head-h +
+     .app-pane-head-meta from `_shared/app.css` so font + size match
+     every other solo's pane header (Geist 22px / mono badge). Local
+     `.pv-head` only tweaks the leading chevron's spacing. */
   .pv-head {
-    display: flex; align-items: center;
-    gap: 8px;
-    padding: 8px 10px 6px 10px;
-    border-bottom: 1px solid var(--border);
     flex-shrink: 0;
-  }
-  .pv-head-h {
-    font-family: var(--font-serif, Georgia, serif);
-    font-size: 13px;
-    color: var(--text-1);
-    letter-spacing: 0.01em;
-  }
-  .pv-head-count {
-    font-size: 10px; color: var(--text-mute);
-    padding: 1px 6px;
-    border-radius: 4px;
-    background: var(--bg-2);
+    gap: 10px;
   }
   .pv-collapse-btn {
     width: 24px; height: 24px;

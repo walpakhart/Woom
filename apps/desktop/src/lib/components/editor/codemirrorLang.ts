@@ -33,22 +33,46 @@ import { clojure } from '@codemirror/legacy-modes/mode/clojure';
 import { haskell } from '@codemirror/legacy-modes/mode/haskell';
 import { scheme } from '@codemirror/legacy-modes/mode/scheme';
 
-function legacy(mode: Parameters<typeof StreamLanguage.define>[0]): Extension {
-  return StreamLanguage.define(mode);
+/* StreamLanguage wrapper that lets us inject `commentTokens` for the
+ * legacy-mode family. `Mod-/` from CodeMirror's defaultKeymap reads
+ * `commentTokens` off the language's languageData facet to decide
+ * which prefix to add / strip — without it the keypress is a no-op
+ * for every legacy mode (shell, ruby, toml, lua, …). The lang-* npm
+ * packages already ship this data; the @codemirror/legacy-modes
+ * shipped parsers don't, so we patch it in centrally here. */
+type CommentTokens = { line?: string; block?: { open: string; close: string } };
+function legacy(
+  mode: Parameters<typeof StreamLanguage.define>[0],
+  commentTokens?: CommentTokens
+): Extension {
+  if (!commentTokens) return StreamLanguage.define(mode);
+  return StreamLanguage.define({
+    ...mode,
+    languageData: { ...(mode.languageData ?? {}), commentTokens }
+  });
 }
+
+/* Comment-token templates by language family. Drives `Mod-/`
+ * (toggleLineComment) for every legacy-mode call site below. */
+const HASH: CommentTokens = { line: '#' };
+const LUA_C: CommentTokens = { line: '--', block: { open: '--[[', close: ']]' } };
+const HASKELL_C: CommentTokens = { line: '--', block: { open: '{-', close: '-}' } };
+const SLASH_C: CommentTokens = { line: '//', block: { open: '/*', close: '*/' } };
+const PS_C: CommentTokens = { line: '#', block: { open: '<#', close: '#>' } };
+const SEMI: CommentTokens = { line: ';' };
 
 // Filename-only matches (no extension or special names). Jenkinsfile, Dockerfile, etc.
 const FILENAME_MAP: Record<string, () => Extension> = {
-  jenkinsfile: () => legacy(groovy),
-  dockerfile: () => legacy(dockerFile),
+  jenkinsfile: () => legacy(groovy, SLASH_C),
+  dockerfile: () => legacy(dockerFile, HASH),
   'docker-compose.yml': () => yaml(),
   'docker-compose.yaml': () => yaml(),
-  makefile: () => legacy(shell),
-  vagrantfile: () => legacy(ruby),
-  rakefile: () => legacy(ruby),
-  gemfile: () => legacy(ruby),
-  procfile: () => legacy(shell),
-  'cmakelists.txt': () => legacy(shell),
+  makefile: () => legacy(shell, HASH),
+  vagrantfile: () => legacy(ruby, HASH),
+  rakefile: () => legacy(ruby, HASH),
+  gemfile: () => legacy(ruby, HASH),
+  procfile: () => legacy(shell, HASH),
+  'cmakelists.txt': () => legacy(shell, HASH),
 
   /* Dotfiles without a real extension. Most of these are tiny config
      files where ALL the user really needs is comment + key=value
@@ -56,22 +80,22 @@ const FILENAME_MAP: Record<string, () => Extension> = {
      cleanly enough that a plain `.gitignore` stops looking like a
      wall of white text. JSON-shaped dotfiles get the json mode so
      strings / numbers / brackets light up. */
-  '.gitignore': () => legacy(shell),
-  '.dockerignore': () => legacy(shell),
-  '.prettierignore': () => legacy(shell),
-  '.eslintignore': () => legacy(shell),
-  '.npmignore': () => legacy(shell),
-  '.gitattributes': () => legacy(shell),
-  '.editorconfig': () => legacy(toml),
-  '.npmrc': () => legacy(shell),
-  '.nvmrc': () => legacy(shell),
-  '.yarnrc': () => legacy(shell),
-  '.tool-versions': () => legacy(shell),
-  '.python-version': () => legacy(shell),
-  '.ruby-version': () => legacy(shell),
-  '.node-version': () => legacy(shell),
-  '.env': () => legacy(shell),
-  '.envrc': () => legacy(shell),
+  '.gitignore': () => legacy(shell, HASH),
+  '.dockerignore': () => legacy(shell, HASH),
+  '.prettierignore': () => legacy(shell, HASH),
+  '.eslintignore': () => legacy(shell, HASH),
+  '.npmignore': () => legacy(shell, HASH),
+  '.gitattributes': () => legacy(shell, HASH),
+  '.editorconfig': () => legacy(toml, HASH),
+  '.npmrc': () => legacy(shell, HASH),
+  '.nvmrc': () => legacy(shell, HASH),
+  '.yarnrc': () => legacy(shell, HASH),
+  '.tool-versions': () => legacy(shell, HASH),
+  '.python-version': () => legacy(shell, HASH),
+  '.ruby-version': () => legacy(shell, HASH),
+  '.node-version': () => legacy(shell, HASH),
+  '.env': () => legacy(shell, HASH),
+  '.envrc': () => legacy(shell, HASH),
   '.prettierrc': () => json(),
   '.babelrc': () => json(),
   '.eslintrc': () => json(),
@@ -95,7 +119,7 @@ const EXT_MAP: Record<string, () => Extension> = {
   jsonc: () => json(),
   yaml: () => yaml(),
   yml: () => yaml(),
-  toml: () => legacy(toml),
+  toml: () => legacy(toml, HASH),
   xml: () => xml(),
   svg: () => xml(),
   // Markup / styles / web
@@ -119,8 +143,8 @@ const EXT_MAP: Record<string, () => Extension> = {
   java: () => java(),
   kt: () => java(),     // kotlin is close enough via java highlighter
   kts: () => java(),
-  groovy: () => legacy(groovy),
-  gradle: () => legacy(groovy),
+  groovy: () => legacy(groovy, SLASH_C),
+  gradle: () => legacy(groovy, SLASH_C),
   // C family
   c: () => cpp(),
   h: () => cpp(),
@@ -131,30 +155,30 @@ const EXT_MAP: Record<string, () => Extension> = {
   // Go / PHP / Ruby / Swift
   go: () => go(),
   php: () => php(),
-  rb: () => legacy(ruby),
-  swift: () => legacy(swift),
+  rb: () => legacy(ruby, HASH),
+  swift: () => legacy(swift, SLASH_C),
   // Shells & scripts
-  sh: () => legacy(shell),
-  bash: () => legacy(shell),
-  zsh: () => legacy(shell),
-  fish: () => legacy(shell),
-  ps1: () => legacy(powerShell),
-  psm1: () => legacy(powerShell),
+  sh: () => legacy(shell, HASH),
+  bash: () => legacy(shell, HASH),
+  zsh: () => legacy(shell, HASH),
+  fish: () => legacy(shell, HASH),
+  ps1: () => legacy(powerShell, PS_C),
+  psm1: () => legacy(powerShell, PS_C),
   // SQL
   sql: () => sql(),
   // Niche but useful
-  lua: () => legacy(lua),
-  pl: () => legacy(perl),
-  pm: () => legacy(perl),
-  r: () => legacy(r),
-  clj: () => legacy(clojure),
-  cljs: () => legacy(clojure),
-  hs: () => legacy(haskell),
-  scm: () => legacy(scheme),
+  lua: () => legacy(lua, LUA_C),
+  pl: () => legacy(perl, HASH),
+  pm: () => legacy(perl, HASH),
+  r: () => legacy(r, HASH),
+  clj: () => legacy(clojure, SEMI),
+  cljs: () => legacy(clojure, SEMI),
+  hs: () => legacy(haskell, HASKELL_C),
+  scm: () => legacy(scheme, SEMI),
   // Env / config without a syntax (we still highlight comments via shell).
-  env: () => legacy(shell),
-  conf: () => legacy(shell),
-  ini: () => legacy(toml),
+  env: () => legacy(shell, HASH),
+  conf: () => legacy(shell, HASH),
+  ini: () => legacy(toml, HASH),
 };
 
 /* Strip suffixes that don't change the file's REAL syntax — they only
@@ -180,15 +204,15 @@ export function languageFor(path: string): Extension {
   if (FILENAME_MAP[lower]) return FILENAME_MAP[lower]();
 
   // Dockerfile.stage, Dockerfile.prod, etc.
-  if (lower.startsWith('dockerfile.')) return legacy(dockerFile);
-  if (lower.startsWith('jenkinsfile.')) return legacy(groovy);
+  if (lower.startsWith('dockerfile.')) return legacy(dockerFile, HASH);
+  if (lower.startsWith('jenkinsfile.')) return legacy(groovy, SLASH_C);
 
   /* `.env.example`, `.env.local`, `.env.production`, `.env.test`, …
      All are env files in syntax — same shell-style `# comment` +
      `KEY=value`. Catch the family before the generic ext lookup so
      `.env.example` doesn't fall through as an unknown `example`
      extension. */
-  if (lower.startsWith('.env.')) return legacy(shell);
+  if (lower.startsWith('.env.')) return legacy(shell, HASH);
 
   /* `.eslintrc.json`, `.babelrc.yaml`, `.prettierrc.toml`, …
      The dotfile basename carries the *family*, the second segment

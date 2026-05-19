@@ -10,13 +10,12 @@
 //! ## Ownership = prefix, not marker
 //!
 //! Anything in `mcpServers` whose key starts with one of `OWNED_PREFIXES`
-//! (`woom-`, plus the historical `forgehold-` from before the rename) is
-//! treated as ours: dropped on every sync, then re-added from current
-//! Keychain state. Entries the user added by hand via `cursor-agent mcp
-//! add` (any other name) survive. We also strip any marker keys we used
-//! to write (`_woom_managed`, `_forgehold_managed`) — they're advisory
-//! and re-emitted below, but the cleanup loop never reads them. This
-//! makes sync self-correcting: rename a sidecar / drop a server / ship a
+//! (`woom-`) is treated as ours: dropped on every sync, then re-added
+//! from current Keychain state. Entries the user added by hand via
+//! `cursor-agent mcp add` (any other name) survive. We also strip the
+//! marker key we used to write (`_woom_managed`) — it's advisory and
+//! re-emitted below, but the cleanup loop never reads it. This makes
+//! sync self-correcting: rename a sidecar / drop a server / ship a
 //! rebrand → next start of Woom converges the file to whatever the
 //! current code declares, no migration code required.
 //!
@@ -47,18 +46,16 @@ const CURSOR_SENTINEL_SESSION_ID: &str = "cursor";
 
 /// Server-name prefixes that identify an entry as ours. Entries matching
 /// any of these are blown away on every sync and re-derived from current
-/// Keychain state. Add new prefixes here on a rebrand; never remove —
-/// historical prefixes stay forever so old installs converge cleanly the
-/// first time the new Woom runs.
-const OWNED_PREFIXES: &[&str] = &["woom-", "forgehold-"];
+/// Keychain state. Add new prefixes here on a rebrand if the historical
+/// install base ever needs cleanup again.
+const OWNED_PREFIXES: &[&str] = &["woom-"];
 
-/// Top-level marker keys we used to (or still) write into the file. Stripped
-/// on every sync and re-emitted below for the *current* set, so the file
-/// always has at most one of these. Cleanup logic doesn't read them — they
-/// exist purely so a human glancing at `~/.cursor/mcp.json` can see what
-/// Woom thinks it currently owns.
+/// Top-level marker key we write into the file. Stripped on every sync
+/// and re-emitted below, so the file always has at most one. Cleanup
+/// logic doesn't read it — it exists purely so a human glancing at
+/// `~/.cursor/mcp.json` can see what Woom thinks it currently owns.
 const MARKER_KEY: &str = "_woom_managed";
-const LEGACY_MARKER_KEYS: &[&str] = &["_forgehold_managed"];
+const LEGACY_MARKER_KEYS: &[&str] = &[];
 
 const JIRA_KEYCHAIN_KEY: &str = "jira";
 const GITHUB_KEYCHAIN_KEY: &str = "github";
