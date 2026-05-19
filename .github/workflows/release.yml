@@ -94,21 +94,27 @@ jobs:
           # updater plugin for trust verification on the install side).
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          # Apple Developer ID signing (required for Gatekeeper).
-          # `tauri build` consumes APPLE_CERTIFICATE + APPLE_CERTIFICATE_PASSWORD
-          # to import the cert into the keychain, then signs with
-          # APPLE_SIGNING_IDENTITY. See:
-          # https://tauri.app/v2/guides/distribution/sign-macos/
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          # Notarytool credentials (consumed in the notarize step below;
-          # also surfaced here so any future plugin-driven notarization
-          # can reach them via env).
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Apple Developer ID signing — ONLY surface when actually enabled.
+          # Otherwise tauri-bundler sees a present-but-empty APPLE_CERTIFICATE
+          # and calls `security import` on garbage, failing with
+          # "SecKeychainItemImport: One or more parameters ... were not valid".
+          # Gating on `steps.apple.outputs.enabled` keeps the env vars unset
+          # when there's no real cert, which makes tauri-bundler skip the
+          # codesign path entirely (ad-hoc signed DMG, Gatekeeper warning OK).
+          APPLE_CERTIFICATE: ${{ steps.apple.outputs.enabled == 'true' && secrets.APPLE_CERTIFICATE || '' }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ steps.apple.outputs.enabled == 'true' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
+          APPLE_SIGNING_IDENTITY: ${{ steps.apple.outputs.enabled == 'true' && secrets.APPLE_SIGNING_IDENTITY || '' }}
+          APPLE_ID: ${{ steps.apple.outputs.enabled == 'true' && secrets.APPLE_ID || '' }}
+          APPLE_PASSWORD: ${{ steps.apple.outputs.enabled == 'true' && secrets.APPLE_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ steps.apple.outputs.enabled == 'true' && secrets.APPLE_TEAM_ID || '' }}
         run: |
+          # Belt-and-braces: when Apple signing is disabled, also `unset` the
+          # vars in this shell so child processes (tauri-bundler) see them as
+          # truly absent, not present-but-empty. Some code paths in the
+          # bundler branch on `env::var(...).is_ok()` rather than non-empty.
+          if [[ "${{ steps.apple.outputs.enabled }}" != "true" ]]; then
+            unset APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID
+          fi
           pnpm sidecars:release:universal
           pnpm --filter @woom/desktop tauri build --target universal-apple-darwin
 
