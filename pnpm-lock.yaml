@@ -1223,8 +1223,8 @@ packages:
   delaunator@5.1.0:
     resolution: {integrity: sha512-AGrQ4QSgssa1NGmWmLPqN5NY2KajF5MqxetNEO+o0n3ZwZZeTmt7bBnvzHWrmkZFxGgr4HdyFgelzgi06otLuQ==}
 
-  devalue@5.7.1:
-    resolution: {integrity: sha512-MUbZ586EgQqdRnC4yDrlod3BEdyvE4TapGYHMW2CiaW+KkkFmWEFqBUaLltEZCGi0iFXCEjRF0OjF0DV2QHjOA==}
+  devalue@5.8.1:
+    resolution: {integrity: sha512-4CXDYRBGqN+57wVJkuXBYmpAVUSg3L6JAQa/DFqm238G73E1wuyc/JhGQJzN7vUf/CMphYau2zXbfWzDR5aTEw==}
 
   didyoumean@1.2.2:
     resolution: {integrity: sha512-gxtyfqMg7GKyhQmb056K7M3xszy/myH8w+B4RT+QXBQsvAOdc3XymqDDPHx1BgPgsdAA5SIifona89YtRATDzw==}
@@ -2405,7 +2405,7 @@ snapshots:
       '@types/cookie': 0.6.0
       acorn: 8.16.0
       cookie: 0.6.0
-      devalue: 5.7.1
+      devalue: 5.8.1
       esm-env: 1.2.2
       kleur: 4.1.5
       magic-string: 0.30.21
@@ -3027,7 +3027,7 @@ snapshots:
     dependencies:
       robust-predicates: 3.0.3
 
-  devalue@5.7.1: {}
+  devalue@5.8.1: {}
 
   didyoumean@1.2.2: {}
 
@@ -3507,7 +3507,7 @@ snapshots:
       aria-query: 5.3.1
       axobject-query: 4.1.0
       clsx: 2.1.1
-      devalue: 5.7.1
+      devalue: 5.8.1
       esm-env: 1.2.2
       esrap: 2.2.5
       is-reference: 3.0.3
