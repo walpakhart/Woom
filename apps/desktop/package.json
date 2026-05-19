@@ -50,7 +50,7 @@
     "d3-dag": "^1.2.1",
     "diff": "^9.0.0",
     "marked": "^18.0.2",
-    "mermaid": "^11.14.0",
+    "mermaid": "^11.15.0",
     "perfect-freehand": "^1.2.3"
   },
   "devDependencies": {
