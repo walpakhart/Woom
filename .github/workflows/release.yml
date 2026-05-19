@@ -118,6 +118,26 @@ jobs:
           pnpm sidecars:release:universal
           pnpm --filter @woom/desktop tauri build --target universal-apple-darwin
 
+      - name: Sign DMG with Tauri updater key
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          # tauri-bundler only writes `.sig` files for the `updater` bundle
+          # target (which on macOS is `.app.tar.gz`, not the DMG). Our updater
+          # manifest references the DMG directly, so we sign it explicitly
+          # here with the same ed25519 key. Produces Woom_<ver>_universal.dmg.sig
+          # next to the DMG — exactly where make-manifest.mjs expects it.
+          DMG_PATH=$(ls apps/desktop/src-tauri/target/universal-apple-darwin/release/bundle/dmg/Woom_${VERSION}_*.dmg | head -1)
+          # `tauri signer sign` accepts the key contents directly via
+          # --private-key, plus password via --password (empty allowed).
+          # It writes <DMG_PATH>.sig as a sibling.
+          pnpm --filter @woom/desktop exec tauri signer sign \
+            --private-key "$TAURI_SIGNING_PRIVATE_KEY" \
+            --password "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" \
+            "$DMG_PATH"
+          ls -la "${DMG_PATH}.sig"
+
       - name: Locate DMG
         id: dmg
         run: |
