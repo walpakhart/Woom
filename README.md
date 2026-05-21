@@ -4,7 +4,7 @@
 > GitHub PRs, code editor, and Claude/Cursor agents in one window —
 > everything a drag away.
 
-**Status:** 0.1.0 — first public release. Solos (Home, Jira, GitHub,
+**Status:** 0.1.2 — first public release. Solos (Home, Jira, GitHub,
 Sentry, Claude, Cursor, Editor, Canvas, Terminal), agents (Claude +
 Cursor with MCP toolbox), built-in editor with multi-agent diff
 review, canvas, terminal, SDD (Spec-Driven Development) orchestrator,
