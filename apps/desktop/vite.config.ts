@@ -6,6 +6,17 @@ const host = process.env.TAURI_DEV_HOST;
 export default defineConfig(async () => ({
   plugins: [sveltekit()],
 
+  // Force browser-side resolution for `svelte` and friends. Without this,
+  // Vite 8 + the version of `@sveltejs/vite-plugin-svelte` we're on resolve
+  // `import { onDestroy } from 'svelte'` to `svelte/src/index-server.js`,
+  // which throws at runtime in the browser ("Cannot read properties of
+  // undefined (reading 'r')") and leaves the WebView a black screen at
+  // first mount. The `browser` condition forces the client-side entry,
+  // matching how `pnpm dev` already resolves things via the Tauri WebView.
+  resolve: {
+    conditions: ['browser', 'module', 'import', 'default']
+  },
+
   // Vite options tailored for Tauri development
   clearScreen: false,
   server: {

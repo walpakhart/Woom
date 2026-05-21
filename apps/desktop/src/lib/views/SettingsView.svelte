@@ -1,5 +1,7 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
+  import { getVersion } from '@tauri-apps/api/app';
   import { openPath, openUrl } from '@tauri-apps/plugin-opener';
   import {
     updateState as updatesStore,
@@ -663,10 +665,22 @@
   let bugReportPreview = $state<string | null>(null);
   let bugReportCopiedAt = $state<number | null>(null);
 
+  /* Live app version pulled from Tauri's package_info() — single source of
+   * truth so the Updates/Build/bug-report panels can't drift apart again.
+   * Falls back to "Woom" until the Tauri call resolves (first paint). */
+  let appVersionLabel = $state('Woom');
+  onMount(async () => {
+    try {
+      appVersionLabel = `Woom ${await getVersion()}`;
+    } catch {
+      /* leave fallback in place */
+    }
+  });
+
   function refreshBugReportPreview() {
     bugReportPreview = buildBugReport({
       description: bugReportDescription,
-      appVersion: 'Woom 0.1.0'
+      appVersion: appVersionLabel
     });
   }
 
@@ -1134,7 +1148,7 @@
       <div class="grid">
         <div class="stat">
           <div class="stat-label">Current version</div>
-          <div class="stat-value mono">Woom 0.1.0</div>
+          <div class="stat-value mono">{appVersionLabel}</div>
         </div>
         <div class="stat">
           <div class="stat-label">Last checked</div>
@@ -1384,7 +1398,7 @@
       <div class="grid">
         <div class="stat">
           <div class="stat-label">Build</div>
-          <div class="stat-value mono">Woom 0.1.0 · aarch64</div>
+          <div class="stat-value mono">{appVersionLabel} · macOS</div>
         </div>
         <div class="stat">
           <div class="stat-label">Storage keys</div>

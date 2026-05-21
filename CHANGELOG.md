@@ -6,6 +6,47 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The
 release runbook (how this CHANGELOG feeds `latest-mac.json`) lives in
 [`docs/RELEASES.md`](docs/RELEASES.md).
 
+## 0.1.2 — 2026-05-21
+
+Hotfix: 0.1.1 shipped with a WebView that mounted to a black screen on
+first launch. Two distinct regressions piled up on the same release —
+this version unwinds both and tightens the release pipeline so neither
+can reappear.
+
+### Fixed
+
+- **Black-screen-after-keychain on launch** — `pnpm.overrides` in the
+  0.1.1 lockfile-hardening commit used open-ended `>=` ranges that
+  pulled Vite up to 8.x and Svelte to 5.55.x. Vite 8 + the pinned
+  `@sveltejs/vite-plugin-svelte@4` no longer add the `browser`
+  resolve-condition by default, so `import { onDestroy } from 'svelte'`
+  resolved to `svelte/src/index-server.js` in the client bundle. That
+  module throws at mount (`Cannot read properties of undefined (reading
+  'r')`) — surfaced as a silent `unhandledrejection`, leaving the
+  WebView a blank `#0C1117` canvas. `vite.config.ts` now pins
+  `resolve.conditions` to `['browser', 'module', 'import', 'default']`.
+- **CSP blocked SvelteKit's bootstrap script** — vite's generated
+  `index.html` carries one inline `<script>` that hydrates
+  `__sveltekit_*`; our `script-src 'self' 'wasm-unsafe-eval'` CSP
+  killed it before Svelte could mount. Added `'unsafe-inline'` to
+  `script-src` (acceptable for a desktop app loading only local
+  embedded assets) and whitelisted `https://fonts.gstatic.com` in
+  `font-src` so Geist / Inter actually load.
+- **Settings showed `Woom 0.1.0`** — three hard-coded literals
+  (Updates → Current version, App → Build, bug-report payload)
+  replaced with a single live `appVersionLabel` derived from
+  `@tauri-apps/api/app#getVersion()` so the panel can't drift from
+  the actual `Info.plist` value again.
+
+### CI
+
+- **`release.yml`** — added an explicit `pnpm --filter @woom/desktop
+  build` step before `tauri build`, plus a guard that fails the job
+  early when `apps/desktop/build/index.html` is missing or empty.
+  Touch on `apps/desktop/src-tauri/src/lib.rs` invalidates the
+  Swatinem cargo cache so `tauri-codegen` re-embeds the freshly built
+  frontend instead of reusing a stale `target/` from a prior run.
+
 ## 0.1.1 — 2026-05-21
 
 SDD orchestrator overhaul: spec-driven workflow is now a real

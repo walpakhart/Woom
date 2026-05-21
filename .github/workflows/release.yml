@@ -88,6 +88,42 @@ jobs:
       - name: Install JS deps
         run: pnpm install --frozen-lockfile
 
+      - name: Build SvelteKit frontend
+        # Build the frontend EXPLICITLY before `tauri build` even though
+        # `tauri.conf.json#build.beforeBuildCommand` would also run it.
+        # Two reasons we don't trust the implicit path:
+        #   1. Swatinem/rust-cache restores a `target/` from a prior run,
+        #      and tauri-codegen embeds whatever was in `apps/desktop/build/`
+        #      at codegen time — if cache was warmed before vite ran, the
+        #      bundle ships with a stale (or empty) frontend and the
+        #      WebView paints black. 0.1.1 shipped exactly this bug.
+        #   2. We want a deterministic guard rail (the verify step below)
+        #      that fails the job loudly instead of silently producing a
+        #      broken DMG.
+        run: pnpm --filter @woom/desktop build
+
+      - name: Verify frontend build is non-empty
+        run: |
+          INDEX="apps/desktop/build/index.html"
+          if [[ ! -s "$INDEX" ]]; then
+            echo "::error::$INDEX missing or empty after vite build — refusing to ship a broken bundle"
+            exit 1
+          fi
+          if ! grep -q "_app/immutable" "$INDEX"; then
+            echo "::error::$INDEX does not reference SvelteKit assets — bundle is corrupt"
+            exit 1
+          fi
+          echo "Frontend OK: $(wc -c < "$INDEX") bytes, $(find apps/desktop/build/_app -type f | wc -l) asset files"
+
+      - name: Invalidate cargo cache for woom-desktop crate
+        # Touch lib.rs so cargo re-evaluates `tauri::generate_context!()`
+        # and re-embeds the freshly-built frontend. Without this, the
+        # Swatinem cache (which keys on Cargo.lock + source-file mtimes)
+        # can hand back a cached binary that still embeds the previous
+        # run's `apps/desktop/build/` — exactly the regression that
+        # produced the 0.1.1 black-screen build.
+        run: touch apps/desktop/src-tauri/src/lib.rs
+
       - name: Build universal DMG
         env:
           # Tauri signer (ed25519 over the .dmg bytes — used by the
