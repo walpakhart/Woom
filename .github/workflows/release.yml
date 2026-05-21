@@ -118,29 +118,42 @@ jobs:
           pnpm sidecars:release:universal
           pnpm --filter @woom/desktop tauri build --target universal-apple-darwin
 
-      - name: Sign DMG with Tauri updater key
+      - name: Build .app.tar.gz updater payload
+        run: |
+          # Tauri 2.x's macOS updater consumes a gzipped tar of the .app
+          # bundle, NOT the DMG (the in-app updater pipes the download
+          # through gunzip → "invalid gzip header" if you feed it a DMG).
+          # So we also produce Woom_<ver>_universal.app.tar.gz here from
+          # the same .app the DMG was built from. The DMG stays as the
+          # "first install" download for new users.
+          APP_DIR="$PWD/apps/desktop/src-tauri/target/universal-apple-darwin/release/bundle/macos"
+          test -d "$APP_DIR/Woom.app" || { echo "::error::Woom.app not found at $APP_DIR"; exit 1; }
+          TARBALL="$APP_DIR/Woom_${VERSION}_universal.app.tar.gz"
+          tar czf "$TARBALL" -C "$APP_DIR" Woom.app
+          ls -la "$TARBALL"
+          echo "TARBALL_PATH=$TARBALL" >> "$GITHUB_ENV"
+
+      - name: Sign DMG and updater tarball with Tauri key
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
-          # tauri-bundler only writes `.sig` files for the `updater` bundle
-          # target (which on macOS is `.app.tar.gz`, not the DMG). Our updater
-          # manifest references the DMG directly, so we sign it explicitly
-          # here with the same ed25519 key. Produces Woom_<ver>_universal.dmg.sig
-          # next to the DMG — exactly where make-manifest.mjs expects it.
-          # Absolute path — `pnpm --filter @woom/desktop exec` runs the
-          # command with cwd switched to `apps/desktop/`, which breaks
-          # any relative path resolved from repo root.
+          # Sign BOTH artifacts with the same ed25519 key:
+          # - DMG sig is kept as a defence-in-depth artifact for users
+          #   downloading the DMG manually.
+          # - .app.tar.gz sig is what the in-app updater verifies.
+          # Absolute paths — `pnpm --filter @woom/desktop exec` switches
+          # cwd to apps/desktop/ which breaks relative path resolution.
           DMG_PATH="$PWD/apps/desktop/src-tauri/target/universal-apple-darwin/release/bundle/dmg/Woom_${VERSION}_universal.dmg"
           test -f "$DMG_PATH" || { echo "::error::DMG not found at $DMG_PATH"; exit 1; }
-          # `tauri signer sign` accepts the key contents directly via
-          # --private-key, plus password via --password (empty allowed).
-          # It writes <DMG_PATH>.sig as a sibling.
-          pnpm --filter @woom/desktop exec tauri signer sign \
-            --private-key "$TAURI_SIGNING_PRIVATE_KEY" \
-            --password "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" \
-            "$DMG_PATH"
-          ls -la "${DMG_PATH}.sig"
+          test -f "$TARBALL_PATH" || { echo "::error::tarball not found at $TARBALL_PATH"; exit 1; }
+          for f in "$DMG_PATH" "$TARBALL_PATH"; do
+            pnpm --filter @woom/desktop exec tauri signer sign \
+              --private-key "$TAURI_SIGNING_PRIVATE_KEY" \
+              --password "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" \
+              "$f"
+          done
+          ls -la "${DMG_PATH}.sig" "${TARBALL_PATH}.sig"
 
       - name: Locate DMG
         id: dmg
@@ -179,10 +192,14 @@ jobs:
 
       - name: Build manifest (latest-mac.json)
         run: |
+          # The manifest's `url` MUST point at the .app.tar.gz tarball —
+          # that's what the in-app updater downloads + verifies + extracts.
+          # The DMG is published as a sibling artifact for first-install
+          # users only; it's NOT referenced from the manifest.
           mkdir -p dist
           node scripts/make-manifest.mjs \
-            --dmg "${{ steps.dmg.outputs.dmg_path }}" \
-            --signature "${{ steps.dmg.outputs.dmg_path }}.sig" \
+            --dmg "$TARBALL_PATH" \
+            --signature "${TARBALL_PATH}.sig" \
             --version "$VERSION" \
             --tag "${{ github.ref_name }}" \
             --repo "${{ github.repository }}" \
@@ -196,6 +213,8 @@ jobs:
           files: |
             ${{ steps.dmg.outputs.dmg_path }}
             ${{ steps.dmg.outputs.dmg_path }}.sig
+            ${{ env.TARBALL_PATH }}
+            ${{ env.TARBALL_PATH }}.sig
             dist/latest-mac.json
           generate_release_notes: true
           prerelease: false
