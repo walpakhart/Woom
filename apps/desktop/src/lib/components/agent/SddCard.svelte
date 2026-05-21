@@ -17,6 +17,10 @@
   import Markdown from '$lib/components/ui/Markdown.svelte';
   import {
     type SddWorkspace,
+    type ActionLogEntry,
+    type SddPhaseDiff,
+    type DiffFile,
+    type AuditEntry,
     approveSdd,
     buildAmendPrompt,
     pauseSdd,
@@ -25,11 +29,18 @@
     discardSdd,
     saveSddBody,
     retrySddPhase,
+    rollbackSddPhase,
+    skipSddPhaseWithReason,
+    getSddPhaseDiff,
+    getSddFileDiff,
+    loadAuditLog,
     buildPromptForStage,
     targetKey,
     stashUndo,
     popUndo,
     sddState,
+    hideSddCard,
+    actionLogFor,
   } from '$lib/state/sdd.svelte';
   import { sessionsState } from '$lib/state/sessions.svelte';
   import { diffMarkdown, renderDiffHtml } from '$lib/util/markdownDiff';
@@ -39,6 +50,13 @@
     /** Stamp the next prompt into composer + fire send. Parent wires
      *  this to its `setSessionInput` + `sendClaudeMessage()` flow. */
     onAdvance: (prompt: string) => void | Promise<void>;
+    /** Read-only fullscreen overlay mode — opened from the header
+     *  history popover. Hides the action footer (no Discard, no
+     *  Approve/Amend/Stop), forces fullscreen on, and routes the
+     *  close button to the parent-supplied `onClose` instead of the
+     *  internal `fullscreen=false` toggle. */
+    viewOnly?: boolean;
+    onClose?: () => void;
   }
   let p: Props = $props();
 
@@ -52,21 +70,31 @@
    *  the chat column. Esc closes; same dismissal as DiffView's
    *  full-screen toggle. */
   let fullscreen = $state(false);
+  const effectiveFullscreen = $derived(p.viewOnly ? true : fullscreen);
   function openFullscreen() {
     bodyOpen = true;
     fullscreen = true;
   }
-  function closeFullscreen() { fullscreen = false; }
+  function closeFullscreen() {
+    if (p.viewOnly) {
+      p.onClose?.();
+      return;
+    }
+    fullscreen = false;
+  }
   function onFullscreenKey(e: KeyboardEvent) {
-    if (e.key === 'Escape' && fullscreen) {
+    if (e.key === 'Escape' && effectiveFullscreen) {
       e.preventDefault();
       closeFullscreen();
     }
   }
   $effect(() => {
-    if (!fullscreen) return;
+    if (!effectiveFullscreen) return;
     window.addEventListener('keydown', onFullscreenKey);
     return () => window.removeEventListener('keydown', onFullscreenKey);
+  });
+  $effect(() => {
+    if (p.viewOnly) bodyOpen = true;
   });
   /* Edit mode — swap the rendered Markdown for a textarea. The user
    *  can tweak the agent's spec/plan/phase content before approving.
@@ -177,13 +205,44 @@
   );
   const isPaused = $derived(stage.kind === 'paused');
 
+  /* Live activity feed — derived from sddState.actionLogByWorkspace.
+   *  `showAll` is local UI state (collapse vs. expand). The buffer is
+   *  reactive: pushes from `attachActionLogListener` re-render this
+   *  block automatically. */
+  let liveActivityShowAll = $state(false);
+  const liveActivity = $derived.by(() => {
+    const visible = stage.kind === 'phase_running';
+    if (!visible) {
+      return {
+        visible: false as const,
+        phase: 0,
+        entries: [] as ActionLogEntry[],
+        headEntries: [] as ActionLogEntry[],
+      };
+    }
+    /* Read through the reactive proxy so $derived tracks updates. */
+    const all =
+      sddState.actionLogByWorkspace[p.workspace.id]?.[stage.phase] ?? [];
+    /* Newest-first inline — easier to scan when the agent is mid-burst. */
+    const entries = [...all].reverse();
+    const headEntries = entries.slice(0, 5);
+    return {
+      visible: true as const,
+      phase: stage.phase,
+      entries,
+      headEntries,
+    };
+  });
+
   function stageLabel(): string {
     switch (stage.kind) {
       case 'drafting': return 'Drafting spec';
       case 'spec_ready': return 'Spec ready';
       case 'planning': return 'Drafting plan';
       case 'plan_ready': return 'Plan ready';
+      case 'phase_pending_approval': return `Phase ${stage.phase} — review`;
       case 'phase_running': return `Phase ${stage.phase} running`;
+      case 'phase_verifying': return `Phase ${stage.phase} verifying`;
       case 'phase_done': return `Phase ${stage.phase} done`;
       case 'complete': return 'All phases done';
       case 'paused': return 'Paused';
@@ -363,6 +422,30 @@
     editDraft = '';
     editOriginal = '';
     editView = 'edit';
+    /* Edit-then-retry chain — when the user clicked "Edit phase &
+     *  retry" on the failure card, the save automatically continues
+     *  into a retry so they don't have to click twice. We snap the
+     *  flag back before firing so re-entry is clean. */
+    if (editAndRetryArmed) {
+      editAndRetryArmed = false;
+      const failed = p.workspace.phases.find(
+        (ph) =>
+          ph.status === 'failed'
+          || (t.kind === 'phase' && ph.number === t.number)
+      );
+      if (failed && !advanceClicked) {
+        advanceClicked = true;
+        const fresh = await retrySddPhase(p.workspace.id, failed.number);
+        if (fresh) {
+          const prompt = await buildPromptForStage(fresh);
+          if (prompt) {
+            void p.onAdvance(prompt);
+            return;
+          }
+        }
+        advanceClicked = false;
+      }
+    }
   }
 
   /** Restore the pre-save body for the current stage's target.
@@ -447,6 +530,133 @@
     }
     advanceClicked = false;
   }
+
+  /* Edit-then-retry: open editMode against the failed phase body so
+   *  the user can tweak instructions, then chain `saveEdit` →
+   *  `retrySddPhase` → fire prompt — saving the user a second click
+   *  after Save. We piggy-back on the existing edit machinery (the
+   *  textarea, save flow) by setting a one-shot flag the saveEdit
+   *  handler picks up. */
+  let editAndRetryArmed = $state(false);
+  function startEditAndRetry() {
+    /* Failed stage's edit target is the failed phase. Switch the peek
+     *  to that phase first so `body` resolves to its content; then
+     *  open editMode. */
+    const failed = p.workspace.phases.find((ph) => ph.status === 'failed');
+    if (!failed) return;
+    selectedPhaseOverride = failed.number;
+    editAndRetryArmed = true;
+    /* Defer one tick so the `body` $derived sees the override. */
+    queueMicrotask(() => startEdit());
+  }
+
+  /* Inline skip-with-reason flow. Opens a textarea in the failure card;
+   *  Submit calls `skipSddPhaseWithReason` (5+ char gate enforced
+   *  server-side) and clears the failed stage. */
+  let skipMode = $state(false);
+  let skipDraft = $state('');
+  function startSkip() {
+    skipMode = true;
+    skipDraft = '';
+  }
+  function cancelSkip() {
+    skipMode = false;
+    skipDraft = '';
+  }
+  async function submitSkip() {
+    const reason = skipDraft.trim();
+    if (reason.length < 5) return;
+    const failed = p.workspace.phases.find((ph) => ph.status === 'failed');
+    if (!failed) return;
+    await skipSddPhaseWithReason(p.workspace.id, failed.number, reason);
+    skipMode = false;
+    skipDraft = '';
+  }
+
+  async function onRollbackFailed() {
+    const failed = p.workspace.phases.find((ph) => ph.status === 'failed');
+    if (!failed) return;
+    await rollbackSddPhase(p.workspace.id, failed.number);
+  }
+
+  /* Phase-diff drawer state. One open file at a time — stores the
+   *  patch text keyed by `${phase}::${path}`. Top-level drawer is
+   *  collapsed by default; auto-expanded inside the lightbox. */
+  let phaseDiffByPhase = $state<Record<number, SddPhaseDiff | 'loading' | null>>({});
+  let phaseDiffOpenPhase = $state<number | null>(null);
+  let openDiffFiles = $state<Record<string, string | 'loading'>>({});
+
+  /* Which phase number the diff drawer should target. For done /
+   *  failed phases, peek-override wins; otherwise follow stage.
+   *  Returns null when there's nothing to diff (stage hasn't produced
+   *  a post-phase commit yet). */
+  const diffTargetPhase = $derived.by<number | null>(() => {
+    const candidate = (() => {
+      if (selectedPhaseOverride !== null) return selectedPhaseOverride;
+      if (stage.kind === 'phase_done') return stage.phase;
+      if (stage.kind === 'failed' && stage.failed_phase != null) return stage.failed_phase;
+      return null;
+    })();
+    if (candidate == null) return null;
+    /* Only render drawer for phases in a settled state. The peek
+     *  override may point at a `pending` phase (user clicking a future
+     *  phase pill) — there's no diff to show for those. */
+    const ph = p.workspace.phases.find((x) => x.number === candidate);
+    if (!ph) return null;
+    if (ph.status === 'pending' || ph.status === 'running') return null;
+    return candidate;
+  });
+
+  /* Auto-trigger the lazy diff load on enter — drawer is collapsed by
+   *  default but the head row needs the totals to render its label. */
+  $effect(() => {
+    if (diffTargetPhase != null) {
+      void ensurePhaseDiffLoaded(diffTargetPhase);
+    }
+  });
+
+  async function ensurePhaseDiffLoaded(phase: number) {
+    if (phaseDiffByPhase[phase] !== undefined) return;
+    phaseDiffByPhase = { ...phaseDiffByPhase, [phase]: 'loading' };
+    const diff = await getSddPhaseDiff(p.workspace.id, phase);
+    phaseDiffByPhase = { ...phaseDiffByPhase, [phase]: diff };
+  }
+
+  function togglePhaseDiff(phase: number) {
+    if (phaseDiffOpenPhase === phase) {
+      phaseDiffOpenPhase = null;
+      return;
+    }
+    phaseDiffOpenPhase = phase;
+    void ensurePhaseDiffLoaded(phase);
+  }
+
+  /* In lightbox, auto-load + auto-open the diff drawer for the
+   *  currently-targeted phase. Reading mode benefits from seeing the
+   *  diff alongside the phase body. */
+  $effect(() => {
+    if (!effectiveFullscreen || diffTargetPhase == null) return;
+    phaseDiffOpenPhase = diffTargetPhase;
+    void ensurePhaseDiffLoaded(diffTargetPhase);
+  });
+
+  async function toggleFileDiff(phase: number, path: string) {
+    const key = `${phase}::${path}`;
+    if (openDiffFiles[key] !== undefined) {
+      const next = { ...openDiffFiles };
+      delete next[key];
+      openDiffFiles = next;
+      return;
+    }
+    openDiffFiles = { ...openDiffFiles, [key]: 'loading' };
+    const patch = await getSddFileDiff(p.workspace.id, phase, path);
+    openDiffFiles = { ...openDiffFiles, [key]: patch };
+  }
+
+  function fileDiffKey(phase: number, path: string): string {
+    return `${phase}::${path}`;
+  }
+
   async function onDiscard() {
     if (!confirm('Discard this SDD workspace? All temp files will be deleted.')) {
       /* Note: same Tauri webview confirm caveat as PreviewPane — Tauri
@@ -456,11 +666,78 @@
     }
     await discardSdd(p.workspace.id);
   }
+
+  // -------- Audit log (phase 6: self-driving MCP) ---------------------
+  // Lazy-load on first request; refresh whenever the workspace stage
+  // changes (a mutation likely just landed, so cached entries are
+  // stale). The overlay is dismissable via Escape.
+  let auditEntries = $state<AuditEntry[]>([]);
+  let auditOpen = $state(false);
+  let auditLoaded = $state(false);
+  let auditFilter = $state<'all' | 'agent' | 'user' | 'system'>('all');
+  let auditExpandedTs = $state<number | null>(null);
+  const filteredAudit = $derived(
+    auditFilter === 'all'
+      ? auditEntries
+      : auditEntries.filter((e) => e.source === auditFilter)
+  );
+  async function refreshAudit() {
+    const entries = await loadAuditLog(p.workspace.id);
+    auditEntries = entries;
+    auditLoaded = true;
+  }
+  async function toggleAudit() {
+    if (!auditOpen) {
+      await refreshAudit();
+    }
+    auditOpen = !auditOpen;
+  }
+  // Auto-refresh on stage flip — covers user mutations + agent
+  // mutations (both of which land on disk before the watcher fires
+  // emit_changed and bumps the stage).
+  $effect(() => {
+    void p.workspace.stage.kind;
+    if (auditLoaded) void refreshAudit();
+  });
+  // Initial load — happens once per mount so the header indicator
+  // shows the count without the user opening the overlay.
+  $effect(() => {
+    void p.workspace.id;
+    if (!auditLoaded) void refreshAudit();
+  });
+  function copyAuditAsJsonl() {
+    const text = filteredAudit
+      .map((e) => JSON.stringify(e))
+      .join('\n');
+    void navigator.clipboard.writeText(text);
+  }
+  function fmtAuditTs(ts: number): string {
+    try {
+      const d = new Date(ts);
+      // HH:MM:SS for compactness (date is shown in the day-grouped
+      // header below if we ever group, which v1 doesn't).
+      return d.toLocaleTimeString();
+    } catch {
+      return String(ts);
+    }
+  }
+  function onAuditKey(e: KeyboardEvent) {
+    if (e.key === 'Escape' && auditOpen) {
+      e.preventDefault();
+      auditOpen = false;
+    }
+  }
+  $effect(() => {
+    if (!auditOpen) return;
+    window.addEventListener('keydown', onAuditKey);
+    return () => window.removeEventListener('keydown', onAuditKey);
+  });
 </script>
 
 <aside
   class="sdd-card"
-  class:sdd-card--full={fullscreen}
+  class:sdd-card--full={effectiveFullscreen}
+  class:sdd-card--view-only={p.viewOnly}
   data-tone={stageTone()}
   in:fly={{ y: 8, duration: 180, easing: cubicOut }}
 >
@@ -471,13 +748,41 @@
       <span class="sdd-spin" aria-label="Agent working"></span>
     {/if}
     <span class="sdd-id mono">{p.workspace.id}</span>
-    {#if fullscreen}
+    {#if auditEntries.length > 0}
+      <button
+        type="button"
+        class="sdd-audit-chip"
+        onclick={toggleAudit}
+        title="Audit log — every mutation across agent / user / system"
+        aria-pressed={auditOpen}
+      >
+        · {auditEntries.length} audit · view
+      </button>
+    {/if}
+    {#if !effectiveFullscreen && !p.viewOnly}
+      <!-- Hide-without-discard. Workspace files stay on disk; the
+           card simply leaves the thread until the user re-opens it
+           from the header history popover. Distinct from Discard
+           (which deletes files) and from the fullscreen × close. -->
+      <button
+        type="button"
+        class="sdd-hide"
+        onclick={() => hideSddCard(p.workspace.id)}
+        title="Hide this SDD card from the thread (workspace stays on disk; re-open from the SDD chip in the header)"
+        aria-label="Hide SDD card"
+      >
+        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M5 13h14"/>
+        </svg>
+      </button>
+    {/if}
+    {#if effectiveFullscreen}
       <button
         type="button"
         class="sdd-close"
         onclick={closeFullscreen}
-        title="Close fullscreen (Esc)"
-        aria-label="Close fullscreen"
+        title={p.viewOnly ? 'Close (Esc)' : 'Close fullscreen (Esc)'}
+        aria-label={p.viewOnly ? 'Close' : 'Close fullscreen'}
       >
         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
           <path d="M6 6l12 12M6 18L18 6"/>
@@ -520,6 +825,40 @@
           title="Back to the current stage's body"
         >back to stage</button>
       {/if}
+    </div>
+  {/if}
+
+  {#if liveActivity.visible}
+    <!-- Live activity feed — one row per recent tool_use / tool_result.
+         Sourced from the in-memory ring buffer in sdd.svelte.ts; the
+         backing JSONL on disk lets us rehydrate after restart so the
+         user sees continuity. Cap inline at 5 rows; full log lives in
+         the lightbox. -->
+    <div class="sdd-activity">
+      <div class="sdd-activity-head">
+        <span class="sdd-activity-title">
+          Phase {liveActivity.phase} · live activity · {liveActivity.entries.length} events
+        </span>
+        {#if liveActivity.entries.length > liveActivity.headEntries.length}
+          <button
+            type="button"
+            class="sdd-activity-more"
+            onclick={() => (liveActivityShowAll = !liveActivityShowAll)}
+            title={liveActivityShowAll ? 'Collapse' : 'Show full log'}
+          >
+            {liveActivityShowAll ? 'collapse' : `+${liveActivity.entries.length - liveActivity.headEntries.length} more`}
+          </button>
+        {/if}
+      </div>
+      <ul class="sdd-activity-list">
+        {#each (liveActivityShowAll ? liveActivity.entries : liveActivity.headEntries) as e (e.correlation_id ?? `${e.ts}-${e.kind}`)}
+          <li class="sdd-activity-row" data-status={e.status ?? 'running'} in:fly={{ y: 4, duration: 120, easing: cubicOut }}>
+            <span class="sdd-activity-dot" aria-hidden="true"></span>
+            <span class="sdd-activity-tool mono">{e.tool ?? e.kind}</span>
+            <span class="sdd-activity-summary">{e.summary}</span>
+          </li>
+        {/each}
+      </ul>
     </div>
   {/if}
 
@@ -570,7 +909,7 @@
               onclick={() => (editView = 'diff-unified')}
             >diff</button>
           </span>
-        {:else if editTarget()}
+        {:else if editTarget() && !p.viewOnly}
           <button type="button" class="sdd-edit-toggle" onclick={startEdit} title="Edit before approving">
             edit ✎
           </button>
@@ -580,6 +919,7 @@
              painful. ⛶ pops them into a viewport-cover overlay so
              the user can actually read end-to-end without scroll
              gymnastics. -->
+        {#if !p.viewOnly}
         <button
           type="button"
           class="sdd-expand"
@@ -591,6 +931,7 @@
             <path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>
           </svg>
         </button>
+        {/if}
       </div>
       {#if bodyOpen}
         {#if editMode}
@@ -633,9 +974,138 @@
     </div>
   {/if}
 
+  {#if diffTargetPhase != null && phaseDiffByPhase[diffTargetPhase] !== undefined}
+    {@const diff = phaseDiffByPhase[diffTargetPhase]}
+    <!-- Phase diff drawer — collapsible "Files changed" view showing
+         per-file stats from `git diff <pre>..<post>`. Click a row to
+         load + render its unified-diff patch lazily. Auto-expanded
+         in fullscreen / lightbox; collapsed inline by default so the
+         card stays compact. -->
+    <div class="sdd-diff-drawer">
+      <button
+        type="button"
+        class="sdd-diff-drawer-head"
+        onclick={() => togglePhaseDiff(diffTargetPhase)}
+        aria-expanded={phaseDiffOpenPhase === diffTargetPhase}
+      >
+        <svg
+          class="sdd-chev"
+          class:open={phaseDiffOpenPhase === diffTargetPhase}
+          viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"
+        >
+          <path d="M9 6l6 6-6 6"/>
+        </svg>
+        {#if diff === 'loading' || diff == null}
+          <span class="mono">Files changed · loading…</span>
+        {:else if diff.skipped}
+          <span class="mono">Files changed · git snapshot was skipped for this phase</span>
+        {:else}
+          <span class="mono">
+            Files changed ({diff.files.length})
+            <span class="sdd-diff-ins">+{diff.total_insertions}</span>
+            <span class="sdd-diff-del">−{diff.total_deletions}</span>
+          </span>
+        {/if}
+      </button>
+      {#if phaseDiffOpenPhase === diffTargetPhase && diff && diff !== 'loading' && !diff.skipped}
+        <ul class="sdd-diff-files">
+          {#each diff.files as f (f.path)}
+            {@const key = fileDiffKey(diffTargetPhase, f.path)}
+            {@const open = openDiffFiles[key]}
+            <li class="sdd-diff-file" data-status={f.status}>
+              <button
+                type="button"
+                class="sdd-diff-file-row mono"
+                onclick={() => !f.is_binary && toggleFileDiff(diffTargetPhase, f.path)}
+                disabled={f.is_binary}
+                title={f.is_binary ? 'binary file — patch not shown' : 'click to expand inline diff'}
+              >
+                <span class="sdd-diff-file-status">{f.status}</span>
+                <span class="sdd-diff-file-path">{f.path}</span>
+                {#if f.is_binary}
+                  <span class="sdd-diff-file-bin">binary</span>
+                {:else}
+                  <span class="sdd-diff-ins">+{f.insertions}</span>
+                  <span class="sdd-diff-del">−{f.deletions}</span>
+                {/if}
+              </button>
+              {#if open !== undefined && !f.is_binary}
+                <div class="sdd-diff-file-body">
+                  {#if open === 'loading'}
+                    <span class="sdd-diff-file-loading mono">loading patch…</span>
+                  {:else if open}
+                    <pre class="sdd-diff-patch mono">{open}</pre>
+                  {:else}
+                    <span class="sdd-diff-file-loading mono">no patch returned</span>
+                  {/if}
+                </div>
+              {/if}
+            </li>
+          {/each}
+        </ul>
+      {/if}
+    </div>
+  {/if}
+
   {#if stage.kind === 'failed'}
+    <!-- Structured failure card — replaces v1's one-liner reason.
+         Header carries trigger label, body lists failed acceptance
+         checks (collapsible log_tail per check) + last action-log
+         entries before failure for context. Action row lives in the
+         main footer so chrome stays consistent with non-failed states. -->
     <div class="sdd-failed">
-      <strong>Failed:</strong> {stage.reason}
+      <div class="sdd-failed-head">
+        <span class="sdd-failed-title">
+          {#if stage.failed_phase != null}
+            Phase {stage.failed_phase} failed
+          {:else}
+            Workflow failed
+          {/if}
+          {#if stage.trigger}
+            <span class="sdd-failed-trigger mono">· {stage.trigger.replace('_', ' ')}</span>
+          {/if}
+        </span>
+      </div>
+      <div class="sdd-failed-reason">{stage.reason}</div>
+
+      {#if (stage.failed_checks?.length ?? 0) > 0}
+        <div class="sdd-failed-checks-line mono">
+          Failed checks: {(stage.failed_checks ?? []).map((i) => `#${i + 1}`).join(', ')}
+        </div>
+      {/if}
+
+      {#if (stage.action_log_tail?.length ?? 0) > 0}
+        <details class="sdd-failed-tail">
+          <summary class="mono">
+            Last actions · {stage.action_log_tail?.length ?? 0}
+          </summary>
+          <ul class="sdd-failed-tail-list">
+            {#each (stage.action_log_tail ?? []).slice(-5) as e (e.correlation_id ?? `${e.ts}-${e.kind}`)}
+              <li class="sdd-failed-tail-row mono" data-status={e.status ?? 'done'}>
+                <span class="sdd-activity-tool">{e.tool ?? e.kind}</span>
+                <span class="sdd-activity-summary">{e.summary}</span>
+              </li>
+            {/each}
+          </ul>
+        </details>
+      {/if}
+
+      {#if skipMode}
+        <div class="sdd-skip">
+          <textarea
+            class="sdd-skip-area mono"
+            bind:value={skipDraft}
+            placeholder="Why is this phase being skipped? (min 5 chars — recorded for audit)"
+            rows="3"
+            spellcheck="false"
+            {@attach (node: HTMLTextAreaElement) => node.focus()}
+            onkeydown={(e) => {
+              if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); void submitSkip(); }
+              if (e.key === 'Escape') { e.preventDefault(); cancelSkip(); }
+            }}
+          ></textarea>
+        </div>
+      {/if}
     </div>
   {/if}
 
@@ -663,6 +1133,7 @@
     </div>
   {/if}
 
+  {#if !p.viewOnly}
   <footer class="sdd-actions">
     {#if editMode}
       <!-- Edit-mode footer merges into the card's main actions row —
@@ -693,7 +1164,23 @@
         <button class="sdd-btn sdd-btn--primary" onclick={onResume}>Resume</button>
       {/if}
       {#if stage.kind === 'failed'}
-        <button class="sdd-btn sdd-btn--primary" disabled={advanceClicked} onclick={onRetry}>Retry phase</button>
+        {#if skipMode}
+          <button type="button" class="sdd-btn" onclick={cancelSkip}>cancel</button>
+          <button
+            type="button"
+            class="sdd-btn sdd-btn--primary"
+            disabled={skipDraft.trim().length < 5}
+            onclick={submitSkip}
+            title="⌘↵ to submit"
+          >Skip with reason</button>
+        {:else}
+          <button class="sdd-btn sdd-btn--primary" disabled={advanceClicked} onclick={onRetry}>Retry phase</button>
+          <button class="sdd-btn" disabled={advanceClicked} onclick={startEditAndRetry} title="Edit phase body, then retry">
+            ✎ Edit & retry
+          </button>
+          <button class="sdd-btn" onclick={startSkip} title="Force-skip with audit reason">Skip phase</button>
+          <button class="sdd-btn" onclick={onRollbackFailed} title="Reset working tree to pre-phase commit">↶ Rollback</button>
+        {/if}
       {/if}
       {#if !isTerminal && !isInFlight}
         <!-- Amend affordance — only when the workspace is in a settled
@@ -715,6 +1202,72 @@
     {/if}
     <button class="sdd-btn sdd-btn--mute" onclick={onDiscard}>Discard</button>
   </footer>
+  {/if}
+  {#if auditOpen}
+    <div class="sdd-audit-overlay" role="dialog" aria-label="SDD audit log">
+      <header class="sdd-audit-head">
+        <span class="sdd-audit-title">Audit log</span>
+        <span class="sdd-audit-count mono">{filteredAudit.length} of {auditEntries.length}</span>
+        <span class="sdd-audit-spacer"></span>
+        <label class="sdd-audit-filter">
+          <span class="vh">Filter by source</span>
+          <select bind:value={auditFilter} class="mono">
+            <option value="all">all</option>
+            <option value="agent">agent</option>
+            <option value="user">user</option>
+            <option value="system">system</option>
+          </select>
+        </label>
+        <button class="sdd-btn sdd-btn--mute" type="button" onclick={copyAuditAsJsonl}>Copy JSONL</button>
+        <button class="sdd-btn sdd-btn--mute" type="button" onclick={() => (auditOpen = false)}>Close</button>
+      </header>
+      <div class="sdd-audit-body">
+        {#if filteredAudit.length === 0}
+          <p class="sdd-audit-empty">No audit entries yet.</p>
+        {:else}
+          <ul class="sdd-audit-list">
+            {#each filteredAudit as e (e.ts + e.action + (e.phase ?? -1))}
+              {@const expanded = auditExpandedTs === e.ts}
+              <li class="sdd-audit-row" data-source={e.source}>
+                <button
+                  type="button"
+                  class="sdd-audit-row-head"
+                  onclick={() => (auditExpandedTs = expanded ? null : e.ts)}
+                  aria-expanded={expanded}
+                >
+                  <span class="sdd-audit-ts mono">{fmtAuditTs(e.ts)}</span>
+                  <span class="sdd-audit-source mono" data-source={e.source}>{e.source}</span>
+                  <span class="sdd-audit-action mono">{e.action}</span>
+                  {#if e.phase != null}
+                    <span class="sdd-audit-phase mono">phase {e.phase}</span>
+                  {/if}
+                  {#if e.reason}
+                    <span class="sdd-audit-reason">— {e.reason}</span>
+                  {/if}
+                </button>
+                {#if expanded && (e.before !== undefined || e.after !== undefined)}
+                  <div class="sdd-audit-snap mono">
+                    {#if e.before !== undefined}
+                      <details open>
+                        <summary>before</summary>
+                        <pre>{JSON.stringify(e.before, null, 2)}</pre>
+                      </details>
+                    {/if}
+                    {#if e.after !== undefined}
+                      <details open>
+                        <summary>after</summary>
+                        <pre>{JSON.stringify(e.after, null, 2)}</pre>
+                      </details>
+                    {/if}
+                  </div>
+                {/if}
+              </li>
+            {/each}
+          </ul>
+        {/if}
+      </div>
+    </div>
+  {/if}
 </aside>
 
 <style>
@@ -824,6 +1377,88 @@
 
   .sdd-phases {
     display: flex; flex-wrap: wrap; gap: 5px;
+  }
+
+  /* Live activity feed — quiet, monospace, status-dot driven. Sits
+   *  between phases-pills and the body so it's always within reach
+   *  while a phase is running. Transparent bg + 2px accent stripe to
+   *  match the established quiet-blockquote idiom of inline cards. */
+  .sdd-activity {
+    margin-top: 6px;
+    padding: 4px 0 4px 10px;
+    border-left: 2px solid color-mix(in oklab, var(--accent-source, currentColor) 60%, transparent);
+    background: transparent;
+    font-size: 12px;
+    color: var(--text-1);
+  }
+  .sdd-activity-head {
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 3px;
+  }
+  .sdd-activity-title {
+    color: var(--text-2);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .sdd-activity-more {
+    appearance: none;
+    background: transparent;
+    border: 0;
+    padding: 0;
+    cursor: pointer;
+    color: var(--text-2);
+    font-size: 11px;
+  }
+  .sdd-activity-more:hover { color: var(--text-0); }
+  .sdd-activity-list {
+    list-style: none;
+    margin: 0; padding: 0;
+    display: flex; flex-direction: column; gap: 2px;
+    max-height: 240px;
+    overflow-y: auto;
+  }
+  .sdd-activity-row {
+    display: grid;
+    grid-template-columns: 8px auto 1fr;
+    align-items: center;
+    gap: 8px;
+    line-height: 1.45;
+    min-width: 0;
+  }
+  .sdd-activity-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--text-3);
+    align-self: center;
+  }
+  .sdd-activity-row[data-status="running"] .sdd-activity-dot {
+    background: color-mix(in oklab, var(--info, #3aa) 80%, transparent);
+    animation: sdd-activity-pulse 1.4s ease-in-out infinite;
+  }
+  .sdd-activity-row[data-status="done"] .sdd-activity-dot {
+    background: color-mix(in oklab, var(--success, #4a7) 70%, transparent);
+  }
+  .sdd-activity-row[data-status="failed"] .sdd-activity-dot {
+    background: color-mix(in oklab, var(--danger, #c44) 80%, transparent);
+  }
+  @keyframes sdd-activity-pulse {
+    0%, 100% { opacity: 0.55; }
+    50%       { opacity: 1.0; }
+  }
+  .sdd-activity-tool {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-2);
+    white-space: nowrap;
+  }
+  .sdd-activity-summary {
+    color: var(--text-1);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
   }
   /* Phase pills look like inline code spans — same font + bg
    *  language as `<code>` from prose. Reinforces "this is part of the
@@ -952,6 +1587,22 @@
     border-radius: 4px;
     transition: background 100ms, color 100ms;
   }
+  .sdd-hide {
+    margin-left: auto;
+    border: 0;
+    background: transparent;
+    color: var(--text-mute);
+    cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 22px; height: 22px;
+    border-radius: 4px;
+    transition: background 100ms, color 100ms;
+  }
+  .sdd-hide:hover {
+    background: color-mix(in srgb, var(--accent) 8%, transparent);
+    color: var(--accent-bright);
+  }
+
   .sdd-close:hover {
     background: color-mix(in srgb, var(--error) 14%, transparent);
     color: var(--error);
@@ -1140,19 +1791,163 @@
     background: transparent;
     padding: 0;
   }
-  /* Failed banner — uses warn-tone red accents inside the card, sits
-   *  above the actions row so the user sees WHY before they decide
-   *  whether to retry. */
+  /* Failure card — quiet-blockquote grammar with a warn-tone left rail
+   *  (not error-red — keeps the card in the same visual register as
+   *  the rest of SDD; we don't shout at the user). Header carries
+   *  trigger badge, body lists failed checks + last actions, footer
+   *  chrome (retry / edit / skip / rollback) lives in the main
+   *  actions row so layout stays consistent. */
   .sdd-failed {
-    padding: 6px 10px;
-    border-left: 2px solid var(--error);
-    background: color-mix(in srgb, var(--error) 10%, transparent);
-    border-radius: 3px;
+    display: flex; flex-direction: column;
+    gap: 6px;
+    padding: 4px 0 4px 10px;
+    border-left: 2px solid color-mix(in srgb, #e0b16c 75%, transparent);
+    background: color-mix(in srgb, #e0b16c 6%, transparent);
     color: var(--text-1);
-    font-size: 12px;
+    font-size: 12.5px;
     line-height: 1.5;
   }
-  .sdd-failed strong { color: var(--error); }
+  .sdd-failed-head {
+    display: flex; align-items: center;
+    gap: 8px;
+  }
+  .sdd-failed-title {
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--text-0);
+  }
+  .sdd-failed-trigger {
+    color: var(--text-mute);
+    font-size: 11px;
+    font-weight: 400;
+  }
+  .sdd-failed-reason {
+    color: var(--text-1);
+  }
+  .sdd-failed-checks-line {
+    color: var(--text-mute);
+    font-size: 11.5px;
+  }
+  .sdd-failed-tail summary,
+  .sdd-failed-checks summary {
+    cursor: pointer;
+    color: var(--text-mute);
+    font-size: 11px;
+    user-select: none;
+  }
+  .sdd-failed-tail-list {
+    list-style: none;
+    padding: 4px 0 0 0;
+    margin: 0;
+    display: flex; flex-direction: column;
+    gap: 2px;
+  }
+  .sdd-failed-tail-row {
+    display: flex; gap: 8px;
+    color: var(--text-mute);
+    font-size: 11px;
+  }
+  .sdd-failed-tail-row .sdd-activity-summary {
+    color: var(--text-1);
+  }
+  /* Inline skip-with-reason form — sits inside the failure card. */
+  .sdd-skip {
+    display: flex;
+  }
+  .sdd-skip-area {
+    width: 100%;
+    min-height: 64px;
+    padding: 6px 0 6px 10px;
+    border: 0;
+    border-left: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
+    background: color-mix(in srgb, var(--bg-0) 70%, transparent);
+    color: var(--text-0);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    line-height: 1.5;
+    resize: vertical;
+    outline: 0;
+  }
+  .sdd-skip-area:focus {
+    border-left-color: var(--accent);
+  }
+
+  /* Phase-diff drawer — same chevron + mono-title grammar as
+   *  `.sdd-body-toggle` so it reads as another expandable section
+   *  rather than a separate element. */
+  .sdd-diff-drawer {
+    display: flex; flex-direction: column;
+    gap: 4px;
+  }
+  .sdd-diff-drawer-head {
+    display: inline-flex; align-items: center;
+    gap: 5px;
+    padding: 1px 0;
+    margin: 0;
+    border: 0;
+    background: transparent;
+    color: var(--text-1);
+    font-size: 12.5px;
+    line-height: 1.4;
+    cursor: pointer;
+    user-select: none;
+    align-self: flex-start;
+  }
+  .sdd-diff-drawer-head:hover { color: var(--text-0); }
+  .sdd-diff-ins { color: var(--success, #66d39a); }
+  .sdd-diff-del { color: #d77e7e; }
+  .sdd-diff-files {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex; flex-direction: column;
+  }
+  .sdd-diff-file-row {
+    display: flex; align-items: center;
+    gap: 8px;
+    padding: 2px 0 2px 14px;
+    margin: 0;
+    border: 0;
+    background: transparent;
+    color: var(--text-1);
+    font-size: 11.5px;
+    line-height: 1.5;
+    text-align: left;
+    cursor: pointer;
+    width: 100%;
+  }
+  .sdd-diff-file-row:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--accent) 4%, transparent);
+  }
+  .sdd-diff-file-row:disabled { cursor: default; opacity: 0.7; }
+  .sdd-diff-file-status {
+    width: 14px; text-align: center;
+    color: var(--text-mute);
+  }
+  .sdd-diff-file-path { flex: 1; }
+  .sdd-diff-file-bin {
+    color: var(--text-mute);
+    font-size: 10.5px;
+  }
+  .sdd-diff-file-body {
+    padding: 4px 0 6px 28px;
+  }
+  .sdd-diff-patch {
+    margin: 0;
+    padding: 6px 8px;
+    background: color-mix(in srgb, var(--bg-0) 70%, transparent);
+    border-left: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
+    font-size: 11.5px;
+    line-height: 1.45;
+    white-space: pre;
+    overflow-x: auto;
+    max-height: 360px;
+    overflow-y: auto;
+  }
+  .sdd-diff-file-loading {
+    color: var(--text-mute);
+    font-size: 11px;
+  }
   /* Body toggle is a text-link, not a button — keeps the "inline
    *  prose" feel. Chevron + filename hint at expandability without
    *  shouting. */
@@ -1277,4 +2072,102 @@
     outline: 0;
   }
   .sdd-amend-area:focus { border-color: var(--accent); }
+
+  /* -------- Audit log (phase 6) -------- */
+  .vh {
+    position: absolute; width: 1px; height: 1px;
+    overflow: hidden; clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+  .sdd-audit-chip {
+    appearance: none;
+    background: transparent;
+    border: 0; padding: 0;
+    margin-left: 6px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    color: var(--text-mute);
+    cursor: pointer;
+    opacity: 0.7;
+  }
+  .sdd-audit-chip:hover { opacity: 1; color: var(--text-0); }
+  .sdd-audit-chip[aria-pressed="true"] { color: var(--accent); opacity: 1; }
+  .sdd-audit-overlay {
+    margin: 8px 0 0 14px;
+    padding: 8px 10px;
+    border: 1px solid var(--border-neutral-hi);
+    background: color-mix(in srgb, var(--bg-1) 92%, transparent);
+    border-radius: 4px;
+    font-size: 12px;
+  }
+  .sdd-audit-head {
+    display: flex; align-items: center; gap: 8px;
+    margin-bottom: 6px;
+  }
+  .sdd-audit-title { font-weight: 600; }
+  .sdd-audit-count { font-size: 10.5px; color: var(--text-mute); }
+  .sdd-audit-spacer { flex: 1; }
+  .sdd-audit-filter select {
+    background: var(--bg-0);
+    border: 1px solid var(--border-neutral-hi);
+    color: var(--text-0);
+    font-size: 11px;
+    padding: 1px 4px;
+    border-radius: 3px;
+  }
+  .sdd-audit-empty {
+    margin: 4px 0; color: var(--text-mute); font-style: italic;
+  }
+  .sdd-audit-list {
+    list-style: none; margin: 0; padding: 0;
+    max-height: 320px; overflow-y: auto;
+  }
+  .sdd-audit-row + .sdd-audit-row {
+    border-top: 1px solid color-mix(in srgb, var(--border-neutral-hi) 50%, transparent);
+  }
+  .sdd-audit-row-head {
+    appearance: none;
+    width: 100%;
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px;
+    background: transparent; border: 0;
+    padding: 4px 0;
+    text-align: left;
+    color: var(--text-0);
+    cursor: pointer;
+    font: inherit;
+  }
+  .sdd-audit-row-head:hover {
+    background: color-mix(in srgb, var(--accent) 6%, transparent);
+  }
+  .sdd-audit-ts { font-size: 10.5px; color: var(--text-mute); }
+  .sdd-audit-source {
+    font-size: 10px; padding: 0 4px; border-radius: 2px;
+    background: color-mix(in srgb, var(--text-mute) 18%, transparent);
+    color: var(--text-0);
+  }
+  .sdd-audit-source[data-source="agent"]  { background: color-mix(in srgb, #d6743a 28%, transparent); }
+  .sdd-audit-source[data-source="user"]   { background: color-mix(in srgb, #6a8fb5 28%, transparent); }
+  .sdd-audit-source[data-source="system"] { background: color-mix(in srgb, #888 22%, transparent); }
+  .sdd-audit-action { font-weight: 600; }
+  .sdd-audit-phase { font-size: 10.5px; color: var(--text-mute); }
+  .sdd-audit-reason { color: var(--text-mute); font-style: italic; }
+  .sdd-audit-snap {
+    padding: 4px 0 8px 14px;
+    font-size: 11px;
+  }
+  .sdd-audit-snap pre {
+    margin: 4px 0 0;
+    padding: 6px 8px;
+    background: var(--bg-0);
+    border: 1px solid var(--border-neutral-hi);
+    border-radius: 3px;
+    overflow-x: auto;
+    font-size: 10.5px;
+    line-height: 1.4;
+  }
+  .sdd-audit-snap summary {
+    cursor: pointer;
+    color: var(--text-mute);
+    font-size: 10.5px;
+  }
 </style>

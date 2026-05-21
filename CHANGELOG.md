@@ -6,7 +6,66 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The
 release runbook (how this CHANGELOG feeds `latest-mac.json`) lives in
 [`docs/RELEASES.md`](docs/RELEASES.md).
 
-## 0.1.0 — 2026-05-19
+## 0.1.1 — 2026-05-21
+
+SDD orchestrator overhaul: spec-driven workflow is now a real
+data-as-code engine with verifier, git lifecycle, live action log,
+structured failure surface, and a self-driving MCP API.
+
+### Added
+
+- **SDD plan-as-data** — workspaces now carry an `is_v2` flag and a
+  `phase_pending_approval` gate; plan/phase frontmatter is the
+  source of truth, so the orchestrator advances on disk-observed
+  `status: done` transitions instead of message-passing.
+- **Acceptance verifier** (`sdd_verify` module) — runs typecheck /
+  test / lint commands declared in `plan.md` after each phase,
+  records `acceptance.json`, and only flips a phase to `done` when
+  every check passes (or the user marks it manually). 14 dedicated
+  unit tests.
+- **Git integration** — auto-init of a per-workspace branch on
+  `sdd_start`, post-phase commits with structured messages,
+  rollback / recover commands, orphan-phase detection on disk
+  rebuild. 13 git-helper tests.
+- **Live action log** — `agentStream.ts` publishes tool-use /
+  tool-result events; the orchestrator persists them under
+  `phases/NN/action-log.jsonl` and replays them in the SddCard so
+  you see what the agent is actually doing in real time.
+- **Failure surface + diff drawer** — when a phase fails, the card
+  shows the structured verifier output (which check, exit code,
+  trimmed stderr), an editable retry form with reason, a skip
+  form, and a per-file diff drawer powered by `git::phase_diff`.
+  `retry_count` and `skip_reason` are persisted in phase
+  frontmatter for audit.
+- **Self-driving MCP** — 12 new `mcp__app__sdd_*` tools (5
+  read-only + 7 mutating) exposed by the `woom-app` sidecar:
+  `sdd_get`, `_list_phases`, `_get_phase`, `_get_action_log`,
+  `_get_results`, `_advance_phase`, `_retry_phase`, `_skip_phase`,
+  `_pause`, `_resume`, `_log_phase_done`, `_log_action`. Every
+  mutation requires a `reason ≥ 5 chars`. `approve_spec` /
+  `approve_plan` are intentionally absent — user gates stay user
+  gates.
+- **Audit log** — append-only `<workspace>/audit-log.jsonl` records
+  every mutation (agent / user / system) with timestamp, action,
+  optional phase, reason, and before/after snapshots. SddCard
+  header shows `· N audit · view` chip; overlay supports source
+  filter, expanded before/after diffs, and copy-as-JSONL export.
+- **Agent context inject** — `agentContext.ts` advertises
+  `linked_to_sdd_phase=<wsid>:<phase>` on the linked-session row
+  and embeds an SDD-orchestrator discipline block teaching the
+  agent how (and when not) to call the new tools.
+
+### Changed
+
+- **SDD prompts** (`phase.md`, `plan.md`) rewritten to use the new
+  MCP API instead of recommending manual frontmatter edits. Legacy
+  frontmatter-edit path still works as a fallback for old
+  workspaces.
+- **`SddWorkspace` JSON shape** extends with `is_v2`,
+  `recovery_state`, `audit-log.jsonl` path, structured failure
+  fields. Frontend types in `sdd.svelte.ts` mirror the new shape.
+
+
 
 First public release.
 

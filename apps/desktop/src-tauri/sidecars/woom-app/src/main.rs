@@ -2365,6 +2365,193 @@ impl App {
         run_or_fallback("question", params, fallback).await
     }
 
+    // ---- SDD orchestrator tools -----------------------------------------
+    // Phase 6: surface for an agent driving its own SDD workspace. Each
+    // tool is a thin validator — the actual mutation happens on the
+    // desktop side, where the frontend's stream parser intercepts the
+    // tool_use event, calls the underlying Tauri command, and writes the
+    // audit-log row. We deliberately omit `sdd_approve_spec` /
+    // `sdd_approve_plan` so the agent CANNOT bypass the user's approval
+    // gate — the JSON-RPC layer will return `method-not-found` if it
+    // tries.
+
+    #[tool(
+        description = "Read the full SDD workspace snapshot (stage, phases, recovery state). Use to refresh your view of what's running, what's done, what's failed. Read-only — no audit cost. Pass `id` from the `linked_to_sdd_phase=<wsid>:<phase>` line in your layout preamble."
+    )]
+    async fn sdd_get(
+        &self,
+        Parameters(SddIdParams { id }): Parameters<SddIdParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        sdd_check_workspace_id(&id)?;
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Reading SDD workspace `{id}`. The desktop side will return the full snapshot on the frontend's stream-parser dispatch."
+        ))]))
+    }
+
+    #[tool(
+        description = "List phases in the SDD workspace as a compact array — number, slug, title, status, tasks_done/tasks_total, has_acceptance_passed. Cheap; no audit cost. Use before `sdd_get_phase` to scan which phase is current."
+    )]
+    async fn sdd_list_phases(
+        &self,
+        Parameters(SddIdParams { id }): Parameters<SddIdParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        sdd_check_workspace_id(&id)?;
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Listing phases for `{id}`."
+        ))]))
+    }
+
+    #[tool(
+        description = "Read phase `phase`'s body + acceptance results from the workspace. Returns Goal, Context, Tasks, Acceptance criteria, Verification commands, plus the latest acceptance.json (per-check pass/fail/exit_code). Read-only. Call this BEFORE doing the work and BEFORE calling `sdd_log_phase_done`."
+    )]
+    async fn sdd_get_phase(
+        &self,
+        Parameters(SddPhaseRefParams { id, phase }): Parameters<SddPhaseRefParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        sdd_check_workspace_id(&id)?;
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Reading phase {phase} of `{id}`."
+        ))]))
+    }
+
+    #[tool(
+        description = "Read the last `tail` entries (default 50) from phase `phase`'s action log. Useful when investigating a failed phase — the verifier surfaces the last 5 in the failure card, but for full forensics you'll want the longer tail."
+    )]
+    async fn sdd_get_action_log(
+        &self,
+        Parameters(SddActionLogParams { id, phase, tail }): Parameters<SddActionLogParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        sdd_check_workspace_id(&id)?;
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Reading action log of `{id}` phase {phase} (tail={}).",
+            tail.unwrap_or(50)
+        ))]))
+    }
+
+    #[tool(
+        description = "Read the result summary + acceptance.json for phase `phase`. Use to inspect what a previously-completed phase actually did, e.g. when picking up a workspace mid-flight or auditing whether a skipped phase left a real result. Read-only."
+    )]
+    async fn sdd_get_results(
+        &self,
+        Parameters(SddPhaseRefParams { id, phase }): Parameters<SddPhaseRefParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        sdd_check_workspace_id(&id)?;
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Reading results of `{id}` phase {phase}."
+        ))]))
+    }
+
+    #[tool(
+        description = "Open the gate for phase `phase` so it transitions PendingApproval → Running. Equivalent to the user clicking 'Start phase'. ONLY call when `sdd_autonomy=semi-auto` is in your context (default mode keeps approval with the user). The previous phase MUST be `done` or `skipped`. `reason` ≥ 5 chars — appended to the audit log so the user can see why you advanced."
+    )]
+    async fn sdd_advance_phase(
+        &self,
+        Parameters(SddMutatingPhaseParams { id, phase, reason }): Parameters<SddMutatingPhaseParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        sdd_check_workspace_id(&id)?;
+        let r = sdd_check_reason(&reason)?;
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Advancing `{id}` to phase {phase} (reason: {r})."
+        ))]))
+    }
+
+    #[tool(
+        description = "Reset phase `phase` to `pending` so the next advance re-runs it. Use after a verifier failure when you've fixed the root cause and want a clean attempt. Also bumps `retry_count`. ONLY in semi-auto. `reason` ≥ 5 chars."
+    )]
+    async fn sdd_retry_phase(
+        &self,
+        Parameters(SddMutatingPhaseParams { id, phase, reason }): Parameters<SddMutatingPhaseParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        sdd_check_workspace_id(&id)?;
+        let r = sdd_check_reason(&reason)?;
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Retrying `{id}` phase {phase} (reason: {r})."
+        ))]))
+    }
+
+    #[tool(
+        description = "Mark phase `phase` as `skipped` and persist the reason on the phase frontmatter + meta + audit log. Use ONLY when the phase is genuinely out of scope or blocked by something out of band — never to dodge a verifier failure you could fix. ONLY in semi-auto. `reason` ≥ 5 chars."
+    )]
+    async fn sdd_skip_phase(
+        &self,
+        Parameters(SddMutatingPhaseParams { id, phase, reason }): Parameters<SddMutatingPhaseParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        sdd_check_workspace_id(&id)?;
+        let r = sdd_check_reason(&reason)?;
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Skipping `{id}` phase {phase} (reason: {r})."
+        ))]))
+    }
+
+    #[tool(
+        description = "Pause the workspace — stops the orchestrator from scheduling new phases until `sdd_resume`. The current phase, if running, finishes naturally. Idempotent. `reason` ≥ 5 chars (e.g. \"need to investigate flaky test before continuing\")."
+    )]
+    async fn sdd_pause(
+        &self,
+        Parameters(SddMutatingWorkspaceParams { id, reason }): Parameters<SddMutatingWorkspaceParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        sdd_check_workspace_id(&id)?;
+        let r = sdd_check_reason(&reason)?;
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Pausing `{id}` (reason: {r})."
+        ))]))
+    }
+
+    #[tool(
+        description = "Resume a paused workspace — clears the pause control file and lets the orchestrator schedule the next phase. Idempotent. `reason` ≥ 5 chars."
+    )]
+    async fn sdd_resume(
+        &self,
+        Parameters(SddMutatingWorkspaceParams { id, reason }): Parameters<SddMutatingWorkspaceParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        sdd_check_workspace_id(&id)?;
+        let r = sdd_check_reason(&reason)?;
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Resuming `{id}` (reason: {r})."
+        ))]))
+    }
+
+    #[tool(
+        description = "Close phase `phase`: orchestrator writes the result summary, runs the verifier, commits to git, and flips the phase frontmatter to `status: done`. THIS IS THE PREFERRED WAY to finish a phase — do NOT manually edit phase frontmatter when this tool is available. `summary` is 2-3 sentences. `files_changed` is the repo-relative paths you touched."
+    )]
+    async fn sdd_log_phase_done(
+        &self,
+        Parameters(SddLogPhaseDoneParams { id, phase, summary, files_changed }): Parameters<SddLogPhaseDoneParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        sdd_check_workspace_id(&id)?;
+        if summary.trim().is_empty() {
+            return Err(ErrorData::invalid_params(
+                "`summary` is empty — write 2-3 sentences describing what observably changed.",
+                None,
+            ));
+        }
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Closing `{id}` phase {phase} ({} files changed). Orchestrator will write result.md, run verifier, commit.",
+            files_changed.len()
+        ))]))
+    }
+
+    #[tool(
+        description = "Push a milestone marker into phase `phase`'s action log as an `sdd_event` row. Use SPARINGLY for genuinely user-visible milestones inside a long phase (e.g. \"finished refactor of auth module\", \"all tests green\"). Tool-call events already auto-log; don't double-log."
+    )]
+    async fn sdd_log_action(
+        &self,
+        Parameters(SddLogActionParams { id, phase, summary, detail }): Parameters<SddLogActionParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        sdd_check_workspace_id(&id)?;
+        let s = summary.trim();
+        if s.is_empty() {
+            return Err(ErrorData::invalid_params(
+                "`summary` is empty — pass a one-line milestone label (≤ 80 chars).",
+                None,
+            ));
+        }
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Logging action on `{id}` phase {phase}: {s}{}.",
+            detail.as_deref().map(|_| " (with detail)").unwrap_or("")
+        ))]))
+    }
+
     #[tool(
         description = "Propose switching the current session's working directory. Surfaces an approval card in Woom and BLOCKS until the user approves (cwd switches) or dismisses. The tool's response is the actual outcome — react and continue in this same turn."
     )]
@@ -2613,6 +2800,121 @@ struct BgStdinParams {
     /// submit a line; omit to leave bytes in the line buffer (the
     /// child sees the partial input when it next reads).
     text: String,
+}
+
+// ---- SDD orchestrator params ---------------------------------------------
+// Phase 6: shape the MCP surface that lets an agent drive its own SDD
+// workflow. Read-tools (`sdd_get*`) are pure observability; mutating
+// tools (`sdd_advance_phase` etc.) require a `reason: String` ≥ 5 chars
+// after trim, and the frontend stream parser writes the corresponding
+// audit-log entry on every successful call. `sdd_approve_spec` /
+// `sdd_approve_plan` are NOT exposed — those gates are user-only.
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct SddIdParams {
+    /// SDD workspace id (e.g. `sdd-ec99a5aeae`). Pull it out of the
+    /// `linked_to_sdd_phase=<wsid>:<phase>` line in the layout snapshot
+    /// at the top of your system prompt.
+    id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct SddPhaseRefParams {
+    id: String,
+    /// Phase number, 1-indexed.
+    phase: u32,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct SddActionLogParams {
+    id: String,
+    phase: u32,
+    /// Tail length — most-recent N entries. Default 50.
+    #[serde(default)]
+    tail: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct SddMutatingPhaseParams {
+    id: String,
+    phase: u32,
+    /// Why you're advancing / retrying / skipping. Required, ≥ 5 chars
+    /// after trim. The audit log persists this verbatim — write a real
+    /// sentence ("verifier flaked on flaky test, retrying once" ⩾
+    /// "ok"). Min length is enforced server-side, not just here.
+    reason: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct SddMutatingWorkspaceParams {
+    id: String,
+    /// Why. Same rules as `SddMutatingPhaseParams::reason`.
+    reason: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct SddLogPhaseDoneParams {
+    id: String,
+    phase: u32,
+    /// 2-3 sentence summary of what changed during this phase, in the
+    /// same shape the result.md `## Summary` section expects.
+    summary: String,
+    /// Repo-relative paths the phase touched. Used by the auto-generated
+    /// result file's `files_changed:` frontmatter list.
+    #[serde(default)]
+    files_changed: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct SddLogActionParams {
+    id: String,
+    phase: u32,
+    /// Free-form milestone label (≤ 80 chars). Shows up in the live
+    /// action feed as a bold `sdd_event` row so the user can see what
+    /// the agent calls a "milestone" mid-phase.
+    summary: String,
+    #[serde(default)]
+    detail: Option<String>,
+}
+
+/// Shared reason-validation gate for the mutating SDD tools. Mirrors the
+/// server-side `sdd::audit::validate_reason` so the agent gets a clean
+/// error message before the request even touches the desktop process.
+fn sdd_check_reason(reason: &str) -> Result<String, ErrorData> {
+    let trimmed = reason.trim();
+    if trimmed.len() < 5 {
+        return Err(ErrorData::invalid_params(
+            format!(
+                "`reason` is too short ({} chars after trim) — explain why you're \
+                 mutating the SDD workflow. Min 5 chars. Examples: \"verifier \
+                 flaked, retrying\", \"manual smoke confirmed phase complete\", \
+                 \"user asked to skip — out of scope\".",
+                trimmed.len()
+            ),
+            None,
+        ));
+    }
+    Ok(trimmed.to_string())
+}
+
+/// Sanity-check the workspace id looks like an SDD id (`sdd-` + ≥ 6 hex
+/// chars). Cheap defense against the agent passing a stage name or the
+/// repo path by mistake. Best-effort — the actual existence check
+/// happens on the desktop side when the Tauri command resolves the
+/// registry.
+fn sdd_check_workspace_id(id: &str) -> Result<(), ErrorData> {
+    let trimmed = id.trim();
+    if !trimmed.starts_with("sdd-") || trimmed.len() < "sdd-".len() + 6 {
+        return Err(ErrorData::invalid_params(
+            format!(
+                "`id` does not look like an SDD workspace id (expected `sdd-XXXXXX…`, \
+                 got `{trimmed}`). The id appears in your layout preamble as \
+                 `linked_to_sdd_phase=<wsid>:<phase>`."
+            ),
+            None,
+        ));
+    }
+    Ok(())
 }
 
 #[tool_handler]

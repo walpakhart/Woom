@@ -87,7 +87,63 @@ that can be executed sequentially.
    - [ ] Verification passes
    ```
 
-5. **STOP after writing.** Do not start executing phases yet. Reply with
+5. **Write `plan.json`** alongside `plan.md` — a machine-readable
+   mirror of the phase list. The orchestrator uses this as the source
+   of truth for structural changes (insert / reorder / delete) and for
+   per-phase acceptance criteria in later phases.
+
+   `{{workspace_root}}/plan.json`:
+
+   ```json
+   {
+     "version": 1,
+     "phases": [
+       {
+         "number": 1,
+         "slug": "01-foundation",
+         "title": "Foundation",
+         "depends_on": [],
+         "complexity": "medium",
+         "acceptance": []
+       }
+     ]
+   }
+   ```
+
+   Rules for `plan.json`:
+   - `slug` MUST match the phase markdown filename without `.md`
+     (`phases/01-foundation.md` → `"01-foundation"`).
+   - `complexity` is one of `"low" | "medium" | "high"` (best-guess —
+     used by the UI to size phase cards).
+   - **`acceptance` is REQUIRED**. Each phase needs at least 2 checks
+     so the verifier can confirm the phase delivered. Three shapes:
+
+     ```jsonc
+     // Run a shell command. Pass when exit matches `expect_exit` AND
+     // (if set) `stdout_match` substring is in stdout/stderr.
+     { "type": "shell",
+       "cmd": "cargo test ... my_module::",
+       "expect_exit": 0,
+       "stdout_match": "test result: ok",     // optional
+       "timeout_ms": 120000 }                 // optional, default 120s
+
+     // All listed paths must exist (workspace-relative).
+     { "type": "file_exists",
+       "paths": ["src/foo.ts", "tests/foo.test.ts"] }
+
+     // User-eyeballed; verifier records it as `manual_unmarked` and
+     // the SddCard surfaces a Mark-passed/Mark-failed pair.
+     { "type": "manual",
+       "description": "Verify the new icon renders on a HiDPI display." }
+     ```
+
+     Pick at minimum ONE shell-or-file_exists check + (where
+     applicable) one manual. Frontend-heavy phases: `pnpm --filter
+     desktop check` + a manual smoke. Backend-heavy: a focused
+     `cargo test ... <module>::` + `file_exists` for new files.
+   - 2-space indent; trailing newline.
+
+6. **STOP after writing.** Do not start executing phases yet. Reply with
    one short sentence: "Plan + N phases written to `<paths>`."
 
 ## Rules

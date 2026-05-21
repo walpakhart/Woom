@@ -11,7 +11,7 @@
   import ClaudeActionCard from '$lib/components/agent/ClaudeActionCard.svelte';
   import QuestionCard from '$lib/components/agent/QuestionCard.svelte';
   import SddCard from '$lib/components/agent/SddCard.svelte';
-  import { workspaceForSession } from '$lib/state/sdd.svelte';
+  import { workspaceForSession, isSddCardHidden } from '$lib/state/sdd.svelte';
   import CardContextMenu, { type MenuItem } from '$lib/views/apps/_shared/CardContextMenu.svelte';
   import { notify } from '$lib/state/toaster.svelte';
   import { setDragPayload } from '$lib/state/drag.svelte';
@@ -545,7 +545,7 @@
     {#snippet inlineActions()}
       {#if workspaceForSession(sess.id)}
         {@const sddWs = workspaceForSession(sess.id)}
-        {#if sddWs}
+        {#if sddWs && !isSddCardHidden(sddWs.id)}
           <div class="action-wrap">
             <SddCard
               workspace={sddWs}
@@ -553,6 +553,11 @@
             />
           </div>
         {/if}
+        <!-- When hidden via the card's "—" button the SDD card is
+             removed from the thread entirely. Re-open it from the
+             SDD chip in the ChatHeader (which calls `showSddCard`
+             alongside `openStandaloneView`). Workspace files on
+             disk are untouched. -->
       {/if}
 
       {#each sess.actions as action (action.id)}
@@ -1507,6 +1512,7 @@
   }
 
   .action-wrap { width: 100%; }
+
 
   .ct-empty, .ct-welcome {
     margin: auto;

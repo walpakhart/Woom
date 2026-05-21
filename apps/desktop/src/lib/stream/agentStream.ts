@@ -35,6 +35,91 @@ import {
 import { formatToolUse } from '$lib/format';
 import type { ClaudeAction, ClaudeUsage } from '$lib/types';
 
+// ---------------------------------------------------------------------------
+// Tool-event pub/sub — a tiny side-channel that mirrors every `tool_use` and
+// `tool_result` block coming through `handleStreamEvent`, in normalized form.
+// Used by the SDD action-log store (`sdd.svelte.ts::attachActionLogListener`)
+// to populate the per-phase live-activity feed without re-parsing stream
+// events. Stays opt-in: subscribers only see the firehose if they explicitly
+// `subscribeToolEvent(...)` — nobody else pays a perf cost.
+//
+// We don't reuse `AgentStreamHandlers` for this because the existing handler
+// fields are coupled to chat-thread / action-card concerns; the SDD log
+// wants raw "what tool fired, with what args, with what result" without the
+// formatting that `formatToolUse` already applies for the trace pill.
+// ---------------------------------------------------------------------------
+
+export type ToolEventKind = 'tool_use' | 'tool_result';
+
+export interface ToolStreamEvent {
+  kind: ToolEventKind;
+  /** Owning agent session id (Claude / Cursor session). */
+  sessionId: string;
+  /** Stable id from the CLI — same value on the matching `tool_use` and
+   *  `tool_result` so subscribers can correlate. May be empty for
+   *  legacy events or pre-MCP tools. */
+  toolUseId: string;
+  /** Tool name as the CLI emits it: "Read", "Edit", "Bash",
+   *  "mcp__github__get_pr", … For tool_result, mirrors the originating
+   *  tool's name when known (we resolve via the cached id→name map). */
+  toolName: string;
+  /** Raw input arguments for `tool_use`. Empty object on `tool_result`. */
+  input?: Record<string, unknown>;
+  /** Trimmed text payload of `tool_result`. Empty on `tool_use`. */
+  resultText?: string;
+  /** True when the originating `tool_result` block carried `is_error: true`. */
+  isError?: boolean;
+}
+
+type ToolEventListener = (event: ToolStreamEvent) => void;
+const toolEventListeners = new Set<ToolEventListener>();
+
+/** Subscribe to every tool_use / tool_result event flowing through
+ *  `handleStreamEvent`. Returns an unsubscribe function. Listeners that
+ *  throw are caught and logged so one bad subscriber can't break the
+ *  stream pipeline. */
+export function subscribeToolEvent(listener: ToolEventListener): () => void {
+  toolEventListeners.add(listener);
+  return () => toolEventListeners.delete(listener);
+}
+
+function emitToolEvent(event: ToolStreamEvent): void {
+  for (const l of toolEventListeners) {
+    try {
+      l(event);
+    } catch (e) {
+      console.warn('[agentStream] tool-event listener threw:', e);
+    }
+  }
+}
+
+/** Map of tool_use id → tool_name, kept so tool_result events
+ *  (which only carry the id) can resolve their originating tool name
+ *  for the action log. Keyed per session so two parallel sessions
+ *  don't see each other's ids. Pruned to last 256 entries to keep
+ *  memory bounded across long-running turns. */
+const toolNameById: Map<string, Map<string, string>> = new Map();
+const TOOL_NAME_CAP = 256;
+
+function rememberToolName(sessionId: string, toolUseId: string, toolName: string) {
+  if (!toolUseId) return;
+  let inner = toolNameById.get(sessionId);
+  if (!inner) {
+    inner = new Map();
+    toolNameById.set(sessionId, inner);
+  }
+  inner.set(toolUseId, toolName);
+  if (inner.size > TOOL_NAME_CAP) {
+    // Drop the oldest entry — Map preserves insertion order.
+    const firstKey = inner.keys().next().value;
+    if (firstKey !== undefined) inner.delete(firstKey);
+  }
+}
+
+function lookupToolName(sessionId: string, toolUseId: string): string {
+  return toolNameById.get(sessionId)?.get(toolUseId) ?? '';
+}
+
 export interface AgentStreamHandlers {
   /** Called with raw text deltas for the assistant turn. Implementations
    *  typically forward to `appendToLastAssistant` and scroll the chat. */
@@ -236,6 +321,23 @@ export function handleStreamEvent(
       for (const block of inner.content) {
         if (block.type !== 'tool_result') continue;
         const raw = extractToolResultText(block);
+        const toolUseId =
+          typeof block.tool_use_id === 'string' ? (block.tool_use_id as string) : '';
+        const isError = block.is_error === true;
+        // Mirror to the tool-event channel even for empty results —
+        // SDD action log uses these to flip a `running` entry to
+        // `done`/`failed`. Skip only when there's literally nothing
+        // we can correlate.
+        if (toolUseId) {
+          emitToolEvent({
+            kind: 'tool_result',
+            sessionId,
+            toolUseId,
+            toolName: lookupToolName(sessionId, toolUseId),
+            resultText: raw ?? '',
+            isError,
+          });
+        }
         if (!raw) continue;
         // Attach to the last trace event's last segment — visually
         // pairs the command with its output inside the same "✓ N
@@ -315,6 +417,18 @@ export function handleStreamEvent(
     const name = typeof block.name === 'string' ? block.name : 'tool';
     const input = (block.input ?? {}) as Record<string, unknown>;
     const id = typeof block.id === 'string' ? block.id : genId();
+    /* Mirror to the tool-event channel so subscribers (SDD action log)
+     *  see every tool_use uniformly — including propose_*, mcp__app__*,
+     *  Edit/MultiEdit/Write — in raw form, before any UI-shaping
+     *  branches below mutate state or emit trace pills. */
+    rememberToolName(sessionId, id, name);
+    emitToolEvent({
+      kind: 'tool_use',
+      sessionId,
+      toolUseId: id,
+      toolName: name,
+      input,
+    });
     // Intercept propose_* tools: they surface action cards in the chat
     // so the user can approve them before anything runs. Suppress the
     // generic tool-use line — the card carries the message.

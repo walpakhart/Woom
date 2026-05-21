@@ -837,6 +837,286 @@ fn parse_github_slug(url: &str) -> Result<(String, String), String> {
     Ok((parts[0].to_string(), parts[1].to_string()))
 }
 
+// ---------------------------------------------------------------------------
+// SDD-specific git helpers — used by the Spec-Driven-Development orchestrator
+// to commit pre/post-phase snapshots, roll a phase back, and detect crash-
+// orphaned phases on app boot. Kept here (vs in sdd.rs) so the existing
+// `git()` / `run()` plumbing is reused and there's only one shell-out path
+// for the whole crate.
+// ---------------------------------------------------------------------------
+
+/// Cheap "is this directory inside a git work tree?" probe. Any non-zero
+/// exit (including "not a repo") returns false. Used to flip the SDD
+/// workspace's `git_enabled` flag — non-git working dirs degrade
+/// gracefully (no branch / commit / rollback, but the rest of SDD works).
+pub fn is_git_repo(repo_cwd: &str) -> bool {
+    if repo_cwd.is_empty() {
+        return false;
+    }
+    let mut c = git(repo_cwd);
+    c.args(["rev-parse", "--git-dir"]);
+    c.output().map(|o| o.status.success()).unwrap_or(false)
+}
+
+/// True when `git status --porcelain` is empty — no untracked, no
+/// staged, no modified. Used by the SDD pre-phase snapshot path to
+/// decide whether to safety-stash before committing the pre-phase
+/// marker.
+pub fn working_dir_clean(repo_cwd: &str) -> bool {
+    let mut c = git(repo_cwd);
+    c.args(["status", "--porcelain"]);
+    match c.output() {
+        Ok(o) if o.status.success() => o.stdout.iter().all(|b| b.is_ascii_whitespace()),
+        _ => false,
+    }
+}
+
+/// Resolve `HEAD` to a full sha. Returns Err on detached HEAD with no
+/// commits at all (fresh repo) so callers can short-circuit instead
+/// of cargo-culting a broken ref.
+pub fn head_sha(repo_cwd: &str) -> Result<String, String> {
+    let mut c = git(repo_cwd);
+    c.args(["rev-parse", "HEAD"]);
+    Ok(run(c)?.trim().to_string())
+}
+
+/// Create a new branch at HEAD without checking it out. Used to mint
+/// the per-workspace `sdd/<id>` branch on `sdd_start` so all SDD
+/// commits land on a dedicated ref the user can review (or discard)
+/// later. Idempotent — `git branch <name>` exits non-zero if the
+/// branch already exists, which we treat as a no-op success since
+/// the workspace already had this branch from a prior boot.
+pub fn create_branch_at_head(repo_cwd: &str, name: &str) -> Result<(), String> {
+    let mut c = git(repo_cwd);
+    c.args(["branch", name]);
+    match run(c) {
+        Ok(_) => Ok(()),
+        Err(e) if e.to_lowercase().contains("already exists") => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
+/// Commit ALL working-tree changes (`git add -A && git commit`) on the
+/// CURRENT branch with the given message. `--allow-empty` so it
+/// works for "no-op phase" or pre-phase markers when the tree was
+/// already clean. Returns the new HEAD sha.
+pub fn commit_all_allow_empty(repo_cwd: &str, message: &str) -> Result<String, String> {
+    // Stage everything first so the commit captures untracked files too.
+    let mut add = git(repo_cwd);
+    add.args(["add", "-A"]);
+    let _ = run(add); // tolerate "nothing to add" on a clean tree
+    let mut commit = git(repo_cwd);
+    commit.args(["commit", "--allow-empty", "-m", message]);
+    run(commit)?;
+    head_sha(repo_cwd)
+}
+
+/// Hard-reset to a known sha. Destructive; callers MUST safety-stash
+/// first if there's any uncommitted work they want to preserve.
+pub fn reset_hard(repo_cwd: &str, sha: &str) -> Result<(), String> {
+    let mut c = git(repo_cwd);
+    c.args(["reset", "--hard", sha]);
+    run(c).map(|_| ())
+}
+
+/// Stash including untracked files under a custom label so it's
+/// identifiable later (`git stash list`). Returns Ok(true) if a
+/// stash was actually created, Ok(false) if there was nothing to
+/// stash (avoiding a confusing empty-stash entry). The label travels
+/// in the stash message so the user can see "sdd-pre-phase-2-<wsid>"
+/// in their `git stash list` output.
+pub fn stash_with_label(repo_cwd: &str, label: &str) -> Result<bool, String> {
+    if working_dir_clean(repo_cwd) {
+        return Ok(false);
+    }
+    let mut c = git(repo_cwd);
+    c.args(["stash", "push", "-u", "-m", label]);
+    run(c).map(|_| true)
+}
+
+/// SDD-flavoured working-tree summary used by SddCard's git-row.
+/// Cheaper than `repo_info` (skips remote-url parsing); aligns the
+/// shape of what the SDD frontend wants to render.
+#[derive(Debug, Serialize, Clone)]
+pub struct SddGitState {
+    pub enabled: bool,
+    pub branch: Option<String>,
+    pub on_sdd_branch: bool,
+    pub ahead: u32,
+    pub behind: u32,
+    pub dirty: bool,
+}
+
+pub fn sdd_git_state(repo_cwd: &str, sdd_branch: &str) -> SddGitState {
+    if !is_git_repo(repo_cwd) {
+        return SddGitState {
+            enabled: false,
+            branch: None,
+            on_sdd_branch: false,
+            ahead: 0,
+            behind: 0,
+            dirty: false,
+        };
+    }
+    let st = status(repo_cwd).ok();
+    let branch = st.as_ref().and_then(|s| s.branch.clone());
+    let on_sdd_branch = branch.as_deref() == Some(sdd_branch);
+    SddGitState {
+        enabled: true,
+        branch,
+        on_sdd_branch,
+        ahead: st.as_ref().map(|s| s.ahead).unwrap_or(0),
+        behind: st.as_ref().map(|s| s.behind).unwrap_or(0),
+        dirty: st.as_ref().map(|s| !s.files.is_empty()).unwrap_or(false),
+    }
+}
+
+/// Per-file entry in a phase diff. `status` mirrors `git diff
+/// --name-status` letters: A = added, M = modified, D = deleted,
+/// R = renamed, C = copied, T = type-change. `insertions`/`deletions`
+/// from `--numstat`. Binary files have `is_binary: true` and zero
+/// counts (numstat reports `-`).
+#[derive(Debug, Serialize, Clone, PartialEq)]
+pub struct DiffFile {
+    pub path: String,
+    pub status: String,
+    pub insertions: u32,
+    pub deletions: u32,
+    pub is_binary: bool,
+    /// Set on `R` / `C` so the UI can display "old → new".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_path: Option<String>,
+}
+
+/// Aggregate result of `compute_phase_diff`. `skipped: true` signals
+/// that the phase had no `pre_phase_sha` (snapshot intentionally
+/// skipped in phase 3 — clean-tree gate failed) so there's nothing to
+/// diff. UI renders a "git snapshot was skipped for this phase"
+/// placeholder in that case.
+#[derive(Debug, Serialize, Clone, PartialEq)]
+pub struct SddPhaseDiff {
+    pub files: Vec<DiffFile>,
+    pub total_insertions: u32,
+    pub total_deletions: u32,
+    pub skipped: bool,
+}
+
+/// Compute per-file diff stats between `pre_sha` and `post_sha`.
+/// Combines `git diff --name-status` (letter status) with `git diff
+/// --numstat` (line counts) into a single `DiffFile` per path.
+///
+/// Both git commands are run on the same SHA range so order is
+/// stable; `--name-status` is parsed first to seed the file list +
+/// pick up renames, then `--numstat` fills in counts. A file that
+/// appears only in numstat (shouldn't happen in practice) is appended
+/// with status "M" as a fallback.
+pub fn compute_phase_diff(repo: &str, pre_sha: &str, post_sha: &str) -> Result<SddPhaseDiff, String> {
+    let range = format!("{}..{}", pre_sha, post_sha);
+    let mut name_status_cmd = git(repo);
+    name_status_cmd.args(["diff", "--name-status", "-M", "-C", &range]);
+    let name_out = run(name_status_cmd)?;
+
+    let mut numstat_cmd = git(repo);
+    numstat_cmd.args(["diff", "--numstat", "-M", "-C", &range]);
+    let numstat_out = run(numstat_cmd)?;
+
+    /* Build path → (status, from_path) from `--name-status`. The
+     *  rename/copy lines have THREE tab-fields: `R<score>\told\tnew`,
+     *  the rest have TWO: `M\tpath`. We key on the *new* path so
+     *  numstat (which always uses the new path) lines up. */
+    use std::collections::HashMap;
+    let mut status_by_path: HashMap<String, (String, Option<String>)> = HashMap::new();
+    for line in name_out.lines() {
+        let parts: Vec<&str> = line.split('\t').collect();
+        match parts.as_slice() {
+            [s, p] if !s.is_empty() => {
+                status_by_path.insert((*p).to_string(), (status_letter(s).to_string(), None));
+            }
+            [s, from, to] if !s.is_empty() => {
+                status_by_path.insert(
+                    (*to).to_string(),
+                    (status_letter(s).to_string(), Some((*from).to_string())),
+                );
+            }
+            _ => {}
+        }
+    }
+
+    let mut files: Vec<DiffFile> = Vec::new();
+    let mut total_insertions: u32 = 0;
+    let mut total_deletions: u32 = 0;
+    for line in numstat_out.lines() {
+        let parts: Vec<&str> = line.split('\t').collect();
+        if parts.len() < 3 {
+            continue;
+        }
+        let ins_raw = parts[0];
+        let del_raw = parts[1];
+        let path = parts[2].to_string();
+        let is_binary = ins_raw == "-" || del_raw == "-";
+        let insertions = ins_raw.parse::<u32>().unwrap_or(0);
+        let deletions = del_raw.parse::<u32>().unwrap_or(0);
+        total_insertions = total_insertions.saturating_add(insertions);
+        total_deletions = total_deletions.saturating_add(deletions);
+        let (status, from_path) = status_by_path
+            .remove(&path)
+            .unwrap_or_else(|| ("M".to_string(), None));
+        files.push(DiffFile {
+            path,
+            status,
+            insertions,
+            deletions,
+            is_binary,
+            from_path,
+        });
+    }
+    /* Any name-status entries without a numstat row (e.g. pure
+     *  rename with no edits — git reports it with `0\t0` in numstat
+     *  so this shouldn't fire, but defensive). */
+    for (path, (status, from_path)) in status_by_path.into_iter() {
+        files.push(DiffFile {
+            path,
+            status,
+            insertions: 0,
+            deletions: 0,
+            is_binary: false,
+            from_path,
+        });
+    }
+    Ok(SddPhaseDiff {
+        files,
+        total_insertions,
+        total_deletions,
+        skipped: false,
+    })
+}
+
+/// Get the unified-format patch for a single file between two SHAs.
+/// Used by the lazy file-diff fetch from the UI when the user clicks
+/// to expand a row. Returns the raw `git diff` output (already includes
+/// `diff --git`/`index`/hunk headers); empty string if the file
+/// matches between SHAs (shouldn't happen given we only call this for
+/// listed files but harmless).
+pub fn compute_file_diff(repo: &str, pre_sha: &str, post_sha: &str, path: &str) -> Result<String, String> {
+    let range = format!("{}..{}", pre_sha, post_sha);
+    let mut c = git(repo);
+    c.args(["diff", "-M", "-C", &range, "--", path]);
+    run(c)
+}
+
+/// `git diff --name-status` prefixes rename/copy with a similarity
+/// score (e.g. `R100`, `C82`). We strip it for a stable single-letter
+/// status the UI can switch on.
+fn status_letter(s: &str) -> &str {
+    if s.starts_with('R') {
+        "R"
+    } else if s.starts_with('C') {
+        "C"
+    } else {
+        s
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -868,5 +1148,204 @@ mod tests {
     #[test]
     fn rejects_non_github_host() {
         assert!(parse_github_slug("git@gitlab.com:foo/bar.git").is_err());
+    }
+
+    // ---- SDD helper tests --------------------------------------------------
+    //
+    // These bring up a real ephemeral git repo on disk so we exercise the
+    // SAME shell-out path as production. Tempdir is hand-rolled (no extra
+    // crate) — same approach as `sdd_verify::tests::td()`.
+
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn td() -> PathBuf {
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let pid = std::process::id();
+        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let p = std::env::temp_dir().join(format!("woom-git-test-{pid}-{nanos}-{n}"));
+        std::fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    fn init_repo(dir: &std::path::Path) {
+        // `git init -q -b main` so the default branch name is stable
+        // across machines whose `init.defaultBranch` differs.
+        let mut c = Command::new("git");
+        c.current_dir(dir).args(["init", "-q", "-b", "main"]);
+        c.output().unwrap();
+        // Local user — required for commits to succeed in CI env.
+        for kv in [("user.email", "test@woom"), ("user.name", "Woom Test")] {
+            let mut c = Command::new("git");
+            c.current_dir(dir).args(["config", kv.0, kv.1]);
+            c.output().unwrap();
+        }
+    }
+
+    #[test]
+    fn is_git_repo_detects_init() {
+        let dir = td();
+        assert!(!is_git_repo(dir.to_str().unwrap()));
+        init_repo(&dir);
+        assert!(is_git_repo(dir.to_str().unwrap()));
+    }
+
+    #[test]
+    fn working_dir_clean_tracks_changes() {
+        let dir = td();
+        init_repo(&dir);
+        std::fs::write(dir.join("a.txt"), "hi").unwrap();
+        // Untracked file → dirty.
+        assert!(!working_dir_clean(dir.to_str().unwrap()));
+        // After committing, clean again.
+        let mut c = Command::new("git");
+        c.current_dir(&dir).args(["add", "-A"]);
+        c.output().unwrap();
+        let mut c = Command::new("git");
+        c.current_dir(&dir).args(["commit", "-q", "-m", "x"]);
+        c.output().unwrap();
+        assert!(working_dir_clean(dir.to_str().unwrap()));
+    }
+
+    #[test]
+    fn create_branch_at_head_is_idempotent() {
+        let dir = td();
+        init_repo(&dir);
+        std::fs::write(dir.join("seed.txt"), "x").unwrap();
+        commit_all_allow_empty(dir.to_str().unwrap(), "seed").unwrap();
+        let s = dir.to_str().unwrap();
+        create_branch_at_head(s, "sdd/test").expect("first create");
+        // Second call must not error — workspace re-init must be safe.
+        create_branch_at_head(s, "sdd/test").expect("second create idempotent");
+    }
+
+    #[test]
+    fn commit_all_allow_empty_returns_sha_and_handles_clean() {
+        let dir = td();
+        init_repo(&dir);
+        let s = dir.to_str().unwrap();
+        // Empty repo: --allow-empty still produces a commit.
+        let sha1 = commit_all_allow_empty(s, "first").unwrap();
+        assert_eq!(sha1.len(), 40);
+        // Clean tree again: still works (allow-empty).
+        let sha2 = commit_all_allow_empty(s, "still-empty").unwrap();
+        assert_ne!(sha1, sha2);
+    }
+
+    #[test]
+    fn reset_hard_rolls_back() {
+        let dir = td();
+        init_repo(&dir);
+        let s = dir.to_str().unwrap();
+        std::fs::write(dir.join("a.txt"), "v1").unwrap();
+        let sha1 = commit_all_allow_empty(s, "v1").unwrap();
+        std::fs::write(dir.join("a.txt"), "v2").unwrap();
+        commit_all_allow_empty(s, "v2").unwrap();
+        reset_hard(s, &sha1).unwrap();
+        let cur = std::fs::read_to_string(dir.join("a.txt")).unwrap();
+        assert_eq!(cur, "v1");
+    }
+
+    #[test]
+    fn stash_with_label_skips_clean_tree() {
+        let dir = td();
+        init_repo(&dir);
+        let s = dir.to_str().unwrap();
+        commit_all_allow_empty(s, "seed").unwrap();
+        // Clean → no stash created.
+        assert_eq!(stash_with_label(s, "sdd-pre-1").unwrap(), false);
+        // Dirty → stash created.
+        std::fs::write(dir.join("a.txt"), "x").unwrap();
+        assert_eq!(stash_with_label(s, "sdd-pre-1").unwrap(), true);
+        // Working tree should now be clean again.
+        assert!(working_dir_clean(s));
+    }
+
+    #[test]
+    fn sdd_git_state_off_outside_repo() {
+        let dir = td();
+        let st = sdd_git_state(dir.to_str().unwrap(), "sdd/whatever");
+        assert!(!st.enabled);
+        assert!(!st.dirty);
+    }
+
+    #[test]
+    fn sdd_git_state_inside_repo() {
+        let dir = td();
+        init_repo(&dir);
+        let s = dir.to_str().unwrap();
+        commit_all_allow_empty(s, "seed").unwrap();
+        let st = sdd_git_state(s, "sdd/test-id");
+        assert!(st.enabled);
+        assert_eq!(st.branch.as_deref(), Some("main"));
+        assert!(!st.on_sdd_branch);
+        assert!(!st.dirty);
+    }
+
+    #[test]
+    fn phase_diff_basic_modify_add_delete() {
+        let dir = td();
+        init_repo(&dir);
+        let s = dir.to_str().unwrap();
+        // Pre-state: a.txt with one line + b.txt to be deleted.
+        std::fs::write(dir.join("a.txt"), "one\n").unwrap();
+        std::fs::write(dir.join("b.txt"), "bye\n").unwrap();
+        commit_all_allow_empty(s, "seed").unwrap();
+        let pre = head_sha(s).unwrap();
+        // Post-state: edit a.txt, add c.txt, delete b.txt.
+        std::fs::write(dir.join("a.txt"), "one\ntwo\n").unwrap();
+        std::fs::write(dir.join("c.txt"), "new\n").unwrap();
+        std::fs::remove_file(dir.join("b.txt")).unwrap();
+        commit_all_allow_empty(s, "phase").unwrap();
+        let post = head_sha(s).unwrap();
+        let diff = compute_phase_diff(s, &pre, &post).unwrap();
+        assert!(!diff.skipped);
+        assert_eq!(diff.files.len(), 3);
+        let a = diff.files.iter().find(|f| f.path == "a.txt").unwrap();
+        assert_eq!(a.status, "M");
+        assert_eq!(a.insertions, 1);
+        let c = diff.files.iter().find(|f| f.path == "c.txt").unwrap();
+        assert_eq!(c.status, "A");
+        let b = diff.files.iter().find(|f| f.path == "b.txt").unwrap();
+        assert_eq!(b.status, "D");
+        assert_eq!(diff.total_insertions, 2); // a.txt +1, c.txt +1
+        assert_eq!(diff.total_deletions, 1); // b.txt -1
+    }
+
+    #[test]
+    fn phase_diff_binary_file_marked_as_binary() {
+        let dir = td();
+        init_repo(&dir);
+        let s = dir.to_str().unwrap();
+        commit_all_allow_empty(s, "seed").unwrap();
+        let pre = head_sha(s).unwrap();
+        // Write file with NUL bytes — git treats it as binary, numstat
+        // reports `-\t-`.
+        std::fs::write(dir.join("blob.bin"), [0u8, 1, 2, 3, 0, 255]).unwrap();
+        commit_all_allow_empty(s, "phase").unwrap();
+        let post = head_sha(s).unwrap();
+        let diff = compute_phase_diff(s, &pre, &post).unwrap();
+        let f = diff.files.iter().find(|f| f.path == "blob.bin").unwrap();
+        assert!(f.is_binary, "expected blob.bin marked binary, got {f:?}");
+        assert_eq!(f.insertions, 0);
+        assert_eq!(f.deletions, 0);
+    }
+
+    #[test]
+    fn phase_diff_file_diff_returns_patch() {
+        let dir = td();
+        init_repo(&dir);
+        let s = dir.to_str().unwrap();
+        std::fs::write(dir.join("a.txt"), "one\n").unwrap();
+        commit_all_allow_empty(s, "seed").unwrap();
+        let pre = head_sha(s).unwrap();
+        std::fs::write(dir.join("a.txt"), "one\ntwo\n").unwrap();
+        commit_all_allow_empty(s, "phase").unwrap();
+        let post = head_sha(s).unwrap();
+        let patch = compute_file_diff(s, &pre, &post, "a.txt").unwrap();
+        assert!(patch.contains("diff --git"), "patch missing header: {patch}");
+        assert!(patch.contains("+two"), "patch missing addition: {patch}");
     }
 }

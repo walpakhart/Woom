@@ -182,6 +182,25 @@ pub(crate) fn build_mcp_config(
         allowed.push("mcp__app__terminal_buffer".into());
         allowed.push("mcp__app__propose_bash".into());
         allowed.push("mcp__app__propose_switch_cwd".into());
+        // SDD orchestrator tools (phase 6: self-driving MCP). Read-tools
+        // are auto-allow because they're cheap and always-safe; mutating
+        // tools have a server-side `reason ≥ 5 chars` gate so the agent
+        // can't quietly bypass the user. Approve-spec / approve-plan are
+        // INTENTIONALLY absent — the user-only gate means even if the
+        // agent guessed the tool name, JSON-RPC would return method-not-
+        // found.
+        allowed.push("mcp__app__sdd_get".into());
+        allowed.push("mcp__app__sdd_list_phases".into());
+        allowed.push("mcp__app__sdd_get_phase".into());
+        allowed.push("mcp__app__sdd_get_action_log".into());
+        allowed.push("mcp__app__sdd_get_results".into());
+        allowed.push("mcp__app__sdd_advance_phase".into());
+        allowed.push("mcp__app__sdd_retry_phase".into());
+        allowed.push("mcp__app__sdd_skip_phase".into());
+        allowed.push("mcp__app__sdd_pause".into());
+        allowed.push("mcp__app__sdd_resume".into());
+        allowed.push("mcp__app__sdd_log_phase_done".into());
+        allowed.push("mcp__app__sdd_log_action".into());
     }
 
     // Merge in any third-party MCP servers the user has installed via

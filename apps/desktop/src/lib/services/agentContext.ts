@@ -13,6 +13,7 @@ import { sessionsState } from '$lib/state/sessions.svelte';
 import { canvasState, ensureCanvasLoaded, type Shape, type Edge } from '$lib/state/canvas.svelte';
 import { getCachedClaudeMd } from '$lib/state/claudemd.svelte';
 import { getCachedAutoMemoryBlock } from '$lib/state/autoMemory.svelte';
+import { getSddPhaseForSession as sddPhaseForSession } from '$lib/state/sdd.svelte';
 
 /** Build the per-turn app-context string we hand the agent as a
  *  system-prompt suffix. Lists each solo singleton (kind + id), the
@@ -125,6 +126,100 @@ export function buildAgentAppContext(callingSessionId: string): string {
       + 'If the first call returns an empty result, narrowing then '
       + 'is free — but never broaden after a hit. Pagination > '
       + 're-querying.'
+  );
+
+  // Long-wait discipline. The single biggest UX bug we see today is
+  // the agent firing a foreground bash polling loop (`until …; do
+  // sleep 15; done`) to wait for a CI run / a notarize submit / an
+  // RDS create to finish. The Bash tool blocks the turn until the
+  // loop exits — which can be 5+ minutes — and the chat surface
+  // visually freezes. Push the agent toward the bg-task family
+  // (`mcp__app__bg_*`) for ANYTHING that's "wait for an external
+  // thing to finish".
+  lines.push('');
+  lines.push(
+    'Long-wait discipline. NEVER write a foreground bash polling '
+      + 'loop (`until [...]; do sleep N; done`, `while true; sleep`, '
+      + '`gh run watch`, etc.) — they block the turn for the entire '
+      + 'wait + the chat surface visually freezes. Instead:\n'
+      + '  - For "wait until CI / build / notarize / RDS provision '
+      + 'finishes" → spawn the wait as a background task via '
+      + '`mcp__app__bg_spawn` with the actual polling script as '
+      + '`command`, then call `mcp__app__bg_wait_line(id, '
+      + 'contains="<readiness signal>", timeout_ms=…)`. The task '
+      + 'streams output into the Preview pane and the agent gets a '
+      + 'discrete return value when the signal lands — no '
+      + 'foreground blocking.\n'
+      + '  - For "fire a one-shot wait of N seconds in the '
+      + 'background and come back to it next turn" → run the wait '
+      + 'inside `mcp__app__bg_spawn` (don\'t use Bash\'s `&` — that '
+      + 'detaches WITH the Bash tool process and you lose the '
+      + 'handle). The user sees the task in the Preview pane and '
+      + 'gets a notification when it completes.\n'
+      + '  - For "poll a remote until success without holding the '
+      + 'chat" → schedule via the same bg pattern with `until` '
+      + 'INSIDE the spawned script body, NOT in the Bash tool '
+      + 'call.\n'
+      + '  - If the user explicitly typed "wait for X and tell me" '
+      + 'or "run rerun and tell me when it\'s done" → bg_spawn the '
+      + 'poller, then immediately reply that the wait is running '
+      + 'in the background and end the turn. The bg-task '
+      + 'completion event re-arms the chat without you holding it '
+      + 'hostage.'
+  );
+
+  // SDD-phase live activity. When the calling session is linked to a
+  // running SDD phase, the user already sees a real-time feed of
+  // every tool_use / tool_result in the SddCard. Telling the agent
+  // about this is two-fold: (a) save tokens by not echoing
+  // "I'm reading X now…" (the user has the feed); (b) give it an
+  // anchor for status messages — the agent can reply with the
+  // OUTCOME ("read X, found nothing relevant") instead of the
+  // PROCESS, which the feed already covers.
+  lines.push('');
+  lines.push(
+    'SDD Phase live log: when you\'re inside an SDD-managed phase '
+      + '(look for `linked_to_sdd_phase=…` in the layout below), the '
+      + 'user already sees a real-time feed of your tool_use events '
+      + 'in the SDD card. Do NOT echo the same in chat ("I\'m reading '
+      + 'X now…"). Save tokens — they see the feed. Reply with '
+      + 'OUTCOMES (what you found, what you decided), not PROCESS '
+      + '(what file you opened next).'
+  );
+
+  // SDD orchestrator MCP surface (phase 6). When linked to an SDD
+  // phase, the agent has structured tools to drive the workflow
+  // instead of editing markdown frontmatter by hand. The discipline
+  // block below explains which tools are read-only / mutating and
+  // which actions REMAIN user-only (approve spec/plan).
+  lines.push('');
+  lines.push(
+    '## SDD orchestrator\n'
+      + 'When your linked session is running an SDD workflow, the '
+      + 'layout snapshot below shows `linked_to_sdd_phase=<wsid>:<phase>`. '
+      + 'In that state:\n'
+      + '- Read state via `mcp__app__sdd_get` / `mcp__app__sdd_list_phases` '
+      + '/ `mcp__app__sdd_get_phase` / `mcp__app__sdd_get_action_log` / '
+      + '`mcp__app__sdd_get_results` — cheap, no audit cost.\n'
+      + '- To close a phase, call `mcp__app__sdd_log_phase_done(id, phase, '
+      + 'summary, files_changed)` — the orchestrator does the rest '
+      + '(writes result.md, runs the verifier, commits to git). Do NOT '
+      + 'manually edit the phase frontmatter when this tool is available.\n'
+      + '- Do NOT echo your tool_use events in chat ("I\'m reading X '
+      + 'now…") — the SDD card already shows the user a real-time feed.\n'
+      + '- Do NOT call `mcp__app__sdd_advance_phase` / `_retry_phase` / '
+      + '`_skip_phase` unless `sdd_autonomy=semi-auto` is in your '
+      + 'context. In default mode the user gates phase transitions via '
+      + 'the failure / pending-approval card.\n'
+      + '- Approve spec / plan are USER-ONLY actions — there are NO MCP '
+      + 'tools for that (the JSON-RPC layer would return method-not-found '
+      + 'even if you guessed the name). If your work is ready for '
+      + 'approval, finish your turn cleanly and the user will press '
+      + 'Approve.\n'
+      + '- Every mutating call requires a `reason` ≥ 5 characters — it '
+      + 'lands in the workspace audit log alongside who/what/when. Write '
+      + 'a real sentence ("verifier flaked, retrying once") not a token '
+      + '("ok").'
   );
 
   // ── Variable section: solo layout snapshot + one-shot
@@ -245,6 +340,15 @@ export function buildAgentAppContext(callingSessionId: string): string {
           if (termInst) {
             meta.push(`linked_to_terminal=${termInst.name} (id=${termInst.id})`);
           }
+        }
+        /* SDD phase link — only stamped when the session has an SDD
+           workspace currently in `phase_running`. The marker lets the
+           agent know its tool-use stream is being mirrored into a
+           live feed, so the "Long-wait / SDD Phase live log"
+           discipline above kicks in. */
+        const sddPhase = sddPhaseForSession(sess.id);
+        if (sddPhase) {
+          meta.push(`linked_to_sdd_phase=${sddPhase.workspaceId}:phase-${sddPhase.phase}`);
         }
       }
     }

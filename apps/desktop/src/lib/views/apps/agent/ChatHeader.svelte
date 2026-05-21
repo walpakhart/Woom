@@ -16,8 +16,9 @@
   import { tick, untrack } from 'svelte';
   import {
     sddState,
-    bindWorkspaceToSession,
+    openStandaloneView,
     discardSdd,
+    showSddCard,
     type SddWorkspace,
     type SddPhase,
   } from '$lib/state/sdd.svelte';
@@ -234,7 +235,9 @@
       case 'spec_ready': return 'spec ready';
       case 'planning': return 'drafting plan';
       case 'plan_ready': return 'plan ready';
+      case 'phase_pending_approval': return `phase ${s.phase} pending`;
       case 'phase_running': return `phase ${s.phase} running`;
+      case 'phase_verifying': return `phase ${s.phase} verifying`;
       case 'phase_done': return `phase ${s.phase} done`;
       case 'complete': return 'complete';
       case 'paused': return 'paused';
@@ -255,8 +258,11 @@
     return `${done}/${w.phases.length}`;
   }
   function sddOpenWorkspace(workspaceId: string) {
-    if (!sess) return;
-    bindWorkspaceToSession(sess.id, workspaceId);
+    // Restore inline visibility if previously hidden — clicking the
+    // history row is the "bring it back" gesture pair for the
+    // SddCard's "—" hide button.
+    showSddCard(workspaceId);
+    openStandaloneView(workspaceId);
     closeSddPopover();
   }
   async function sddDiscardWorkspace(workspaceId: string) {

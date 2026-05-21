@@ -177,7 +177,8 @@
   import { initScale } from '$lib/state/scale.svelte';
   import { initDensity, toggleDensity } from '$lib/state/density.svelte';
   import { initBgTasks } from '$lib/state/bgTasks.svelte';
-  import { initSdd, workspaceForSession, refreshSdd } from '$lib/state/sdd.svelte';
+  import { initSdd, workspaceForSession, refreshSdd, sddState, closeStandaloneView } from '$lib/state/sdd.svelte';
+  import SddCard from '$lib/components/agent/SddCard.svelte';
   import {
     initUpdatesStore,
     updateState as updatesPhaseStore,
@@ -2635,9 +2636,16 @@
    *  "Phase N done."). Skips slash-command parsing, the UserPromptSubmit
    *  hook, and mention baking — SDD prompts are internal and shouldn't
    *  go through user-prompt-shaped middleware. */
-  type SendOpts = { silent?: boolean };
+  type SendOpts = { silent?: boolean; kind?: 'claude' | 'cursor' };
   async function sendClaudeMessage(opts: SendOpts = {}) {
-    const s = activeSession;
+    /* Resolve session by kind when caller specifies one — `activeSession`
+     *  reads `activeClaudeId` which can lag the cursor view when the
+     *  user switches columns without selecting a session there. Routing
+     *  the cursor composer's Send through `kind: 'cursor'` guarantees
+     *  the cursor session is the target. */
+    const s = opts.kind
+      ? sessionsState.list.find((x) => x.id === sessionsState.activeIds[opts.kind!]) ?? null
+      : activeSession;
     if (!s) return;
     /* Queue while a turn is in flight: instead of dropping the click,
        push the current input to `pendingQueue` and clear the composer.
@@ -4535,8 +4543,15 @@
     updateSession(s.id, {
       claudeUuid: genUuid(),
       claudeResumable: false,
-      cwdSwitchRecap: recap
+      cwdSwitchRecap: recap,
+      /* Force-clear `sending` so the composer leaves the "thinking…"
+       *  state even when the CLI was SIGKILLed without emitting a
+       *  stream-end event. Without this the thinking dots stick
+       *  forever and the next Send falls into the queue-while-busy
+       *  branch instead of firing. */
+      sending: false
     });
+    stopThinkingTimer(kind);
   }
 
 
@@ -5744,7 +5759,7 @@
           onRemoveAction={dismissAction}
           onExecuteAction={executeAction}
           onOpenPrInWoom={openPrUrlInWoom}
-          onSend={() => void sendClaudeMessage()}
+          onSend={() => void sendClaudeMessage({ kind: 'claude' })}
           onStop={() => void stopAgentForKind('claude')}
           onPasteImages={(k, blobs) => pasteImagesIntoColumn(APP_INSTANCE_IDS.claude, k, blobs)}
           onDragOver={(e) => onAgentDragOver(APP_INSTANCE_IDS.claude, 'claude', e)}
@@ -5787,7 +5802,7 @@
           onRemoveAction={dismissAction}
           onExecuteAction={executeAction}
           onOpenPrInWoom={openPrUrlInWoom}
-          onSend={() => void sendClaudeMessage()}
+          onSend={() => void sendClaudeMessage({ kind: 'cursor' })}
           onStop={() => void stopAgentForKind('cursor')}
           onPasteImages={(k, blobs) => pasteImagesIntoColumn(APP_INSTANCE_IDS.cursor, k, blobs)}
           onDragOver={(e) => onAgentDragOver(APP_INSTANCE_IDS.cursor, 'cursor', e)}
@@ -5958,6 +5973,22 @@
       view = s.agentKind === 'cursor' ? 'cursorApp' : 'claudeApp';
     }}
   />
+{/if}
+
+<!-- Standalone read-only SDD overlay — opened from the header history
+     popover. Renders as a top-level fullscreen card with only a Close
+     button (no Discard / Approve), so the user can read past specs
+     without touching the active chat. -->
+{#if sddState.standaloneViewWorkspaceId}
+  {@const standaloneWs = sddState.workspaces.find((w) => w.id === sddState.standaloneViewWorkspaceId)}
+  {#if standaloneWs}
+    <SddCard
+      workspace={standaloneWs}
+      viewOnly={true}
+      onClose={closeStandaloneView}
+      onAdvance={() => {}}
+    />
+  {/if}
 {/if}
 
 <style>

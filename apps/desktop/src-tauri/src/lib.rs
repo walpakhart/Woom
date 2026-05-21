@@ -18,6 +18,7 @@ mod keychain;
 mod library;
 mod memory_local;
 mod sdd;
+mod sdd_verify;
 mod sentry;
 mod skills;
 mod statusline;
@@ -474,6 +475,26 @@ pub fn run() {
             sdd::sdd_prompt,
             sdd::sdd_save_body,
             sdd::sdd_retry_phase,
+            sdd::sdd_approve_phase,
+            sdd::sdd_skip_phase,
+            sdd::sdd_insert_phase,
+            sdd::sdd_reorder_phases,
+            sdd::sdd_delete_phase,
+            sdd::sdd_upgrade_workspace,
+            sdd::sdd_run_verification,
+            sdd::sdd_mark_manual_check,
+            sdd::sdd_rollback_phase,
+            sdd::sdd_recover_workspace,
+            sdd::sdd_get_git_state,
+            sdd::sdd_get_phase_diff,
+            sdd::sdd_get_file_diff,
+            sdd::sdd_skip_phase_with_reason,
+            sdd::sdd_append_action_log,
+            sdd::sdd_append_action_log_batch,
+            sdd::sdd_read_action_log,
+            sdd::sdd_audit_append,
+            sdd::sdd_audit_read,
+            sdd::sdd_validate_mutation,
             sdd::sdd_discard,
             // User-defined hooks — agent-lifecycle scripts. See
             // `hooks.rs` for the contract (stdin JSON / exit code /

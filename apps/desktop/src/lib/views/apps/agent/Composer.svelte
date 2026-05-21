@@ -1630,10 +1630,22 @@
     color: var(--text-mute);
     -webkit-text-fill-color: var(--text-mute);
   }
+  /* Selection: highlight rectangle only. We MUST keep
+   * `-webkit-text-fill-color` transparent here — flipping it back to
+   * `var(--text-0)` paints the textarea's glyphs visible inside the
+   * selection range while the backdrop ALSO paints those same
+   * glyphs, producing the double-render the user sees as "selection
+   * bleeds + cursor far from character". The native selection rect
+   * still highlights the area; backdrop text remains visible
+   * underneath; nothing double-paints. */
   .cmp-area::selection {
     background: var(--accent-soft);
-    color: var(--text-0);
-    -webkit-text-fill-color: var(--text-0);
+    color: transparent;
+    -webkit-text-fill-color: transparent;
+  }
+  .cmp-area::-moz-selection {
+    background: var(--accent-soft);
+    color: transparent;
   }
   .cmp-area:disabled { opacity: 0.5; cursor: not-allowed; }
 

@@ -1,6 +1,6 @@
 {
   "name": "woom",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Woom — a focused, warm-lit workspace for software work.",
   "scripts": {
