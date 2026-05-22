@@ -33,6 +33,7 @@
   import { Terminal } from '@xterm/xterm';
   import { FitAddon } from '@xterm/addon-fit';
   import { WebLinksAddon } from '@xterm/addon-web-links';
+  import { WebglAddon } from '@xterm/addon-webgl';
   import '@xterm/xterm/css/xterm.css';
   import { sessionsState } from '$lib/state/sessions.svelte';
   import { layoutState } from '$lib/state/layout.svelte';
@@ -221,6 +222,20 @@
     term.loadAddon(fit);
     term.loadAddon(new WebLinksAddon());
     term.open(host);
+
+    /* GPU renderer — DOM renderer chokes on heavy output (npm install,
+     * build logs, long agent tool_use runs). WebGL drops frame cost from
+     * O(visible cells) DOM mutations to a single texture upload per frame.
+     * Falls back silently to DOM if context-loss fires (e.g. user
+     * suspends + resumes the laptop). */
+    try {
+      const webgl = new WebglAddon();
+      webgl.onContextLoss(() => webgl.dispose());
+      term.loadAddon(webgl);
+    } catch {
+      /* WebGL unavailable (rare on macOS WKWebView) — DOM renderer
+       * still works, just slower. Silent fallback. */
+    }
 
     // Forward keystrokes to the PTY. Multi-byte input (paste, dead
     // keys, IME) all goes through `onData` as a single string, which

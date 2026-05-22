@@ -6,6 +6,45 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The
 release runbook (how this CHANGELOG feeds `latest-mac.json`) lives in
 [`docs/RELEASES.md`](docs/RELEASES.md).
 
+## 0.1.3 — 2026-05-22
+
+UX polish + reliability fixes across updater, SDD orchestrator, and the
+embedded terminal.
+
+### Fixed
+
+- **Updater "0.1.x skipped" zombie state** — `check_and_emit` now
+  auto-clears `skipped_version` whenever it equals the running
+  `CARGO_PKG_VERSION` (you can't be "skipping" the version you're
+  already on). Pairs with a Settings affordance so the "clear skip &
+  re-check" button surfaces whenever the in-memory phase is
+  `Skipped`, regardless of what's on disk — escape hatch for any
+  ghost state left over from a prior session.
+- **SDD `phase_pending_approval` stuck without an Approve button** —
+  v2 workspaces gated each phase behind a per-phase approval marker,
+  but the SddCard's `isAwaitingApproval` derivation only matched
+  `spec_ready` / `plan_ready` / `phase_done`, and `advance()` had no
+  branch for the new stage. Cards landed on review with only
+  Amend/Stop/Discard and no way to proceed. Card now offers
+  `Approve · start phase N` which calls `approveSddPhase(id, phase)`
+  and chains into the existing phase-prompt pipeline.
+- **TodoWrite trace pill hid the actual plan** — the row showed
+  `4 items · 3 done · 1 in progress` and nothing else, so users
+  couldn't tell what the agent was about to do. `formatTodos` now
+  emits the bullet list into the toolcall envelope's `‹output›`
+  slot; clicking the row expands `<details>` and shows every todo
+  with a status glyph (`✓ ▸ ○ ✕`).
+
+### Changed
+
+- **Terminal renderer flipped to WebGL** — heavy output (npm install,
+  agent tool_use bursts, long build logs) was stalling the chat UI
+  because xterm's DOM renderer mutates one DOM node per visible cell
+  per frame. Added `@xterm/addon-webgl@0.19.0`; renderer now does a
+  single texture upload per frame. Falls back silently to DOM on
+  `onContextLoss` (e.g. after sleep/resume) so behaviour stays
+  identical when the GPU path is unavailable.
+
 ## 0.1.2 — 2026-05-21
 
 Hotfix: 0.1.1 shipped with a WebView that mounted to a black screen on

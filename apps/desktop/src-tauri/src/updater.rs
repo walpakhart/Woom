@@ -187,6 +187,15 @@ pub async fn check_and_emit(app: &AppHandle) -> UpdateState {
     let mut settings = load_settings(app);
     settings.last_checked_at_ms = Some(now_ms());
 
+    // Auto-clear stale skip — if the running binary already matches
+    // the skipped version, the skip is meaningless (user is on it).
+    // Prevents a zombie "0.1.2 skipped" message after the user
+    // manually installs the version they previously skipped.
+    let running = env!("CARGO_PKG_VERSION");
+    if settings.skipped_version.as_deref() == Some(running) {
+        settings.skipped_version = None;
+    }
+
     let state = match result {
         Ok(Some(update)) => {
             let version = update.version.clone();

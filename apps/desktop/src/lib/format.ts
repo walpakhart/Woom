@@ -180,9 +180,25 @@ export function formatTodos(input: Record<string, unknown>): string {
   // (added in ChatThread.svelte) gives this a checklist icon + brand
   // tint so the summary still reads as a todo step at a glance.
   const summary = parts.join(' · ');
-  return activeLabel
+  const head = activeLabel
     ? `_todos_ ${mdInlineCode(truncInline(summary, 80))} — ${truncInline(activeLabel, 80)}`
     : `_todos_ ${mdInlineCode(truncInline(summary, 80))}`;
+  // Bullet list lands inside the toolcall envelope's output slot so
+  // ChatThread's <details> expander shows the full plan when the user
+  // clicks the row. Glyph prefix encodes status: ✓ done, ▸ in-progress,
+  // ○ pending, ✕ cancelled. Active item bolded with caret.
+  const bullets = todos.map((t) => {
+    const status = typeof t.status === 'string' ? t.status : 'pending';
+    const content = typeof t.content === 'string' ? t.content : '';
+    const af = typeof t.activeForm === 'string' ? t.activeForm : '';
+    const text = truncInline((status === 'in_progress' ? (af || content) : content) || '(no label)', 200);
+    const glyph =
+      status === 'completed' ? '✓' :
+      status === 'in_progress' ? '▸' :
+      status === 'cancelled' ? '✕' : '○';
+    return `${glyph} ${text}`;
+  }).join('\n');
+  return `${head}\n‹output›\n${bullets}\n‹/output›`;
 }
 
 export function truncInline(s: string, max: number): string {

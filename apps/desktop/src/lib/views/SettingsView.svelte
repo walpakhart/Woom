@@ -1174,11 +1174,11 @@
           Auto-check on launch + every 6h
         </label>
       </div>
-      {#if updatesStore.settings.skipped_version}
+      {#if updatesStore.settings.skipped_version || updatesStore.phase.kind === 'skipped'}
         <div class="update-skip-row">
           <span class="update-skip-label">Skipped version</span>
-          <span class="mono">{updatesStore.settings.skipped_version}</span>
-          <button class="btn-link" onclick={clearSkippedVersion}>clear skip</button>
+          <span class="mono">{updatesStore.settings.skipped_version ?? (updatesStore.phase.kind === 'skipped' ? updatesStore.phase.version : '')}</span>
+          <button class="btn-link" onclick={clearSkippedVersion}>clear skip & re-check</button>
         </div>
       {/if}
       {#if updateStatusMessage}

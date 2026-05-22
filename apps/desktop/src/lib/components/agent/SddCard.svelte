@@ -22,6 +22,7 @@
     type DiffFile,
     type AuditEntry,
     approveSdd,
+    approveSddPhase,
     buildAmendPrompt,
     pauseSdd,
     resumeSdd,
@@ -194,7 +195,10 @@
   const sessionSending = $derived(!!linkedSession?.sending);
   const isAwaitingApproval = $derived(
     !sessionSending &&
-      (stage.kind === 'spec_ready' || stage.kind === 'plan_ready' || stage.kind === 'phase_done')
+      (stage.kind === 'spec_ready' ||
+        stage.kind === 'plan_ready' ||
+        stage.kind === 'phase_done' ||
+        stage.kind === 'phase_pending_approval')
   );
   const isInFlight = $derived(
     sessionSending ||
@@ -280,6 +284,9 @@
         const w = await approveSdd(p.workspace.id, 'plan');
         if (w) fresh = w;
       }
+    } else if (stage.kind === 'phase_pending_approval') {
+      const w = await approveSddPhase(p.workspace.id, stage.phase);
+      if (w) fresh = w;
     }
     const prompt = await buildPromptForStage(fresh);
     if (prompt) {
@@ -377,6 +384,7 @@
     if (stage.kind === 'spec_ready') return 'Approve spec · draft plan';
     if (stage.kind === 'plan_ready') return nextPhase ? `Approve plan · start phase ${nextPhase.number}` : 'Approve plan';
     if (stage.kind === 'phase_done') return nextPhase ? `Continue · phase ${nextPhase.number}` : 'Done';
+    if (stage.kind === 'phase_pending_approval') return `Approve · start phase ${stage.phase}`;
     return '';
   }
 
