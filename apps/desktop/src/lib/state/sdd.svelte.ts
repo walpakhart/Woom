@@ -33,6 +33,17 @@ export type SddStage =
   | { kind: 'plan_ready' }
   | { kind: 'phase_pending_approval'; phase: number }
   | { kind: 'phase_running'; phase: number }
+  /** Three-call mode — agent is producing the plan-pass output
+   *  (read-only analysis written to `phases/<slug>/plan.md`).
+   *  See `spec-1` FR-1. */
+  | { kind: 'phase_planning'; phase: number }
+  /** Three-call mode — plan.md exists, plan-gate is enabled, user
+   *  must Approve / Amend / Discard before implement fires.
+   *  See `spec-1` FR-7. */
+  | { kind: 'phase_plan_review'; phase: number }
+  /** Three-call mode — agent is executing the plan (edits land
+   *  here). See `spec-1` FR-3. */
+  | { kind: 'phase_implementing'; phase: number }
   | { kind: 'phase_verifying'; phase: number }
   | { kind: 'phase_done'; phase: number }
   | { kind: 'complete' }
@@ -62,7 +73,18 @@ export type SddFailureTrigger =
   | 'timeout'
   | 'exception'
   | 'crash'
-  | 'user_stopped';
+  | 'user_stopped'
+  /** Three-call plan-pass mutated files despite the read-only contract.
+   *  Detected via pre/post `git status --porcelain` sentinel. */
+  | 'plan_mutated_disk'
+  /** Three-call verify-pass produced non-empty `deviations`. */
+  | 'verify_failed'
+  /** Three-call verify-pass JSON failed to parse AND no hard gate
+   *  rescued the phase. Rare — `VerifyOutput::parse_or_fallback`
+   *  masks most parse errors. */
+  | 'verify_parse_fail'
+  /** User clicked Discard during the plan-review gate. */
+  | 'plan_discarded';
 
 // --- Phase diff (file changes between pre/post phase commits) --------
 
@@ -179,6 +201,13 @@ export interface SddPhase {
   body: string;
   path: string;
   summary: string | null;
+  /** Three-call mode artifact — `phases/<slug>/plan.md`. Null when
+   *  missing (single-call mode or three-call pre-plan-pass). See
+   *  `spec-1` FR-2. */
+  plan_body?: string | null;
+  /** Three-call mode artifact — `phases/<slug>/verify.json` parsed.
+   *  Null when missing. See `spec-1` FR-4. */
+  verify?: VerifyOutput | null;
 }
 
 export interface SddWorkspace {
@@ -208,7 +237,43 @@ export interface SddWorkspace {
    *  interrupted" banner asking the user to rollback or keep state.
    *  Mirrors `enum SddRecoveryState` in `apps/desktop/src-tauri/src/sdd.rs`. */
   recovery_state: SddRecoveryState | null;
+  /** Three-call execution mode config mirrored from
+   *  `meta.json#phase_execution`. SddCard + buildPromptForStage read
+   *  this to decide which sub-step pipeline to follow. See
+   *  `spec-1` FR-11. */
+  phase_execution: PhaseExecutionConfig;
 }
+
+/** Which sub-step a three-call phase is currently running. Lives on
+ *  `<workspace>/control/phase-<N>-substep-state.json` and tags action
+ *  log rows so the SddCard can group events per pass. */
+export type SddPhaseSubstep = 'plan' | 'implement' | 'verify';
+
+export type PhaseExecutionMode = 'single_call' | 'three_call';
+
+/** Mirror of `crate::sdd::PhaseExecutionConfig`. Every field has a
+ *  default on the Rust side so legacy meta.json (lacking the block)
+ *  deserializes; this TS type matches the populated shape after
+ *  hydrate. See `spec-1` FR-11 / FR-12. */
+export interface PhaseExecutionConfig {
+  mode: PhaseExecutionMode;
+  plan_gate: boolean;
+  plan_budget_pct: number;
+  implement_budget_pct: number;
+  verify_budget_pct: number;
+}
+
+/** Default values matching `PhaseExecutionConfig::default()` on the
+ *  Rust side. Exposed so the SddCard / Settings can short-circuit
+ *  when a workspace's config is absent (e.g. during the first paint
+ *  before hydrate lands). */
+export const DEFAULT_PHASE_EXECUTION_CONFIG: PhaseExecutionConfig = {
+  mode: 'single_call',
+  plan_gate: false,
+  plan_budget_pct: 0.25,
+  implement_budget_pct: 0.70,
+  verify_budget_pct: 0.05,
+};
 
 /** Tagged-union mirror of Rust's `SddRecoveryState`. Currently only one
  *  variant — `OrphanPhase` — but we keep the discriminator so adding
@@ -218,6 +283,9 @@ export type SddRecoveryState = {
   phase: number;
   /** Sha to roll back to. Null when git was disabled at approve-time. */
   pre_phase_sha: string | null;
+  /** Three-call mode — sub-step that was in flight when Woom died.
+   *  Surfaces in the recovery banner copy. See `spec-1` NFR-rel-1. */
+  sub_step?: SddPhaseSubstep | null;
 };
 
 /** Compact git-row state returned by `getSddGitState`. Mirrors
@@ -316,6 +384,11 @@ export interface ActionLogEntry {
    *  `running` row to `done`/`failed` when the matching `tool_result`
    *  arrives instead of stacking two rows. */
   correlation_id?: string;
+  /** Three-call mode — which sub-step was active when this row was
+   *  written. Used by SddCard to render `— plan —` / `— implement —`
+   *  / `— verify —` divider rows in the live feed. Absent on
+   *  single-call workspaces and legacy JSONL. See `spec-1` FR-9. */
+  sub_step?: SddPhaseSubstep | null;
 }
 
 /** Soft cap for the in-memory feed per (workspace, phase). The full
@@ -927,6 +1000,140 @@ export async function getSddGitState(id: string): Promise<SddGitState | null> {
   }
 }
 
+/** Mirror of `crate::sdd::VerifyOutput` — structured verify-pass
+ *  output written to `<workspace>/phases/<slug>/verify.json`. Every
+ *  field always present after `parse_or_fallback`; empty arrays /
+ *  strings are valid. See `spec-1` FR-4. */
+export interface VerifyOutput {
+  summary: string;
+  files_changed: string[];
+  task_compliance: string[];
+  deviations: string[];
+  notes: string;
+}
+
+/** Persist the plan-pass output as `phases/<slug>/plan.md` and
+ *  advance substep-state. Workspace returned reflects the post-write
+ *  derived stage (`phase_plan_review` if plan_gate=true, else
+ *  `phase_implementing`). */
+export async function saveSddPhasePlan(
+  id: string,
+  phase: number,
+  body: string,
+): Promise<SddWorkspace | null> {
+  try {
+    const ws = await invoke<SddWorkspace>('sdd_save_phase_plan', { id, phase, body });
+    upsertWorkspace(ws);
+    return ws;
+  } catch (e) {
+    console.warn('sdd_save_phase_plan failed', e);
+    return null;
+  }
+}
+
+/** Three-call mode — close out the implement pass: advance the
+ *  substep checkpoint from `Implement` → `Verify` so the orchestrator
+ *  fires the verify-pass prompt on the next agent turn. Persists the
+ *  implement-pass `summary` on phase frontmatter; status stays
+ *  `running` until the verify pass flips it. */
+export async function completeSddPhaseImplement(
+  id: string,
+  phase: number,
+  summary: string,
+  filesChanged: string[],
+): Promise<SddWorkspace | null> {
+  try {
+    const ws = await invoke<SddWorkspace>('sdd_complete_phase_implement', {
+      id,
+      phase,
+      summary,
+      filesChanged,
+    });
+    upsertWorkspace(ws);
+    return ws;
+  } catch (e) {
+    console.warn('sdd_complete_phase_implement failed', e);
+    return null;
+  }
+}
+
+/** Persist the verify-pass JSON, auto-fill phase frontmatter
+ *  summary, advance phase status. `rawJson` is the agent's literal
+ *  response — backend `parse_or_fallback` tolerates markdown fences
+ *  and falls back to a deviations sentinel on malformed input. */
+export async function saveSddPhaseVerify(
+  id: string,
+  phase: number,
+  rawJson: string,
+): Promise<SddWorkspace | null> {
+  try {
+    const ws = await invoke<SddWorkspace>('sdd_save_phase_verify', {
+      id,
+      phase,
+      rawJson,
+    });
+    upsertWorkspace(ws);
+    return ws;
+  } catch (e) {
+    console.warn('sdd_save_phase_verify failed', e);
+    return null;
+  }
+}
+
+/** Persist a workspace's `phase_execution` config (mode + plan_gate
+ *  + budget splits). Validates server-side; rejects when the budget
+ *  percentages sum past 1.0 + a small float epsilon. See `spec-1`
+ *  FR-11 / FR-12. */
+export async function setSddPhaseExecutionConfig(
+  id: string,
+  config: PhaseExecutionConfig,
+): Promise<SddWorkspace | null> {
+  try {
+    const ws = await invoke<SddWorkspace>('sdd_set_phase_execution_config', { id, config });
+    upsertWorkspace(ws);
+    return ws;
+  } catch (e) {
+    console.warn('sdd_set_phase_execution_config failed', e);
+    return null;
+  }
+}
+
+/** Three-call mode — discard the plan-pass output during the
+ *  plan-review gate. Flips phase to `failed { trigger:
+ *  plan_discarded }` so the standard failure card surfaces.
+ *  Different from skip — failure card retains Retry/Edit&retry. */
+export async function discardSddPhasePlan(
+  id: string,
+  phase: number,
+  reason?: string,
+): Promise<SddWorkspace | null> {
+  try {
+    const ws = await invoke<SddWorkspace>('sdd_discard_phase_plan', { id, phase, reason });
+    upsertWorkspace(ws);
+    return ws;
+  } catch (e) {
+    console.warn('sdd_discard_phase_plan failed', e);
+    return null;
+  }
+}
+
+/** Clear the plan-review gate so the implement pass can fire. Only
+ *  meaningful in three-call mode with `phase_execution.plan_gate =
+ *  true`. */
+export async function approveSddPhasePlan(
+  id: string,
+  phase: number,
+): Promise<SddWorkspace | null> {
+  try {
+    const ws = await invoke<SddWorkspace>('sdd_approve_phase_plan', { id, phase });
+    upsertWorkspace(ws);
+    return ws;
+  } catch (e) {
+    console.warn('sdd_approve_phase_plan failed', e);
+    return null;
+  }
+}
+
 export async function pauseSdd(id: string): Promise<void> {
   try { await invoke('sdd_pause', { id }); } catch (e) { console.warn(e); }
 }
@@ -943,7 +1150,16 @@ export async function discardSdd(id: string): Promise<void> {
 
 // --- Prompt assembly -------------------------------------------------
 
-type PromptKind = 'spec' | 'plan' | 'phase' | 'summary' | 'amend';
+type PromptKind =
+  | 'spec'
+  | 'plan'
+  | 'phase'
+  | 'summary'
+  | 'amend'
+  /** Three-call mode passes — see `spec-1` FR-1 / FR-3 / FR-4. */
+  | 'phase_plan'
+  | 'phase_implement'
+  | 'phase_verify';
 
 /** Fetch a prompt template from the Rust side. Templates are embedded
  *  via `include_str!` at build time so they ship with the binary. */
@@ -1004,13 +1220,58 @@ export async function buildPromptForStage(ws: SddWorkspace): Promise<string | nu
       return interpolate(tpl, { workspace_root: root, user_prompt: ws.user_prompt });
     }
     case 'phase_running':
-      return null; // already in flight
-    case 'phase_verifying':
-      return null; // verifier is running — agent has nothing to do
+      return null; // already in flight (single-call mode)
     case 'phase_pending_approval':
       return null; // waiting on user — gate cleared via approveSddPhase
     case 'spec_ready':
       return null; // waiting on user approve
+    case 'phase_planning': {
+      /* Three-call mode — plan pass. Fires when the workspace
+       * transitions out of phase_pending_approval AND
+       * `phase_execution.mode === "three_call"`. */
+      const stage = ws.stage;
+      const ph = ws.phases.find((p) => p.number === stage.phase);
+      if (!ph) return null;
+      const tpl = await fetchPrompt('phase_plan');
+      return interpolate(tpl, {
+        workspace_root: root,
+        workspace_id: ws.id,
+        user_prompt: ws.user_prompt,
+        phase_number: String(ph.number),
+        phase_slug: ph.slug,
+        phase_file: `${ph.slug}.md`,
+      });
+    }
+    case 'phase_plan_review':
+      return null; // waiting on user — gate cleared via approveSddPhasePlan
+    case 'phase_implementing': {
+      const stage = ws.stage;
+      const ph = ws.phases.find((p) => p.number === stage.phase);
+      if (!ph) return null;
+      const tpl = await fetchPrompt('phase_implement');
+      return interpolate(tpl, {
+        workspace_root: root,
+        workspace_id: ws.id,
+        user_prompt: ws.user_prompt,
+        phase_number: String(ph.number),
+        phase_slug: ph.slug,
+        phase_file: `${ph.slug}.md`,
+      });
+    }
+    case 'phase_verifying': {
+      const stage = ws.stage;
+      const ph = ws.phases.find((p) => p.number === stage.phase);
+      if (!ph) return null;
+      const tpl = await fetchPrompt('phase_verify');
+      return interpolate(tpl, {
+        workspace_root: root,
+        workspace_id: ws.id,
+        user_prompt: ws.user_prompt,
+        phase_number: String(ph.number),
+        phase_slug: ph.slug,
+        phase_file: `${ph.slug}.md`,
+      });
+    }
     default:
       return null;
   }
@@ -1060,11 +1321,26 @@ export async function buildAmendPrompt(
  *  the next phase when it kicks off). */
 export function getSddPhaseForSession(
   sessionId: string,
-): { workspaceId: string; phase: number } | null {
+): { workspaceId: string; phase: number; subStep: SddPhaseSubstep | null } | null {
   const ws = workspaceForSession(sessionId);
   if (!ws) return null;
-  if (ws.stage.kind !== 'phase_running') return null;
-  return { workspaceId: ws.id, phase: ws.stage.phase };
+  // Single-call mode: only `phase_running` counts. Three-call mode
+  // includes the per-substep variants so tool events fire during
+  // plan/implement/verify alike. Pick the active sub-step so
+  // `pushActionEntry` can tag rows for the live-feed dividers.
+  const s = ws.stage;
+  switch (s.kind) {
+    case 'phase_running':
+      return { workspaceId: ws.id, phase: s.phase, subStep: null };
+    case 'phase_planning':
+      return { workspaceId: ws.id, phase: s.phase, subStep: 'plan' };
+    case 'phase_implementing':
+      return { workspaceId: ws.id, phase: s.phase, subStep: 'implement' };
+    case 'phase_verifying':
+      return { workspaceId: ws.id, phase: s.phase, subStep: 'verify' };
+    default:
+      return null;
+  }
 }
 
 /** Read-only view: returns the current in-memory buffer for the given
@@ -1185,7 +1461,7 @@ function attachActionLogListener(): void {
      *  pollute the JSONL on disk. */
     const target = getSddPhaseForSession(evt.sessionId);
     if (!target) return;
-    const { workspaceId, phase } = target;
+    const { workspaceId, phase, subStep } = target;
     if (evt.kind === 'tool_use') {
       const entry: ActionLogEntry = {
         ts: Date.now(),
@@ -1196,6 +1472,7 @@ function attachActionLogListener(): void {
         detail: detailFromInput(evt.input ?? {}),
         status: 'running',
         correlation_id: evt.toolUseId || undefined,
+        sub_step: subStep ?? undefined,
       };
       pushActionEntry(workspaceId, entry);
       queueAppend(workspaceId, entry);
@@ -1214,6 +1491,7 @@ function attachActionLogListener(): void {
       summary: evt.toolName ? `${evt.toolName} ${status}` : status,
       status,
       correlation_id: evt.toolUseId || undefined,
+      sub_step: subStep ?? undefined,
     };
     pushActionEntry(workspaceId, entry);
     queueAppend(workspaceId, entry);
@@ -1227,8 +1505,16 @@ function attachActionLogListener(): void {
  *  hydrate. */
 async function rehydrateActionLogs(): Promise<void> {
   for (const ws of sddState.workspaces) {
-    if (ws.stage.kind !== 'phase_running') continue;
-    const phase = ws.stage.phase;
+    const s = ws.stage;
+    if (
+      s.kind !== 'phase_running' &&
+      s.kind !== 'phase_planning' &&
+      s.kind !== 'phase_implementing' &&
+      s.kind !== 'phase_verifying'
+    ) {
+      continue;
+    }
+    const phase = s.phase;
     if ((sddState.actionLogByWorkspace[ws.id]?.[phase]?.length ?? 0) > 0) continue;
     try {
       const entries = await invoke<ActionLogEntry[]>('sdd_read_action_log', {

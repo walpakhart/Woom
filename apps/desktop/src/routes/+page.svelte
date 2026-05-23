@@ -177,7 +177,18 @@
   import { initScale } from '$lib/state/scale.svelte';
   import { initDensity, toggleDensity } from '$lib/state/density.svelte';
   import { initBgTasks } from '$lib/state/bgTasks.svelte';
-  import { initSdd, workspaceForSession, refreshSdd, sddState, closeStandaloneView } from '$lib/state/sdd.svelte';
+  import {
+    initSdd,
+    workspaceForSession,
+    refreshSdd,
+    sddState,
+    closeStandaloneView,
+    saveSddPhasePlan,
+    completeSddPhaseImplement,
+    saveSddPhaseVerify,
+    approveSddPhasePlan,
+    discardSddPhasePlan
+  } from '$lib/state/sdd.svelte';
   import SddCard from '$lib/components/agent/SddCard.svelte';
   import {
     initUpdatesStore,
@@ -4093,6 +4104,55 @@
           if (desiredId) shape.id = desiredId;
           canvasAddShape(canvasId, shape);
         })();
+        return;
+      }
+      /* Three-call SDD close-out tools. The sidecar tool returns
+         text instantly so the agent can keep streaming; the real
+         mutation (write plan.md / verify.json, advance substep
+         state, flip phase frontmatter) happens here via the same
+         Tauri commands the SddCard buttons call. File-watcher
+         detects the change and the orchestrator schedules the
+         next pass on the next tick. */
+      case 'mcp__app__sdd_save_phase_plan': {
+        const id = str('id');
+        const phase = num('phase');
+        const body = str('body');
+        if (!id || !Number.isFinite(phase) || !body) return;
+        void saveSddPhasePlan(id, phase, body);
+        return;
+      }
+      case 'mcp__app__sdd_complete_phase_implement': {
+        const id = str('id');
+        const phase = num('phase');
+        const summary = str('summary');
+        if (!id || !Number.isFinite(phase) || !summary) return;
+        const fc = Array.isArray(input.files_changed)
+          ? (input.files_changed as unknown[]).filter((v): v is string => typeof v === 'string')
+          : [];
+        void completeSddPhaseImplement(id, phase, summary, fc);
+        return;
+      }
+      case 'mcp__app__sdd_save_phase_verify': {
+        const id = str('id');
+        const phase = num('phase');
+        const rawJson = str('raw_json');
+        if (!id || !Number.isFinite(phase) || !rawJson) return;
+        void saveSddPhaseVerify(id, phase, rawJson);
+        return;
+      }
+      case 'mcp__app__sdd_approve_phase_plan': {
+        const id = str('id');
+        const phase = num('phase');
+        if (!id || !Number.isFinite(phase)) return;
+        void approveSddPhasePlan(id, phase);
+        return;
+      }
+      case 'mcp__app__sdd_discard_phase_plan': {
+        const id = str('id');
+        const phase = num('phase');
+        const reason = str('reason');
+        if (!id || !Number.isFinite(phase)) return;
+        void discardSddPhasePlan(id, phase, reason || undefined);
         return;
       }
     }

@@ -2553,6 +2553,94 @@ impl App {
     }
 
     #[tool(
+        description = "Three-call mode — persist the plan-pass body to `phases/<slug>/plan.md` and advance the substep checkpoint from `Plan` → `Implement` (or stay on `Plan` when `plan_gate=true`). Call this as the FINAL step of the plan pass. `body` is the full markdown plan."
+    )]
+    async fn sdd_save_phase_plan(
+        &self,
+        Parameters(SddSavePhasePlanParams { id, phase, body }): Parameters<SddSavePhasePlanParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        sdd_check_workspace_id(&id)?;
+        if body.trim().is_empty() {
+            return Err(ErrorData::invalid_params(
+                "`body` is empty — write the plan markdown (Approach / Step-by-step / Files / Tests / Risks).",
+                None,
+            ));
+        }
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Saved plan for `{id}` phase {phase} ({} chars). Substep advances to Implement (or stays on Plan if plan_gate=true).",
+            body.len()
+        ))]))
+    }
+
+    #[tool(
+        description = "Three-call mode — close out the implement pass: advance the substep checkpoint from `Implement` → `Verify` so the next agent turn fires the verify-pass prompt. Persists `summary` + `files_changed` on the phase frontmatter (verify pass quotes them). Phase status STAYS `running` — verify pass is the one that flips done/failed. Call this as the FINAL step of the implement pass."
+    )]
+    async fn sdd_complete_phase_implement(
+        &self,
+        Parameters(SddCompletePhaseImplementParams { id, phase, summary, files_changed }): Parameters<SddCompletePhaseImplementParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        sdd_check_workspace_id(&id)?;
+        if summary.trim().is_empty() {
+            return Err(ErrorData::invalid_params(
+                "`summary` is empty — write 2-3 sentences describing observable changes from the implement pass.",
+                None,
+            ));
+        }
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Closing implement pass for `{id}` phase {phase} ({} files changed). Substep advances to Verify; next turn fires verify-pass prompt.",
+            files_changed.len()
+        ))]))
+    }
+
+    #[tool(
+        description = "Three-call mode — persist the verify-pass JSON to `phases/<slug>/verify.json`, fill phase frontmatter `summary`, flip phase status to `done` (no deviations) or `failed { trigger: verify_failed }` (deviations present), clear the substep checkpoint. Call this as the FINAL step of the verify pass. `raw_json` is the verdict JSON (markdown fences are tolerated)."
+    )]
+    async fn sdd_save_phase_verify(
+        &self,
+        Parameters(SddSavePhaseVerifyParams { id, phase, raw_json }): Parameters<SddSavePhaseVerifyParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        sdd_check_workspace_id(&id)?;
+        if raw_json.trim().is_empty() {
+            return Err(ErrorData::invalid_params(
+                "`raw_json` is empty — pass the verify-pass JSON verdict (schema: summary, task_compliance, deviations[], notes, files_changed[]).",
+                None,
+            ));
+        }
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Saved verify verdict for `{id}` phase {phase} ({} bytes). Phase status will flip done/failed based on deviations.",
+            raw_json.len()
+        ))]))
+    }
+
+    #[tool(
+        description = "Three-call mode with `plan_gate=true` — approve the plan-pass output for `phase` and advance the substep checkpoint from `Plan` → `Implement`. Only useful when the workspace's `plan_gate` is enabled. `reason` ≥ 5 chars — audit log line."
+    )]
+    async fn sdd_approve_phase_plan(
+        &self,
+        Parameters(SddApprovePhasePlanParams { id, phase, reason }): Parameters<SddApprovePhasePlanParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        sdd_check_workspace_id(&id)?;
+        let r = sdd_check_reason(&reason)?;
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Approving plan for `{id}` phase {phase} (reason: {r}). Substep advances to Implement."
+        ))]))
+    }
+
+    #[tool(
+        description = "Three-call mode — discard the plan-pass output for `phase` and mark the phase `failed { trigger: plan_discarded }`. Use when the planned approach is wrong (wrong architecture, missed dependency) and you want a clean retry rather than implementing a flawed plan. `reason` ≥ 5 chars — persisted to phase frontmatter + audit log."
+    )]
+    async fn sdd_discard_phase_plan(
+        &self,
+        Parameters(SddDiscardPhasePlanParams { id, phase, reason }): Parameters<SddDiscardPhasePlanParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        sdd_check_workspace_id(&id)?;
+        let r = sdd_check_reason(&reason)?;
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Discarding plan for `{id}` phase {phase} (reason: {r}). Phase flips to failed; clear retry path."
+        ))]))
+    }
+
+    #[tool(
         description = "Propose switching the current session's working directory. Surfaces an approval card in Woom and BLOCKS until the user approves (cwd switches) or dismisses. The tool's response is the actual outcome — react and continue in this same turn."
     )]
     async fn propose_switch_cwd(
@@ -2875,6 +2963,56 @@ struct SddLogActionParams {
     summary: String,
     #[serde(default)]
     detail: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct SddSavePhasePlanParams {
+    id: String,
+    phase: u32,
+    /// Markdown body of the plan — written verbatim to
+    /// `phases/<slug>/plan.md`. Should mirror the Plan template
+    /// from the plan-pass prompt (Approach / Step-by-step / Files
+    /// to touch / Tests / Risks).
+    body: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct SddCompletePhaseImplementParams {
+    id: String,
+    phase: u32,
+    /// 2-3 sentence summary of observable changes — written to the
+    /// phase frontmatter so the verify pass can quote it.
+    summary: String,
+    /// Repo-relative paths the implement-pass touched.
+    #[serde(default)]
+    files_changed: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct SddSavePhaseVerifyParams {
+    id: String,
+    phase: u32,
+    /// Raw JSON output from the verify-pass agent. Backend
+    /// `VerifyOutput::parse_or_fallback` tolerates markdown fences
+    /// and falls back to a deviations sentinel on parse failure.
+    raw_json: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct SddApprovePhasePlanParams {
+    id: String,
+    phase: u32,
+    /// Why the plan is approved. Audit-log line. ≥ 5 chars.
+    reason: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct SddDiscardPhasePlanParams {
+    id: String,
+    phase: u32,
+    /// Why the plan is discarded. Persisted to phase frontmatter +
+    /// audit log as `plan_discarded` trigger. ≥ 5 chars.
+    reason: String,
 }
 
 /// Shared reason-validation gate for the mutating SDD tools. Mirrors the

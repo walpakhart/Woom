@@ -23,6 +23,11 @@
     type AuditEntry,
     approveSdd,
     approveSddPhase,
+    approveSddPhasePlan,
+    discardSddPhasePlan,
+    setSddPhaseExecutionConfig,
+    DEFAULT_PHASE_EXECUTION_CONFIG,
+    type PhaseExecutionConfig,
     buildAmendPrompt,
     pauseSdd,
     resumeSdd,
@@ -198,11 +203,17 @@
       (stage.kind === 'spec_ready' ||
         stage.kind === 'plan_ready' ||
         stage.kind === 'phase_done' ||
-        stage.kind === 'phase_pending_approval')
+        stage.kind === 'phase_pending_approval' ||
+        stage.kind === 'phase_plan_review')
   );
   const isInFlight = $derived(
     sessionSending ||
-      stage.kind === 'drafting' || stage.kind === 'planning' || stage.kind === 'phase_running'
+      stage.kind === 'drafting' ||
+      stage.kind === 'planning' ||
+      stage.kind === 'phase_running' ||
+      stage.kind === 'phase_planning' ||
+      stage.kind === 'phase_implementing' ||
+      stage.kind === 'phase_verifying'
   );
   const isTerminal = $derived(
     stage.kind === 'complete' || stage.kind === 'stopped' || stage.kind === 'failed'
@@ -246,6 +257,9 @@
       case 'plan_ready': return 'Plan ready';
       case 'phase_pending_approval': return `Phase ${stage.phase} — review`;
       case 'phase_running': return `Phase ${stage.phase} running`;
+      case 'phase_planning': return `Phase ${stage.phase} — planning`;
+      case 'phase_plan_review': return `Phase ${stage.phase} — plan review`;
+      case 'phase_implementing': return `Phase ${stage.phase} — implementing`;
       case 'phase_verifying': return `Phase ${stage.phase} verifying`;
       case 'phase_done': return `Phase ${stage.phase} done`;
       case 'complete': return 'All phases done';
@@ -257,6 +271,7 @@
 
   function stageTone(): 'live' | 'ok' | 'warn' | 'dim' {
     if (isInFlight) return 'live';
+    if (stage.kind === 'phase_plan_review') return 'warn';
     if (stage.kind === 'failed' || stage.kind === 'stopped') return 'warn';
     if (stage.kind === 'complete') return 'ok';
     return 'dim';
@@ -287,6 +302,12 @@
     } else if (stage.kind === 'phase_pending_approval') {
       const w = await approveSddPhase(p.workspace.id, stage.phase);
       if (w) fresh = w;
+    } else if (stage.kind === 'phase_plan_review') {
+      // Three-call mode plan-review gate. Clear the marker, advance
+      // substep-state to Implement, then fire the implement-pass
+      // prompt via the standard pipeline.
+      const w = await approveSddPhasePlan(p.workspace.id, stage.phase);
+      if (w) fresh = w;
     }
     const prompt = await buildPromptForStage(fresh);
     if (prompt) {
@@ -297,6 +318,23 @@
       advanceClicked = false;
     }
   }
+
+  /* Three-call mode — surface the verify.json verdict for the
+   *  CURRENTLY-displayed phase (active stage's phase, or the override
+   *  when the user clicks a phase chip). Null when verify.json is
+   *  absent. See `spec-1` FR-10. */
+  const verifyForActiveStage = $derived.by(() => {
+    const targetPhase =
+      selectedPhaseOverride !== null
+        ? selectedPhaseOverride
+        : 'phase' in stage
+          ? stage.phase
+          : null;
+    if (targetPhase === null) return null;
+    const ph = p.workspace.phases.find((x) => x.number === targetPhase);
+    if (!ph || !ph.verify) return null;
+    return { slug: ph.slug, verdict: ph.verify };
+  });
 
   /* Body chunk to preview — show spec for spec_ready, plan for
    *  plan_ready, current phase's body for phase_running, prior phase
@@ -310,6 +348,19 @@
     }
     if (stage.kind === 'phase_running') {
       const ph = p.workspace.phases.find((x) => x.number === stage.phase);
+      if (ph) return { title: `phases/${ph.slug}.md`, markdown: ph.body };
+    }
+    if (stage.kind === 'phase_planning' || stage.kind === 'phase_implementing' || stage.kind === 'phase_verifying') {
+      const ph = p.workspace.phases.find((x) => x.number === stage.phase);
+      // During verify/implement we already have the plan.md — show it
+      // so the user can scan the agent's intended approach while the
+      // pass is running. During planning, plan.md may not exist yet.
+      if (ph?.plan_body) return { title: `phases/${ph.slug}/plan.md`, markdown: ph.plan_body };
+      if (ph) return { title: `phases/${ph.slug}.md`, markdown: ph.body };
+    }
+    if (stage.kind === 'phase_plan_review') {
+      const ph = p.workspace.phases.find((x) => x.number === stage.phase);
+      if (ph?.plan_body) return { title: `phases/${ph.slug}/plan.md`, markdown: ph.plan_body };
       if (ph) return { title: `phases/${ph.slug}.md`, markdown: ph.body };
     }
     if (stage.kind === 'phase_done') {
@@ -385,6 +436,7 @@
     if (stage.kind === 'plan_ready') return nextPhase ? `Approve plan · start phase ${nextPhase.number}` : 'Approve plan';
     if (stage.kind === 'phase_done') return nextPhase ? `Continue · phase ${nextPhase.number}` : 'Done';
     if (stage.kind === 'phase_pending_approval') return `Approve · start phase ${stage.phase}`;
+    if (stage.kind === 'phase_plan_review') return `Approve plan · run phase ${stage.phase}`;
     return '';
   }
 
@@ -518,6 +570,20 @@
   async function onPause() { await pauseSdd(p.workspace.id); }
   async function onResume() { await resumeSdd(p.workspace.id); }
   async function onStop() { await stopSdd(p.workspace.id); }
+  /** Discard the plan-pass output during plan-review. Calls the
+   *  dedicated `sdd_discard_phase_plan` command so the phase flips
+   *  to `failed { trigger: plan_discarded }` and the standard
+   *  failure card (Retry / Edit & retry / Skip) takes over. */
+  async function discardPlanReview() {
+    if (advanceClicked) return;
+    if (stage.kind !== 'phase_plan_review') return;
+    advanceClicked = true;
+    try {
+      await discardSddPhasePlan(p.workspace.id, stage.phase);
+    } finally {
+      advanceClicked = false;
+    }
+  }
   async function onRetry() {
     if (advanceClicked) return;
     advanceClicked = true;
@@ -681,6 +747,9 @@
   // stale). The overlay is dismissable via Escape.
   let auditEntries = $state<AuditEntry[]>([]);
   let auditOpen = $state(false);
+  /** Per-workspace execution-mode config drawer toggle. Opens
+   *  inline under the card header — mirrors Settings card controls. */
+  let configOpen = $state(false);
   let auditLoaded = $state(false);
   let auditFilter = $state<'all' | 'agent' | 'user' | 'system'>('all');
   let auditExpandedTs = $state<number | null>(null);
@@ -767,6 +836,26 @@
         · {auditEntries.length} audit · view
       </button>
     {/if}
+    {#if !p.viewOnly}
+      <!-- Config cog — opens an inline drawer with per-workspace
+           three-call mode toggle + plan-gate checkbox. Same controls
+           as Settings card but scoped to this workspace. See
+           `spec-1` FR-11. -->
+      <button
+        type="button"
+        class="sdd-cog"
+        class:sdd-cog--open={configOpen}
+        onclick={() => (configOpen = !configOpen)}
+        title="Configure execution mode (single-call / three-call) + plan-review gate"
+        aria-label="Workspace execution config"
+        aria-expanded={configOpen}
+      >
+        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+        </svg>
+      </button>
+    {/if}
     {#if !effectiveFullscreen && !p.viewOnly}
       <!-- Hide-without-discard. Workspace files stay on disk; the
            card simply leaves the thread until the user re-opens it
@@ -798,6 +887,48 @@
       </button>
     {/if}
   </header>
+
+  {#if configOpen}
+    <!-- Inline workspace config drawer — mirrors the Settings card
+         controls but scoped to this workspace. See `spec-1` FR-11. -->
+    <div class="sdd-config-drawer">
+      <label class="sdd-config-row">
+        <span class="sdd-config-label">Execution mode</span>
+        <select
+          class="sdd-config-select mono"
+          value={p.workspace.phase_execution?.mode ?? 'single_call'}
+          onchange={(e) => {
+            const mode = (e.currentTarget as HTMLSelectElement).value as 'single_call' | 'three_call';
+            void setSddPhaseExecutionConfig(p.workspace.id, {
+              ...(p.workspace.phase_execution ?? DEFAULT_PHASE_EXECUTION_CONFIG),
+              mode,
+            } satisfies PhaseExecutionConfig);
+          }}
+        >
+          <option value="single_call">single-call (legacy)</option>
+          <option value="three_call">three-call (plan → implement → verify)</option>
+        </select>
+      </label>
+      <label class="sdd-config-row sdd-config-row--toggle">
+        <input
+          type="checkbox"
+          checked={p.workspace.phase_execution?.plan_gate ?? false}
+          disabled={(p.workspace.phase_execution?.mode ?? 'single_call') !== 'three_call'}
+          onchange={(e) => {
+            const plan_gate = (e.currentTarget as HTMLInputElement).checked;
+            void setSddPhaseExecutionConfig(p.workspace.id, {
+              ...(p.workspace.phase_execution ?? DEFAULT_PHASE_EXECUTION_CONFIG),
+              plan_gate,
+            } satisfies PhaseExecutionConfig);
+          }}
+        />
+        <span class="sdd-config-label">Pause between plan and implement (plan-review gate)</span>
+      </label>
+      <p class="sdd-config-hint">
+        Three-call mode runs each phase as three discrete agent passes — adds ~5–15% cost per phase, improves auditability. Config persists in <span class="mono">meta.json#phase_execution</span>.
+      </p>
+    </div>
+  {/if}
 
   <div class="sdd-prompt-line">
     <span class="sdd-prompt-label">Ask:</span>
@@ -977,6 +1108,55 @@
           <div class="sdd-body-content">
             <Markdown source={body.markdown} />
           </div>
+          {#if verifyForActiveStage}
+            <!-- Verify pane — structured render of phases/<slug>/verify.json.
+                 Surfaces below the regular body for completed phases so
+                 the user can scan task_compliance / deviations / notes
+                 without leaving the card. Empty fields hidden. See
+                 `spec-1` FR-10. -->
+            <div class="sdd-verify-pane" data-deviated={verifyForActiveStage.verdict.deviations.length > 0}>
+              <header class="sdd-verify-head mono">verify · phases/{verifyForActiveStage.slug}/verify.json</header>
+              {#if verifyForActiveStage.verdict.summary}
+                <p class="sdd-verify-summary">{verifyForActiveStage.verdict.summary}</p>
+              {/if}
+              {#if verifyForActiveStage.verdict.files_changed.length > 0}
+                <details class="sdd-verify-section">
+                  <summary class="mono">files changed · {verifyForActiveStage.verdict.files_changed.length}</summary>
+                  <ul class="sdd-verify-files mono">
+                    {#each verifyForActiveStage.verdict.files_changed as f (f)}
+                      <li>{f}</li>
+                    {/each}
+                  </ul>
+                </details>
+              {/if}
+              {#if verifyForActiveStage.verdict.task_compliance.length > 0}
+                <details class="sdd-verify-section">
+                  <summary class="mono">task compliance · {verifyForActiveStage.verdict.task_compliance.length}</summary>
+                  <ul class="sdd-verify-list">
+                    {#each verifyForActiveStage.verdict.task_compliance as t (t)}
+                      <li><span aria-label="passed">✓</span> {t}</li>
+                    {/each}
+                  </ul>
+                </details>
+              {/if}
+              {#if verifyForActiveStage.verdict.deviations.length > 0}
+                <details class="sdd-verify-section sdd-verify-section--warn" open>
+                  <summary class="mono">deviations · {verifyForActiveStage.verdict.deviations.length}</summary>
+                  <ul class="sdd-verify-list">
+                    {#each verifyForActiveStage.verdict.deviations as d (d)}
+                      <li><span aria-label="deviation">⚠️</span> {d}</li>
+                    {/each}
+                  </ul>
+                </details>
+              {/if}
+              {#if verifyForActiveStage.verdict.notes}
+                <details class="sdd-verify-section">
+                  <summary class="mono">notes</summary>
+                  <p class="sdd-verify-notes">{verifyForActiveStage.verdict.notes}</p>
+                </details>
+              {/if}
+            </div>
+          {/if}
         {/if}
       {/if}
     </div>
@@ -1164,6 +1344,18 @@
         <button class="sdd-btn sdd-btn--primary" disabled={advanceClicked} onclick={advance}>
           {advanceClicked ? 'sending…' : actionLabel()}
         </button>
+      {/if}
+      {#if stage.kind === 'phase_plan_review'}
+        <!-- Plan-review Discard — flips the phase to skipped with a
+             plan_discarded audit reason. The full failure-card
+             grammar (Retry / Edit & retry) is overkill here; user
+             intent is "abandon this plan, move on". -->
+        <button
+          class="sdd-btn"
+          disabled={advanceClicked}
+          onclick={discardPlanReview}
+          title="Skip this phase — plan rejected"
+        >Discard plan</button>
       {/if}
       {#if isInFlight}
         <button class="sdd-btn" onclick={onPause}>Pause</button>
@@ -1610,6 +1802,53 @@
     background: color-mix(in srgb, var(--accent) 8%, transparent);
     color: var(--accent-bright);
   }
+  .sdd-cog {
+    border: 0;
+    background: transparent;
+    color: var(--text-mute);
+    cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 22px; height: 22px;
+    border-radius: 4px;
+    transition: background 100ms, color 100ms;
+  }
+  .sdd-cog:hover, .sdd-cog--open {
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    color: var(--accent-bright);
+  }
+  .sdd-config-drawer {
+    margin: 6px 0 8px 0;
+    padding: 8px 12px;
+    border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--accent) 4%, transparent);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: 12px;
+  }
+  .sdd-config-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .sdd-config-row--toggle { font-size: 11.5px; color: var(--text-1); }
+  .sdd-config-row--toggle input[disabled] { opacity: 0.4; }
+  .sdd-config-label { color: var(--text-1); }
+  .sdd-config-select {
+    padding: 3px 6px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    background: var(--bg-1);
+    color: var(--text-0);
+    font-size: 11px;
+  }
+  .sdd-config-hint {
+    margin: 2px 0 0 0;
+    font-size: 11px;
+    color: var(--text-mute);
+    line-height: 1.4;
+  }
 
   .sdd-close:hover {
     background: color-mix(in srgb, var(--error) 14%, transparent);
@@ -1990,6 +2229,61 @@
     max-height: 360px;
     overflow-y: auto;
     margin-top: 2px;
+  }
+
+  /* Verify pane — structured render of verify.json. Quiet card
+   * styling so it sits inline with the body without competing for
+   * attention. Deviations get a warn-tone accent. */
+  .sdd-verify-pane {
+    margin-top: 10px;
+    padding: 6px 0 4px 12px;
+    border-left: 2px solid color-mix(in srgb, var(--accent) 22%, transparent);
+    font-size: 12px;
+    color: var(--text-1);
+  }
+  .sdd-verify-pane[data-deviated="true"] {
+    border-left-color: color-mix(in srgb, var(--error) 50%, transparent);
+  }
+  .sdd-verify-head {
+    font-size: 10px;
+    color: var(--text-mute);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 4px;
+  }
+  .sdd-verify-summary {
+    margin: 4px 0 6px 0;
+    line-height: 1.5;
+  }
+  .sdd-verify-section {
+    margin: 3px 0;
+  }
+  .sdd-verify-section > summary {
+    cursor: pointer;
+    font-size: 11px;
+    color: var(--text-mute);
+    padding: 2px 0;
+  }
+  .sdd-verify-section--warn > summary {
+    color: var(--error);
+  }
+  .sdd-verify-files, .sdd-verify-list {
+    margin: 4px 0 6px 0;
+    padding-left: 16px;
+    list-style: none;
+  }
+  .sdd-verify-files li {
+    padding: 1px 0;
+    color: var(--text-1);
+  }
+  .sdd-verify-list li {
+    padding: 2px 0;
+    line-height: 1.5;
+  }
+  .sdd-verify-notes {
+    margin: 4px 0;
+    color: var(--text-1);
+    font-style: italic;
   }
 
   /* Actions row — buttons stay typographic but now have a visible

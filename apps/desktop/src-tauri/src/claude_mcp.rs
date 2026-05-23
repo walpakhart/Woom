@@ -201,6 +201,16 @@ pub(crate) fn build_mcp_config(
         allowed.push("mcp__app__sdd_resume".into());
         allowed.push("mcp__app__sdd_log_phase_done".into());
         allowed.push("mcp__app__sdd_log_action".into());
+        // Three-call execution mode close-out tools (spec-1). Each
+        // validates input in the sidecar; the frontend `handleAppNavigation`
+        // observer triggers the actual Tauri command that mutates the
+        // workspace (write plan.md / verify.json, advance substep state,
+        // flip phase frontmatter, emit `sdd:changed`).
+        allowed.push("mcp__app__sdd_save_phase_plan".into());
+        allowed.push("mcp__app__sdd_complete_phase_implement".into());
+        allowed.push("mcp__app__sdd_save_phase_verify".into());
+        allowed.push("mcp__app__sdd_approve_phase_plan".into());
+        allowed.push("mcp__app__sdd_discard_phase_plan".into());
     }
 
     // Merge in any third-party MCP servers the user has installed via

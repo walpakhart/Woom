@@ -6,6 +6,70 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The
 release runbook (how this CHANGELOG feeds `latest-mac.json`) lives in
 [`docs/RELEASES.md`](docs/RELEASES.md).
 
+## Unreleased
+
+### Fixed
+
+- **SDD three-call mode close-out tools** — `sdd_save_phase_plan`,
+  `sdd_complete_phase_implement`, `sdd_save_phase_verify`,
+  `sdd_approve_phase_plan`, and `sdd_discard_phase_plan` are now
+  exposed via the `woom-app` MCP sidecar, allowlisted in
+  `claude_mcp.rs`, and routed through `+page.svelte`'s
+  `handleAppNavigation` so the Tauri commands actually fire when the
+  agent calls them. Without this, three-call execution mode was stuck
+  after the plan pass — the agent couldn't advance the substep
+  checkpoint. Adds new Tauri command `sdd_complete_phase_implement`
+  (advances `Implement` → `Verify`, carries the implement-pass
+  summary onto phase frontmatter). Updates `phase_implement.md`
+  prompt to call the new tool instead of the no-op
+  `sdd_log_phase_done`.
+
+### Added
+
+- **SDD three-call execution mode** — every phase optionally runs
+  through three discrete agent passes (`plan` / `implement` / `verify`)
+  with a structured-JSON verify verdict
+  (`summary` / `files_changed` / `task_compliance` / `deviations` /
+  `notes`) persisted to `phases/<slug>/verify.json`. Phase frontmatter
+  `summary:` auto-fills from the verify pass so the SDD history pane
+  stops showing "(no summary)". Opt-in plan-review gate adds an
+  Approve/Discard step between plan and implement. New Settings card
+  exposes per-workspace mode toggle + plan-gate checkbox. Legacy
+  workspaces auto-migrate to `single_call` mode on first hydrate so
+  in-flight workflows don't shift behaviour mid-execution. See SDD
+  workspace `sdd-926d553a7b` for the full design (`spec.md` +
+  `plan.md` + six phase markdown files).
+- **SDD sub-step badges + verify pane in SddCard** — running phases
+  surface `Phase N — planning / implementing / verifying` labels in
+  warm-live tone; completed phases gain an inline Verify pane
+  rendering the JSON verdict with ✓ task compliance and ⚠️
+  deviations. Live-feed action log gains `— plan —` / `— implement —`
+  / `— verify —` divider rows so the user can scan which pass an
+  event belongs to. Crash-recovery banner now reads
+  "Phase N (during &lt;sub-step&gt;) interrupted" when a checkpoint
+  is recovered from `control/phase-N-substep-state.json`.
+- **Per-workspace config cog in SddCard** — `⚙` button in the card
+  header opens an inline drawer with mode select (single-call /
+  three-call) + plan-review gate checkbox, scoped to the workspace
+  (no global toggle needed). Settings card retains the same
+  controls for cross-workspace overview.
+- **Dedicated `plan_discarded` failure trigger** — Discard button
+  during plan-review now calls `sdd_discard_phase_plan` (instead of
+  the legacy `skipSddPhaseWithReason` workaround), flips the phase
+  to `failed { trigger: plan_discarded }` so the standard failure
+  card (Retry / Edit & retry / Skip) surfaces. Reason persists into
+  `phase-N-meta.json#skip_reason` for audit + frontmatter
+  `trigger:` for stage derivation.
+
+### Changed
+
+- **`SddStage` enum extended** with `PhasePlanning` /
+  `PhasePlanReview` / `PhaseImplementing` variants; existing
+  `PhaseVerifying` placeholder now wired. Single-call mode keeps
+  emitting `PhaseRunning` byte-for-byte. New `FailureTrigger`
+  variants — `PlanMutatedDisk` / `VerifyFailed` / `VerifyParseFail` /
+  `PlanDiscarded` — drive richer failure-card copy.
+
 ## 0.1.3 — 2026-05-22
 
 UX polish + reliability fixes across updater, SDD orchestrator, and the

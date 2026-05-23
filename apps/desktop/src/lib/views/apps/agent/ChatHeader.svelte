@@ -237,6 +237,9 @@
       case 'plan_ready': return 'plan ready';
       case 'phase_pending_approval': return `phase ${s.phase} pending`;
       case 'phase_running': return `phase ${s.phase} running`;
+      case 'phase_planning': return `phase ${s.phase} planning`;
+      case 'phase_plan_review': return `phase ${s.phase} plan review`;
+      case 'phase_implementing': return `phase ${s.phase} implementing`;
       case 'phase_verifying': return `phase ${s.phase} verifying`;
       case 'phase_done': return `phase ${s.phase} done`;
       case 'complete': return 'complete';
@@ -247,7 +250,15 @@
   }
   function sddStageTone(w: SddWorkspace): 'live' | 'ok' | 'warn' | 'dim' {
     const k = w.stage.kind;
-    if (k === 'drafting' || k === 'planning' || k === 'phase_running') return 'live';
+    if (
+      k === 'drafting' ||
+      k === 'planning' ||
+      k === 'phase_running' ||
+      k === 'phase_planning' ||
+      k === 'phase_implementing' ||
+      k === 'phase_verifying'
+    ) return 'live';
+    if (k === 'phase_plan_review') return 'warn';
     if (k === 'failed' || k === 'stopped') return 'warn';
     if (k === 'complete') return 'ok';
     return 'dim';

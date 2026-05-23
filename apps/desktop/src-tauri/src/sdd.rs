@@ -67,12 +67,39 @@ pub enum SddStage {
     /// button. Cleared by `sdd_approve_phase` writing
     /// `control/phase-N-approved`.
     PhasePendingApproval { phase: u32 },
-    /// Phase `phase` is being executed by the agent.
+    /// Phase `phase` is being executed by the agent. Three-call mode
+    /// emits the finer-grained `PhasePlanning` / `PhaseImplementing` /
+    /// `PhaseVerifying` variants instead; this variant stays for
+    /// single-call mode + as the fallback when `substep-state.json`
+    /// is absent (legacy hydrate path).
     PhaseRunning { phase: u32 },
-    /// V2 only — phase body status is `done` but acceptance criteria are
-    /// still being evaluated by the verifier (phase 2 of the SDD v2
-    /// roadmap). Placeholder in this phase; `derive_stage` does not yet
-    /// emit it.
+    /// Three-call mode only — agent is producing the plan-pass output
+    /// (read-only analysis written verbatim to
+    /// `phases/<slug>/plan.md`). Drives the "Phase N — planning" badge
+    /// in the SddCard. Cleared by `sdd_save_phase_plan` advancing
+    /// substep-state to `Implement` (or `Plan` review gate).
+    /// See `spec-1` FR-1 and `plan-1` §State machine.
+    PhasePlanning { phase: u32 },
+    /// Three-call mode only — plan.md exists, plan-gate is enabled
+    /// (`phase_execution.plan_gate = true`), and
+    /// `control/phase-<N>-plan-approved` is NOT yet present. SddCard
+    /// surfaces the plan body + Approve / Amend / Discard buttons.
+    /// `sdd_approve_phase_plan` writes the gate marker to advance.
+    /// See `spec-1` FR-7.
+    PhasePlanReview { phase: u32 },
+    /// Three-call mode only — agent is executing the plan against the
+    /// repo (edits land here). Same in-flight semantics as
+    /// `PhaseRunning` but distinguished so the SddCard badge can
+    /// announce "implementing" specifically and the action_log can
+    /// tag rows with `sub_step: implement`.
+    /// See `spec-1` FR-3.
+    PhaseImplementing { phase: u32 },
+    /// Three-call mode — agent is running the verify-pass (self-review
+    /// producing structured JSON written to `phases/<slug>/verify.json`).
+    /// In single-call mode this variant stays unused (placeholder kept
+    /// for v2 roadmap continuity); three-call wires it via
+    /// `sdd_save_phase_verify`.
+    /// See `spec-1` FR-4.
     PhaseVerifying { phase: u32 },
     /// Phase `phase` finished; about to advance or awaiting approval.
     PhaseDone { phase: u32 },
@@ -121,6 +148,29 @@ pub enum FailureTrigger {
     Crash,
     /// User explicitly stopped the workspace.
     UserStopped,
+    /// Three-call mode — the plan-pass agent mutated files on disk
+    /// despite the read-only contract. Detected by the pre/post
+    /// `git status --porcelain` sentinel around the plan call.
+    /// See `spec-1` NFR-rel-3 + `plan-1` §Prompt + agent flow.
+    PlanMutatedDisk,
+    /// Three-call mode — verify-pass produced a JSON payload with
+    /// non-empty `deviations`. The phase is flipped to `failed` so
+    /// the existing Retry / Edit & retry / Skip cards can act on it.
+    /// See `spec-1` FR-5.
+    VerifyFailed,
+    /// Three-call mode — verify-pass output failed to parse as the
+    /// expected JSON schema AND no hard-gate acceptance check rescued
+    /// the phase. Only surfaces when there's NOTHING more specific
+    /// to report; `VerifyOutput::parse_or_fallback` masks most
+    /// parse errors with a fallback deviation row.
+    /// See `spec-1` NFR-rel-2.
+    VerifyParseFail,
+    /// Three-call mode — user clicked Discard during the plan-review
+    /// gate (`PhasePlanReview`). The phase is failed so the standard
+    /// failure-card recovery flow (Retry / Edit & retry / Skip) is
+    /// available.
+    /// See `spec-1` FR-7.
+    PlanDiscarded,
 }
 
 /// A single phase as parsed from `phases/NN-*.md`. Both frontmatter and
@@ -146,6 +196,16 @@ pub struct SddPhase {
     /// Optional summary appearing after the phase finishes (read from
     /// `results/NN-result.md`, populated by `refresh_state`).
     pub summary: Option<String>,
+    /// Three-call mode artifact — `phases/<slug>/plan.md`. None when
+    /// missing (single-call mode or three-call still pre-plan-pass).
+    /// Surfaces in the SddCard Plan tab and plan-review pane.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_body: Option<String>,
+    /// Three-call mode artifact — `phases/<slug>/verify.json` parsed
+    /// into the structured `VerifyOutput`. None when missing.
+    /// Surfaces in the SddCard Verify tab.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verify: Option<VerifyOutput>,
 }
 
 /// One workspace = one SDD session. Everything orchestrator-side hangs
@@ -190,6 +250,12 @@ pub struct SddWorkspace {
     /// "keep state, mark failed".
     #[serde(default)]
     pub recovery_state: Option<SddRecoveryState>,
+    /// Three-call execution config mirrored from `meta.json#phase_execution`
+    /// on every refresh. Cached on the snapshot so `derive_stage`, the
+    /// SddCard, and the prompt-builder all read the same value without
+    /// each having to re-read meta.json. See `spec-1` FR-11.
+    #[serde(default)]
+    pub phase_execution: PhaseExecutionConfig,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -202,6 +268,14 @@ pub enum SddRecoveryState {
     OrphanPhase {
         phase: u32,
         pre_phase_sha: Option<String>,
+        /// Three-call mode — sub-step that was in flight when the
+        /// app crashed. Read from `substep-state.json` during the
+        /// hydrate scan. Drives the recovery banner copy ("Phase N
+        /// interrupted during implement"). None for single-call
+        /// workspaces or workspaces without a checkpoint. See
+        /// `spec-1` NFR-rel-1.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sub_step: Option<SddPhaseSubstep>,
     },
 }
 
@@ -311,6 +385,12 @@ struct FrontMatter {
     created: Option<String>,
     #[serde(default)]
     updated: Option<String>,
+    /// Explicit `FailureTrigger` discriminant written by commands like
+    /// `sdd_discard_phase_plan`. Free-form string here so unknown
+    /// variants don't fail deserialisation; `derive_stage` re-parses
+    /// into the typed enum.
+    #[serde(default)]
+    trigger: Option<String>,
 }
 
 /// Split a markdown file with leading `---\n…\n---\n` YAML frontmatter
@@ -508,6 +588,11 @@ fn rebuild_from_disk(workspace: &mut SddWorkspace) -> Result<(), String> {
                     None
                 }
             };
+            // Three-call mode artifacts — read each from disk, None
+            // when absent. Single-call workspaces always end up with
+            // both as None (no per-phase dir gets written).
+            let plan_body = read_phase_plan_md(&root, &slug);
+            let verify = read_verify_json(&root, &slug);
             workspace.phases.push(SddPhase {
                 number,
                 slug,
@@ -519,6 +604,8 @@ fn rebuild_from_disk(workspace: &mut SddWorkspace) -> Result<(), String> {
                 body,
                 path: path.to_string_lossy().into_owned(),
                 summary,
+                plan_body,
+                verify,
             });
         }
         workspace.phases.sort_by_key(|p| p.number);
@@ -530,6 +617,18 @@ fn rebuild_from_disk(workspace: &mut SddWorkspace) -> Result<(), String> {
      * per-phase approval gate. Legacy workspaces (no plan.json) keep
      * the v1 auto-advance flow byte-for-byte. */
     workspace.is_v2 = root.join("plan.json").exists();
+
+    // --- phase_execution mirror ---
+    /* Three-call orchestrator config lives at
+     * `meta.json#phase_execution`. Re-read on every refresh so a user
+     * toggling the mode via Settings is reflected in the snapshot
+     * without an explicit reload. Missing/garbled meta.json falls
+     * through to `Default` (SingleCall). See `spec-1` FR-11. */
+    if let Ok(meta_raw) = std::fs::read_to_string(root.join("meta.json")) {
+        if let Ok(meta) = serde_json::from_str::<SddMeta>(&meta_raw) {
+            workspace.phase_execution = meta.phase_execution;
+        }
+    }
 
     // --- crash-recovery probe ---
     /* A phase whose status is still `running` or `verifying` BUT whose
@@ -546,9 +645,17 @@ fn rebuild_from_disk(workspace: &mut SddWorkspace) -> Result<(), String> {
             if meta.post_phase_sha.is_some() {
                 None
             } else {
+                // Three-call mode — surface which sub-step was
+                // running so the recovery banner copy reads
+                // "Phase N (during implement) interrupted". None
+                // when substep-state.json is missing (single-call
+                // OR pre-first-substep crash).
+                let sub_step = read_substep_state(&root, p.number)
+                    .and_then(|s| s.sub_step);
                 Some(SddRecoveryState::OrphanPhase {
                     phase: p.number,
                     pre_phase_sha: meta.pre_phase_sha.clone(),
+                    sub_step,
                 })
             }
         });
@@ -643,13 +750,52 @@ fn derive_stage(
         let root = PathBuf::from(&w.root);
         let failed_checks = read_failed_check_indices(&root, p.number);
         let action_log_tail = read_action_log_tail(&root, p.number, 10);
-        let trigger = if !failed_checks.is_empty() {
+        // Three-call mode: consult phases/<slug>/verify.json. If the
+        // verify pass produced non-empty deviations, surface the
+        // VerifyFailed trigger UNLESS a hard-gate failure already
+        // exists (`failed_checks` non-empty) — hard gates win because
+        // they carry more specific information. See `plan-1`
+        // §Failure-handling model.
+        let verify = read_verify_json(&root, &p.slug);
+        let verify_deviated = verify
+            .as_ref()
+            .is_some_and(|v| !v.deviations.is_empty());
+        // The phase markdown frontmatter may carry an explicit
+        // `trigger:` set by `sdd_discard_phase_plan` (plan_discarded)
+        // or future failure paths. Read it once + parse into the
+        // typed enum; falls back to inferring from acceptance.json +
+        // verify.json. Manual write-trigger wins over inferred.
+        let explicit_trigger = std::fs::read_to_string(&p.path)
+            .ok()
+            .and_then(|raw| {
+                let (fm, _) = parse_frontmatter(&raw);
+                fm.trigger.clone()
+            })
+            .and_then(|s| serde_json::from_value::<FailureTrigger>(serde_json::Value::String(s)).ok());
+        let trigger = if let Some(t) = explicit_trigger {
+            Some(t)
+        } else if !failed_checks.is_empty() {
             Some(FailureTrigger::CheckFailed)
+        } else if verify_deviated {
+            Some(FailureTrigger::VerifyFailed)
         } else {
             Some(FailureTrigger::Exception)
         };
+        // Tailor the failure reason to the trigger so the failure
+        // card's header reads accurately. Falls back to the generic
+        // "see result file" line for legacy triggers.
+        let reason = if verify_deviated && failed_checks.is_empty() {
+            let first = verify
+                .as_ref()
+                .and_then(|v| v.deviations.first())
+                .cloned()
+                .unwrap_or_else(|| "verify pass reported deviations".into());
+            format!("Phase {} ({}) — verify deviations: {first}", p.number, p.title)
+        } else {
+            format!("Phase {} ({}) failed — see result file", p.number, p.title)
+        };
         return SddStage::Failed {
-            reason: format!("Phase {} ({}) failed — see result file", p.number, p.title),
+            reason,
             failed_phase: Some(p.number),
             trigger,
             failed_checks,
@@ -658,6 +804,54 @@ fn derive_stage(
     }
     let running_phase = w.phases.iter().find(|p| p.status == "running");
     if let Some(p) = running_phase {
+        /* Three-call mode fan-out: a `running` phase normally collapses
+         * to `PhaseRunning`, but when the workspace's `phase_execution.mode`
+         * is `ThreeCall` AND a `substep-state.json` checkpoint is on disk,
+         * we emit the sub-step-specific variant so the SddCard can
+         * render the right badge + footer. Missing checkpoint (legacy
+         * single-call OR three-call workspace where the agent hasn't
+         * advanced past `PhasePendingApproval` yet) falls through to
+         * the generic `PhaseRunning` variant. See `spec-1` FR-1/3/4
+         * + `plan-1` §State machine. */
+        if w.phase_execution.mode == PhaseExecutionMode::ThreeCall {
+            let root = PathBuf::from(&w.root);
+            if let Some(state) = read_substep_state(&root, p.number) {
+                match state.sub_step {
+                    Some(SddPhaseSubstep::Plan) => {
+                        /* Plan-review gate — only fires when the user
+                         * opted into `phase_execution.plan_gate`, the
+                         * plan.md artifact exists on disk, AND the
+                         * approval marker is NOT yet present. Without
+                         * the plan.md, the agent is still mid-plan-pass
+                         * (badge stays "Planning"). With the marker,
+                         * the user has already approved and we've
+                         * transitioned to `Implement`. */
+                        let plan_md_exists = root
+                            .join("phases")
+                            .join(&p.slug)
+                            .join("plan.md")
+                            .exists();
+                        let plan_approved = root
+                            .join(format!("control/phase-{}-plan-approved", p.number))
+                            .exists();
+                        if w.phase_execution.plan_gate && plan_md_exists && !plan_approved {
+                            return SddStage::PhasePlanReview { phase: p.number };
+                        }
+                        return SddStage::PhasePlanning { phase: p.number };
+                    }
+                    Some(SddPhaseSubstep::Implement) => {
+                        return SddStage::PhaseImplementing { phase: p.number };
+                    }
+                    Some(SddPhaseSubstep::Verify) => {
+                        return SddStage::PhaseVerifying { phase: p.number };
+                    }
+                    None => {
+                        // Checkpoint with no sub-step → treat as
+                        // generic running (rare, but defensive).
+                    }
+                }
+            }
+        }
         return SddStage::PhaseRunning { phase: p.number };
     }
     /* `skipped` phases are treated like `done` for advancement purposes —
@@ -743,6 +937,49 @@ fn replace_body_on(path: &Path, new_body: &str) -> Result<(), String> {
     } else {
         format!("---\n{yaml_str}\n---\n\n{}\n", new_body.trim_end())
     };
+    let tmp = path.with_extension("md.tmp");
+    std::fs::write(&tmp, content).map_err(|e| format!("write tmp: {e}"))?;
+    std::fs::rename(&tmp, path).map_err(|e| format!("rename: {e}"))?;
+    Ok(())
+}
+
+/// Set both `status:` AND `summary:` in one round-trip. Used by
+/// `sdd_save_phase_verify` so the phase frontmatter advances from
+/// `running` → `done`/`failed` and the verify-pass summary lands in
+/// the `summary:` field in a single atomic write. See `spec-1` FR-6.
+fn set_status_and_summary_on(
+    path: &Path,
+    new_status: &str,
+    new_summary: Option<&str>,
+) -> Result<(), String> {
+    let raw = std::fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    let (yaml_str, body) = split_frontmatter_raw(&raw);
+    let mut map: serde_yaml::Mapping = if yaml_str.trim().is_empty() {
+        serde_yaml::Mapping::new()
+    } else {
+        serde_yaml::from_str(&yaml_str).map_err(|e| format!("parse frontmatter: {e}"))?
+    };
+    map.insert(
+        serde_yaml::Value::String("status".into()),
+        serde_yaml::Value::String(new_status.into()),
+    );
+    map.insert(
+        serde_yaml::Value::String("updated".into()),
+        serde_yaml::Value::String(format_iso(now_ms())),
+    );
+    // Only write `summary:` when the verify pass produced a real
+    // string. Empty / missing summary leaves the field untouched —
+    // never write garbage per FR-6.
+    if let Some(summary) = new_summary {
+        if !summary.trim().is_empty() {
+            map.insert(
+                serde_yaml::Value::String("summary".into()),
+                serde_yaml::Value::String(summary.trim().into()),
+            );
+        }
+    }
+    let new_yaml = serde_yaml::to_string(&map).map_err(|e| format!("yaml: {e}"))?;
+    let content = format!("---\n{new_yaml}---\n\n{}\n", body.trim_end());
     let tmp = path.with_extension("md.tmp");
     std::fs::write(&tmp, content).map_err(|e| format!("write tmp: {e}"))?;
     std::fs::rename(&tmp, path).map_err(|e| format!("rename: {e}"))?;
@@ -840,6 +1077,13 @@ const PLAN_TEMPLATE_PROMPT: &str = include_str!("./sdd_prompts/plan.md");
 const PHASE_TEMPLATE_PROMPT: &str = include_str!("./sdd_prompts/phase.md");
 const SUMMARY_TEMPLATE_PROMPT: &str = include_str!("./sdd_prompts/summary.md");
 const AMEND_TEMPLATE_PROMPT: &str = include_str!("./sdd_prompts/amend.md");
+/// Three-call mode plan pass — read-only analysis producing a plan
+/// markdown body. See `spec-1` FR-1 / `plan-1` §Prompt + agent flow.
+const PHASE_PLAN_TEMPLATE_PROMPT: &str = include_str!("./sdd_prompts/phase_plan.md");
+/// Three-call mode implement pass — executes the plan with edits.
+const PHASE_IMPLEMENT_TEMPLATE_PROMPT: &str = include_str!("./sdd_prompts/phase_implement.md");
+/// Three-call mode verify pass — produces structured JSON verdict.
+const PHASE_VERIFY_TEMPLATE_PROMPT: &str = include_str!("./sdd_prompts/phase_verify.md");
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -853,6 +1097,15 @@ pub enum SddPromptKind {
     /// the current artifact — the agent edits files in place rather
     /// than scaffolding a fresh workspace.
     Amend,
+    /// Three-call mode — plan pass (read-only analysis producing
+    /// `phases/<slug>/plan.md`). See `spec-1` FR-1.
+    PhasePlan,
+    /// Three-call mode — implement pass (executes the plan against
+    /// the repo). See `spec-1` FR-3.
+    PhaseImplement,
+    /// Three-call mode — verify pass (structured JSON self-review).
+    /// See `spec-1` FR-4.
+    PhaseVerify,
 }
 
 // ---------------------------------------------------------------------------
@@ -907,6 +1160,14 @@ pub async fn sdd_start(
         updated_at: now_ms(),
         is_v2: false,
         recovery_state: None,
+        // New workspaces default to three-call per spec FR-11; legacy
+        // workspaces hydrated from disk override this in `sdd_hydrate`
+        // (sets `SingleCall` so in-flight workflows don't change
+        // behaviour mid-execution).
+        phase_execution: PhaseExecutionConfig {
+            mode: PhaseExecutionMode::ThreeCall,
+            ..PhaseExecutionConfig::default()
+        },
     };
     let cell = Arc::new(RwLock::new(ws.clone()));
     registry.workspaces.write().insert(id.clone(), cell);
@@ -945,6 +1206,10 @@ pub async fn sdd_start(
         git_enabled,
         sdd_branch,
         parent_sha,
+        // Mirror the workspace's runtime config onto meta.json so a
+        // subsequent hydrate / restart recovers the same mode without
+        // a separate save step. See `plan-1` §Compatibility + migration.
+        phase_execution: ws.phase_execution.clone(),
     };
     let _ = write_workspace_meta(&root, &meta);
     /* Boot the FS watcher if this is the first workspace. Failures here
@@ -1010,14 +1275,42 @@ pub async fn sdd_hydrate(
             updated_at: now_ms(),
             is_v2: false,
             recovery_state: None,
+            // Hydrate sets this from `meta.json#phase_execution` below.
+            // Legacy workspaces lacking the block get the default
+            // (SingleCall) so they keep their existing behaviour
+            // mid-execution. See `plan-1` §Compatibility + migration.
+            phase_execution: PhaseExecutionConfig::default(),
         };
         let _ = rebuild_from_disk(&mut ws);
-        // Recover user_prompt + session_id from optional meta.json side-car.
-        if let Ok(meta_raw) = std::fs::read_to_string(path.join("meta.json")) {
+        // Recover user_prompt + session_id + phase_execution from optional meta.json side-car.
+        // Migration: legacy meta.json files written before `spec-1` lack
+        // the `phase_execution` block entirely. We detect this via a raw
+        // JSON probe (cheap), set the default block to single_call so
+        // in-flight workflows don't shift mid-execution, persist the
+        // migrated meta.json back to disk, and emit an audit row so
+        // the orchestrator's trail captures the one-shot rewrite.
+        let meta_path = path.join("meta.json");
+        if let Ok(meta_raw) = std::fs::read_to_string(&meta_path) {
+            let needs_migration = serde_json::from_str::<serde_json::Value>(&meta_raw)
+                .map(|v| v.get("phase_execution").is_none())
+                .unwrap_or(false);
             if let Ok(meta) = serde_json::from_str::<SddMeta>(&meta_raw) {
-                ws.user_prompt = meta.user_prompt.unwrap_or_default();
-                ws.session_id = meta.session_id;
+                ws.user_prompt = meta.user_prompt.clone().unwrap_or_default();
+                ws.session_id = meta.session_id.clone();
                 ws.created_at = meta.created_at.unwrap_or(ws.created_at);
+                ws.phase_execution = meta.phase_execution.clone();
+                if needs_migration {
+                    let migrated = SddMeta {
+                        phase_execution: PhaseExecutionConfig::default(),
+                        ..meta
+                    };
+                    let _ = write_workspace_meta(&path, &migrated);
+                    audit::append(
+                        &path,
+                        &audit::AuditEntry::new("system", "phase_execution_migrated")
+                            .with_after(serde_json::json!({"mode": "single_call"})),
+                    );
+                }
             }
         }
         let cell = Arc::new(RwLock::new(ws.clone()));
@@ -1027,6 +1320,102 @@ pub async fn sdd_hydrate(
     /* Boot the watcher once we have workspaces on disk to observe. */
     let _ = ensure_watcher(&app, registry.workspaces.clone(), &registry.watcher, &base);
     Ok(out)
+}
+
+/// Per-workspace toggle for the three-call execution mode (plan →
+/// implement → verify) introduced in `spec-1`. `single_call` is the
+/// historical Woom behaviour where each phase fires one agent turn;
+/// `three_call` fans the phase out into three discrete passes with
+/// structured verify output. Migration hook in `sdd_hydrate` sets
+/// legacy workspaces to `SingleCall` so in-flight workflows don't
+/// shift behaviour mid-execution.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PhaseExecutionMode {
+    SingleCall,
+    ThreeCall,
+}
+
+impl Default for PhaseExecutionMode {
+    fn default() -> Self {
+        // Legacy workspaces lacking the `phase_execution` block
+        // deserialize with this default — the migration hook
+        // explicitly writes the same value to disk so future reads
+        // are deterministic. See `plan-1` §Compatibility + migration.
+        Self::SingleCall
+    }
+}
+
+fn default_plan_budget_pct() -> f32 {
+    0.25
+}
+fn default_implement_budget_pct() -> f32 {
+    0.70
+}
+fn default_verify_budget_pct() -> f32 {
+    0.05
+}
+
+/// `<workspace>/meta.json#phase_execution` — orchestrator config for
+/// the three-call phase execution mode. Every field has a `serde`
+/// default so a meta.json lacking the block (legacy workspace) still
+/// deserializes cleanly via `#[serde(default)]` on the parent field.
+/// Budget percentages are informational this release — persisted now
+/// so a future budget-enforcement spec can consume them without a
+/// schema migration. See `spec-1` FR-11 / FR-12.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PhaseExecutionConfig {
+    #[serde(default)]
+    pub mode: PhaseExecutionMode,
+    /// When true, three-call mode halts between `PhasePlanning` and
+    /// `PhaseImplementing` so the user can Approve / Amend / Discard
+    /// the generated plan.md. Default false — auto-advance to
+    /// implement when the plan-pass finishes. See `spec-1` FR-7.
+    #[serde(default)]
+    pub plan_gate: bool,
+    /// Share of the per-phase budget reserved for the plan-pass call.
+    /// Sum of `plan_budget_pct + implement_budget_pct +
+    /// verify_budget_pct` MUST be ≤ 1.0 (enforced by `validate()`).
+    #[serde(default = "default_plan_budget_pct")]
+    pub plan_budget_pct: f32,
+    #[serde(default = "default_implement_budget_pct")]
+    pub implement_budget_pct: f32,
+    #[serde(default = "default_verify_budget_pct")]
+    pub verify_budget_pct: f32,
+}
+
+impl Default for PhaseExecutionConfig {
+    fn default() -> Self {
+        Self {
+            mode: PhaseExecutionMode::default(),
+            plan_gate: false,
+            plan_budget_pct: default_plan_budget_pct(),
+            implement_budget_pct: default_implement_budget_pct(),
+            verify_budget_pct: default_verify_budget_pct(),
+        }
+    }
+}
+
+impl PhaseExecutionConfig {
+    /// Reject configs whose budget percentages sum past 1.0. The
+    /// `sdd_set_phase_execution_config` Tauri command (lands in
+    /// phase 6) calls this before persisting to surface a typed
+    /// error instead of writing garbage that later math relies on.
+    /// Per-percentage clamping (e.g. negative values) is not enforced
+    /// — `f32` is the wire type and we trust validators on the UI
+    /// side to keep inputs in `[0.0, 1.0]`. See `spec-1` FR-12.
+    #[allow(dead_code)] // wired by sdd_set_phase_execution_config in phase 6
+    pub fn validate(&self) -> Result<(), String> {
+        let sum = self.plan_budget_pct + self.implement_budget_pct + self.verify_budget_pct;
+        // Allow a small float slop so 0.25 + 0.70 + 0.05 = 1.0 + ε
+        // doesn't false-positive.
+        if sum > 1.0 + f32::EPSILON * 4.0 {
+            return Err(format!(
+                "budget percentages exceed 1.0 (got {sum:.3})"
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// Side-car metadata stored at `<workspace>/meta.json`. Currently
@@ -1057,6 +1446,12 @@ pub(crate) struct SddMeta {
     /// workspace, separate from per-phase pre-snapshots.
     #[serde(default)]
     parent_sha: Option<String>,
+    /// Three-call execution config — see `PhaseExecutionConfig`. Missing
+    /// on legacy workspaces; deserializes to `Default` (single_call).
+    /// The hydrate-path migration writes the default block to disk so
+    /// future reads have a populated value.
+    #[serde(default)]
+    pub(crate) phase_execution: PhaseExecutionConfig,
 }
 
 /// Per-phase meta side-car at `<workspace>/phases/phase-N-meta.json`.
@@ -1091,6 +1486,205 @@ pub(crate) struct SddPhaseMeta {
     /// the spec or skipping". Defaults to 0 for fresh phases.
     #[serde(default)]
     pub(crate) retry_count: u32,
+}
+
+/// Structured output produced by the three-call verify pass.
+/// Mirrors the JSON schema instructed in
+/// `sdd_prompts/phase_verify.md` (FR-4 of `spec-1`). Every field has
+/// `#[serde(default)]` so a malformed payload still produces a usable
+/// struct — `parse_or_fallback` masks parse failures behind a fixed
+/// `deviations: ["Unable to parse verification output"]` row so
+/// downstream code never sees `null`.
+#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct VerifyOutput {
+    #[serde(default)]
+    pub summary: String,
+    #[serde(default)]
+    pub files_changed: Vec<String>,
+    #[serde(default)]
+    pub task_compliance: Vec<String>,
+    #[serde(default)]
+    pub deviations: Vec<String>,
+    #[serde(default)]
+    pub notes: String,
+}
+
+impl VerifyOutput {
+    /// Parse the raw agent response into a `VerifyOutput`. Tolerates
+    /// markdown code-fences around the JSON (the verify-pass prompt
+    /// asks for raw JSON but agents sometimes wrap anyway) and a few
+    /// common stripping cases. On hard parse failure returns a
+    /// fallback with `deviations = ["Unable to parse verification
+    /// output"]` so callers can persist a deterministic shape and
+    /// the failure card has something to render. See `spec-1`
+    /// NFR-rel-2.
+    pub fn parse_or_fallback(raw: &str) -> Self {
+        let stripped = strip_json_fences(raw);
+        serde_json::from_str(&stripped).unwrap_or_else(|_| Self {
+            deviations: vec!["Unable to parse verification output".into()],
+            ..Default::default()
+        })
+    }
+}
+
+/// Trim leading/trailing whitespace plus an optional surrounding
+/// triple-backtick fence (with or without a `json` language tag).
+/// Idempotent on already-clean payloads.
+fn strip_json_fences(raw: &str) -> String {
+    let trimmed = raw.trim();
+    let without_open = trimmed
+        .strip_prefix("```json")
+        .or_else(|| trimmed.strip_prefix("```"))
+        .map(|s| s.trim_start())
+        .unwrap_or(trimmed);
+    let without_close = without_open.strip_suffix("```").unwrap_or(without_open);
+    without_close.trim().to_string()
+}
+
+/// Read `<workspace>/phases/<slug>/plan.md`. `None` when the file
+/// is missing — interpreted by callers as "plan pass hasn't landed
+/// yet" (legacy single-call or three-call still in flight).
+#[allow(dead_code)] // surfaced via SddCard Plan tab in phase 4
+pub(crate) fn read_phase_plan_md(workspace_root: &Path, slug: &str) -> Option<String> {
+    let path = workspace_root.join("phases").join(slug).join("plan.md");
+    std::fs::read_to_string(&path).ok()
+}
+
+/// Atomically write the plan-pass output as `phases/<slug>/plan.md`.
+/// Creates the per-phase directory lazily. Body is stored verbatim
+/// (markdown, no frontmatter) — `spec-1` FR-2 captures the agent's
+/// last assistant message as-is so the user sees the exact text the
+/// implement pass will consume.
+pub(crate) fn write_phase_plan_md(
+    workspace_root: &Path,
+    slug: &str,
+    body: &str,
+) -> Result<(), String> {
+    let dir = workspace_root.join("phases").join(slug);
+    std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir phase dir: {e}"))?;
+    let path = dir.join("plan.md");
+    let tmp = path.with_extension("md.tmp");
+    std::fs::write(&tmp, body).map_err(|e| format!("write plan.md tmp: {e}"))?;
+    std::fs::rename(&tmp, &path).map_err(|e| format!("rename plan.md: {e}"))?;
+    Ok(())
+}
+
+/// Read `<workspace>/phases/<slug>/verify.json`. `None` when missing
+/// (verify pass hasn't completed) OR when JSON parse fails (returning
+/// `None` keeps callers honest — they should treat that as "no soft
+/// verdict yet" rather than synthesising one). See `spec-1` FR-4.
+#[allow(dead_code)] // surfaced via SddCard Verify tab in phase 4
+pub(crate) fn read_verify_json(workspace_root: &Path, slug: &str) -> Option<VerifyOutput> {
+    let path = workspace_root.join("phases").join(slug).join("verify.json");
+    let raw = std::fs::read_to_string(&path).ok()?;
+    serde_json::from_str(&raw).ok()
+}
+
+/// Atomically write the verify-pass JSON. Pretty-printed for human
+/// readability (the file is read by both the SddCard renderer and
+/// the user inspecting on disk).
+pub(crate) fn write_verify_json(
+    workspace_root: &Path,
+    slug: &str,
+    verdict: &VerifyOutput,
+) -> Result<(), String> {
+    let dir = workspace_root.join("phases").join(slug);
+    std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir phase dir: {e}"))?;
+    let path = dir.join("verify.json");
+    let body = serde_json::to_string_pretty(verdict)
+        .map_err(|e| format!("serialize verify.json: {e}"))?;
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, body).map_err(|e| format!("write verify.json tmp: {e}"))?;
+    std::fs::rename(&tmp, &path).map_err(|e| format!("rename verify.json: {e}"))?;
+    Ok(())
+}
+
+/// Which sub-step of a three-call phase is currently in flight.
+/// Drives the `SddStage::Phase{Planning,Implementing,Verifying}`
+/// emission in `derive_stage` + the `sub_step` tag on action_log
+/// rows so the SddCard can render per-substep dividers without
+/// re-walking the JSONL. See `spec-1` FR-1 / FR-3 / FR-4.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SddPhaseSubstep {
+    Plan,
+    Implement,
+    Verify,
+}
+
+/// Crash-recovery checkpoint for the three-call phase pipeline. Lives
+/// at `<workspace>/control/phase-<N>-substep-state.json`, written
+/// atomically (`.tmp` + rename) at every transition. On hydrate the
+/// orchestrator reads it; if `sub_step` is `Some(_)` AND no phase
+/// result has landed since, the recovery banner labels the orphan as
+/// "Phase N (during <sub_step>)" so the user knows where the run
+/// died. See `spec-1` NFR-rel-1.
+#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct SddPhaseSubstepState {
+    pub phase: u32,
+    /// `None` means no sub-step is in flight (cleared at phase end or
+    /// after `clear_substep_state`). `Some(sub)` means the agent is
+    /// running OR was running when Woom crashed.
+    #[serde(default)]
+    pub sub_step: Option<SddPhaseSubstep>,
+    /// Unix-ms when the current sub_step transition was written. Zero
+    /// when the state was constructed via `Default` (no transition
+    /// yet recorded).
+    #[serde(default)]
+    pub started_at: u64,
+}
+
+/// Read `<workspace>/control/phase-<N>-substep-state.json`. `None`
+/// when the file is missing (legacy / single-call workspace) OR the
+/// JSON fails to parse (treat as missing — fail open so a corrupted
+/// checkpoint doesn't permanently block recovery). The caller's
+/// expected behaviour for `None` is "fall back to `PhaseRunning`".
+pub(crate) fn read_substep_state(
+    workspace_root: &Path,
+    phase: u32,
+) -> Option<SddPhaseSubstepState> {
+    let path = workspace_root
+        .join("control")
+        .join(format!("phase-{phase}-substep-state.json"));
+    let raw = std::fs::read_to_string(&path).ok()?;
+    serde_json::from_str(&raw).ok()
+}
+
+/// Atomically write the checkpoint. Same write-tmp + rename pattern
+/// as `write_phase_meta` so readers never see a partial file (POSIX
+/// `rename` is atomic on the same filesystem). Creates the
+/// `<root>/control/` directory lazily.
+#[allow(dead_code)] // wired by sdd_save_phase_plan / sdd_save_phase_verify in phase 3
+pub(crate) fn write_substep_state(
+    workspace_root: &Path,
+    state: &SddPhaseSubstepState,
+) -> Result<(), String> {
+    let dir = workspace_root.join("control");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir control: {e}"))?;
+    let path = dir.join(format!("phase-{}-substep-state.json", state.phase));
+    let body = serde_json::to_string_pretty(state)
+        .map_err(|e| format!("serialize substep-state: {e}"))?;
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, body).map_err(|e| format!("write substep-state tmp: {e}"))?;
+    std::fs::rename(&tmp, &path).map_err(|e| format!("rename substep-state: {e}"))?;
+    Ok(())
+}
+
+/// Remove the checkpoint file. Called at phase end (verify-pass done)
+/// so a successful phase doesn't leave a stale checkpoint that would
+/// re-trigger the recovery banner on next boot. Missing file is not
+/// an error — idempotent semantics match `write_substep_state`'s
+/// "fail open" reader.
+#[allow(dead_code)] // wired by sdd_save_phase_verify in phase 3
+pub(crate) fn clear_substep_state(workspace_root: &Path, phase: u32) -> Result<(), String> {
+    let path = workspace_root
+        .join("control")
+        .join(format!("phase-{phase}-substep-state.json"));
+    match std::fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("remove substep-state: {e}")),
+    }
 }
 
 pub(crate) fn read_phase_meta(workspace_root: &Path, phase: u32) -> SddPhaseMeta {
@@ -1410,6 +2004,9 @@ pub async fn sdd_prompt(kind: SddPromptKind) -> Result<String, String> {
         SddPromptKind::Phase => PHASE_TEMPLATE_PROMPT,
         SddPromptKind::Summary => SUMMARY_TEMPLATE_PROMPT,
         SddPromptKind::Amend => AMEND_TEMPLATE_PROMPT,
+        SddPromptKind::PhasePlan => PHASE_PLAN_TEMPLATE_PROMPT,
+        SddPromptKind::PhaseImplement => PHASE_IMPLEMENT_TEMPLATE_PROMPT,
+        SddPromptKind::PhaseVerify => PHASE_VERIFY_TEMPLATE_PROMPT,
     };
     Ok(s.to_string())
 }
@@ -1592,6 +2189,439 @@ pub async fn sdd_approve_phase(
         &audit::AuditEntry::new("user", "advance_phase")
             .with_phase(phase)
             .with_after(serde_json::json!({"approved": true})),
+    );
+    // Three-call mode bootstrap — flip the phase to `running` and
+    // seed substep-state with `Plan` so derive_stage emits
+    // `PhasePlanning` on the next refresh. The plan-pass prompt fires
+    // through the standard `buildPromptForStage` path. Single-call
+    // mode does NOT touch the substep file; phase status stays
+    // `pending` until the agent flips it via `sdd_log_phase_done`.
+    let three_call = matches!(
+        cell.read().phase_execution.mode,
+        PhaseExecutionMode::ThreeCall
+    );
+    if three_call {
+        let phase_path = cell
+            .read()
+            .phases
+            .iter()
+            .find(|p| p.number == phase)
+            .map(|p| PathBuf::from(&p.path));
+        if let Some(path) = phase_path {
+            let _ = set_status_on(&path, "running");
+        }
+        let _ = write_substep_state(
+            &root,
+            &SddPhaseSubstepState {
+                phase,
+                sub_step: Some(SddPhaseSubstep::Plan),
+                started_at: now_ms(),
+            },
+        );
+        append_substep_started_event(&root, phase, SddPhaseSubstep::Plan);
+        audit::append(
+            &root,
+            &audit::AuditEntry::new("system", "phase_plan_started")
+                .with_phase(phase)
+                .with_after(serde_json::json!({"sub_step": "plan"})),
+        );
+    }
+    let snapshot = {
+        let mut w = cell.write();
+        rebuild_from_disk(&mut w)?;
+        w.clone()
+    };
+    emit_changed(&app, &id);
+    Ok(snapshot)
+}
+
+/// Three-call mode — persist the plan-pass output as
+/// `phases/<slug>/plan.md`, advance `substep-state.json` to
+/// `Implement` (or stay on `Plan` if `phase_execution.plan_gate` is
+/// true), and emit `sdd:changed`. The body is the agent's verbatim
+/// markdown — typically the final assistant message from the plan
+/// pass. See `spec-1` FR-2.
+#[tauri::command]
+pub async fn sdd_save_phase_plan(
+    app: AppHandle,
+    registry: State<'_, SddRegistry>,
+    id: String,
+    phase: u32,
+    body: String,
+) -> Result<SddWorkspace, String> {
+    let cell = registry
+        .workspaces
+        .read()
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| format!("unknown workspace {id}"))?;
+    let (root, slug, plan_gate) = {
+        let w = cell.read();
+        let p = w
+            .phases
+            .iter()
+            .find(|p| p.number == phase)
+            .ok_or_else(|| format!("phase {phase} not found"))?;
+        (
+            PathBuf::from(&w.root),
+            p.slug.clone(),
+            w.phase_execution.plan_gate,
+        )
+    };
+    write_phase_plan_md(&root, &slug, &body)?;
+    // Advance the substep checkpoint. plan_gate=true → stay on `Plan`
+    // (user needs to Approve via `sdd_approve_phase_plan`). Otherwise
+    // jump straight to `Implement` so the next agent turn fires the
+    // implement-pass prompt.
+    let next = if plan_gate {
+        SddPhaseSubstep::Plan
+    } else {
+        SddPhaseSubstep::Implement
+    };
+    write_substep_state(
+        &root,
+        &SddPhaseSubstepState {
+            phase,
+            sub_step: Some(next),
+            started_at: now_ms(),
+        },
+    )?;
+    // Only drop a substep divider when we actually advanced (not
+    // when plan_gate parks us on Plan waiting for the user). The
+    // plan-pass start event was already emitted by sdd_approve_phase.
+    if !plan_gate {
+        append_substep_started_event(&root, phase, SddPhaseSubstep::Implement);
+        audit::append(
+            &root,
+            &audit::AuditEntry::new("agent", "phase_implement_started")
+                .with_phase(phase)
+                .with_after(serde_json::json!({"sub_step": "implement"})),
+        );
+        audit::append(
+            &root,
+            &audit::AuditEntry::new("agent", "phase_plan_completed")
+                .with_phase(phase)
+                .with_after(serde_json::json!({"sub_step": "plan"})),
+        );
+    } else {
+        audit::append(
+            &root,
+            &audit::AuditEntry::new("agent", "phase_plan_completed")
+                .with_phase(phase)
+                .with_after(serde_json::json!({"sub_step": "plan", "gate": "review"})),
+        );
+    }
+    let snapshot = {
+        let mut w = cell.write();
+        rebuild_from_disk(&mut w)?;
+        w.clone()
+    };
+    emit_changed(&app, &id);
+    Ok(snapshot)
+}
+
+/// Three-call mode — close out the implement pass: advance the
+/// substep checkpoint from `Implement` → `Verify` so the orchestrator
+/// fires the verify-pass prompt on the next agent turn. `summary` +
+/// `files_changed` are persisted on the phase frontmatter (matching
+/// `sdd_save_phase_verify`'s contract, so the verifier downstream
+/// has the implement-pass-side narrative available). No status flip
+/// happens here — that's the verify pass's job. See `spec-1` FR-3.
+#[tauri::command]
+pub async fn sdd_complete_phase_implement(
+    app: AppHandle,
+    registry: State<'_, SddRegistry>,
+    id: String,
+    phase: u32,
+    summary: String,
+    files_changed: Vec<String>,
+) -> Result<SddWorkspace, String> {
+    let cell = registry
+        .workspaces
+        .read()
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| format!("unknown workspace {id}"))?;
+    let (root, phase_path) = {
+        let w = cell.read();
+        let p = w
+            .phases
+            .iter()
+            .find(|p| p.number == phase)
+            .ok_or_else(|| format!("phase {phase} not found"))?;
+        (PathBuf::from(&w.root), PathBuf::from(&p.path))
+    };
+    let summary_opt: Option<&str> = if summary.trim().is_empty() {
+        None
+    } else {
+        Some(summary.as_str())
+    };
+    // Carry the implement-pass summary onto the phase frontmatter so
+    // the verify pass + result.md generator can quote it. Status stays
+    // `running` — verify pass is the one that flips done/failed.
+    if summary_opt.is_some() {
+        set_status_and_summary_on(&phase_path, "running", summary_opt)?;
+    }
+    write_substep_state(
+        &root,
+        &SddPhaseSubstepState {
+            phase,
+            sub_step: Some(SddPhaseSubstep::Verify),
+            started_at: now_ms(),
+        },
+    )?;
+    append_substep_started_event(&root, phase, SddPhaseSubstep::Verify);
+    audit::append(
+        &root,
+        &audit::AuditEntry::new("agent", "phase_implement_completed")
+            .with_phase(phase)
+            .with_after(serde_json::json!({
+                "sub_step": "implement",
+                "files_changed_count": files_changed.len(),
+            })),
+    );
+    audit::append(
+        &root,
+        &audit::AuditEntry::new("agent", "phase_verify_started")
+            .with_phase(phase)
+            .with_after(serde_json::json!({"sub_step": "verify"})),
+    );
+    let snapshot = {
+        let mut w = cell.write();
+        rebuild_from_disk(&mut w)?;
+        w.clone()
+    };
+    emit_changed(&app, &id);
+    Ok(snapshot)
+}
+
+/// Three-call mode — persist the verify-pass JSON, auto-fill phase
+/// frontmatter `summary`, flip phase status to `done` (no deviations)
+/// or `failed { trigger: verify_failed }` (deviations present), clear
+/// the substep checkpoint, emit `sdd:changed`. See `spec-1` FR-4
+/// through FR-6.
+#[tauri::command]
+pub async fn sdd_save_phase_verify(
+    app: AppHandle,
+    registry: State<'_, SddRegistry>,
+    id: String,
+    phase: u32,
+    raw_json: String,
+) -> Result<SddWorkspace, String> {
+    let cell = registry
+        .workspaces
+        .read()
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| format!("unknown workspace {id}"))?;
+    let (root, slug, phase_path) = {
+        let w = cell.read();
+        let p = w
+            .phases
+            .iter()
+            .find(|p| p.number == phase)
+            .ok_or_else(|| format!("phase {phase} not found"))?;
+        (
+            PathBuf::from(&w.root),
+            p.slug.clone(),
+            PathBuf::from(&p.path),
+        )
+    };
+    let verdict = VerifyOutput::parse_or_fallback(&raw_json);
+    write_verify_json(&root, &slug, &verdict)?;
+    let new_status = if verdict.deviations.is_empty() {
+        "done"
+    } else {
+        "failed"
+    };
+    let summary_opt: Option<&str> = if verdict.summary.trim().is_empty() {
+        None
+    } else {
+        Some(verdict.summary.as_str())
+    };
+    set_status_and_summary_on(&phase_path, new_status, summary_opt)?;
+    // Phase complete — drop the checkpoint so a future hydrate
+    // doesn't think the phase is still running.
+    let _ = clear_substep_state(&root, phase);
+    // Audit the verify-pass lifecycle. We emit both started+completed
+    // here because the verify call kicks off from the same agent turn
+    // that closes it — no intermediate orchestrator hook to insert
+    // the "started" row earlier. See `spec-1` audit requirements.
+    append_substep_started_event(&root, phase, SddPhaseSubstep::Verify);
+    audit::append(
+        &root,
+        &audit::AuditEntry::new("agent", "phase_implement_completed")
+            .with_phase(phase)
+            .with_after(serde_json::json!({"sub_step": "implement"})),
+    );
+    audit::append(
+        &root,
+        &audit::AuditEntry::new("agent", "phase_verify_started")
+            .with_phase(phase)
+            .with_after(serde_json::json!({"sub_step": "verify"})),
+    );
+    audit::append(
+        &root,
+        &audit::AuditEntry::new("agent", "phase_verify_completed")
+            .with_phase(phase)
+            .with_after(serde_json::json!({
+                "status": new_status,
+                "deviations_count": verdict.deviations.len(),
+                "files_changed_count": verdict.files_changed.len(),
+            })),
+    );
+    let snapshot = {
+        let mut w = cell.write();
+        rebuild_from_disk(&mut w)?;
+        w.clone()
+    };
+    emit_changed(&app, &id);
+    Ok(snapshot)
+}
+
+/// Three-call mode — clear the plan-review gate by writing
+/// `control/phase-<N>-plan-approved`, advance substep-state to
+/// `Implement`, emit `sdd:changed`. See `spec-1` FR-7.
+#[tauri::command]
+pub async fn sdd_approve_phase_plan(
+    app: AppHandle,
+    registry: State<'_, SddRegistry>,
+    id: String,
+    phase: u32,
+) -> Result<SddWorkspace, String> {
+    let cell = registry
+        .workspaces
+        .read()
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| format!("unknown workspace {id}"))?;
+    let root = PathBuf::from(cell.read().root.clone());
+    set_control_file(&root, &format!("phase-{phase}-plan-approved"))?;
+    write_substep_state(
+        &root,
+        &SddPhaseSubstepState {
+            phase,
+            sub_step: Some(SddPhaseSubstep::Implement),
+            started_at: now_ms(),
+        },
+    )?;
+    append_substep_started_event(&root, phase, SddPhaseSubstep::Implement);
+    audit::append(
+        &root,
+        &audit::AuditEntry::new("user", "approve_phase_plan").with_phase(phase),
+    );
+    audit::append(
+        &root,
+        &audit::AuditEntry::new("agent", "phase_implement_started")
+            .with_phase(phase)
+            .with_after(serde_json::json!({"sub_step": "implement"})),
+    );
+    let snapshot = {
+        let mut w = cell.write();
+        rebuild_from_disk(&mut w)?;
+        w.clone()
+    };
+    emit_changed(&app, &id);
+    Ok(snapshot)
+}
+
+/// Three-call mode — discard the plan-pass output during plan-review
+/// gate. Flips the phase to `failed` with `trigger: plan_discarded`
+/// so the standard failure-card recovery flow (Retry / Edit & retry
+/// / Skip) takes over. Different from `sdd_skip_phase_with_reason`
+/// (which marks `skipped` and bypasses the failure card). See
+/// `spec-1` FR-7.
+#[tauri::command]
+pub async fn sdd_discard_phase_plan(
+    app: AppHandle,
+    registry: State<'_, SddRegistry>,
+    id: String,
+    phase: u32,
+    reason: Option<String>,
+) -> Result<SddWorkspace, String> {
+    let cell = registry
+        .workspaces
+        .read()
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| format!("unknown workspace {id}"))?;
+    let (root, phase_path) = {
+        let w = cell.read();
+        let p = w
+            .phases
+            .iter()
+            .find(|p| p.number == phase)
+            .ok_or_else(|| format!("phase {phase} not found"))?;
+        (PathBuf::from(&w.root), PathBuf::from(&p.path))
+    };
+    let trimmed_reason = reason
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("plan discarded by user during plan-review gate");
+    set_status_with_extras(
+        &phase_path,
+        "failed",
+        vec![
+            ("trigger".into(), "plan_discarded".into()),
+            ("discard_reason".into(), trimmed_reason.into()),
+        ],
+    )?;
+    // Persist reason into phase-meta.json too so the audit log can
+    // surface it without re-parsing markdown frontmatter.
+    let mut phase_meta = read_phase_meta(&root, phase);
+    phase_meta.skip_reason = Some(trimmed_reason.into());
+    let _ = write_phase_meta(&root, phase, &phase_meta);
+    // Clear the substep checkpoint so a future hydrate doesn't
+    // re-trigger the recovery banner on this aborted phase.
+    let _ = clear_substep_state(&root, phase);
+    audit::append(
+        &root,
+        &audit::AuditEntry::new("user", "discard_phase_plan")
+            .with_phase(phase)
+            .with_after(serde_json::json!({
+                "trigger": "plan_discarded",
+                "reason": trimmed_reason,
+            })),
+    );
+    let snapshot = {
+        let mut w = cell.write();
+        rebuild_from_disk(&mut w)?;
+        w.clone()
+    };
+    emit_changed(&app, &id);
+    Ok(snapshot)
+}
+
+/// Persist `meta.json#phase_execution` for the workspace. Validates
+/// the budget-pct sum before writing so callers get a typed error
+/// instead of a malformed file on disk. Emits an audit row + a
+/// `sdd:changed` event so the SddCard reactive store refreshes
+/// immediately. See `spec-1` FR-11 / FR-12.
+#[tauri::command]
+pub async fn sdd_set_phase_execution_config(
+    app: AppHandle,
+    registry: State<'_, SddRegistry>,
+    id: String,
+    config: PhaseExecutionConfig,
+) -> Result<SddWorkspace, String> {
+    config.validate()?;
+    let cell = registry
+        .workspaces
+        .read()
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| format!("unknown workspace {id}"))?;
+    let root = PathBuf::from(cell.read().root.clone());
+    let mut meta = read_workspace_meta(&root);
+    let before = meta.phase_execution.clone();
+    meta.phase_execution = config.clone();
+    write_workspace_meta(&root, &meta)?;
+    audit::append(
+        &root,
+        &audit::AuditEntry::new("user", "set_phase_execution_config")
+            .with_before(serde_json::to_value(&before).unwrap_or(serde_json::Value::Null))
+            .with_after(serde_json::to_value(&config).unwrap_or(serde_json::Value::Null)),
     );
     let snapshot = {
         let mut w = cell.write();
@@ -2428,12 +3458,72 @@ pub struct ActionLogEntry {
     /// pill per call instead of two stacked rows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub correlation_id: Option<String>,
+    /// Three-call mode — which sub-step was in flight when this entry
+    /// was logged (`plan` / `implement` / `verify`). None for
+    /// single-call workspaces and for legacy JSONL written before
+    /// phase 5. Surfaces as group dividers in the SddCard live feed.
+    /// See `spec-1` FR-9.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sub_step: Option<SddPhaseSubstep>,
 }
 
 fn action_log_path(workspace_root: &Path, phase: u32) -> PathBuf {
     workspace_root
         .join("phases")
         .join(format!("phase-{phase}.log.jsonl"))
+}
+
+/// Append a synthetic `sdd_event` row marking the start of a
+/// three-call sub-step. Used by the orchestrator (NOT the agent) to
+/// drop a divider into the JSONL so SddCard's live feed can group
+/// tool rows by pass. Best-effort — IO failures are logged but never
+/// block the caller. See `spec-1` FR-9.
+pub(crate) fn append_substep_started_event(
+    workspace_root: &Path,
+    phase: u32,
+    sub_step: SddPhaseSubstep,
+) {
+    let summary = match sub_step {
+        SddPhaseSubstep::Plan => "— plan —",
+        SddPhaseSubstep::Implement => "— implement —",
+        SddPhaseSubstep::Verify => "— verify —",
+    };
+    let entry = ActionLogEntry {
+        ts: now_ms(),
+        phase,
+        kind: ActionLogKind::SddEvent,
+        tool: None,
+        summary: summary.into(),
+        detail: None,
+        status: None,
+        correlation_id: None,
+        sub_step: Some(sub_step),
+    };
+    let path = action_log_path(workspace_root, phase);
+    if let Some(parent) = path.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            eprintln!("[sdd] substep_event mkdir {}: {e}", parent.display());
+            return;
+        }
+    }
+    let line = match serde_json::to_string(&entry) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("[sdd] substep_event serialize: {e}");
+            return;
+        }
+    };
+    use std::io::Write;
+    match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        Ok(mut f) => {
+            let _ = writeln!(f, "{line}");
+        }
+        Err(e) => eprintln!("[sdd] substep_event open {}: {e}", path.display()),
+    }
 }
 
 /// Append a single ActionLogEntry to the phase's JSONL file. Creates the
@@ -3273,6 +4363,8 @@ mod tests {
             body: String::new(),
             path: format!("/tmp/sdd-test/phases/{:02}-phase-{num}.md", num),
             summary: None,
+            plan_body: None,
+            verify: None,
         }
     }
 
@@ -3294,7 +4386,19 @@ mod tests {
             updated_at: 0,
             is_v2,
             recovery_state: None,
+            // Default test workspace runs in single-call mode so the
+            // existing derive_stage_v2_* tests keep their semantics
+            // (no sub-step fan-out). Tests that need three-call mode
+            // construct a workspace with `phase_execution.mode =
+            // ThreeCall` explicitly.
+            phase_execution: PhaseExecutionConfig::default(),
         }
+    }
+
+    fn sample_ws_three_call(root: &Path, phases: Vec<SddPhase>) -> SddWorkspace {
+        let mut ws = sample_ws(root, phases, /* is_v2 */ true);
+        ws.phase_execution.mode = PhaseExecutionMode::ThreeCall;
+        ws
     }
 
     #[test]
@@ -3397,6 +4501,451 @@ mod tests {
         let stage = derive_stage(&ws, Some("approved".into()), Some("approved".into()));
         // Running phases skip the v2 gate entirely.
         assert_eq!(stage, SddStage::PhaseRunning { phase: 1 });
+    }
+
+    // ── three-call mode (spec-1) ─────────────────────────────────────
+
+    #[test]
+    fn phase_execution_mode_serializes_snake_case() {
+        let s = serde_json::to_string(&PhaseExecutionMode::ThreeCall).unwrap();
+        assert_eq!(s, "\"three_call\"");
+        let s = serde_json::to_string(&PhaseExecutionMode::SingleCall).unwrap();
+        assert_eq!(s, "\"single_call\"");
+    }
+
+    #[test]
+    fn phase_execution_config_default_is_legacy_safe() {
+        let cfg = PhaseExecutionConfig::default();
+        assert_eq!(cfg.mode, PhaseExecutionMode::SingleCall);
+        assert!(!cfg.plan_gate);
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn phase_execution_config_rejects_overflow_budget() {
+        let cfg = PhaseExecutionConfig {
+            mode: PhaseExecutionMode::ThreeCall,
+            plan_gate: false,
+            plan_budget_pct: 0.5,
+            implement_budget_pct: 0.7,
+            verify_budget_pct: 0.1,
+        };
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn meta_json_round_trips_with_phase_execution_block() {
+        let meta = SddMeta {
+            user_prompt: Some("ask".into()),
+            session_id: None,
+            created_at: Some(1),
+            repo_cwd: None,
+            git_enabled: false,
+            sdd_branch: None,
+            parent_sha: None,
+            phase_execution: PhaseExecutionConfig {
+                mode: PhaseExecutionMode::ThreeCall,
+                plan_gate: true,
+                ..PhaseExecutionConfig::default()
+            },
+        };
+        let json = serde_json::to_string(&meta).unwrap();
+        let back: SddMeta = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.phase_execution.mode, PhaseExecutionMode::ThreeCall);
+        assert!(back.phase_execution.plan_gate);
+    }
+
+    #[test]
+    fn meta_json_legacy_missing_block_deserializes_to_single_call() {
+        let legacy_json = r#"{"user_prompt":"ask","session_id":null,"created_at":1}"#;
+        let meta: SddMeta = serde_json::from_str(legacy_json).unwrap();
+        assert_eq!(meta.phase_execution.mode, PhaseExecutionMode::SingleCall);
+    }
+
+    #[test]
+    fn substep_state_round_trip() {
+        let dir = tempdir();
+        let state = SddPhaseSubstepState {
+            phase: 2,
+            sub_step: Some(SddPhaseSubstep::Implement),
+            started_at: 12345,
+        };
+        write_substep_state(&dir, &state).unwrap();
+        let back = read_substep_state(&dir, 2).unwrap();
+        assert_eq!(back, state);
+        // Atomic write should not leave the `.tmp` sidecar behind.
+        let tmp = dir.join("control/phase-2-substep-state.json.tmp");
+        assert!(!tmp.exists(), "tmp file leaked after rename");
+    }
+
+    #[test]
+    fn substep_state_missing_returns_none() {
+        let dir = tempdir();
+        assert!(read_substep_state(&dir, 1).is_none());
+    }
+
+    #[test]
+    fn substep_state_clear_is_idempotent() {
+        let dir = tempdir();
+        // Removing a non-existent checkpoint is OK.
+        clear_substep_state(&dir, 1).unwrap();
+        // Write then clear leaves no file behind.
+        let state = SddPhaseSubstepState {
+            phase: 1,
+            sub_step: Some(SddPhaseSubstep::Plan),
+            started_at: 0,
+        };
+        write_substep_state(&dir, &state).unwrap();
+        clear_substep_state(&dir, 1).unwrap();
+        assert!(read_substep_state(&dir, 1).is_none());
+    }
+
+    #[test]
+    fn derive_stage_three_call_substep_plan_emits_phase_planning() {
+        let dir = tempdir();
+        write_substep_state(
+            &dir,
+            &SddPhaseSubstepState {
+                phase: 1,
+                sub_step: Some(SddPhaseSubstep::Plan),
+                started_at: 1,
+            },
+        )
+        .unwrap();
+        let phases = vec![sample_phase(1, "running"), sample_phase(2, "pending")];
+        let ws = sample_ws_three_call(&dir, phases);
+        let stage = derive_stage(&ws, Some("approved".into()), Some("approved".into()));
+        assert_eq!(stage, SddStage::PhasePlanning { phase: 1 });
+    }
+
+    #[test]
+    fn derive_stage_three_call_substep_implement_emits_phase_implementing() {
+        let dir = tempdir();
+        write_substep_state(
+            &dir,
+            &SddPhaseSubstepState {
+                phase: 1,
+                sub_step: Some(SddPhaseSubstep::Implement),
+                started_at: 1,
+            },
+        )
+        .unwrap();
+        let phases = vec![sample_phase(1, "running")];
+        let ws = sample_ws_three_call(&dir, phases);
+        let stage = derive_stage(&ws, Some("approved".into()), Some("approved".into()));
+        assert_eq!(stage, SddStage::PhaseImplementing { phase: 1 });
+    }
+
+    #[test]
+    fn derive_stage_three_call_substep_verify_emits_phase_verifying() {
+        let dir = tempdir();
+        write_substep_state(
+            &dir,
+            &SddPhaseSubstepState {
+                phase: 1,
+                sub_step: Some(SddPhaseSubstep::Verify),
+                started_at: 1,
+            },
+        )
+        .unwrap();
+        let phases = vec![sample_phase(1, "running")];
+        let ws = sample_ws_three_call(&dir, phases);
+        let stage = derive_stage(&ws, Some("approved".into()), Some("approved".into()));
+        assert_eq!(stage, SddStage::PhaseVerifying { phase: 1 });
+    }
+
+    #[test]
+    fn derive_stage_three_call_no_substep_falls_through_to_running() {
+        let dir = tempdir();
+        // No checkpoint on disk.
+        let phases = vec![sample_phase(1, "running")];
+        let ws = sample_ws_three_call(&dir, phases);
+        let stage = derive_stage(&ws, Some("approved".into()), Some("approved".into()));
+        assert_eq!(stage, SddStage::PhaseRunning { phase: 1 });
+    }
+
+    #[test]
+    fn derive_stage_single_call_ignores_substep_state() {
+        // Even with a checkpoint on disk, single-call mode never
+        // emits sub-step variants — keeps legacy workspaces stable.
+        let dir = tempdir();
+        write_substep_state(
+            &dir,
+            &SddPhaseSubstepState {
+                phase: 1,
+                sub_step: Some(SddPhaseSubstep::Implement),
+                started_at: 1,
+            },
+        )
+        .unwrap();
+        let phases = vec![sample_phase(1, "running")];
+        let ws = sample_ws(&dir, phases, /* is_v2 */ true);
+        // Default mode = SingleCall via PhaseExecutionConfig::default().
+        let stage = derive_stage(&ws, Some("approved".into()), Some("approved".into()));
+        assert_eq!(stage, SddStage::PhaseRunning { phase: 1 });
+    }
+
+    // ── artifact persistence (phase 3) ───────────────────────────────
+
+    #[test]
+    fn verify_output_parses_clean_json() {
+        let raw = r#"{
+            "summary": "ok",
+            "files_changed": ["a.rs"],
+            "task_compliance": ["t1 done"],
+            "deviations": [],
+            "notes": ""
+        }"#;
+        let v = VerifyOutput::parse_or_fallback(raw);
+        assert_eq!(v.summary, "ok");
+        assert_eq!(v.files_changed, vec!["a.rs"]);
+        assert!(v.deviations.is_empty());
+    }
+
+    #[test]
+    fn verify_output_strips_markdown_fences() {
+        let raw = "```json\n{\"summary\":\"yo\",\"deviations\":[]}\n```";
+        let v = VerifyOutput::parse_or_fallback(raw);
+        assert_eq!(v.summary, "yo");
+    }
+
+    #[test]
+    fn verify_output_falls_back_on_garbage() {
+        let v = VerifyOutput::parse_or_fallback("not json at all");
+        assert_eq!(
+            v.deviations,
+            vec!["Unable to parse verification output".to_string()]
+        );
+        assert!(v.summary.is_empty());
+    }
+
+    #[test]
+    fn plan_md_round_trip() {
+        let dir = tempdir();
+        write_phase_plan_md(&dir, "01-foo", "# plan\nbody").unwrap();
+        let back = read_phase_plan_md(&dir, "01-foo").unwrap();
+        assert_eq!(back, "# plan\nbody");
+    }
+
+    #[test]
+    fn verify_json_round_trip() {
+        let dir = tempdir();
+        let v = VerifyOutput {
+            summary: "s".into(),
+            files_changed: vec!["x".into()],
+            task_compliance: vec![],
+            deviations: vec![],
+            notes: "n".into(),
+        };
+        write_verify_json(&dir, "01-foo", &v).unwrap();
+        let back = read_verify_json(&dir, "01-foo").unwrap();
+        assert_eq!(back, v);
+    }
+
+    #[test]
+    fn verify_json_missing_returns_none() {
+        let dir = tempdir();
+        assert!(read_verify_json(&dir, "01-foo").is_none());
+    }
+
+    #[test]
+    fn set_status_and_summary_writes_both_fields() {
+        let dir = tempdir();
+        std::fs::create_dir_all(dir.join("phases")).unwrap();
+        let path = dir.join("phases/01-foo.md");
+        std::fs::write(
+            &path,
+            "---\nphase: 1\ntitle: Foo\nstatus: running\n---\n\nbody\n",
+        )
+        .unwrap();
+        set_status_and_summary_on(&path, "done", Some("Did the thing.")).unwrap();
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("status: done"));
+        assert!(content.contains("summary: Did the thing."));
+        assert!(content.contains("body"));
+    }
+
+    #[test]
+    fn set_status_and_summary_skips_empty_summary() {
+        let dir = tempdir();
+        std::fs::create_dir_all(dir.join("phases")).unwrap();
+        let path = dir.join("phases/01-foo.md");
+        std::fs::write(
+            &path,
+            "---\nphase: 1\ntitle: Foo\nstatus: running\n---\n\nbody\n",
+        )
+        .unwrap();
+        // None and "" both leave the field untouched (FR-6: never
+        // write garbage).
+        set_status_and_summary_on(&path, "done", None).unwrap();
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("status: done"));
+        assert!(!content.contains("summary:"));
+    }
+
+    #[test]
+    fn derive_stage_failure_reads_verify_json_deviations() {
+        let dir = tempdir();
+        let phases_dir = dir.join("phases");
+        std::fs::create_dir_all(phases_dir.join("01-foundation")).unwrap();
+        // Phase markdown — status failed.
+        std::fs::write(
+            phases_dir.join("01-foundation.md"),
+            "---\nphase: 1\ntitle: Foundation\nstatus: failed\n---\n\nbody\n",
+        )
+        .unwrap();
+        // verify.json with one deviation.
+        write_verify_json(
+            &dir,
+            "01-foundation",
+            &VerifyOutput {
+                summary: "tried".into(),
+                deviations: vec!["forgot the tests".into()],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let phase = SddPhase {
+            number: 1,
+            slug: "01-foundation".into(),
+            title: "Foundation".into(),
+            depends_on: vec![],
+            status: "failed".into(),
+            tasks_total: 0,
+            tasks_done: 0,
+            body: String::new(),
+            path: phases_dir
+                .join("01-foundation.md")
+                .to_string_lossy()
+                .into_owned(),
+            summary: None,
+            plan_body: None,
+            verify: None,
+        };
+        let ws = sample_ws(&dir, vec![phase], /* is_v2 */ true);
+        let stage = derive_stage(&ws, Some("approved".into()), Some("approved".into()));
+        match stage {
+            SddStage::Failed {
+                trigger,
+                failed_phase,
+                reason,
+                ..
+            } => {
+                assert_eq!(trigger, Some(FailureTrigger::VerifyFailed));
+                assert_eq!(failed_phase, Some(1));
+                assert!(reason.contains("forgot the tests"));
+            }
+            other => panic!("expected Failed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn derive_stage_failure_check_failed_wins_over_verify_failed() {
+        // When BOTH hard-gate acceptance failures AND verify
+        // deviations exist, the hard-gate trigger wins (more
+        // specific). See `plan-1` §Failure-handling model.
+        let dir = tempdir();
+        let phases_dir = dir.join("phases");
+        std::fs::create_dir_all(phases_dir.join("01-foundation")).unwrap();
+        std::fs::write(
+            phases_dir.join("01-foundation.md"),
+            "---\nphase: 1\ntitle: Foundation\nstatus: failed\n---\n\nbody\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.join("results")).unwrap();
+        // Synthesise an acceptance.json with a failed check.
+        let accept = crate::sdd_verify::PhaseAcceptanceFile {
+            phase: 1,
+            overall_status: crate::sdd_verify::OverallStatus::Failed,
+            started_at: 0,
+            finished_at: 0,
+            results: vec![crate::sdd_verify::AcceptanceResult {
+                check_index: 0,
+                kind: "shell".into(),
+                status: crate::sdd_verify::CheckStatus::Failed,
+                started_at: 0,
+                finished_at: 0,
+                exit_code: Some(1),
+                log_tail: String::new(),
+                note: String::new(),
+            }],
+        };
+        std::fs::write(
+            dir.join("results/phase-1-acceptance.json"),
+            serde_json::to_string(&accept).unwrap(),
+        )
+        .unwrap();
+        write_verify_json(
+            &dir,
+            "01-foundation",
+            &VerifyOutput {
+                deviations: vec!["soft verdict".into()],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let phase = SddPhase {
+            number: 1,
+            slug: "01-foundation".into(),
+            title: "Foundation".into(),
+            depends_on: vec![],
+            status: "failed".into(),
+            tasks_total: 0,
+            tasks_done: 0,
+            body: String::new(),
+            path: phases_dir
+                .join("01-foundation.md")
+                .to_string_lossy()
+                .into_owned(),
+            summary: None,
+            plan_body: None,
+            verify: None,
+        };
+        let ws = sample_ws(&dir, vec![phase], /* is_v2 */ true);
+        let stage = derive_stage(&ws, Some("approved".into()), Some("approved".into()));
+        match stage {
+            SddStage::Failed { trigger, .. } => {
+                assert_eq!(trigger, Some(FailureTrigger::CheckFailed));
+            }
+            other => panic!("expected Failed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn derive_stage_three_call_plan_review_gate_emits_when_plan_md_exists() {
+        let dir = tempdir();
+        // Plan checkpoint + plan.md artifact on disk + plan_gate=true
+        // + no approval marker → plan review.
+        write_substep_state(
+            &dir,
+            &SddPhaseSubstepState {
+                phase: 1,
+                sub_step: Some(SddPhaseSubstep::Plan),
+                started_at: 1,
+            },
+        )
+        .unwrap();
+        let slug_dir = dir.join("phases").join("01-foundation");
+        std::fs::create_dir_all(&slug_dir).unwrap();
+        std::fs::write(slug_dir.join("plan.md"), "plan body").unwrap();
+        let phase = SddPhase {
+            number: 1,
+            slug: "01-foundation".into(),
+            title: "Foundation".into(),
+            depends_on: vec![],
+            status: "running".into(),
+            tasks_total: 0,
+            tasks_done: 0,
+            body: String::new(),
+            path: format!("{}/phases/01-foundation.md", dir.to_string_lossy()),
+            summary: None,
+            plan_body: None,
+            verify: None,
+        };
+        let mut ws = sample_ws_three_call(&dir, vec![phase]);
+        ws.phase_execution.plan_gate = true;
+        let stage = derive_stage(&ws, Some("approved".into()), Some("approved".into()));
+        assert_eq!(stage, SddStage::PhasePlanReview { phase: 1 });
     }
 
     #[test]
@@ -3527,6 +5076,7 @@ mod tests {
                 detail: None,
                 status: Some("running".into()),
                 correlation_id: Some("abc".into()),
+                sub_step: None,
             },
             ActionLogEntry {
                 ts: 2,
@@ -3537,6 +5087,7 @@ mod tests {
                 detail: None,
                 status: Some("done".into()),
                 correlation_id: Some("abc".into()),
+                sub_step: None,
             },
         ];
         let mut body = String::new();
@@ -3572,6 +5123,7 @@ mod tests {
             detail: None,
             status: Some("running".into()),
             correlation_id: None,
+            sub_step: None,
         };
         let body = format!(
             "{}\n{}\n",
@@ -3649,6 +5201,7 @@ mod tests {
                 detail: None,
                 status: Some("done".into()),
                 correlation_id: None,
+                sub_step: None,
             };
             body.push_str(&serde_json::to_string(&e).unwrap());
             body.push('\n');
