@@ -84,6 +84,7 @@
     if (!sess) return;
     autoGrow();
     detectMentionTrigger();
+    detectSlashTrigger();
   }
 
   function onKey(e: KeyboardEvent) {
@@ -118,10 +119,11 @@
       updateSession(sess.id, { permissionMode: next });
       return;
     }
-    /* Slash picker — when the input is a partial slash token, hijack
-       ↑/↓ navigation + Enter selection. Tab also confirms (Cmd-T-style
-       autocomplete). Escape hides the picker by clearing the input;
-       the user can also just type a space to dismiss naturally. */
+    /* Slash picker — caret-aware, mirrors @-mention key handling.
+       ↑/↓ navigate, Enter/Tab confirm the selection (splice into the
+       input at the trigger position), Escape closes the picker
+       without touching the input. Typing whitespace closes naturally
+       via detectSlashTrigger. */
     if (slashOpen) {
       const totalRows = slashMatches.length + skillMatches.length;
       if (e.key === 'ArrowDown') {
@@ -134,21 +136,16 @@
         slashSelectedIdx = Math.max(slashSelectedIdx - 1, 0);
         return;
       }
-      if (e.key === 'Tab') {
+      if (e.key === 'Tab' || e.key === 'Enter') {
         e.preventDefault();
         confirmPickerSelection();
         return;
       }
       if (e.key === 'Escape') {
         e.preventDefault();
-        if (sess) updateSession(sess.id, { input: '' });
+        closeSlash();
         return;
       }
-      /* Enter falls through to the normal send path — `/foo` already
-         parses via parseSlashCommand on the parent side, so hitting
-         Enter on a fully-typed command both selects + sends in one
-         keystroke. Skipping the picker-side select keeps the muscle
-         memory of "type / and Enter" intact. */
     }
     /* Bash-style prompt history. ↑/↓ on the textarea cycle through
        previously-sent prompts when (a) we're already in history mode,
@@ -394,43 +391,47 @@
   let mentionFrom = $state(-1);
   const mentionOpen = $derived(mentionAnchor !== null);
 
-  /* ---------- Slash picker ---------- */
-  /** Selected index inside `slashMatches` when the picker is open.
-   *  Resets to 0 on every match-set change. */
-  let slashSelectedIdx = $state(0);
+  /* ---------- Slash picker ───────────────────────────────────────
+     Mirrors the @-mention picker: a `/` trigger anywhere in the input
+     opens the picker against the substring between `/` and the caret.
+     Pick splices `/<name>` at the trigger position (instead of
+     replacing the whole input), so the user can compose prose around
+     a skill invocation — same UX as @-mentions. Send-path scans for
+     a `/<skillname>` token and renders the skill body with the prose
+     around it passed as $ARGUMENTS. */
 
-  /** The set of slash commands that prefix-match the current input.
-   *  Empty when the input doesn't look like a slash trigger; the
-   *  picker is shown only when the array has at least one row. */
+  /** Selected index inside the combined (slash + skill) match list
+   *  when the picker is open. Resets to 0 on every match-set change. */
+  let slashSelectedIdx = $state(0);
+  /** Position rect for the picker — null when closed. */
+  let slashAnchor = $state<{ left: number; top: number; width: number } | null>(null);
+  /** Substring after the most recent `/` that still has the caret
+   *  inside it — feeds the picker's filter. */
+  let slashQuery = $state('');
+  /** Index in the input where the `/` trigger started. Used to splice
+   *  the chosen entry back in cleanly. */
+  let slashFrom = $state(-1);
+
+  /** Slash commands that prefix-match the current trigger query. */
   const slashMatches = $derived.by<SlashCommand[]>(() => {
-    if (!sess) return [];
-    const raw = sess.input ?? '';
-    if (!raw.startsWith('/')) return [];
-    /* Picker only when the whole input is a single in-progress
-       slash token — once the user adds a space (`/help me with X`)
-       it's no longer a command attempt, it's prose that happens to
-       start with `/`. Same restriction parseSlashCommand uses. */
-    const body = raw.slice(1);
-    if (/\s/.test(body)) return [];
-    const lower = body.toLowerCase();
+    if (!sess || slashFrom < 0) return [];
+    const lower = slashQuery.toLowerCase();
     return KNOWN_SLASH_COMMANDS.filter((c) => c.startsWith(lower));
   });
   /** Live `permissionMode === 'plan'` flag for the toggle pill. */
   const planActive = $derived((sess?.permissionMode ?? 'default') === 'plan');
 
-  /** Skill names that prefix-match the slash token. Project-scoped
+  /** Skill names that prefix-match the trigger query. Project-scoped
    *  skills sort first (they're already at the head of
    *  `skillsState.list` because discovery walks cwd before user home). */
   const skillMatches = $derived.by<Skill[]>(() => {
-    if (!sess) return [];
-    const raw = sess.input ?? '';
-    if (!raw.startsWith('/')) return [];
-    const body = raw.slice(1);
-    if (/\s/.test(body)) return [];
-    const lower = body.toLowerCase();
+    if (!sess || slashFrom < 0) return [];
+    const lower = slashQuery.toLowerCase();
     return skillsState.list.filter((sk) => sk.name.toLowerCase().startsWith(lower));
   });
-  const slashOpen = $derived(slashMatches.length > 0 || skillMatches.length > 0);
+  const slashOpen = $derived(
+    slashAnchor !== null && (slashMatches.length > 0 || skillMatches.length > 0)
+  );
 
   /* Discover skills when the session's cwd changes. Cheap (Rust scans
    *  a handful of dirs); `refreshSkills` no-ops if cwd hasn't moved. */
@@ -448,36 +449,94 @@
   });
 
   function pickSlashCommand(cmd: SlashCommand): void {
-    if (!sess) return;
-    /* Replace the whole input with `/cmd` — exactly the shape
-       parseSlashCommand recognises. The user can hit Enter to send
-       (parent's onSend routes it through slashCommands.ts) or keep
-       typing if they want, but at that point the picker closes. */
-    updateSession(sess.id, { input: `/${cmd}` });
+    if (!sess || !ta || slashFrom < 0) return;
+    /* Splice `/cmd` in place of the `/<query>` token at the trigger
+       position — same shape as @-mention picking. Caret lands after
+       the inserted token + a trailing space so the user can keep
+       typing or hit Enter to send. parseSlashCommand still recognises
+       the result when the whole input is just `/cmd`; arg-bearing
+       commands like `/preview` accept the prose that follows. */
+    const value = ta.value ?? '';
+    const caret = ta.selectionStart ?? value.length;
+    const before = value.slice(0, slashFrom);
+    const after = value.slice(caret);
+    const insertion = `/${cmd} `;
+    const next = before + insertion + after;
+    setSessionInput(sess.id, next);
+    closeSlash();
     queueMicrotask(() => {
-      if (ta) {
-        ta.selectionStart = ta.value.length;
-        ta.selectionEnd = ta.value.length;
-        ta.focus();
-      }
+      if (!ta) return;
+      ta.focus();
+      const pos = (before + insertion).length;
+      ta.selectionStart = pos;
+      ta.selectionEnd = pos;
     });
   }
 
   function pickSkill(sk: Skill): void {
-    if (!sess) return;
-    /* Skills almost always want args (the hint says so) — leave a
-       trailing space so the user can start typing immediately. The
-       parent's send path will look up the skill by name and route
-       through `skills_render` instead of the regular slash dispatch. */
+    if (!sess || !ta || slashFrom < 0) return;
+    /* Splice `/<skillname>` at the trigger position. Trailing space
+       only when the skill declares an `argument_hint` (it expects
+       prose after the name); otherwise we let the user keep editing
+       around the chip cleanly. */
+    const value = ta.value ?? '';
+    const caret = ta.selectionStart ?? value.length;
+    const before = value.slice(0, slashFrom);
+    const after = value.slice(caret);
     const trailing = sk.argument_hint ? ' ' : '';
-    updateSession(sess.id, { input: `/${sk.name}${trailing}` });
+    const insertion = `/${sk.name}${trailing}`;
+    const next = before + insertion + after;
+    setSessionInput(sess.id, next);
+    closeSlash();
     queueMicrotask(() => {
-      if (ta) {
-        ta.selectionStart = ta.value.length;
-        ta.selectionEnd = ta.value.length;
-        ta.focus();
-      }
+      if (!ta) return;
+      ta.focus();
+      const pos = (before + insertion).length;
+      ta.selectionStart = pos;
+      ta.selectionEnd = pos;
     });
+  }
+
+  /** Re-evaluate whether the caret is currently inside a `/`-trigger
+   *  span. Mirrors `detectMentionTrigger` — most recent `/` before
+   *  the caret, preceded by start-of-input or whitespace, with no
+   *  whitespace between the `/` and the caret. Anchors the picker
+   *  to the textarea's left edge. */
+  function detectSlashTrigger() {
+    if (!ta || !sess) return;
+    const value = ta.value ?? '';
+    const caret = ta.selectionStart ?? value.length;
+    let at = -1;
+    for (let i = caret - 1; i >= 0; i--) {
+      const c = value[i];
+      if (c === '/') {
+        if (i === 0 || /\s/.test(value[i - 1])) at = i;
+        break;
+      }
+      if (/\s/.test(c)) break;
+    }
+    if (at < 0) {
+      closeSlash();
+      return;
+    }
+    const q = value.slice(at + 1, caret);
+    if (q.includes('\n')) {
+      closeSlash();
+      return;
+    }
+    slashQuery = q;
+    slashFrom = at;
+    const rect = ta.getBoundingClientRect();
+    slashAnchor = {
+      left: rect.left,
+      top: rect.top,
+      width: Math.min(rect.width, 480)
+    };
+  }
+  function closeSlash(): void {
+    slashAnchor = null;
+    slashQuery = '';
+    slashFrom = -1;
   }
 
   /** Confirm the currently highlighted row — slash commands go first
@@ -945,8 +1004,8 @@
             oninput={onInput}
             onkeydown={onKey}
             onpaste={onPaste}
-            onclick={detectMentionTrigger}
-            onkeyup={detectMentionTrigger}
+            onclick={() => { detectMentionTrigger(); detectSlashTrigger(); }}
+            onkeyup={() => { detectMentionTrigger(); detectSlashTrigger(); }}
             onscroll={syncBackdropScroll}
             placeholder={sess.sending
               ? (p.kind === 'claude'

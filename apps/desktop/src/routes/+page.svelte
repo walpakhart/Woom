@@ -2492,35 +2492,65 @@
     // built-in slash. Slash and skill names share a namespace; on
     // collision a built-in wins (so a user can't accidentally shadow
     // `/help` with a SKILL.md called `help`).
-    const skillMatch = /^\/([A-Za-z][\w-]*)(?:\s+([\s\S]*))?$/.exec(text.trim());
-    if (skillMatch) {
-      const tokenName = skillMatch[1].toLowerCase();
-      const args = skillMatch[2]?.trim() ?? '';
-      const isBuiltin = (KNOWN_SLASH_COMMANDS as string[]).includes(tokenName);
-      if (!isBuiltin) {
-        const sk = skillsState.list.find((s) => s.name.toLowerCase() === tokenName);
-        if (sk) {
-          setSessionInput(session.id, '');
-          const cwd = session.worktreePath ?? session.cwd ?? null;
-          const rendered = await renderSkill(sk.id, args, cwd);
-          if (!rendered) {
-            appendSessionMessage(session.id, {
-              role: 'assistant',
-              content: `_Skill \`${sk.name}\` failed to render — check the file at \`${sk.path}\`._`,
-              at: new Date().toISOString()
-            });
-            return true;
-          }
-          /* Stamp the rendered body into the composer + re-fire the
-           *  normal send pipeline. The rendered text is what the agent
-           *  sees; no further substitution happens. */
-          updateSession(session.id, { input: rendered.rendered });
-          /* Defer a microtask so the input update flushes before the
-           *  recursive send picks it up. */
-          await Promise.resolve();
-          await sendClaudeMessage();
+    /* Inline-skill detection — scan the WHOLE input for a
+     *  `/<skillname>` token (at start, end, or anywhere preceded by
+     *  whitespace) instead of requiring the whole input to BE the
+     *  command. Lets the user write prose around a skill invocation
+     *  the same way @-mentions splice into the text. The non-skill
+     *  remainder of the input becomes the skill's $ARGUMENTS so
+     *  SKILL.md templates can interpolate it. Built-in slash names
+     *  (KNOWN_SLASH_COMMANDS) are skipped here so they fall through
+     *  to the strict-start parser below. */
+    const inlineSkillRe = /(^|\s)\/([A-Za-z][\w-]*)(?=\s|$)/g;
+    let inlineSkill: { name: string; idx: number; full: string } | null = null;
+    {
+      const raw = text;
+      let m: RegExpExecArray | null;
+      while ((m = inlineSkillRe.exec(raw)) !== null) {
+        const candidate = m[2].toLowerCase();
+        if ((KNOWN_SLASH_COMMANDS as string[]).includes(candidate)) continue;
+        const sk = skillsState.list.find((s) => s.name.toLowerCase() === candidate);
+        if (!sk) continue;
+        inlineSkill = {
+          name: sk.name,
+          idx: m.index + (m[1] ? m[1].length : 0),
+          full: `/${sk.name}`
+        };
+        break;
+      }
+    }
+    if (inlineSkill) {
+      const sk = skillsState.list.find((s) => s.name.toLowerCase() === inlineSkill!.name.toLowerCase());
+      if (sk) {
+        const tokenEnd = inlineSkill.idx + inlineSkill.full.length;
+        const beforeToken = text.slice(0, inlineSkill.idx).replace(/\s+$/, '');
+        const afterToken = text.slice(tokenEnd).replace(/^\s+/, '');
+        const args = [beforeToken, afterToken].filter((s) => s.length > 0).join(' ');
+        setSessionInput(session.id, '');
+        const cwd = session.worktreePath ?? session.cwd ?? null;
+        const rendered = await renderSkill(sk.id, args, cwd);
+        if (!rendered) {
+          appendSessionMessage(session.id, {
+            role: 'assistant',
+            content: `_Skill \`${sk.name}\` failed to render — check the file at \`${sk.path}\`._`,
+            at: new Date().toISOString()
+          });
           return true;
         }
+        /* Visible bubble: literal text the user typed (prose + skill
+         *  token, e.g. "make me a hero section /frontend-design").
+         *  Agent receives the expanded SKILL.md body silently — same
+         *  pattern `/sdd` uses to avoid dumping the template into the
+         *  visible transcript. */
+        appendSessionMessage(session.id, {
+          role: 'user',
+          content: text,
+          at: new Date().toISOString()
+        });
+        updateSession(session.id, { input: rendered.rendered });
+        await Promise.resolve();
+        await sendClaudeMessage({ silent: true });
+        return true;
       }
     }
     // Args-bearing commands first — `/preview pnpm dev`, `/kill ID`.
