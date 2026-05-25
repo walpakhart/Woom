@@ -21,6 +21,7 @@ mod memory_local;
 mod sdd;
 mod sdd_action_log;
 mod sdd_audit;
+mod sdd_audit_commands;
 mod sdd_frontmatter;
 mod sdd_hydrate;
 mod sdd_mcp_handlers;
@@ -522,9 +523,9 @@ pub fn run() {
             sdd::sdd_append_action_log,
             sdd::sdd_append_action_log_batch,
             sdd::sdd_read_action_log,
-            sdd::sdd_audit_append,
-            sdd::sdd_audit_read,
-            sdd::sdd_validate_mutation,
+            sdd_audit_commands::sdd_audit_append,
+            sdd_audit_commands::sdd_audit_read,
+            sdd_audit_commands::sdd_validate_mutation,
             sdd::sdd_discard,
             // User-defined hooks — agent-lifecycle scripts. See
             // `hooks.rs` for the contract (stdin JSON / exit code /

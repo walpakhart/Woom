@@ -297,12 +297,12 @@ use crate::sdd_frontmatter::write_with_frontmatter;
 pub(crate) type SharedWorkspaces = Arc<RwLock<HashMap<String, Arc<RwLock<SddWorkspace>>>>>;
 
 pub struct SddRegistry {
-    workspaces: SharedWorkspaces,
-    base_dir: RwLock<Option<PathBuf>>,
+    pub(crate) workspaces: SharedWorkspaces,
+    pub(crate) base_dir: RwLock<Option<PathBuf>>,
     /// File-system watcher — one `notify::RecommendedWatcher` for the
     /// whole base dir. Lazy-initialized on first `sdd_start`. Held in
     /// the struct so it doesn't get dropped (drop = stop watching).
-    watcher: parking_lot::Mutex<Option<notify::RecommendedWatcher>>,
+    pub(crate) watcher: parking_lot::Mutex<Option<notify::RecommendedWatcher>>,
 }
 
 impl SddRegistry {
@@ -2672,6 +2672,7 @@ pub(crate) use crate::sdd_audit as audit;
 // MCP-handler helpers moved to ./sdd_mcp_handlers.rs (wave-1 phase-10
 // split). Aliased here so existing `mcp_handlers::*` call sites stay
 // unchanged.
+#[allow(unused_imports)]
 pub(crate) use crate::sdd_mcp_handlers as mcp_handlers;
 
 // ---------------------------------------------------------------------------
@@ -2681,46 +2682,9 @@ pub(crate) use crate::sdd_mcp_handlers as mcp_handlers;
 // audit overlay calls `sdd_audit_read`.
 // ---------------------------------------------------------------------------
 
-#[tauri::command]
-pub async fn sdd_audit_append(
-    registry: State<'_, SddRegistry>,
-    id: String,
-    entry: audit::AuditEntry,
-) -> Result<(), String> {
-    let cell = registry
-        .workspaces
-        .read()
-        .get(&id)
-        .cloned()
-        .ok_or_else(|| format!("unknown workspace {id}"))?;
-    let root = PathBuf::from(cell.read().root.clone());
-    audit::append(&root, &entry);
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn sdd_audit_read(
-    registry: State<'_, SddRegistry>,
-    id: String,
-) -> Result<Vec<audit::AuditEntry>, String> {
-    let cell = registry
-        .workspaces
-        .read()
-        .get(&id)
-        .cloned()
-        .ok_or_else(|| format!("unknown workspace {id}"))?;
-    let root = PathBuf::from(cell.read().root.clone());
-    Ok(audit::read_all(&root))
-}
-
-/// Server-side reason gate the agent-facing MCP tool stubs share via
-/// the `mcp_handlers::validate_mutation` helper. Exposed as a Tauri
-/// command so the frontend stream parser can reject malformed agent
-/// calls before invoking the underlying mutation.
-#[tauri::command]
-pub async fn sdd_validate_mutation(action: String, reason: String) -> Result<String, String> {
-    mcp_handlers::validate_mutation(&action, &reason)
-}
+// Audit + validate Tauri commands moved to ./sdd_audit_commands.rs
+// (wave-17 split). lib.rs invoke_handler registers them via the
+// new module path.
 
 // ---------------------------------------------------------------------------
 // Unit tests — exercise the v2 plan-as-data + per-phase gate logic without
