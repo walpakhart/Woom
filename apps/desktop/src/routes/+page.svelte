@@ -51,6 +51,7 @@
   import { handleCanvasOrSddMcp } from './appNavigationCanvas';
   import { handleInboxOrViewMcp } from './appNavigationInbox';
   import { handleSlashCommand as handleSlashCommandImpl } from './handleSlashCommand';
+  import * as _modalActions from './modalActions';
   import {
     actionMatchesIpcParams,
     buildActionFromIpcRequest,
@@ -3759,254 +3760,36 @@
   }
 
   // --- Actions ---
-
-  async function submitComment() {
-    if (!commentModal || !inboxState.focusItem?.repo) return;
-    const body = commentModal.body;
-    if (!body.trim()) return;
-    patchModal('comment', { busy: true, error: null });
-    try {
-      await invoke('github_add_comment', {
-        owner: inboxState.focusItem.repo.owner,
-        repo: inboxState.focusItem.repo.name,
-        number: inboxState.focusItem.number,
-        body
-      });
-      closeModal('comment');
-      await reloadDetailAndLists();
-    } catch (e) {
-      patchModal('comment', { busy: false, error: typeof e === 'string' ? e : String(e) });
-    }
-  }
-
-  async function submitReview() {
-    if (!reviewModal || !inboxState.focusItem?.repo || !inboxState.focusItem.is_pull_request) return;
-    const { event, body } = reviewModal;
-    patchModal('review', { busy: true, error: null });
-    try {
-      await invoke('github_submit_review', {
-        owner: inboxState.focusItem.repo.owner,
-        repo: inboxState.focusItem.repo.name,
-        number: inboxState.focusItem.number,
-        event,
-        body
-      });
-      closeModal('review');
-      await reloadDetailAndLists();
-    } catch (e) {
-      patchModal('review', { busy: false, error: typeof e === 'string' ? e : String(e) });
-    }
-  }
-
-  async function submitMerge() {
-    if (!mergeModal || !inboxState.focusItem?.repo || !inboxState.focusItem.is_pull_request) return;
-    const method = mergeModal.method;
-    patchModal('merge', { busy: true, error: null });
-    try {
-      await invoke('github_merge_pr', {
-        owner: inboxState.focusItem.repo.owner,
-        repo: inboxState.focusItem.repo.name,
-        number: inboxState.focusItem.number,
-        method
-      });
-      closeModal('merge');
-      await reloadDetailAndLists();
-    } catch (e) {
-      patchModal('merge', { busy: false, error: typeof e === 'string' ? e : String(e) });
-    }
-  }
-
-  async function setState(state: 'closed' | 'open') {
-    if (!inboxState.focusItem?.repo) return;
-    actionBusy = state;
-    try {
-      await invoke('github_set_state', {
-        owner: inboxState.focusItem.repo.owner,
-        repo: inboxState.focusItem.repo.name,
-        number: inboxState.focusItem.number,
-        state
-      });
-      // Optimistically update focusItem so the UI flips Close→Reopen right away,
-      // even though the inbox (filtered is:open) may drop the item on refresh.
-      if (inboxState.focusItem) {
-        inboxState.focusItem = { ...inboxState.focusItem, state };
-      }
-      await reloadDetailAndLists();
-    } catch (e) {
-      inboxState.detailError = typeof e === 'string' ? e : String(e);
-    } finally {
-      actionBusy = null;
-    }
-  }
-
-  function askClose() {
-    if (!inboxState.focusItem) return;
-    const kind = inboxState.focusItem.is_pull_request ? 'pull request' : 'issue';
-    openModal('confirm', {
-      title: `Close this ${kind}?`,
-      body: `${externalId(inboxState.focusItem)} — ${inboxState.focusItem.title}`,
-      confirmText: 'Close',
-      danger: true,
-      busy: false,
-      onConfirm: async () => {
-        await setState('closed');
-      }
-    });
-  }
-
-  function openConnectModal(conn: ConnectionMeta) {
-    if (!conn.implemented) return;
-    if (conn.id === 'github') {
-      openModal('pat', { conn, token: '', error: null, busy: false });
-    } else if (conn.id === 'jira') {
-      openModal('jiraConnect', { workspace: '', email: '', token: '', error: null, busy: false });
-    } else if (conn.id === 'sentry') {
-      openModal('sentryConnect', {
-        host: 'https://sentry.io',
-        organization_slug: '',
-        token: '',
-        error: null,
-        busy: false
-      });
-    } else if (conn.id === 'claude') {
-      openModal('claudeStatus', { status: claudeStatus, loading: false });
-      void refreshClaudeModal();
-    } else if (conn.id === 'cursor') {
-      openModal('cursorStatus', { status: cursorStatus, loading: false });
-      void refreshCursorModal();
-    }
-  }
-
-  async function refreshClaudeModal() {
-    if (!modalsState.claudeStatus) return;
-    patchModal('claudeStatus', { loading: true });
-    await refreshClaudeStatus();
-    if (modalsState.claudeStatus) patchModal('claudeStatus', { status: claudeStatus, loading: false });
-  }
-
-  async function refreshCursorModal() {
-    if (!modalsState.cursorStatus) return;
-    patchModal('cursorStatus', { loading: true });
-    // refreshClaudeStatus() actually refreshes BOTH agents (cursor + claude) —
-    // see `agent_status` Tauri command. Reuse so we don't double-poll.
-    await refreshClaudeStatus();
-    if (modalsState.cursorStatus) patchModal('cursorStatus', { status: cursorStatus, loading: false });
-  }
-
-  function cursorInstallUrl() {
-    return 'https://cursor.com/docs/cli/installation';
-  }
-
-  async function submitJira() {
-    if (!jiraModal) return;
-    const { workspace, email, token } = jiraModal;
-    patchModal('jiraConnect', { busy: true, error: null });
-    try {
-      await invoke<JiraUser>('jira_connect', { workspace, email, token });
-      markTokenInstalled('jira');
-      closeModal('jiraConnect');
-      await refreshJiraStatus();
-    } catch (e) {
-      patchModal('jiraConnect', { busy: false, error: typeof e === 'string' ? e : String(e) });
-    }
-  }
-
-  async function disconnectJira() {
-    await invoke('jira_disconnect');
-    clearTokenInstalled('jira');
-    await refreshJiraStatus();
-  }
-
-  function jiraTokenUrl() {
-    return 'https://id.atlassian.com/manage-profile/security/api-tokens';
-  }
-
-  function sentryTokenUrl(): string {
-    const host = modalsState.sentryConnect?.host?.trim() || 'https://sentry.io';
-    return `${host.replace(/\/+$/, '')}/settings/account/api/auth-tokens/`;
-  }
-
-  async function submitSentry() {
-    if (!modalsState.sentryConnect) return;
-    const { host, organization_slug, token } = modalsState.sentryConnect;
-    patchModal('sentryConnect', { busy: true, error: null });
-    try {
-      await invoke<SentryUser>('sentry_connect', {
-        host,
-        organizationSlug: organization_slug,
-        token
-      });
-      markTokenInstalled('sentry');
-      closeModal('sentryConnect');
-      await refreshSentryStatus();
-      void refreshAllSentryInboxes();
-    } catch (e) {
-      patchModal('sentryConnect', { busy: false, error: typeof e === 'string' ? e : String(e) });
-    }
-  }
-
-  async function disconnectSentryAll() {
-    try {
-      await invoke('sentry_disconnect');
-      clearTokenInstalled('sentry');
-      await refreshSentryStatus();
-      resetSentryInbox();
-      notify({ kind: 'success', title: 'Disconnected from Sentry' });
-    } catch (e) {
-      notifyError(e, { title: 'Sentry disconnect failed' });
-    }
-  }
-
-  function claudeInstallUrl() {
-    return 'https://docs.claude.com/en/docs/claude-code/overview';
-  }
-
-  async function submitPat() {
-    if (!patModal) return;
-    const token = patModal.token;
-    patchModal('pat', { busy: true, error: null });
-    try {
-      const user = await invoke<GithubUser>('github_connect_pat', { token });
-      connectionsState.github = { kind: 'connected', user };
-      markTokenInstalled('github');
-      closeModal('pat');
-      await refreshAllInboxes();
-      view = 'githubApp';
-    } catch (e) {
-      patchModal('pat', { busy: false, error: typeof e === 'string' ? e : String(e) });
-    }
-  }
-
-  async function disconnectGithub() {
-    try {
-      await invoke('github_disconnect');
-      clearTokenInstalled('github');
-      await refreshGithubStatus();
-      resetGithubInbox();
-      notify({ kind: 'success', title: 'Disconnected from GitHub' });
-    } catch (e) {
-      notifyError(e, { title: 'GitHub disconnect failed' });
-    }
-    // Repo state is owned by GithubTab — it wipes itself via its
-    // `$effect` on `connectedGithub` becoming false.
-  }
-
-  async function disconnectJiraAll() {
-    try {
-      await invoke('jira_disconnect');
-      clearTokenInstalled('jira');
-      await refreshJiraStatus();
-      resetJiraInbox();
-      notify({ kind: 'success', title: 'Disconnected from Jira' });
-    } catch (e) {
-      notifyError(e, { title: 'Jira disconnect failed' });
-      return;
-    }
-  }
-
-  async function openBrowser(url: string) {
-    try { await openUrl(url); } catch (e) { notifyError(e, { title: 'Could not open browser' }); }
-  }
+  // Modal action handlers moved to ./modalActions.ts (wave-34 split).
+  // The route file keeps thin shims that wire route-local setters
+  // (view, actionBusy) + derived agent statuses via a deps object.
+  const _modalDeps = (): import('./modalActions').ModalActionDeps => ({
+    setView: (v) => { view = v as View; },
+    setActionBusy: (s) => { actionBusy = s; },
+    reloadDetailAndLists,
+    getClaudeStatus: () => claudeStatus,
+    getCursorStatus: () => cursorStatus,
+  });
+  const submitComment = () => _modalActions.submitComment();
+  const submitReview = () => _modalActions.submitReview();
+  const submitMerge = () => _modalActions.submitMerge();
+  const setState = (s: 'closed' | 'open') => _modalActions.setIssueState(s, _modalDeps());
+  const askClose = () => _modalActions.askClose(_modalDeps());
+  const openConnectModal = (conn: ConnectionMeta) => _modalActions.openConnectModal(conn, _modalDeps());
+  const refreshClaudeModal = () => _modalActions.refreshClaudeModal(_modalDeps());
+  const refreshCursorModal = () => _modalActions.refreshCursorModal(_modalDeps());
+  const cursorInstallUrl = () => _modalActions.cursorInstallUrl();
+  const claudeInstallUrl = () => _modalActions.claudeInstallUrl();
+  const jiraTokenUrl = () => _modalActions.jiraTokenUrl();
+  const sentryTokenUrl = () => _modalActions.sentryTokenUrl();
+  const submitJira = () => _modalActions.submitJira();
+  const disconnectJira = () => _modalActions.disconnectJira();
+  const submitSentry = () => _modalActions.submitSentry();
+  const disconnectSentryAll = () => _modalActions.disconnectSentryAll();
+  const submitPat = () => _modalActions.submitPat(_modalDeps());
+  const disconnectGithub = () => _modalActions.disconnectGithub();
+  const disconnectJiraAll = () => _modalActions.disconnectJiraAll();
+  const openBrowser = (u: string) => _modalActions.openBrowser(u);
 
   function onKey(e: KeyboardEvent) {
     if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
@@ -4276,10 +4059,6 @@
     );
   }
 
-  function githubTokenUrl() {
-    const scopes = ['repo', 'read:user', 'read:org'].join(',');
-    return `https://github.com/settings/tokens/new?scopes=${scopes}&description=Woom%20Desktop`;
-  }
 
   function mergeDisabled(): boolean {
     if (!inboxState.focusItem?.is_pull_request) return true;
@@ -4292,304 +4071,15 @@
 
   // ---- Jira Create Issue ----
 
-  async function openJiraCreateIssue() {
-    /* Pull defaults from the FIRST jira column's filter — no perfect
-       answer with multiple columns, but most setups have one and the
-       user expects the new-issue dialog to pre-fill from "the" column. */
-    const firstId = Object.keys(inboxState.jiraFiltersByInstance)[0];
-    const active = firstId
-      ? inboxState.jiraFiltersByInstance[firstId]
-      : { projectKey: null, sprintIds: [] as (number | 'backlog')[] };
-    openModal('jiraCreate', {
-      projectKey: active.projectKey ?? '',
-      projects: inboxState.jiraProjectOptions,
-      projectsLoading: false,
-      issueTypes: [],
-      issueTypeName: 'Task',
-      summary: '',
-      description: '',
-      assigneeAccountId: '',
-      assignees: [],
-      assigneesLoading: false,
-      sprints: inboxState.jiraSprintOptions,
-      // Default the new-issue sprint to the first numeric sprint scope
-      // selected in the filter (multi-select: a created issue can only
-      // live in one sprint, so pick the first; null falls through if
-      // the user only had backlog selected or nothing).
-      sprintId: active.sprintIds.find((s): s is number => typeof s === 'number') ?? null,
-      busy: false,
-      error: null
-    });
-    // Always refresh projects list (lazy — skips if already cached).
-    if (!inboxState.jiraProjectOptions.length) {
-      patchModal('jiraCreate', { projectsLoading: true });
-      try {
-        const projects = await invoke<JiraProject[]>('jira_list_projects');
-        inboxState.jiraProjectOptions = projects;
-        patchModal('jiraCreate', { projects, projectsLoading: false });
-      } catch {
-        patchModal('jiraCreate', { projectsLoading: false });
-      }
-    }
-    // If a project is pre-selected, pull its issue types immediately.
-    if (modalsState.jiraCreate?.projectKey) {
-      void onJiraCreateProjectChange(modalsState.jiraCreate.projectKey);
-    }
-  }
-
-  async function onJiraCreateProjectChange(key: string) {
-    if (!modalsState.jiraCreate) return;
-    // Project change wipes assignee — accountId is project-scoped (a user
-    // assignable in PROJECTA may not exist as an option in PROJECTB), so
-    // resetting avoids carrying a stale id forward.
-    patchModal('jiraCreate', {
-      projectKey: key,
-      issueTypes: [],
-      assignees: [],
-      assigneeAccountId: ''
-    });
-    if (!key) return;
-    // Issue types + assignable users in parallel — both keyed off the
-    // project. Failures are swallowed because the modal still works with
-    // the hardcoded fallback (Task/Bug/Story) and an unassigned issue.
-    void (async () => {
-      try {
-        const types = await invoke<JiraIssueType[]>('jira_list_issue_types', { projectKey: key });
-        const m = modalsState.jiraCreate;
-        if (!m) return;
-        const preserved = types.find((t) => t.name === m.issueTypeName);
-        const nextName = preserved ? preserved.name : types[0]?.name ?? 'Task';
-        patchModal('jiraCreate', { issueTypes: types, issueTypeName: nextName });
-      } catch {/* fallback to hardcoded list */}
-    })();
-    void (async () => {
-      patchModal('jiraCreate', { assigneesLoading: true });
-      try {
-        const users = await invoke<JiraUserSummary[]>('jira_list_assignable_users', { projectKey: key });
-        // Stable A→Z sort by displayName so the dropdown is scannable.
-        users.sort((a, b) => a.display_name.localeCompare(b.display_name));
-        patchModal('jiraCreate', { assignees: users, assigneesLoading: false });
-      } catch {
-        patchModal('jiraCreate', { assigneesLoading: false });
-      }
-    })();
-  }
-
-  async function submitJiraCreate() {
-    if (!jiraCreateModal) return;
-    const { projectKey, summary, description, issueTypeName, assigneeAccountId, sprintId } = jiraCreateModal;
-    if (!projectKey.trim() || !summary.trim() || !issueTypeName.trim()) return;
-    patchModal('jiraCreate', { busy: true, error: null });
-    try {
-      const created = await invoke<JiraItem>('jira_create_issue', {
-        projectKey: projectKey.trim(),
-        issueType: issueTypeName,
-        summary: summary.trim(),
-        description,
-        assigneeAccountId: assigneeAccountId.trim() || null,
-        sprintId
-      });
-      // Optimistically push the new issue onto every jira column's list,
-      // then refresh to pick up server-side ordering. Each column will
-      // re-fetch with its own filter — the optimistic prepend just hides
-      // the round-trip latency.
-      for (const id of Object.keys(inboxState.jiraItemsByInstance)) {
-        inboxState.jiraItemsByInstance[id] = [
-          created,
-          ...inboxState.jiraItemsByInstance[id]
-        ];
-      }
-      closeModal('jiraCreate');
-      void refreshAllJiraInboxes({ silent: true });
-    } catch (e) {
-      patchModal('jiraCreate', { busy: false, error: typeof e === 'string' ? e : String(e) });
-    }
-  }
-
-  // ---- GitHub Create PR ----
-
-  async function openGithubCreatePr() {
-    /* Pull repo default from the first inbox's filter, same
-       trade-off as openJiraCreateIssue. */
-    const firstId = Object.keys(inboxState.githubFiltersByInstance)[0];
-    const activeRepo = firstId
-      ? inboxState.githubFiltersByInstance[firstId].repo
-      : null;
-    openModal('githubCreatePr', {
-      repo: activeRepo ?? '',
-      repos: inboxState.githubRepoOptions.map((r) => ({
-        owner: r.owner,
-        name: r.name,
-        full_name: r.full_name,
-        default_branch: null
-      })),
-      reposLoading: false,
-      branches: [],
-      branchesLoading: false,
-      base: '',
-      head: '',
-      title: '',
-      body: '',
-      draft: false,
-      compare: null,
-      filesExpanded: false,
-      busy: false,
-      error: null
-    });
-    if (!inboxState.githubRepoOptions.length) {
-      patchModal('githubCreatePr', { reposLoading: true });
-      try {
-        const repos = await invoke<Repository[]>('github_list_repos');
-        inboxState.githubRepoOptions = repos.map((r) => ({
-          owner: r.owner,
-          name: r.name,
-          full_name: r.full_name
-        }));
-        patchModal('githubCreatePr', {
-          repos: repos.map((r) => ({
-            owner: r.owner,
-            name: r.name,
-            full_name: r.full_name,
-            default_branch: r.default_branch
-          })),
-          reposLoading: false
-        });
-      } catch {
-        patchModal('githubCreatePr', { reposLoading: false });
-      }
-    }
-    if (modalsState.githubCreatePr?.repo) {
-      void onGithubPrRepoChange(modalsState.githubCreatePr.repo);
-    }
-  }
-
-  async function onGithubPrRepoChange(full: string) {
-    if (!modalsState.githubCreatePr) return;
-    patchModal('githubCreatePr', {
-      repo: full,
-      branches: [],
-      base: '',
-      head: '',
-      compare: null,
-      branchesLoading: !!full
-    });
-    if (!full) return;
-    const [owner, name] = full.split('/');
-    if (!owner || !name) return;
-    try {
-      const branches = await invoke<RepoBranch[]>('github_list_repo_branches', { owner, repo: name });
-      // Look up the default branch — either from the cached repo list, or via
-      // github_list_repos if we don't have it yet.
-      let defaultBranch =
-        modalsState.githubCreatePr?.repos.find((r) => r.full_name === full)?.default_branch ?? null;
-      if (!defaultBranch) {
-        try {
-          const repos = await invoke<Repository[]>('github_list_repos');
-          defaultBranch = repos.find((r) => r.full_name === full)?.default_branch ?? null;
-        } catch { /* ignore */ }
-      }
-      patchModal('githubCreatePr', {
-        branches,
-        branchesLoading: false,
-        base: defaultBranch ?? branches[0]?.name ?? ''
-      });
-    } catch (e) {
-      patchModal('githubCreatePr', {
-        branchesLoading: false,
-        error: typeof e === 'string' ? e : String(e)
-      });
-    }
-  }
-
-  async function onGithubPrBranchesChange() {
-    const m = modalsState.githubCreatePr;
-    if (!m) return;
-    // Autofill title from head branch name — Title Case sans separators —
-    // only if the user hasn't typed a custom title yet.
-    if (m.head && !m.title.trim()) {
-      const pretty = m.head
-        .replace(/^[a-zA-Z]+\//, '')
-        .replace(/[-_/]+/g, ' ')
-        .trim()
-        .split(' ')
-        .filter(Boolean)
-        .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-        .join(' ');
-      if (pretty) patchModal('githubCreatePr', { title: pretty });
-    }
-    if (!m.repo || !m.base || !m.head || m.base === m.head) {
-      if (m.compare) patchModal('githubCreatePr', { compare: null });
-      return;
-    }
-    const [owner, name] = m.repo.split('/');
-    if (!owner || !name) return;
-    patchModal('githubCreatePr', {
-      compare: {
-        loading: true,
-        error: null,
-        total_commits: 0,
-        ahead_by: 0,
-        behind_by: 0,
-        additions: 0,
-        deletions: 0,
-        commits: [],
-        files: []
-      }
-    });
-    try {
-      const result = await invoke<CompareResult>('github_compare', {
-        owner,
-        repo: name,
-        base: m.base,
-        head: m.head
-      });
-      patchModal('githubCreatePr', { compare: { loading: false, error: null, ...result } });
-    } catch (e) {
-      patchModal('githubCreatePr', {
-        compare: {
-          loading: false,
-          error: typeof e === 'string' ? e : String(e),
-          total_commits: 0,
-          ahead_by: 0,
-          behind_by: 0,
-          additions: 0,
-          deletions: 0,
-          commits: [],
-          files: []
-        }
-      });
-    }
-  }
-
-  async function submitGithubPr() {
-    if (!githubCreatePrModal) return;
-    const { repo, base, head, title, body, draft } = githubCreatePrModal;
-    if (!repo || !base || !head || base === head || !title.trim()) return;
-    const [owner, name] = repo.split('/');
-    if (!owner || !name) return;
-    patchModal('githubCreatePr', { busy: true, error: null });
-    try {
-      const created = await invoke<InboxItem>('github_create_pr', {
-        owner,
-        repo: name,
-        title: title.trim(),
-        body,
-        base,
-        head,
-        draft
-      });
-      closeModal('githubCreatePr');
-      // Optimistically push onto every github column and open focus pane.
-      for (const id of Object.keys(inboxState.itemsByInstance)) {
-        inboxState.itemsByInstance[id] = [created, ...inboxState.itemsByInstance[id]];
-      }
-      openFocusItem(created);
-      view = 'githubApp';
-      void refreshAllInboxes({ silent: true });
-    } catch (e) {
-      patchModal('githubCreatePr', { busy: false, error: typeof e === 'string' ? e : String(e) });
-    }
-  }
+  // --- Create issue / PR (modalActions) ---
+  const openJiraCreateIssue = () => _modalActions.openJiraCreateIssue();
+  const onJiraCreateProjectChange = (k: string) => _modalActions.onJiraCreateProjectChange(k);
+  const submitJiraCreate = () => _modalActions.submitJiraCreate();
+  const openGithubCreatePr = () => _modalActions.openGithubCreatePr();
+  const onGithubPrRepoChange = (f: string) => _modalActions.onGithubPrRepoChange(f);
+  const onGithubPrBranchesChange = () => _modalActions.onGithubPrBranchesChange();
+  const submitGithubPr = () => _modalActions.submitGithubPr(_modalDeps());
+  const githubTokenUrl = () => _modalActions.githubTokenUrl();
 </script>
 
 <svelte:window onkeydown={onKey} />
