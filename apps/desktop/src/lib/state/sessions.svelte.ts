@@ -39,8 +39,126 @@ let _diskWriteTimer: ReturnType<typeof setTimeout> | null = null;
    pause. With the ceiling, we flush at least every 2.5s even if
    changes keep arriving. */
 let _diskLastFlushAt = 0;
-const DISK_DEBOUNCE_MS = 400;
+const DISK_DEBOUNCE_MS = 800;
 const DISK_MAX_DEFER_MS = 2_500;
+
+/* Identity-based dirty tracking — `flushToDisk` was unconditionally
+ * writing ALL session files on every burst (one Promise.all rebuild
+ * of N session files per debounce window). For a 10-session workspace
+ * with one active stream that's 9 wasted writes per flush. We instead
+ * compare each session's object identity against the snapshot from
+ * the last successful write. Every mutator does
+ * `sessionsState.list = sessionsState.list.map(...)` which creates a
+ * new reference for the changed session only — so the ref-equality
+ * check catches exactly the dirty ones. `null` sentinel means "never
+ * written" (first flush after init writes everything once). */
+const _lastWrittenRef: Map<string, ClaudeSession> = new Map();
+let _lastWrittenActiveId: string | null | undefined = undefined; // undefined = never written
+
+// ---- Streaming-delta batch queue ----
+// `appendToLastAssistant` / `appendToLastThinking` get called once per
+// token by the agent CLI's streaming pipeline (~50/s during a hot
+// reply, times N parallel sessions). Each call used to do a full
+// `sessionsState.list.map(...)` rebuild + spread of the last message's
+// `events` array — O(sessions × messages) per token. On a long chat
+// (300 msgs) with 4 sessions open this was the dominant cost during
+// streaming and made the chat itself feel laggy.
+//
+// We coalesce all text / thinking deltas that land within the same
+// animation frame into a single per-session list.map that applies
+// every queued op in one pass. Any other mutator that touches the
+// same `sessionsState.list` reference (`appendToLastTrace`,
+// `attachOutputToLastTrace`, `replaceLastAssistant`,
+// `updateLastAssistantUsage`, `flushSessionsNow`, …) calls
+// `flushStreamQueueNow()` first so the queued deltas land BEFORE the
+// direct mutation — preserving causal order in the event log
+// (text → trace → text shows up that way, not all-text-then-trace).
+type StreamOp =
+  | { kind: 'text'; delta: string }
+  | { kind: 'thinking'; delta: string };
+
+const _streamQueue = new Map<string, StreamOp[]>();
+let _streamRaf: number | null = null;
+
+function _scheduleStreamFlush() {
+  if (_streamRaf !== null) return;
+  if (typeof requestAnimationFrame === 'undefined') {
+    queueMicrotask(_flushStreamQueue);
+    return;
+  }
+  _streamRaf = requestAnimationFrame(() => {
+    _streamRaf = null;
+    _flushStreamQueue();
+  });
+}
+
+function _enqueueStream(sessionId: string, op: StreamOp): void {
+  let ops = _streamQueue.get(sessionId);
+  if (!ops) {
+    ops = [];
+    _streamQueue.set(sessionId, ops);
+  }
+  // Merge consecutive same-kind ops — 50 text tokens collapse to one
+  // op with a long delta, so the flush only walks the events array
+  // once per session instead of once per token.
+  const last = ops[ops.length - 1];
+  if (last && last.kind === op.kind) {
+    last.delta += op.delta;
+  } else {
+    ops.push(op);
+  }
+  _scheduleStreamFlush();
+}
+
+function _flushStreamQueue(): void {
+  if (_streamQueue.size === 0) return;
+  // Snapshot the per-session ops then clear the live queue so any
+  // re-entrant enqueue (e.g. a Svelte effect kicked off by the
+  // list.map below) lands in the NEXT frame's batch instead of being
+  // replayed inside the current pass.
+  const work = new Map(_streamQueue);
+  _streamQueue.clear();
+  sessionsState.list = sessionsState.list.map((s) => {
+    const ops = work.get(s.id);
+    if (!ops || ops.length === 0) return s;
+    const msgs = [...s.messages];
+    const last = msgs[msgs.length - 1];
+    if (!last || last.role !== 'assistant') return s;
+    let content = last.content;
+    let thinking = last.thinking;
+    const events = [...(last.events ?? [])];
+    for (const op of ops) {
+      if (op.kind === 'text') {
+        content += op.delta;
+        const lastEv = events[events.length - 1];
+        if (lastEv && lastEv.kind === 'text') {
+          events[events.length - 1] = { kind: 'text', body: lastEv.body + op.delta };
+        } else {
+          events.push({ kind: 'text', body: op.delta });
+        }
+      } else {
+        thinking = (thinking ?? '') + op.delta;
+      }
+    }
+    msgs[msgs.length - 1] = { ...last, content, thinking, events };
+    return { ...s, messages: msgs };
+  });
+}
+
+/** Drain any queued streaming deltas synchronously. Called at the top
+ *  of every other mutator on `sessionsState.list` so direct mutations
+ *  (trace pills, action cards, edit cards, replaceLastAssistant, …)
+ *  always see the latest text/thinking state instead of stomping over
+ *  a stale snapshot that the rAF batch hadn't applied yet. Also called
+ *  by `flushSessionsNow` so the on-disk copy is current before the
+ *  app quits. */
+export function flushStreamQueueNow(): void {
+  if (_streamRaf !== null) {
+    if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(_streamRaf);
+    _streamRaf = null;
+  }
+  _flushStreamQueue();
+}
 
 function sessionIndexPath(): string { return `${_diskDir}/index.json`; }
 function sessionFilePath(id: string): string { return `${_diskDir}/${id}.json`; }
@@ -53,17 +171,36 @@ function sessionFilePath(id: string): string { return `${_diskDir}/${id}.json`; 
  * file-dump that's not useful to keep in the chat transcript. */
 const EVENT_BYTE_CAP = 64 * 1024;
 
-/** Replace events whose JSON exceeds `EVENT_BYTE_CAP` with a small trace
- *  stub. Applied symmetrically on serialize (so disk stays lean) and on
- *  hydrate (so existing oversize files self-heal at boot). Pure — never
- *  mutates the input. */
+/** Cheap size estimator for a MessageEvent — sums string-length of the
+ *  fields that dominate JSON size, no allocation. Skips the per-event
+ *  JSON.stringify the old check ran on every hydrate — that was the
+ *  dominant cost when loading a 4 MB session at boot. */
+function estimateEventSize(e: MessageEvent): number {
+  switch (e.kind) {
+    case 'text': return e.body?.length ?? 0;
+    case 'trace': {
+      let n = 0;
+      for (const s of e.segments) n += s.length;
+      return n;
+    }
+    case 'edit':
+      return (e.oldText?.length ?? 0) + (e.newText?.length ?? 0);
+    default:
+      return 0;
+  }
+}
+
+/** Replace events whose payload exceeds `EVENT_BYTE_CAP` with a small
+ *  trace stub. Applied symmetrically on serialize (so disk stays lean)
+ *  and on hydrate (so existing oversize files self-heal at boot).
+ *  Pure — never mutates the input. */
 function capMessageEvents(messages: ClaudeMessage[]): ClaudeMessage[] {
   let touchedAny = false;
   const next = messages.map((m) => {
     if (m.role !== 'assistant' || !m.events || m.events.length === 0) return m;
     let touched = false;
     const evs: MessageEvent[] = m.events.map((e) => {
-      const size = JSON.stringify(e).length;
+      const size = estimateEventSize(e);
       if (size <= EVENT_BYTE_CAP) return e;
       touched = true;
       const hint = e.kind === 'edit' ? ` path=${e.filePath}` : '';
@@ -115,26 +252,63 @@ function serializeSession(s: ClaudeSession): object {
 async function flushToDisk(sessions: ClaudeSession[], activeId: string | null) {
   if (!_diskDir) return;
   try {
+    /* Identity-diff against the last-written snapshot — write ONLY the
+       sessions whose object reference changed since last flush. Every
+       mutator allocates a fresh ClaudeSession for the touched id (via
+       `list.map((s) => s.id === id ? {...s, ...} : s)`) so a !== check
+       reliably tells us which ids carry new content. */
+    const ids = sessions.map((s) => s.id);
+    const dirty: ClaudeSession[] = [];
+    const liveIds = new Set<string>(ids);
+    for (const s of sessions) {
+      if (_lastWrittenRef.get(s.id) !== s) dirty.push(s);
+    }
+    /* Index needs a rewrite when the list of ids changed (add / remove /
+       reorder) OR when the active pointer moved. */
+    let indexDirty = activeId !== _lastWrittenActiveId;
+    if (!indexDirty) {
+      if (_lastWrittenActiveId === undefined) {
+        indexDirty = true;
+      } else if (ids.length !== _lastWrittenRef.size) {
+        indexDirty = true;
+      } else {
+        for (const id of _lastWrittenRef.keys()) {
+          if (!liveIds.has(id)) { indexDirty = true; break; }
+        }
+      }
+    }
     /* Parallel per-session writes — sequential `await invoke()` in a
        for-loop was the dominant cost during a force-quit's grace
-       window. With Promise.all every session-file goes out
+       window. With Promise.all every dirty session goes out
        concurrently and we only await the slowest one before the
        index gets written. The index write stays sequential so we
        never persist an ids[] pointing at a file that hasn't landed
        yet. */
-    const ids = sessions.map((s) => s.id);
-    await Promise.all(
-      sessions.map((s) =>
-        invoke('fs_write_file', {
-          path: sessionFilePath(s.id),
-          contents: JSON.stringify(serializeSession(s))
-        })
-      )
-    );
-    await invoke('fs_write_file', {
-      path: sessionIndexPath(),
-      contents: JSON.stringify({ activeId, ids })
-    });
+    if (dirty.length > 0) {
+      await Promise.all(
+        dirty.map((s) =>
+          invoke('fs_write_file', {
+            path: sessionFilePath(s.id),
+            contents: JSON.stringify(serializeSession(s))
+          })
+        )
+      );
+      for (const s of dirty) _lastWrittenRef.set(s.id, s);
+    }
+    /* Prune removed ids from the snapshot map so a re-added id with the
+       same value isn't silently skipped on next flush. */
+    if (_lastWrittenRef.size !== liveIds.size) {
+      for (const id of [..._lastWrittenRef.keys()]) {
+        if (!liveIds.has(id)) _lastWrittenRef.delete(id);
+      }
+    }
+    if (indexDirty) {
+      await invoke('fs_write_file', {
+        path: sessionIndexPath(),
+        contents: JSON.stringify({ activeId, ids })
+      });
+      _lastWrittenActiveId = activeId;
+    }
     _diskLastFlushAt = Date.now();
     if (persistError.sessions) persistError.sessions = null;
   } catch (e) {
@@ -194,6 +368,10 @@ function scheduleDiskWrite() {
  *  can guarantee the on-disk copy reflects the in-memory state
  *  before the next browser tick / quit. */
 export async function flushSessionsNow(): Promise<void> {
+  // Drain any in-flight rAF batch before we serialize — otherwise the
+  // on-disk copy would miss the trailing few tokens that hadn't
+  // landed in state yet.
+  flushStreamQueueNow();
   if (_diskWriteTimer) {
     clearTimeout(_diskWriteTimer);
     _diskWriteTimer = null;
@@ -789,6 +967,10 @@ export function setActiveSessionInInstance(instanceId: string, sessionId: string
 }
 
 export function updateSession(id: string, patch: Partial<ClaudeSession>) {
+  // Drain any queued stream deltas before the patch so `sending: false`
+  // (and similar one-shot toggles) can't land before the tail of the
+  // stream's last few tokens. No-op when the queue is empty.
+  flushStreamQueueNow();
   sessionsState.list = sessionsState.list.map((s) => (s.id === id ? { ...s, ...patch } : s));
 }
 
@@ -1269,45 +1451,21 @@ export function switchAgentKind(sessionId: string, kind: 'claude' | 'cursor') {
 // from the Claude streaming pipeline.
 
 export function appendToLastAssistant(sessionId: string, delta: string) {
-  sessionsState.list = sessionsState.list.map((s) => {
-    if (s.id !== sessionId) return s;
-    const msgs = [...s.messages];
-    const last = msgs[msgs.length - 1];
-    if (last && last.role === 'assistant') {
-      // Mirror into both `content` (legacy concat for search /
-      // replaceLastAssistant / back-compat with old persisted messages)
-      // AND `events` (new ordered array — text deltas merge into the
-      // last text event, or start a new one if the previous event was
-      // a trace block). This preserves interleaving without breaking
-      // any code that still reads `content`.
-      const events = [...(last.events ?? [])];
-      const lastEv = events[events.length - 1];
-      if (lastEv && lastEv.kind === 'text') {
-        events[events.length - 1] = { kind: 'text', body: lastEv.body + delta };
-      } else {
-        events.push({ kind: 'text', body: delta });
-      }
-      msgs[msgs.length - 1] = { ...last, content: last.content + delta, events };
-    }
-    return { ...s, messages: msgs };
-  });
+  // Hot-path during streaming — enqueue into the rAF-coalesced batch
+  // instead of doing a full sessionsState.list.map per token. The
+  // queued op mirrors into both `content` (legacy concat) and
+  // `events` (ordered array) on flush, identical to the previous
+  // synchronous behavior.
+  _enqueueStream(sessionId, { kind: 'text', delta });
 }
 
 /** Mirror of `appendToLastAssistant` for `thinking` content blocks.
     Concatenates onto the last assistant message's `thinking` field
     (lazily initialised). The pill in the chat surface collapses these
     into a "Thinking ✓" button the user can expand to inspect after
-    the final answer lands. */
+    the final answer lands. Batched via the same rAF queue as text. */
 export function appendToLastThinking(sessionId: string, delta: string) {
-  sessionsState.list = sessionsState.list.map((s) => {
-    if (s.id !== sessionId) return s;
-    const msgs = [...s.messages];
-    const last = msgs[msgs.length - 1];
-    if (last && last.role === 'assistant') {
-      msgs[msgs.length - 1] = { ...last, thinking: (last.thinking ?? '') + delta };
-    }
-    return { ...s, messages: msgs };
-  });
+  _enqueueStream(sessionId, { kind: 'thinking', delta });
 }
 
 /** Append a tool-use trace line (already formatted by `formatToolUse`)
@@ -1323,6 +1481,10 @@ export function appendToLastThinking(sessionId: string, delta: string) {
         order, instead of the old "all pills at top + all text below". */
 export function appendToLastTrace(sessionId: string, segment: string) {
   if (!segment.trim()) return;
+  // Drain any queued text/thinking deltas so the trace event lands
+  // AFTER them in `events[]` — preserves the text → trace → text
+  // chronology in the rendered chat.
+  flushStreamQueueNow();
   // Wrap in ‹toolcall›…‹/toolcall› markers so AssistantContent can
   // render the call (and any later-attached output, see
   // attachOutputToLastTrace) as a single unified card with INPUT
@@ -1367,6 +1529,9 @@ export function appendToLastTrace(sessionId: string, segment: string) {
 export function attachOutputToLastTrace(sessionId: string, output: string) {
   const trimmed = output.trim();
   if (!trimmed) return;
+  // Ensure any queued text deltas are flushed first so the splice
+  // operates on the up-to-date trace segments.
+  flushStreamQueueNow();
   // Cap to 1500 chars per result — file dumps and tree outputs would
   // otherwise blow the trace pill out of proportion. The agent's
   // CLI session has the full text anyway.
@@ -1437,6 +1602,9 @@ export function attachOutputToLastTrace(sessionId: string, output: string) {
  *  creation chunks that nominally fit the window but get rounded up
  *  by tokenizer differences. */
 export function updateLastAssistantUsage(sessionId: string, usage: ClaudeUsage) {
+  // Stamp lands on whatever message the last queued delta belongs to,
+  // not the one before it.
+  flushStreamQueueNow();
   sessionsState.list = sessionsState.list.map((s) => {
     if (s.id !== sessionId) return s;
     const cap = contextWindowFor(
@@ -1459,6 +1627,13 @@ export function updateLastAssistantUsage(sessionId: string, usage: ClaudeUsage) 
 }
 
 export function replaceLastAssistant(sessionId: string, content: string) {
+  // We're about to OVERWRITE the last assistant message — drop any
+  // pending stream deltas for this session first so they don't
+  // re-apply on top of the replacement on the next frame. Other
+  // sessions' queued deltas are unaffected.
+  const ops = _streamQueue.get(sessionId);
+  if (ops && ops.length > 0) _streamQueue.delete(sessionId);
+  flushStreamQueueNow();
   sessionsState.list = sessionsState.list.map((s) => {
     if (s.id !== sessionId) return s;
     const msgs = [...s.messages];
@@ -1515,6 +1690,9 @@ export function appendEditEvent(
     status?: 'loading' | 'applied';
   }
 ) {
+  // Same ordering concern as appendToLastTrace — the edit card should
+  // land after any pending stream deltas, not before them.
+  flushStreamQueueNow();
   sessionsState.list = sessionsState.list.map((s) => {
     if (s.id !== sessionId) return s;
     const msgs = [...s.messages];

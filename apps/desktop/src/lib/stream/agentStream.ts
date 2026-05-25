@@ -101,6 +101,62 @@ function emitToolEvent(event: ToolStreamEvent): void {
 const toolNameById: Map<string, Map<string, string>> = new Map();
 const TOOL_NAME_CAP = 256;
 
+/** Per-session map of Claude CLI background-task ids → output paths.
+ *  Populated when we sniff a `Command running in background with ID:`
+ *  line in a `tool_result`. Exposed via `bgTasksForSession` /
+ *  `unwatchBgTasksForSession` so +page.svelte can drop the registry
+ *  when the user moves on (types into the chat, deletes the session)
+ *  — otherwise the auto-fire on `claude:bg_done` would arrive late
+ *  and surprise the agent mid-other-conversation. */
+const claudeBgTasksBySession: Map<string, Map<string, string>> = new Map();
+
+const BG_ID_RE = /Command running in background with ID:\s*(\S+)/;
+const BG_OUTPUT_RE = /Output is being written to:\s*(\S+)/;
+
+/** Parse a Bash tool_result for the bg-task spawn markers and, if
+ *  found, register a Tauri-side watcher. Idempotent on `task_id` —
+ *  the Rust side replaces a prior watcher with the same id. */
+export function maybeRegisterClaudeBgTask(sessionId: string, rawResultText: string): void {
+  const idMatch = BG_ID_RE.exec(rawResultText);
+  const pathMatch = BG_OUTPUT_RE.exec(rawResultText);
+  if (!idMatch || !pathMatch) return;
+  const taskId = idMatch[1];
+  const outputPath = pathMatch[1];
+  let bySession = claudeBgTasksBySession.get(sessionId);
+  if (!bySession) {
+    bySession = new Map();
+    claudeBgTasksBySession.set(sessionId, bySession);
+  }
+  bySession.set(taskId, outputPath);
+  void invoke('claude_bg_watch', { sessionId, taskId, outputPath }).catch((e) => {
+    console.warn('[claude_bg] watch failed', taskId, e);
+  });
+}
+
+/** Drop the watch for a specific task id. Called from +page.svelte's
+ *  `claude:bg_done` listener after it fires the silent continuation,
+ *  so a second mtime-stale tick (Rust-side races) doesn't double-fire. */
+export function forgetBgTask(sessionId: string, taskId: string): void {
+  const bySession = claudeBgTasksBySession.get(sessionId);
+  if (!bySession) return;
+  bySession.delete(taskId);
+  if (bySession.size === 0) claudeBgTasksBySession.delete(sessionId);
+  void invoke('claude_bg_unwatch', { taskId }).catch(() => { /* noop */ });
+}
+
+/** Bulk-cancel every active watch for a session. Use when the user
+ *  deletes the session or starts typing a fresh message into a chat
+ *  that still has live bg tasks (manual interaction = "I'm driving,
+ *  don't surprise me with a silent auto-reply"). */
+export function unwatchBgTasksForSession(sessionId: string): void {
+  const bySession = claudeBgTasksBySession.get(sessionId);
+  if (!bySession) return;
+  for (const taskId of bySession.keys()) {
+    void invoke('claude_bg_unwatch', { taskId }).catch(() => { /* noop */ });
+  }
+  claudeBgTasksBySession.delete(sessionId);
+}
+
 function rememberToolName(sessionId: string, toolUseId: string, toolName: string) {
   if (!toolUseId) return;
   let inner = toolNameById.get(sessionId);
@@ -339,6 +395,16 @@ export function handleStreamEvent(
           });
         }
         if (!raw) continue;
+        // Detect Claude CLI background-task spawn: the Bash tool with
+        // `run_in_background:true` returns a tool_result whose text
+        // includes both an ID and the output-file path. Without this
+        // hook the agent's turn ends right after the spawn message
+        // (next streaming event is end-of-turn) and the bg task runs
+        // forever with no one to wake the agent when it finishes.
+        // `claude_bg_watch` polls the output file and emits
+        // `claude:bg_done` on idle; +page.svelte listens for that
+        // event and fires a silent continuation prompt.
+        maybeRegisterClaudeBgTask(sessionId, raw);
         // Attach to the last trace event's last segment — visually
         // pairs the command with its output inside the same "✓ N
         // steps" pill (so expanding the pill shows: command →

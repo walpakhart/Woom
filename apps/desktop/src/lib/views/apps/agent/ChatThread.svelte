@@ -46,18 +46,70 @@
     sessionsState.list.find((s) => s.id === sessionsState.activeIds[p.kind]) ?? null
   );
 
-  /* Index of the LAST message in the visible stream (skipping hidden
-   *  orchestration messages). Used to anchor action cards + SDD card
-   *  inline at the natural conversation position — they render right
-   *  after the latest message so they scroll WITH the chat instead
-   *  of living in a separate trailing block at the bottom. */
-  const lastVisibleIndex = $derived.by(() => {
-    const list = sess?.messages ?? [];
-    for (let i = list.length - 1; i >= 0; i--) {
-      if (!list[i].hidden) return i;
-    }
-    return -1;
+  /* Render window. Long conversations (100+ messages with rich
+   *  markdown + tool traces) brought chat-switch animation to a
+   *  crawl — Markdown + syntax-highlight compile cost scales linearly
+   *  with rendered message count. Show the last `visibleCount` of
+   *  the *non-hidden* messages by default; "Show N earlier" button
+   *  unfurls more in WINDOW_STEP chunks. Budgeted by non-hidden so
+   *  SDD-heavy sessions (every phase prompt + response is `hidden`
+   *  orchestration traffic) don't end up with a window of all-hidden
+   *  entries and a blank chat. Reset on session switch. */
+  const WINDOW_STEP = 30;
+  let visibleCount = $state(WINDOW_STEP);
+  $effect(() => {
+    void sess?.id;
+    visibleCount = WINDOW_STEP;
   });
+  /* All five window metrics — nonHiddenTotal / windowStart /
+     visibleNonHiddenCount / hiddenAboveCount / lastVisibleIndex —
+     are derived from the same `sess.messages` array. Five separate
+     `$derived.by` loops over the full list (one per metric) was a
+     hot spot during streaming: every token delta produced a new
+     `sessionsState.list` reference, all five derivations re-ran,
+     each walking 100+ messages. Folding them into ONE pass cuts
+     re-derive cost by 5×. Single backward walk fills tailIndex
+     (lastVisibleIndex) + collects up to `visibleCount` non-hidden
+     entries to fix windowStart; a quick forward sweep from
+     windowStart finishes visibleNonHiddenCount. */
+  const windowMetrics = $derived.by(() => {
+    const msgs = sess?.messages ?? [];
+    let nonHiddenTotal = 0;
+    let lastVisibleIndex = -1;
+    let windowStart = 0;
+    let seenFromTail = 0;
+    let foundWindowStart = false;
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      if (msgs[i].hidden) continue;
+      if (lastVisibleIndex === -1) lastVisibleIndex = i;
+      nonHiddenTotal++;
+      if (!foundWindowStart) {
+        seenFromTail++;
+        if (seenFromTail >= visibleCount) {
+          windowStart = i;
+          foundWindowStart = true;
+        }
+      }
+    }
+    if (!foundWindowStart) windowStart = 0;
+    let visibleNonHiddenCount = 0;
+    for (let i = windowStart; i < msgs.length; i++) {
+      if (!msgs[i].hidden) visibleNonHiddenCount++;
+    }
+    return {
+      nonHiddenTotal,
+      lastVisibleIndex,
+      windowStart,
+      visibleNonHiddenCount,
+      hiddenAboveCount: nonHiddenTotal - visibleNonHiddenCount,
+    };
+  });
+  const nonHiddenTotal = $derived(windowMetrics.nonHiddenTotal);
+  const windowStart = $derived(windowMetrics.windowStart);
+  const visibleNonHiddenCount = $derived(windowMetrics.visibleNonHiddenCount);
+  const hiddenAboveCount = $derived(windowMetrics.hiddenAboveCount);
+  const lastVisibleIndex = $derived(windowMetrics.lastVisibleIndex);
+  const visibleMessages = $derived(sess?.messages.slice(windowStart) ?? []);
 
   const elapsed = $derived.by(() => {
     if (!p.thinkingStartedAt || !sess?.sending) return '';
@@ -68,6 +120,69 @@
   });
 
   const repoCwd = $derived(sess?.worktreePath ?? sess?.cwd ?? null);
+
+  /* Viewport-based lazy mount. Long chats (100+ messages with rich
+     Markdown + many trace events per assistant turn) used to render
+     every body upfront — Markdown parse + syntax decorate is the
+     dominant cost when opening / switching to a long session. We
+     observe each <article> with IntersectionObserver (rootMargin
+     extended ±1200px so scroll feels smooth) and only mount the
+     heavy body content once an article has intersected the viewport
+     at least once. Sticky: once an article has been seen it stays
+     mounted forever (avoids height-shift jank on scroll-up). The
+     last few messages near the tail (lastVisibleIndex - FRESH_TAIL)
+     are always eager so the actively streaming reply + recent
+     context render immediately on chat open. */
+  const FRESH_TAIL = 5;
+  let visibleArticleSet = $state(new Set<number>());
+  const articleObserver: IntersectionObserver | null = (() => {
+    if (typeof IntersectionObserver === 'undefined') return null;
+    return new IntersectionObserver(
+      (entries) => {
+        let added = false;
+        const next = new Set(visibleArticleSet);
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          const ds = (entry.target as HTMLElement).dataset.msgIdx;
+          if (!ds) continue;
+          const idx = Number(ds);
+          if (!Number.isFinite(idx) || idx < 0) continue;
+          if (!next.has(idx)) {
+            next.add(idx);
+            added = true;
+          }
+        }
+        if (added) visibleArticleSet = next;
+      },
+      { rootMargin: '1200px 0px 1200px 0px', threshold: 0 }
+    );
+  })();
+  /* Reset the seen-set when switching sessions; the indices belong to
+     the previous session's `messages` array and would otherwise leak
+     across so e.g. "I've already seen index 47" prevents the new
+     session's index-47 message from being treated as off-viewport. */
+  $effect(() => {
+    void sess?.id;
+    visibleArticleSet = new Set<number>();
+  });
+  function observeArticle(node: HTMLElement, idx: number) {
+    node.dataset.msgIdx = String(idx);
+    if (articleObserver) articleObserver.observe(node);
+    return {
+      update(newIdx: number) {
+        node.dataset.msgIdx = String(newIdx);
+      },
+      destroy() {
+        if (articleObserver) articleObserver.unobserve(node);
+      },
+    };
+  }
+  function shouldRenderBody(absIdx: number): boolean {
+    if (!articleObserver) return true; // SSR / no-IO fallback — render all
+    if (visibleArticleSet.has(absIdx)) return true;
+    if (absIdx >= lastVisibleIndex - FRESH_TAIL) return true;
+    return false;
+  }
 
   /* Right-click context menu on chat messages. Captures the message
      + its index so action closures can address it after the menu
@@ -405,6 +520,10 @@
   const anchoredQuestionIds = $derived.by(() => {
     const ids = new Set<string>();
     if (!sess) return ids;
+    // Early-exit: no pending question actions → no anchors possible.
+    // Skips O(messages × events × segments) regex traversal that
+    // otherwise re-runs on every streaming delta.
+    if (!sess.actions.some((a) => a.kind === 'question' && a.status === 'pending')) return ids;
     for (const msg of sess.messages) {
       if (!msg.events) continue;
       for (const ev of msg.events) {
@@ -588,18 +707,34 @@
       {/each}
     {/snippet}
 
-    {#each sess.messages as msg, i (i)}
+    {#if hiddenAboveCount > 0}
+      <button
+        class="ct-load-more mono"
+        onclick={() => (visibleCount = Math.min(nonHiddenTotal, visibleCount + WINDOW_STEP))}
+        title="Render the previous {Math.min(WINDOW_STEP, hiddenAboveCount)} messages"
+      >
+        + Show {Math.min(WINDOW_STEP, hiddenAboveCount)} earlier {hiddenAboveCount === 1 ? 'message' : 'messages'}
+        <span class="ct-load-more-sub">({visibleNonHiddenCount} of {nonHiddenTotal} shown)</span>
+      </button>
+    {/if}
+    {#each visibleMessages as msg, sliceI (windowStart + sliceI)}
+      {@const i = windowStart + sliceI}
       {#if msg.hidden}
         <!-- Hidden orchestration traffic (SDD phase prompts) — agent
              CLI sees it via --resume, the user doesn't. Skipped entirely. -->
       {:else if msg.role === 'user'}
         <article
           class="msg msg--user"
+          use:observeArticle={i}
           oncontextmenu={(e) => openMsgCtxMenu(e, msg, i)}
         >
           <div class="msg-byline msg-byline--user">@you</div>
           <div class="msg-body">
-            <Markdown source={msg.content} onOpenFile={p.onOpenFile} />
+            {#if shouldRenderBody(i)}
+              <Markdown source={msg.content} onOpenFile={p.onOpenFile} />
+            {:else}
+              <div class="msg-stub" aria-hidden="true">{msg.content.slice(0, 80)}…</div>
+            {/if}
             {#if msg.images && msg.images.length > 0}
               <div class="msg-images">
                 {#each msg.images as img (img.path)}
@@ -643,6 +778,7 @@
       {:else if msg.role === 'assistant'}
         <article
           class="msg msg--assistant"
+          use:observeArticle={i}
           oncontextmenu={(e) => openMsgCtxMenu(e, msg, i)}
         >
           <!-- Floating drag handle. Pinned to the article's top-right
@@ -676,7 +812,14 @@
                 <pre class="thinking-body">{msg.thinking}</pre>
               </details>
             {/if}
-            {#if msg.events && msg.events.length > 0}
+            {#if !shouldRenderBody(i)}
+              <!-- Off-viewport placeholder. Approximate height keeps the
+                   scrollbar honest until the article scrolls within the
+                   IntersectionObserver buffer and the real body mounts. -->
+              <div class="msg-stub msg-stub--assistant" aria-hidden="true">
+                {msg.content.slice(0, 160) || '…'}
+              </div>
+            {:else if msg.events && msg.events.length > 0}
               {#each msg.events as ev, ei (ei)}
                 {#if ev.kind === 'text'}
                   {#if ev.body}<Markdown source={ev.body} onOpenFile={p.onOpenFile} />{/if}
@@ -887,7 +1030,7 @@
           </div>
         </article>
       {:else}
-        <article class="msg msg--system">
+        <article class="msg msg--system" use:observeArticle={i}>
           <div class="msg-system">{msg.content}</div>
           {#if i === lastVisibleIndex}{@render inlineActions()}{/if}
         </article>
@@ -904,6 +1047,29 @@
     overflow-y: auto;
     padding: 28px 28px 12px;
     display: flex; flex-direction: column; gap: 24px;
+  }
+  .ct-load-more {
+    align-self: center;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 14px;
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--accent) 6%, transparent);
+    border: 1px dashed color-mix(in srgb, var(--border) 80%, transparent);
+    color: var(--text-2);
+    font-size: 11px;
+    cursor: pointer;
+    transition: background 140ms, border-color 140ms;
+  }
+  .ct-load-more:hover {
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+    color: var(--text);
+  }
+  .ct-load-more-sub {
+    opacity: 0.6;
+    font-size: 10px;
   }
 
   /* v7 — 76px byline column + 1fr body. */
@@ -933,6 +1099,32 @@
   }
 
   .msg-body { min-width: 0; position: relative; }
+
+  /* Off-viewport placeholder for lazy-mounted message bodies.
+     Shows a single-line excerpt so scroll position stays meaningful
+     and a11y tools have something to read; the real <Markdown /> +
+     trace tree mounts as soon as the IntersectionObserver fires
+     (rootMargin ±1200px so this swap-in happens well before the
+     stub actually scrolls into view). */
+  .msg-stub {
+    color: var(--text-2);
+    font-size: 13.5px;
+    line-height: 1.6;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-height: 22px;
+    opacity: 0.6;
+    font-style: italic;
+  }
+  .msg-stub--assistant {
+    min-height: 80px;
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
+    -webkit-box-orient: vertical;
+  }
   .msg-body :global(p) { margin: 0 0 8px; line-height: 1.6; color: var(--text-0); }
   .msg-body :global(p:last-child) { margin-bottom: 0; }
   .msg-body :global(strong) { color: var(--text-0); font-weight: 600; }
