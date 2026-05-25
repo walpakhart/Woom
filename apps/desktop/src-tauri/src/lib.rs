@@ -33,6 +33,7 @@ mod sdd_meta;
 mod sdd_phase_config;
 mod sdd_phase_io;
 mod sdd_plan;
+mod sdd_plan_helpers;
 mod sdd_prompts;
 mod sdd_substep;
 mod sdd_time;
