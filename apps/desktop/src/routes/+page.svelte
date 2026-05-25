@@ -52,6 +52,7 @@
   import { handleInboxOrViewMcp } from './appNavigationInbox';
   import { handleSlashCommand as handleSlashCommandImpl } from './handleSlashCommand';
   import * as _modalActions from './modalActions';
+  import * as _agentDrop from './agentDrop';
   import {
     actionMatchesIpcParams,
     buildActionFromIpcRequest,
@@ -1193,7 +1194,7 @@
     // Runs before biometric unlock so sessions are ready when the lock
     // screen clears.
     const appDataDir = await invoke<string>('app_data_dir');
-    cachedAppDataDir = appDataDir;
+    _agentDrop.setCachedAppDataDir(appDataDir);
     await initSessionsFromDisk(appDataDir);
     /* Same migration shape for canvases (M1 §1.1). `restoreCanvasState`
        above already populated `canvasState.index` and `byInstance`
@@ -1490,279 +1491,22 @@
       preview / direct File blob drop). Resolved lazily once and cached — the
       OS path is stable for the install. Lives under $APPDATA which is in the
       `assetProtocol.scope` so `convertFileSrc` can render thumbnails. */
-  let cachedAppDataDir: string | null = null;
-  async function getAttachmentDir(): Promise<string> {
-    if (!cachedAppDataDir) {
-      cachedAppDataDir = await invoke<string>('app_data_dir');
-    }
-    return `${cachedAppDataDir}/chat-attachments`;
-  }
-
-  /** Read a Blob/File as base64 (without the `data:...;base64,` prefix). Uses
-      FileReader to avoid the `String.fromCharCode.apply` stack-overflow that
-      bites on multi-MB images. */
-  /* blobToBase64 moved to ./page_helpers.ts */
-
-  /** Save a list of in-memory image blobs to disk + attach them to a session.
-      Used for Files drops (Cmd+Shift+5 floating preview, drag from another
-      browser tab) and clipboard paste — anywhere we have bytes but no source
-      path. Sanitises the filename and prefixes a timestamp so two screenshots
-      from the same minute don't collide. */
-  async function attachBlobsToSession(sessionId: string, blobs: { name: string; type: string; blob: Blob }[]): Promise<number> {
-    if (blobs.length === 0) return 0;
-    const dir = await getAttachmentDir();
-    const savedPaths: string[] = [];
-    for (const item of blobs) {
-      try {
-        const b64 = await blobToBase64(item.blob);
-        // Sanitise: drop slashes (path traversal), collapse whitespace, keep
-        // unicode. Falls back to a generic name when the blob has none.
-        const safe = (item.name || `image.${guessExt(item.type)}`)
-          .replace(/[/\\]+/g, '_')
-          .replace(/\s+/g, ' ')
-          .trim();
-        const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-        const path = `${dir}/${stamp}-${safe}`;
-        await invoke('fs_write_bytes', { path, base64: b64 });
-        savedPaths.push(path);
-      } catch (err) {
-        console.warn('attach blob failed', err);
-      }
-    }
-    if (savedPaths.length === 0) return 0;
-    return attachPathsToSession(sessionId, savedPaths);
-  }
-
-  /* guessExt moved to ./page_helpers.ts */
-
-  /** Cmd+V of one or more images in a chat composer. Routes through the same
-      blob → on-disk → mention pipeline as drag-drop, so the resulting
-      attachment chip strip + transcript thumbnail look identical. */
-  async function pasteImagesIntoColumn(
-    instanceId: string,
-    kind: 'claude' | 'cursor',
-    blobs: { name: string; type: string; blob: Blob }[]
-  ): Promise<number> {
-    if (blobs.length === 0) return 0;
-    // Resolve target the same way `onAgentDrop` does: active session in this
-    // column, then any session bound here, then a fresh one of this kind.
-    // Prefer `activeIds[kind]` since that's what ChatThread renders;
-    // `activeByInstance[instanceId]` only updates when the focused
-    // session has an `agentInstanceId`, which leaves floating sessions
-    // out of sync.
-    const activeId =
-      sessionsState.activeIds[kind] ?? sessionsState.activeByInstance[instanceId];
-    let target = activeId ? sessionsState.list.find((s) => s.id === activeId) ?? null : null;
-    if (!target) target = sessionsState.list.find((s) => s.agentInstanceId === instanceId) ?? null;
-    if (!target) {
-      const id = newClaudeSession({ agentKind: kind, agentInstanceId: instanceId });
-      target = sessionsState.list.find((s) => s.id === id) ?? null;
-    }
-    if (!target) return 0;
-    const n = await attachBlobsToSession(target.id, blobs);
-    if (n > 0) setActiveSessionInInstance(instanceId, target.id);
-    return n;
-  }
+  // attachBlobsToSession + pasteImagesIntoColumn moved to ./agentDrop.ts
+  // (wave-35 split).
+  const attachBlobsToSession = (sessionId: string, blobs: { name: string; type: string; blob: Blob }[]) =>
+    _agentDrop.attachBlobsToSession(sessionId, blobs);
+  const pasteImagesIntoColumn = (instanceId: string, kind: 'claude' | 'cursor', blobs: { name: string; type: string; blob: Blob }[]) =>
+    _agentDrop.pasteImagesIntoColumn(instanceId, kind, blobs);
 
   /* imageFilesFromEvent moved to ./page_helpers.ts */
 
-  function onAgentDrop(instanceId: string, kind: 'claude' | 'cursor', e: DragEvent) {
-    e.preventDefault();
-
-    // Pick (or create) the drop target: the active session in THIS column
-    // instance. Falls back to any session bound to this instance, then a
-    // floating session of this kind (adopted), then a fresh one.
-    //
-    // Prefer `activeIds[kind]` over `activeByInstance[instanceId]` —
-    // ChatThread reads the former, and `focusSession` only writes the
-    // latter for sessions that already have an `agentInstanceId`. A
-    // floating chat (agentInstanceId === null) appears in the column
-    // and its messages render correctly, but the per-instance pointer
-    // stays on whatever was previously bound — so drops landed in the
-    // wrong session. Reading activeIds[kind] keeps drop target ==
-    // visible chat regardless of binding state.
-    const pickTarget = (): ClaudeSession | null => {
-      const activeId =
-        sessionsState.activeIds[kind] ?? sessionsState.activeByInstance[instanceId];
-      let t = activeId ? sessionsState.list.find((s) => s.id === activeId) ?? null : null;
-      if (!t) t = sessionsState.list.find((s) => s.agentInstanceId === instanceId) ?? null;
-      if (!t) {
-        // Adopt a floating session of the same kind if one exists.
-        t = sessionsState.list.find(
-          (s) => s.agentKind === kind && s.agentInstanceId === null
-        ) ?? null;
-        if (t) updateSession(t.id, { agentInstanceId: instanceId });
-      }
-      if (!t) {
-        const id = newClaudeSession({ agentKind: kind, agentInstanceId: instanceId });
-        t = sessionsState.list.find((s) => s.id === id) ?? null;
-      }
-      return t;
-    };
-
-    // 1) Internal drag (file from Editor tree, or ticket from inbox). The
-    //    module-state payload is the primary signal; we also read the
-    //    custom mime as a fallback in case the dragend handler raced ahead
-    //    of this drop in some WKWebView edge cases.
-    const internal = dragState.payload;
-    let filePayload: { path: string; isDir: boolean; name: string } | null = null;
-    if (internal && internal.source === 'file') {
-      filePayload = { path: internal.path, isDir: internal.isDir, name: internal.name };
-    } else {
-      const raw = e.dataTransfer?.getData('application/x-woom-file');
-      if (raw) {
-        try {
-          const p = JSON.parse(raw) as { path: string; isDir: boolean; name: string };
-          if (p && typeof p.path === 'string') filePayload = p;
-        } catch { /* malformed mime payload — ignore */ }
-      }
-    }
-    if (filePayload) {
-      const { path, isDir, name } = filePayload;
-      const target = pickTarget();
-      if (target) {
-        // Prefer the session's cwd (set by user or the tree root) for a clean
-        // relative path; fall back to absolute if the file isn't inside cwd.
-        const cwd = target.cwd ?? '';
-        const rel = cwd && path.startsWith(cwd + '/') ? path.slice(cwd.length + 1) : path;
-        const display = '@' + rel + (isDir ? '/' : '');
-        const mention: Mention = {
-          source: 'file',
-          externalId: rel + (isDir ? '/' : ''),
-          title: name,
-          body: path,
-          isDir
-        };
-        const sep = target.input && !target.input.endsWith(' ') ? ' ' : '';
-        updateSession(target.id, {
-          input: target.input + sep + display + ' ',
-          mentions: [...target.mentions, mention],
-          // Auto-bind cwd to the repo that file lives in, if not already set.
-          cwd: target.cwd ?? deriveCwd(path, isDir)
-        });
-        setActiveSessionInInstance(instanceId, target.id);
-      }
-      clearAgentDragState();
-      setDragPayload(null);
-      justDragged = true;
-      setTimeout(() => (justDragged = false), 200);
-      return;
-    }
-
-    // 2) OS file drop from Finder / Downloads / other apps. macOS (and most
-    //    platforms) expose absolute paths via `text/uri-list` — a newline-
-    //    separated list of `file://` URIs. The browser's `.files` property
-    //    gives File blobs but no paths, so we parse URIs ourselves.
-    const uriList = e.dataTransfer?.getData('text/uri-list') || '';
-    if (uriList) {
-      const paths = uriList
-        .split(/\r?\n/)
-        .map((l) => l.trim())
-        .filter((l) => l && !l.startsWith('#') && l.startsWith('file://'))
-        .map((u) => {
-          try {
-            return decodeURIComponent(u.replace(/^file:\/\//, ''));
-          } catch {
-            return '';
-          }
-        })
-        .filter(Boolean);
-      if (paths.length > 0) {
-        const target = pickTarget();
-        if (target) {
-          const n = attachPathsToSession(target.id, paths);
-          if (n > 0) setActiveSessionInInstance(instanceId, target.id);
-        }
-        clearAgentDragState();
-        justDragged = true;
-        setTimeout(() => (justDragged = false), 200);
-        return;
-      }
-    }
-
-    // 2.5) In-memory image File blobs. macOS Cmd+Shift+5 floating preview
-    //    drag exposes the screenshot as a `File` in `dataTransfer.files` but
-    //    omits `text/uri-list` (the file isn't necessarily on disk yet). Same
-    //    happens for cross-tab drags from a browser. Save the bytes ourselves
-    //    under $APPDATA/chat-attachments/ so we have a stable absolute path
-    //    that asset:// can serve and the agent CLI can read.
-    const imageBlobs = imageFilesFromEvent(e);
-    if (imageBlobs.length > 0) {
-      const target = pickTarget();
-      if (target) {
-        void attachBlobsToSession(target.id, imageBlobs).then((n) => {
-          if (n > 0) setActiveSessionInInstance(instanceId, target.id);
-        });
-      }
-      clearAgentDragState();
-      justDragged = true;
-      setTimeout(() => (justDragged = false), 200);
-      return;
-    }
-
-    // 3) Ticket / Sentry drop from inbox. The file branch above already
-    //    returned, so `internal` is one of the issue-shaped variants
-    //    here. Chat-message payloads are also rejected — agent columns
-    //    don't accept "drop a message onto myself" (we'd just create a
-    //    self-reference loop). Chat messages drop onto Canvas only.
-    if (!internal || internal.source === 'file' || internal.source === 'chat-message') {
-      clearAgentDragState();
-      return;
-    }
-    let mention: Mention;
-    if (internal.source === 'github') {
-      mention = {
-        source: 'github',
-        externalId: externalId(internal.item),
-        title: internal.item.title,
-        body: internal.item.body
-      };
-    } else if (internal.source === 'jira') {
-      mention = {
-        source: 'jira',
-        externalId: internal.item.key,
-        title: internal.item.summary,
-        body: internal.item.description
-      };
-    } else {
-      // Sentry — encode the short_id (or numeric id fallback) so Claude
-      // can hand it to `mcp__sentry__get_issue` without further parsing.
-      const issue = internal.item;
-      const ref = issue.short_id || issue.id;
-      const summary = [
-        issue.metadata_type && issue.metadata_value
-          ? `${issue.metadata_type}: ${issue.metadata_value}`
-          : issue.title,
-        issue.culprit ? `culprit: ${issue.culprit}` : null,
-        `level: ${issue.level} · status: ${issue.status}`,
-        `project: ${issue.project_slug} · last seen: ${issue.last_seen}`,
-        issue.permalink ? `url: ${issue.permalink}` : null
-      ]
-        .filter(Boolean)
-        .join('\n');
-      mention = {
-        source: 'sentry',
-        externalId: ref,
-        title: issue.title,
-        body: summary
-      };
-    }
-
-    const target = pickTarget();
-    if (target) {
-      const sep = target.input && !target.input.endsWith(' ') ? ' ' : '';
-      updateSession(target.id, {
-        input: target.input + sep + `@${mention.externalId} `,
-        mentions: [...target.mentions, mention]
-      });
-      setActiveSessionInInstance(instanceId, target.id);
-    }
-
-    clearAgentDragState();
-    setDragPayload(null);
-    justDragged = true;
-    setTimeout(() => (justDragged = false), 200);
-  }
+  // onAgentDrop moved to ./agentDrop.ts (wave-35 split). Deps inject
+  // route-local justDragged setter + clearAgentDragState closure.
+  const onAgentDrop = (instanceId: string, kind: 'claude' | 'cursor', e: DragEvent) =>
+    _agentDrop.onAgentDrop(instanceId, kind, e, {
+      setJustDragged: (v) => { justDragged = v; },
+      clearAgentDragState,
+    });
 
   /** Build a Mention from an inbox payload. Mirrors the shape the
    *  drag→drop pipeline produces in `onAgentDrop`, so the click-driven
@@ -2765,7 +2509,7 @@
       const c = ensureCanvasLoaded(sess.linkedCanvasId);
       if (c && (c.shapes.length > 0 || c.edges.length > 0)) {
         try {
-          const dir = await getAttachmentDir();
+          const dir = await _agentDrop.getAttachmentDir();
           const path = await saveCanvasScreenshot(c, dir);
           if (path) imagePaths.push(path);
         } catch (err) {
