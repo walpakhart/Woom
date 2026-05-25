@@ -1391,6 +1391,41 @@
     </div>
   {/if}
 
+  {#if p.viewOnly && stage.kind === 'failed'}
+    <!-- ViewOnly failure footer — popover-opened failed workspaces
+         need Retry / Accept / Skip / Rollback affordances even in
+         the standalone overlay; otherwise the failure card opens
+         read-only and the user has no recovery path. -->
+    <footer class="sdd-actions">
+      {#if skipMode}
+        <button type="button" class="sdd-btn" onclick={cancelSkip}>cancel</button>
+        <button
+          type="button"
+          class="sdd-btn sdd-btn--primary"
+          disabled={skipDraft.trim().length < 5}
+          onclick={submitSkip}
+          title="⌘↵ to submit"
+        >Skip with reason</button>
+      {:else if acceptMode}
+        <button type="button" class="sdd-btn" onclick={cancelAccept}>cancel</button>
+        <button
+          type="button"
+          class="sdd-btn sdd-btn--primary"
+          disabled={acceptDraft.trim().length < 5}
+          onclick={submitAccept}
+          title="⌘↵ to submit — flips status to done"
+        >Accept with reason</button>
+      {:else}
+        <button class="sdd-btn sdd-btn--primary" disabled={advanceClicked} onclick={onRetry}>Retry phase</button>
+        <button class="sdd-btn" onclick={startAccept} title="Mark this failed phase as done with an audit reason">
+          ✓ Accept anyway
+        </button>
+        <button class="sdd-btn" onclick={startSkip} title="Force-skip with audit reason">Skip phase</button>
+        <button class="sdd-btn" onclick={onRollbackFailed} title="Reset working tree to pre-phase commit">↶ Rollback</button>
+      {/if}
+    </footer>
+  {/if}
+
   {#if !p.viewOnly}
   <footer class="sdd-actions">
     {#if editMode}
