@@ -209,7 +209,7 @@ export interface SddPhase {
   plan_body?: string | null;
   /** Three-call mode artifact — `phases/<slug>/verify.json` parsed.
    *  Null when missing. See `spec-1` FR-4. */
-  verify?: VerifyOutput | null;
+  verify?: import('./sdd_commands.svelte').VerifyOutput | null;
 }
 
 export interface SddWorkspace {
@@ -782,295 +782,30 @@ export {
  *  numbers in the order they should end up (1-indexed final positions).
  *  Rust renumbers and renames the markdown files via a two-pass
  *  staging strategy. */
-export async function reorderSddPhases(
-  id: string,
-  new_order: number[]
-): Promise<SddWorkspace | null> {
-  try {
-    const ws = await invoke<SddWorkspace>('sdd_reorder_phases', { id, new_order });
-    upsertWorkspace(ws);
-    return ws;
-  } catch (e) {
-    console.warn('sdd_reorder_phases failed', e);
-    return null;
-  }
-}
-
-/** v2 only — delete a phase by number. Rejected with Err if the phase
- *  is currently `running`. Subsequent phases shift down by one. */
-export async function deleteSddPhase(
-  id: string,
-  phase: number
-): Promise<SddWorkspace | null> {
-  try {
-    const ws = await invoke<SddWorkspace>('sdd_delete_phase', { id, phase });
-    upsertWorkspace(ws);
-    return ws;
-  } catch (e) {
-    console.warn('sdd_delete_phase failed', e);
-    return null;
-  }
-}
-
-/** v2 only — run the acceptance checks for `phase` and persist the
- *  per-phase result file. Backend flips phase frontmatter to
- *  `done` / `failed` based on the aggregate verdict; on
- *  `manual_pending` the status stays `running` and the user clears
- *  the gate via `markSddManualCheck`.
- *
- *  Resolves with the fresh workspace snapshot. The result file
- *  itself is read separately via `readPhaseAcceptance`. */
-export async function runSddVerification(
-  id: string,
-  phase: number
-): Promise<SddWorkspace | null> {
-  try {
-    const ws = await invoke<SddWorkspace>('sdd_run_verification', { id, phase });
-    upsertWorkspace(ws);
-    return ws;
-  } catch (e) {
-    console.warn('sdd_run_verification failed', e);
-    return null;
-  }
-}
-
-/** v2 only — resolve a manual acceptance check. `passed = true` flips
- *  it to `passed`, `false` to `failed`. The backend recomputes the
- *  aggregate verdict and (if it now flips to a terminal state)
- *  updates phase frontmatter. */
-export async function markSddManualCheck(
-  id: string,
-  phase: number,
-  check_index: number,
-  passed: boolean
-): Promise<SddWorkspace | null> {
-  try {
-    const ws = await invoke<SddWorkspace>('sdd_mark_manual_check', {
-      id,
-      phase,
-      check_index,
-      passed,
-    });
-    upsertWorkspace(ws);
-    return ws;
-  } catch (e) {
-    console.warn('sdd_mark_manual_check failed', e);
-    return null;
-  }
-}
-
-/** Generate a `plan.json` for a legacy v1 workspace from its existing
- *  phase markdown files. After this, `is_v2` flips to true and the
- *  per-phase approval gate kicks in for the next pending phase. */
-export async function upgradeSddWorkspace(
-  id: string
-): Promise<SddWorkspace | null> {
-  try {
-    const ws = await invoke<SddWorkspace>('sdd_upgrade_workspace', { id });
-    upsertWorkspace(ws);
-    return ws;
-  } catch (e) {
-    console.warn('sdd_upgrade_workspace failed', e);
-    return null;
-  }
-}
-
-/** Roll a phase back to its `pre_phase_sha` snapshot. Errors when the
- *  phase has no recorded snapshot (git was off / phase running). The
- *  user's pre-rollback worktree is safety-stashed first under
- *  `sdd-rollback-safety-<phase>-<id>` so they can recover if they
- *  rolled back by accident. */
-export async function rollbackSddPhase(
-  id: string,
-  phase: number
-): Promise<SddWorkspace | null> {
-  try {
-    const ws = await invoke<SddWorkspace>('sdd_rollback_phase', { id, phase });
-    upsertWorkspace(ws);
-    return ws;
-  } catch (e) {
-    console.warn('sdd_rollback_phase failed', e);
-    return null;
-  }
-}
-
-/** Resolve a detected crash-recovery situation. `action` is either
- *  `"rollback"` (jumps to the orphan phase's pre-snapshot) or
- *  `"keep"` (flips the phase to `failed` so the user decides how to
- *  proceed). */
-export async function recoverSddWorkspace(
-  id: string,
-  action: 'rollback' | 'keep'
-): Promise<SddWorkspace | null> {
-  try {
-    const ws = await invoke<SddWorkspace>('sdd_recover_workspace', { id, action });
-    upsertWorkspace(ws);
-    return ws;
-  } catch (e) {
-    console.warn('sdd_recover_workspace failed', e);
-    return null;
-  }
-}
-
-/** Compact git-row state for the SddCard header. Returns
- *  `{ enabled: false, ... }` for non-git workspaces — UI hides the
- *  row in that case rather than showing an empty branch. */
-export async function getSddGitState(id: string): Promise<SddGitState | null> {
-  try {
-    return await invoke<SddGitState>('sdd_get_git_state', { id });
-  } catch (e) {
-    console.warn('sdd_get_git_state failed', e);
-    return null;
-  }
-}
-
-/** Mirror of `crate::sdd::VerifyOutput` — structured verify-pass
- *  output written to `<workspace>/phases/<slug>/verify.json`. Every
- *  field always present after `parse_or_fallback`; empty arrays /
- *  strings are valid. See `spec-1` FR-4. */
-export interface VerifyOutput {
-  summary: string;
-  files_changed: string[];
-  task_compliance: string[];
-  deviations: string[];
-  notes: string;
-}
-
-/** Persist the plan-pass output as `phases/<slug>/plan.md` and
- *  advance substep-state. Workspace returned reflects the post-write
- *  derived stage (`phase_plan_review` if plan_gate=true, else
- *  `phase_implementing`). */
-export async function saveSddPhasePlan(
-  id: string,
-  phase: number,
-  body: string,
-): Promise<SddWorkspace | null> {
-  try {
-    const ws = await invoke<SddWorkspace>('sdd_save_phase_plan', { id, phase, body });
-    upsertWorkspace(ws);
-    return ws;
-  } catch (e) {
-    console.warn('sdd_save_phase_plan failed', e);
-    return null;
-  }
-}
-
-/** Three-call mode — close out the implement pass: advance the
- *  substep checkpoint from `Implement` → `Verify` so the orchestrator
- *  fires the verify-pass prompt on the next agent turn. Persists the
- *  implement-pass `summary` on phase frontmatter; status stays
- *  `running` until the verify pass flips it. */
-export async function completeSddPhaseImplement(
-  id: string,
-  phase: number,
-  summary: string,
-  filesChanged: string[],
-): Promise<SddWorkspace | null> {
-  try {
-    const ws = await invoke<SddWorkspace>('sdd_complete_phase_implement', {
-      id,
-      phase,
-      summary,
-      filesChanged,
-    });
-    upsertWorkspace(ws);
-    return ws;
-  } catch (e) {
-    console.warn('sdd_complete_phase_implement failed', e);
-    return null;
-  }
-}
-
-/** Persist the verify-pass JSON, auto-fill phase frontmatter
- *  summary, advance phase status. `rawJson` is the agent's literal
- *  response — backend `parse_or_fallback` tolerates markdown fences
- *  and falls back to a deviations sentinel on malformed input. */
-export async function saveSddPhaseVerify(
-  id: string,
-  phase: number,
-  rawJson: string,
-): Promise<SddWorkspace | null> {
-  try {
-    const ws = await invoke<SddWorkspace>('sdd_save_phase_verify', {
-      id,
-      phase,
-      rawJson,
-    });
-    upsertWorkspace(ws);
-    return ws;
-  } catch (e) {
-    console.warn('sdd_save_phase_verify failed', e);
-    return null;
-  }
-}
-
-/** Persist a workspace's `phase_execution` config (mode + plan_gate
- *  + budget splits). Validates server-side; rejects when the budget
- *  percentages sum past 1.0 + a small float epsilon. See `spec-1`
- *  FR-11 / FR-12. */
-export async function setSddPhaseExecutionConfig(
-  id: string,
-  config: PhaseExecutionConfig,
-): Promise<SddWorkspace | null> {
-  try {
-    const ws = await invoke<SddWorkspace>('sdd_set_phase_execution_config', { id, config });
-    upsertWorkspace(ws);
-    return ws;
-  } catch (e) {
-    console.warn('sdd_set_phase_execution_config failed', e);
-    return null;
-  }
-}
-
-/** Three-call mode — discard the plan-pass output during the
- *  plan-review gate. Flips phase to `failed { trigger:
- *  plan_discarded }` so the standard failure card surfaces.
- *  Different from skip — failure card retains Retry/Edit&retry. */
-export async function discardSddPhasePlan(
-  id: string,
-  phase: number,
-  reason?: string,
-): Promise<SddWorkspace | null> {
-  try {
-    const ws = await invoke<SddWorkspace>('sdd_discard_phase_plan', { id, phase, reason });
-    upsertWorkspace(ws);
-    return ws;
-  } catch (e) {
-    console.warn('sdd_discard_phase_plan failed', e);
-    return null;
-  }
-}
-
-/** Clear the plan-review gate so the implement pass can fire. Only
- *  meaningful in three-call mode with `phase_execution.plan_gate =
- *  true`. */
-export async function approveSddPhasePlan(
-  id: string,
-  phase: number,
-): Promise<SddWorkspace | null> {
-  try {
-    const ws = await invoke<SddWorkspace>('sdd_approve_phase_plan', { id, phase });
-    upsertWorkspace(ws);
-    return ws;
-  } catch (e) {
-    console.warn('sdd_approve_phase_plan failed', e);
-    return null;
-  }
-}
-
-export async function pauseSdd(id: string): Promise<void> {
-  try { await invoke('sdd_pause', { id }); } catch (e) { console.warn(e); }
-}
-export async function resumeSdd(id: string): Promise<void> {
-  try { await invoke('sdd_resume', { id }); } catch (e) { console.warn(e); }
-}
-export async function stopSdd(id: string): Promise<void> {
-  try { await invoke('sdd_stop', { id }); } catch (e) { console.warn(e); }
-}
-export async function discardSdd(id: string): Promise<void> {
-  try { await invoke('sdd_discard', { id }); } catch (e) { console.warn(e); }
-  removeWorkspace(id);
-}
+// Wave-11/12 — the remaining 18 Tauri command wrappers live in
+// ./sdd_commands.svelte.ts. Re-exported below so external callers
+// keep their imports.
+export {
+  approveSddPhasePlan,
+  completeSddPhaseImplement,
+  deleteSddPhase,
+  discardSdd,
+  discardSddPhasePlan,
+  getSddGitState,
+  markSddManualCheck,
+  pauseSdd,
+  recoverSddWorkspace,
+  reorderSddPhases,
+  resumeSdd,
+  rollbackSddPhase,
+  runSddVerification,
+  saveSddPhasePlan,
+  saveSddPhaseVerify,
+  setSddPhaseExecutionConfig,
+  stopSdd,
+  upgradeSddWorkspace,
+  type VerifyOutput,
+} from './sdd_commands.svelte';
 
 // --- Prompt assembly -------------------------------------------------
 // Templates + interpolation moved to ./sdd_prompts.ts (wave-1 phase-8

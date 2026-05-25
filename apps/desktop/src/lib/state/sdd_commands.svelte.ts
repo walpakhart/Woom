@@ -10,11 +10,24 @@
 import { invoke } from '@tauri-apps/api/core';
 
 import {
+  removeWorkspace,
   upsertWorkspace,
   type AuditEntry,
+  type PhaseExecutionConfig,
+  type SddGitState,
   type SddPhaseDiff,
   type SddWorkspace,
 } from './sdd.svelte';
+
+/** Mirror of `crate::sdd::VerifyOutput` — structured verify-pass
+ *  output written to `<workspace>/phases/<slug>/verify.json`. */
+export interface VerifyOutput {
+  summary: string;
+  files_changed: string[];
+  task_compliance: string[];
+  deviations: string[];
+  notes: string;
+}
 
 export async function refreshSdd(id: string): Promise<SddWorkspace | null> {
   try {
@@ -218,4 +231,223 @@ export async function insertSddPhase(
     console.warn('sdd_insert_phase failed', e);
     return null;
   }
+}
+
+export async function reorderSddPhases(
+  id: string,
+  new_order: number[]
+): Promise<SddWorkspace | null> {
+  try {
+    const ws = await invoke<SddWorkspace>('sdd_reorder_phases', { id, new_order });
+    upsertWorkspace(ws);
+    return ws;
+  } catch (e) {
+    console.warn('sdd_reorder_phases failed', e);
+    return null;
+  }
+}
+
+export async function deleteSddPhase(
+  id: string,
+  phase: number
+): Promise<SddWorkspace | null> {
+  try {
+    const ws = await invoke<SddWorkspace>('sdd_delete_phase', { id, phase });
+    upsertWorkspace(ws);
+    return ws;
+  } catch (e) {
+    console.warn('sdd_delete_phase failed', e);
+    return null;
+  }
+}
+
+export async function runSddVerification(
+  id: string,
+  phase: number
+): Promise<SddWorkspace | null> {
+  try {
+    const ws = await invoke<SddWorkspace>('sdd_run_verification', { id, phase });
+    upsertWorkspace(ws);
+    return ws;
+  } catch (e) {
+    console.warn('sdd_run_verification failed', e);
+    return null;
+  }
+}
+
+export async function markSddManualCheck(
+  id: string,
+  phase: number,
+  check_index: number,
+  passed: boolean
+): Promise<SddWorkspace | null> {
+  try {
+    const ws = await invoke<SddWorkspace>('sdd_mark_manual_check', {
+      id, phase, check_index, passed,
+    });
+    upsertWorkspace(ws);
+    return ws;
+  } catch (e) {
+    console.warn('sdd_mark_manual_check failed', e);
+    return null;
+  }
+}
+
+export async function upgradeSddWorkspace(
+  id: string
+): Promise<SddWorkspace | null> {
+  try {
+    const ws = await invoke<SddWorkspace>('sdd_upgrade_workspace', { id });
+    upsertWorkspace(ws);
+    return ws;
+  } catch (e) {
+    console.warn('sdd_upgrade_workspace failed', e);
+    return null;
+  }
+}
+
+export async function rollbackSddPhase(
+  id: string,
+  phase: number
+): Promise<SddWorkspace | null> {
+  try {
+    const ws = await invoke<SddWorkspace>('sdd_rollback_phase', { id, phase });
+    upsertWorkspace(ws);
+    return ws;
+  } catch (e) {
+    console.warn('sdd_rollback_phase failed', e);
+    return null;
+  }
+}
+
+export async function recoverSddWorkspace(
+  id: string,
+  action: 'rollback' | 'keep'
+): Promise<SddWorkspace | null> {
+  try {
+    const ws = await invoke<SddWorkspace>('sdd_recover_workspace', { id, action });
+    upsertWorkspace(ws);
+    return ws;
+  } catch (e) {
+    console.warn('sdd_recover_workspace failed', e);
+    return null;
+  }
+}
+
+export async function getSddGitState(id: string): Promise<SddGitState | null> {
+  try {
+    return await invoke<SddGitState>('sdd_get_git_state', { id });
+  } catch (e) {
+    console.warn('sdd_get_git_state failed', e);
+    return null;
+  }
+}
+
+/** Persist the plan-pass output as `phases/<slug>/plan.md` and
+ *  advance substep-state. */
+export async function saveSddPhasePlan(
+  id: string,
+  phase: number,
+  body: string,
+): Promise<SddWorkspace | null> {
+  try {
+    const ws = await invoke<SddWorkspace>('sdd_save_phase_plan', { id, phase, body });
+    upsertWorkspace(ws);
+    return ws;
+  } catch (e) {
+    console.warn('sdd_save_phase_plan failed', e);
+    return null;
+  }
+}
+
+/** Three-call mode — close out the implement pass: advance the
+ *  substep checkpoint from `Implement` → `Verify`. */
+export async function completeSddPhaseImplement(
+  id: string,
+  phase: number,
+  summary: string,
+  filesChanged: string[],
+): Promise<SddWorkspace | null> {
+  try {
+    const ws = await invoke<SddWorkspace>('sdd_complete_phase_implement', {
+      id, phase, summary, filesChanged,
+    });
+    upsertWorkspace(ws);
+    return ws;
+  } catch (e) {
+    console.warn('sdd_complete_phase_implement failed', e);
+    return null;
+  }
+}
+
+export async function saveSddPhaseVerify(
+  id: string,
+  phase: number,
+  rawJson: string,
+): Promise<SddWorkspace | null> {
+  try {
+    const ws = await invoke<SddWorkspace>('sdd_save_phase_verify', { id, phase, rawJson });
+    upsertWorkspace(ws);
+    return ws;
+  } catch (e) {
+    console.warn('sdd_save_phase_verify failed', e);
+    return null;
+  }
+}
+
+export async function setSddPhaseExecutionConfig(
+  id: string,
+  config: PhaseExecutionConfig,
+): Promise<SddWorkspace | null> {
+  try {
+    const ws = await invoke<SddWorkspace>('sdd_set_phase_execution_config', { id, config });
+    upsertWorkspace(ws);
+    return ws;
+  } catch (e) {
+    console.warn('sdd_set_phase_execution_config failed', e);
+    return null;
+  }
+}
+
+export async function discardSddPhasePlan(
+  id: string,
+  phase: number,
+  reason?: string,
+): Promise<SddWorkspace | null> {
+  try {
+    const ws = await invoke<SddWorkspace>('sdd_discard_phase_plan', { id, phase, reason });
+    upsertWorkspace(ws);
+    return ws;
+  } catch (e) {
+    console.warn('sdd_discard_phase_plan failed', e);
+    return null;
+  }
+}
+
+export async function approveSddPhasePlan(
+  id: string,
+  phase: number,
+): Promise<SddWorkspace | null> {
+  try {
+    const ws = await invoke<SddWorkspace>('sdd_approve_phase_plan', { id, phase });
+    upsertWorkspace(ws);
+    return ws;
+  } catch (e) {
+    console.warn('sdd_approve_phase_plan failed', e);
+    return null;
+  }
+}
+
+export async function pauseSdd(id: string): Promise<void> {
+  try { await invoke('sdd_pause', { id }); } catch (e) { console.warn(e); }
+}
+export async function resumeSdd(id: string): Promise<void> {
+  try { await invoke('sdd_resume', { id }); } catch (e) { console.warn(e); }
+}
+export async function stopSdd(id: string): Promise<void> {
+  try { await invoke('sdd_stop', { id }); } catch (e) { console.warn(e); }
+}
+export async function discardSdd(id: string): Promise<void> {
+  try { await invoke('sdd_discard', { id }); } catch (e) { console.warn(e); }
+  removeWorkspace(id);
 }
