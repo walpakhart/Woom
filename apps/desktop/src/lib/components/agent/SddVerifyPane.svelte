@@ -22,7 +22,7 @@
     <details class="sdd-verify-section">
       <summary class="mono">files changed · {verdict.files_changed.length}</summary>
       <ul class="sdd-verify-files mono">
-        {#each verdict.files_changed as f (f)}
+        {#each verdict.files_changed as f, i (f + '|' + i)}
           <li>{f}</li>
         {/each}
       </ul>
@@ -32,7 +32,7 @@
     <details class="sdd-verify-section">
       <summary class="mono">task compliance · {verdict.task_compliance.length}</summary>
       <ul class="sdd-verify-list">
-        {#each verdict.task_compliance as t (t)}
+        {#each verdict.task_compliance as t, i (t + '|' + i)}
           <li><span aria-label="passed">✓</span> {t}</li>
         {/each}
       </ul>
@@ -42,7 +42,7 @@
     <details class="sdd-verify-section sdd-verify-section--warn" open>
       <summary class="mono">deviations · {verdict.deviations.length}</summary>
       <ul class="sdd-verify-list">
-        {#each verdict.deviations as d (d)}
+        {#each verdict.deviations as d, i (d + '|' + i)}
           <li><span aria-label="deviation">⚠️</span> {d}</li>
         {/each}
       </ul>
