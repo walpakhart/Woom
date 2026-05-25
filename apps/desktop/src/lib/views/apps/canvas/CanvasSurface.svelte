@@ -31,11 +31,14 @@
 
   import { onMount, onDestroy, untrack } from 'svelte';
   import {
+    anchorWorld,
+    computeAlignment,
     intrinsicFromDataUrl,
     looksLikeImage,
     marqueeFromPoints,
     readAsDataUrl,
     rectIntersects,
+    type CanonicalAnchor,
   } from './canvasGeometry';
   import CanvasShape from '$lib/components/canvas/CanvasShape.svelte';
   import CanvasToolbar from '$lib/components/canvas/CanvasToolbar.svelte';
@@ -657,60 +660,7 @@
    *  The picker chooses the BEST match per axis (smallest |delta|)
    *  rather than the first one, so a near-tie between two equally
    *  good alignments resolves predictably. */
-  function computeAlignment(
-    lead: { x: number; y: number; w: number; h: number },
-    others: { x: number; y: number; w: number; h: number }[],
-    tol: number
-  ): {
-    snapDx: number | null;
-    snapDy: number | null;
-    lines: { vertical: number[]; horizontal: number[] };
-  } {
-    const leadXs = [lead.x, lead.x + lead.w / 2, lead.x + lead.w];
-    const leadYs = [lead.y, lead.y + lead.h / 2, lead.y + lead.h];
-    let bestDx: number | null = null; let bestDxAbs = Infinity;
-    let bestDxLine: number | null = null;
-    let bestDy: number | null = null; let bestDyAbs = Infinity;
-    let bestDyLine: number | null = null;
-    /* Collect ALL ties at the best |delta| so we can draw guides for
-       every aligned anchor — a shape that hits both center and edge
-       of a neighbour gets two guides. */
-    const linesV: number[] = [];
-    const linesH: number[] = [];
-    for (const o of others) {
-      const oXs = [o.x, o.x + o.w / 2, o.x + o.w];
-      const oYs = [o.y, o.y + o.h / 2, o.y + o.h];
-      for (const lx of leadXs) {
-        for (const ox of oXs) {
-          const d = ox - lx;
-          if (Math.abs(d) > tol) continue;
-          if (Math.abs(d) < bestDxAbs) {
-            bestDxAbs = Math.abs(d);
-            bestDx = d;
-            bestDxLine = ox;
-          }
-        }
-      }
-      for (const ly of leadYs) {
-        for (const oy of oYs) {
-          const d = oy - ly;
-          if (Math.abs(d) > tol) continue;
-          if (Math.abs(d) < bestDyAbs) {
-            bestDyAbs = Math.abs(d);
-            bestDy = d;
-            bestDyLine = oy;
-          }
-        }
-      }
-    }
-    if (bestDxLine !== null) linesV.push(bestDxLine);
-    if (bestDyLine !== null) linesH.push(bestDyLine);
-    return {
-      snapDx: bestDx,
-      snapDy: bestDy,
-      lines: { vertical: linesV, horizontal: linesH }
-    };
-  }
+  /* computeAlignment moved to ./canvasGeometry.ts (wave-15 split). */
 
   // ---- Marquee ---------------------------------------------------------
 
@@ -920,28 +870,7 @@
 
   // ---- Edge drawing ----------------------------------------------------
 
-  type CanonicalAnchor = 'tl'|'tc'|'tr'|'ml'|'mc'|'mr'|'bl'|'bc'|'br';
-
-  /** World position of one of the 9 canonical anchors on `shape`. */
-  function anchorWorld(shape: Shape, a: CanonicalAnchor): { x: number; y: number } {
-    const cx = shape.x + shape.w / 2;
-    const cy = shape.y + shape.h / 2;
-    const lx = shape.x;
-    const rx = shape.x + shape.w;
-    const ty = shape.y;
-    const by = shape.y + shape.h;
-    switch (a) {
-      case 'tl': return { x: lx, y: ty };
-      case 'tc': return { x: cx, y: ty };
-      case 'tr': return { x: rx, y: ty };
-      case 'ml': return { x: lx, y: cy };
-      case 'mc': return { x: cx, y: cy };
-      case 'mr': return { x: rx, y: cy };
-      case 'bl': return { x: lx, y: by };
-      case 'bc': return { x: cx, y: by };
-      case 'br': return { x: rx, y: by };
-    }
-  }
+  /* CanonicalAnchor + anchorWorld moved to ./canvasGeometry.ts (wave-15 split). */
 
   function startEdge(e: PointerEvent, shapeId: string, anchor: CanonicalAnchor) {
     if (!activeCanvas) return;

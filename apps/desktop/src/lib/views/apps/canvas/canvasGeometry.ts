@@ -62,3 +62,91 @@ export function intrinsicFromDataUrl(dataUrl: string): Promise<{ w: number; h: n
     img.src = dataUrl;
   });
 }
+
+/** Smart-guide alignment computation. Given a "lead" rect (the
+ *  shape currently being translated) and the rest of the canvas's
+ *  shapes ("others"), find the smallest delta needed to snap any
+ *  of the lead's anchors (left / center / right horizontally; top /
+ *  middle / bottom vertically) to any of the others' anchors. Lines
+ *  are post-snap so the renderer doesn't have to recompute. The
+ *  picker chooses the BEST match per axis (smallest |delta|) so a
+ *  near-tie between two equally good alignments resolves
+ *  predictably. */
+export function computeAlignment(
+  lead: { x: number; y: number; w: number; h: number },
+  others: { x: number; y: number; w: number; h: number }[],
+  tol: number
+): {
+  snapDx: number | null;
+  snapDy: number | null;
+  lines: { vertical: number[]; horizontal: number[] };
+} {
+  const leadXs = [lead.x, lead.x + lead.w / 2, lead.x + lead.w];
+  const leadYs = [lead.y, lead.y + lead.h / 2, lead.y + lead.h];
+  let bestDx: number | null = null; let bestDxAbs = Infinity;
+  let bestDxLine: number | null = null;
+  let bestDy: number | null = null; let bestDyAbs = Infinity;
+  let bestDyLine: number | null = null;
+  const linesV: number[] = [];
+  const linesH: number[] = [];
+  for (const o of others) {
+    const oXs = [o.x, o.x + o.w / 2, o.x + o.w];
+    const oYs = [o.y, o.y + o.h / 2, o.y + o.h];
+    for (const lx of leadXs) {
+      for (const ox of oXs) {
+        const d = ox - lx;
+        if (Math.abs(d) > tol) continue;
+        if (Math.abs(d) < bestDxAbs) {
+          bestDxAbs = Math.abs(d);
+          bestDx = d;
+          bestDxLine = ox;
+        }
+      }
+    }
+    for (const ly of leadYs) {
+      for (const oy of oYs) {
+        const d = oy - ly;
+        if (Math.abs(d) > tol) continue;
+        if (Math.abs(d) < bestDyAbs) {
+          bestDyAbs = Math.abs(d);
+          bestDy = d;
+          bestDyLine = oy;
+        }
+      }
+    }
+  }
+  if (bestDxLine !== null) linesV.push(bestDxLine);
+  if (bestDyLine !== null) linesH.push(bestDyLine);
+  return {
+    snapDx: bestDx,
+    snapDy: bestDy,
+    lines: { vertical: linesV, horizontal: linesH },
+  };
+}
+
+/** World position of one of the 9 canonical anchors on a rect. Used
+ *  by the edge-drawing tool to pin the edge's source point at the
+ *  exact pixel the user grabbed (rather than the shape's center). */
+export type CanonicalAnchor = 'tl'|'tc'|'tr'|'ml'|'mc'|'mr'|'bl'|'bc'|'br';
+export function anchorWorld(
+  shape: { x: number; y: number; w: number; h: number },
+  a: CanonicalAnchor
+): { x: number; y: number } {
+  const cx = shape.x + shape.w / 2;
+  const cy = shape.y + shape.h / 2;
+  const lx = shape.x;
+  const rx = shape.x + shape.w;
+  const ty = shape.y;
+  const by = shape.y + shape.h;
+  switch (a) {
+    case 'tl': return { x: lx, y: ty };
+    case 'tc': return { x: cx, y: ty };
+    case 'tr': return { x: rx, y: ty };
+    case 'ml': return { x: lx, y: cy };
+    case 'mc': return { x: cx, y: cy };
+    case 'mr': return { x: rx, y: cy };
+    case 'bl': return { x: lx, y: by };
+    case 'bc': return { x: cx, y: by };
+    case 'br': return { x: rx, y: by };
+  }
+}
