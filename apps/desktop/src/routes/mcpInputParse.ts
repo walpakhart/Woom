@@ -115,3 +115,57 @@ export const INSTANCE_ID_KEYS_DEEP = [
   'instance_id', 'instanceId', 'id', 'column_id', 'columnId',
   'editor_id', 'agent_id', 'uuid'
 ];
+
+import { makeEdge, type Edge } from '$lib/state/canvas.svelte';
+
+/** Parse an MCP `canvas_add_edge(s)` spec into a fresh `Edge`.
+ *  Mirrors the alias set on the sidecar's `CanvasAddEdgeParams` so
+ *  every spelling the agent CLI emits resolves to the same edge.
+ *  Returns `null` when required ids are missing — caller skips the
+ *  entry instead of throwing. */
+export function parseEdgeSpec(obj: Record<string, unknown>): Edge | null {
+  const fromId = pickFrom(
+    obj,
+    'from_shape_id', 'from', 'source', 'from_id', 'fromId',
+    'fromShapeId', 'fromNode', 'fromBlock', 'start', 'start_id',
+    'startId', 'src', 'sourceId'
+  );
+  const toId = pickFrom(
+    obj,
+    'to_shape_id', 'to', 'target', 'to_id', 'toId', 'toShapeId',
+    'toNode', 'toBlock', 'end', 'end_id', 'endId', 'dest', 'dst',
+    'targetId'
+  );
+  if (!fromId || !toId) return null;
+  type AnchorName = 'tl'|'tc'|'tr'|'ml'|'mc'|'mr'|'bl'|'bc'|'br';
+  const validAnchors: AnchorName[] = ['tl','tc','tr','ml','mc','mr','bl','bc','br'];
+  const fromAnchorRaw = pickFrom(
+    obj,
+    'from_anchor', 'fromAnchor', 'source_anchor', 'sourceAnchor',
+    'start_anchor', 'startAnchor', 'srcAnchor'
+  ) || 'mr';
+  const toAnchorRaw = pickFrom(
+    obj,
+    'to_anchor', 'toAnchor', 'target_anchor', 'targetAnchor',
+    'end_anchor', 'endAnchor', 'destAnchor'
+  ) || 'ml';
+  const fromAnchor = (validAnchors as string[]).includes(fromAnchorRaw)
+    ? (fromAnchorRaw as AnchorName) : 'mr';
+  const toAnchor = (validAnchors as string[]).includes(toAnchorRaw)
+    ? (toAnchorRaw as AnchorName) : 'ml';
+  const kindRaw = pickFrom(obj, 'kind', 'style', 'edge_kind', 'edgeKind');
+  const kind = (kindRaw === 'line' || kindRaw === 'dashed') ? kindRaw : 'arrow';
+  const routingRaw = pickFrom(obj, 'routing', 'route', 'path', 'pathing');
+  const routing = (routingRaw === 'straight' || routingRaw === 'curved')
+    ? routingRaw : 'orthogonal';
+  const labelRaw = pickFrom(obj, 'label', 'text', 'caption', 'title');
+  const edge = makeEdge({
+    from: { shapeId: fromId, anchor: fromAnchor },
+    to: { shapeId: toId, anchor: toAnchor },
+    kind, routing,
+    label: labelRaw || null
+  });
+  const desiredId = pickFrom(obj, 'edge_id', 'id', 'edgeId');
+  if (desiredId) edge.id = desiredId;
+  return edge;
+}
