@@ -17,6 +17,16 @@ export default defineConfig(async () => ({
     conditions: ['browser', 'module', 'import', 'default']
   },
 
+  // Emit source maps in production builds so WebKit devtools can
+  // resolve minified stack traces (Le/D/Ni/Ii/Xr/etc) back to the
+  // original `.svelte` / `.ts` files. Cheap (`hidden-source-map`
+  // keeps the .map files alongside the JS but doesn't reference
+  // them inline, so production users don't ship `//# sourceMappingURL`
+  // comments — devs can still load the maps manually).
+  build: {
+    sourcemap: 'inline'
+  },
+
   // Vite options tailored for Tauri development
   clearScreen: false,
   server: {
