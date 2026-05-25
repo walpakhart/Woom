@@ -40,6 +40,7 @@ mod sdd_structure_commands;
 mod sdd_prompts;
 mod sdd_substep;
 mod sdd_time;
+mod sdd_user_commands;
 mod sdd_verify;
 mod sdd_verify_recover_commands;
 mod sdd_watcher;
@@ -500,14 +501,14 @@ pub fn run() {
             sdd::sdd_get,
             sdd::sdd_list,
             sdd::sdd_refresh,
-            sdd::sdd_approve,
+            sdd_user_commands::sdd_approve,
             sdd_lifecycle_commands::sdd_pause,
             sdd_lifecycle_commands::sdd_resume,
             sdd_lifecycle_commands::sdd_stop,
             sdd_prompts::sdd_prompt,
-            sdd::sdd_save_body,
-            sdd::sdd_retry_phase,
-            sdd::sdd_approve_phase,
+            sdd_user_commands::sdd_save_body,
+            sdd_user_commands::sdd_retry_phase,
+            sdd_user_commands::sdd_approve_phase,
             sdd_phase_commands::sdd_save_phase_plan,
             sdd_phase_commands::sdd_complete_phase_implement,
             sdd_phase_commands::sdd_save_phase_verify,
@@ -534,7 +535,7 @@ pub fn run() {
             sdd_audit_commands::sdd_audit_append,
             sdd_audit_commands::sdd_audit_read,
             sdd_audit_commands::sdd_validate_mutation,
-            sdd::sdd_discard,
+            sdd_user_commands::sdd_discard,
             // User-defined hooks — agent-lifecycle scripts. See
             // `hooks.rs` for the contract (stdin JSON / exit code /
             // stdout JSON). `hooks_run` is called from the frontend
