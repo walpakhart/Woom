@@ -34,6 +34,7 @@
     blobToBase64,
     deriveCwd,
     formatBytesShort,
+    groupAgentSessions as _groupAgentSessions,
     guessExt,
     imageFilesFromEvent,
   } from './page_helpers';
@@ -605,41 +606,9 @@
     sessionsState.list.find((s) => s.id === sessionsState.activeClaudeId) ?? null
   );
 
-  /** Group agent sessions by relative date for the soloAgent sidebar.
-   *  Returns four buckets with non-empty contents only — Today /
-   *  Yesterday / This week / Older. The "now" arg makes the result
-   *  reactive when the parent ticks. Sessions with no messages yet
-   *  bucket into "Older" so they don't pollute Today. */
-  function groupAgentSessions(
-    kind: 'claude' | 'cursor',
-    nowMs: number
-  ): { label: string; items: typeof sessionsState.list }[] {
-    const items = sessionsState.list.filter((s) => s.agentKind === kind);
-    const dayMs = 24 * 60 * 60 * 1000;
-    const sessTime = (s: typeof items[number]) => {
-      const last = s.messages[s.messages.length - 1]?.at;
-      return last ? new Date(last).getTime() : 0;
-    };
-    const sorted = [...items].sort((a, b) => sessTime(b) - sessTime(a));
-    const today: typeof items = [];
-    const yesterday: typeof items = [];
-    const week: typeof items = [];
-    const older: typeof items = [];
-    for (const s of sorted) {
-      const t = sessTime(s);
-      if (t === 0) { older.push(s); continue; }
-      const ageDays = Math.floor((nowMs - t) / dayMs);
-      if (ageDays < 1) today.push(s);
-      else if (ageDays < 2) yesterday.push(s);
-      else if (ageDays < 7) week.push(s);
-      else older.push(s);
-    }
-    return [
-      { label: 'Today', items: today },
-      { label: 'Yesterday', items: yesterday },
-      { label: 'This week', items: week },
-      { label: 'Older', items: older }
-    ].filter((g) => g.items.length > 0);
+  /* groupAgentSessions moved to ./page_helpers.ts (wave-15 split). */
+  function groupAgentSessions(kind: 'claude' | 'cursor', nowMs: number) {
+    return _groupAgentSessions(sessionsState.list, kind, nowMs);
   }
 
   // Thinking-time label for the typing indicator — per-kind so Claude and

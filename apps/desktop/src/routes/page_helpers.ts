@@ -72,3 +72,41 @@ export function deriveCwd(path: string, isDir: boolean): string | null {
   const idx = path.lastIndexOf('/');
   return idx > 0 ? path.slice(0, idx) : null;
 }
+
+/** Group agent sessions by relative date for the soloAgent sidebar.
+ *  Returns four buckets with non-empty contents only — Today /
+ *  Yesterday / This week / Older. The "now" arg makes the result
+ *  reactive when the parent ticks. Sessions with no messages yet
+ *  bucket into "Older" so they don't pollute Today. */
+export function groupAgentSessions<S extends { agentKind: string; messages: { at?: string }[] }>(
+  sessions: readonly S[],
+  kind: 'claude' | 'cursor',
+  nowMs: number
+): { label: string; items: S[] }[] {
+  const items = sessions.filter((s) => s.agentKind === kind);
+  const dayMs = 24 * 60 * 60 * 1000;
+  const sessTime = (s: S): number => {
+    const last = s.messages[s.messages.length - 1]?.at;
+    return last ? new Date(last).getTime() : 0;
+  };
+  const sorted = [...items].sort((a, b) => sessTime(b) - sessTime(a));
+  const today: S[] = [];
+  const yesterday: S[] = [];
+  const week: S[] = [];
+  const older: S[] = [];
+  for (const s of sorted) {
+    const t = sessTime(s);
+    if (t === 0) { older.push(s); continue; }
+    const ageDays = Math.floor((nowMs - t) / dayMs);
+    if (ageDays < 1) today.push(s);
+    else if (ageDays < 2) yesterday.push(s);
+    else if (ageDays < 7) week.push(s);
+    else older.push(s);
+  }
+  return [
+    { label: 'Today', items: today },
+    { label: 'Yesterday', items: yesterday },
+    { label: 'This week', items: week },
+    { label: 'Older', items: older },
+  ].filter((g) => g.items.length > 0);
+}
