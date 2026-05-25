@@ -41,6 +41,8 @@
     getSddFileDiff,
     loadAuditLog,
     buildPromptForStage,
+    manualContinueSdd,
+    acceptSddPhaseFailed,
     targetKey,
     stashUndo,
     popUndo,
@@ -219,6 +221,25 @@
     stage.kind === 'complete' || stage.kind === 'stopped' || stage.kind === 'failed'
   );
   const isPaused = $derived(stage.kind === 'paused');
+  /* Manual-continue affordance — when the agent turn ended but the
+   *  auto-fire dispatcher didn't pick up (stale prod bundle, silent
+   *  drop), the workspace sits in phase_{planning,implementing,
+   *  verifying} with !sessionSending. Surface a Continue button so
+   *  the user can re-arm the next pass without restarting the app. */
+  const canManualContinue = $derived(
+    !sessionSending &&
+      (stage.kind === 'phase_planning' ||
+        stage.kind === 'phase_implementing' ||
+        stage.kind === 'phase_verifying')
+  );
+  const continueLabel = $derived.by(() => {
+    switch (stage.kind) {
+      case 'phase_planning': return 'Continue plan-pass';
+      case 'phase_implementing': return 'Continue implement-pass';
+      case 'phase_verifying': return 'Continue verify-pass';
+      default: return 'Continue';
+    }
+  });
 
   /* Live activity feed — derived from sddState.actionLogByWorkspace.
    *  `showAll` is local UI state (collapse vs. expand). The buffer is
@@ -570,6 +591,16 @@
   async function onPause() { await pauseSdd(p.workspace.id); }
   async function onResume() { await resumeSdd(p.workspace.id); }
   async function onStop() { await stopSdd(p.workspace.id); }
+  let continueClicked = $state(false);
+  async function onContinue() {
+    if (continueClicked || !canManualContinue) return;
+    continueClicked = true;
+    try {
+      await manualContinueSdd(p.workspace.id);
+    } finally {
+      continueClicked = false;
+    }
+  }
   /** Discard the plan-pass output during plan-review. Calls the
    *  dedicated `sdd_discard_phase_plan` command so the phase flips
    *  to `failed { trigger: plan_discarded }` and the standard
@@ -651,6 +682,29 @@
     const failed = p.workspace.phases.find((ph) => ph.status === 'failed');
     if (!failed) return;
     await rollbackSddPhase(p.workspace.id, failed.number);
+  }
+
+  /* Inline accept-with-reason flow. Mirror of the skip flow but flips
+   *  `failed` → `done` instead of `skipped`. Used when the user has
+   *  reviewed verifier deviations and decided they are tolerable. */
+  let acceptMode = $state(false);
+  let acceptDraft = $state('');
+  function startAccept() {
+    acceptMode = true;
+    acceptDraft = '';
+  }
+  function cancelAccept() {
+    acceptMode = false;
+    acceptDraft = '';
+  }
+  async function submitAccept() {
+    const reason = acceptDraft.trim();
+    if (reason.length < 5) return;
+    const failed = p.workspace.phases.find((ph) => ph.status === 'failed');
+    if (!failed) return;
+    await acceptSddPhaseFailed(p.workspace.id, failed.number, reason);
+    acceptMode = false;
+    acceptDraft = '';
   }
 
   /* Phase-diff drawer state. One open file at a time — stores the
@@ -990,7 +1044,7 @@
         {/if}
       </div>
       <ul class="sdd-activity-list">
-        {#each (liveActivityShowAll ? liveActivity.entries : liveActivity.headEntries) as e (e.correlation_id ?? `${e.ts}-${e.kind}`)}
+        {#each (liveActivityShowAll ? liveActivity.entries : liveActivity.headEntries) as e, idx (e.correlation_id ?? `${e.ts}-${e.kind}-${idx}`)}
           <li class="sdd-activity-row" data-status={e.status ?? 'running'} in:fly={{ y: 4, duration: 120, easing: cubicOut }}>
             <span class="sdd-activity-dot" aria-hidden="true"></span>
             <span class="sdd-activity-tool mono">{e.tool ?? e.kind}</span>
@@ -1268,7 +1322,7 @@
             Last actions · {stage.action_log_tail?.length ?? 0}
           </summary>
           <ul class="sdd-failed-tail-list">
-            {#each (stage.action_log_tail ?? []).slice(-5) as e (e.correlation_id ?? `${e.ts}-${e.kind}`)}
+            {#each (stage.action_log_tail ?? []).slice(-5) as e, idx (e.correlation_id ?? `${e.ts}-${e.kind}-${idx}`)}
               <li class="sdd-failed-tail-row mono" data-status={e.status ?? 'done'}>
                 <span class="sdd-activity-tool">{e.tool ?? e.kind}</span>
                 <span class="sdd-activity-summary">{e.summary}</span>
@@ -1290,6 +1344,22 @@
             onkeydown={(e) => {
               if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); void submitSkip(); }
               if (e.key === 'Escape') { e.preventDefault(); cancelSkip(); }
+            }}
+          ></textarea>
+        </div>
+      {/if}
+      {#if acceptMode}
+        <div class="sdd-skip">
+          <textarea
+            class="sdd-skip-area mono"
+            bind:value={acceptDraft}
+            placeholder="Why are these deviations acceptable? (min 5 chars — recorded for audit, phase flips to done)"
+            rows="3"
+            spellcheck="false"
+            {@attach (node: HTMLTextAreaElement) => node.focus()}
+            onkeydown={(e) => {
+              if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); void submitAccept(); }
+              if (e.key === 'Escape') { e.preventDefault(); cancelAccept(); }
             }}
           ></textarea>
         </div>
@@ -1358,6 +1428,19 @@
         >Discard plan</button>
       {/if}
       {#if isInFlight}
+        {#if canManualContinue}
+          <!-- Manual re-fire — stage is "in-flight" but the agent
+               turn ended without the auto-fire dispatcher catching
+               up (production bundle predates the fix, or the
+               dispatcher silently dropped). User clicks Continue to
+               push the next-substep prompt through again. -->
+          <button
+            class="sdd-btn sdd-btn--primary"
+            disabled={continueClicked}
+            onclick={onContinue}
+            title="Re-fire the prompt for this substep"
+          >{continueClicked ? 'sending…' : continueLabel}</button>
+        {/if}
         <button class="sdd-btn" onclick={onPause}>Pause</button>
       {/if}
       {#if isPaused}
@@ -1373,10 +1456,27 @@
             onclick={submitSkip}
             title="⌘↵ to submit"
           >Skip with reason</button>
+        {:else if acceptMode}
+          <button type="button" class="sdd-btn" onclick={cancelAccept}>cancel</button>
+          <button
+            type="button"
+            class="sdd-btn sdd-btn--primary"
+            disabled={acceptDraft.trim().length < 5}
+            onclick={submitAccept}
+            title="⌘↵ to submit — flips status to done"
+          >Accept with reason</button>
         {:else}
           <button class="sdd-btn sdd-btn--primary" disabled={advanceClicked} onclick={onRetry}>Retry phase</button>
           <button class="sdd-btn" disabled={advanceClicked} onclick={startEditAndRetry} title="Edit phase body, then retry">
             ✎ Edit & retry
+          </button>
+          <!-- Accept anyway — flip status failed → done with a recorded
+               reason. Use when verifier deviations are reviewed and
+               judged tolerable trade-offs (the agent's verify summary
+               already explains why). Distinct from Skip which leaves
+               the phase un-done. -->
+          <button class="sdd-btn" onclick={startAccept} title="Mark this failed phase as done with an audit reason — workflow continues from next phase">
+            ✓ Accept anyway
           </button>
           <button class="sdd-btn" onclick={startSkip} title="Force-skip with audit reason">Skip phase</button>
           <button class="sdd-btn" onclick={onRollbackFailed} title="Reset working tree to pre-phase commit">↶ Rollback</button>
@@ -1426,7 +1526,7 @@
           <p class="sdd-audit-empty">No audit entries yet.</p>
         {:else}
           <ul class="sdd-audit-list">
-            {#each filteredAudit as e (e.ts + e.action + (e.phase ?? -1))}
+            {#each filteredAudit as e, idx (e.ts + e.action + (e.phase ?? -1) + '|' + idx)}
               {@const expanded = auditExpandedTs === e.ts}
               <li class="sdd-audit-row" data-source={e.source}>
                 <button

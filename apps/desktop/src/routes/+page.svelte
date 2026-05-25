@@ -187,7 +187,8 @@
     completeSddPhaseImplement,
     saveSddPhaseVerify,
     approveSddPhasePlan,
-    discardSddPhasePlan
+    discardSddPhasePlan,
+    setSddAutoFireDispatcher
   } from '$lib/state/sdd.svelte';
   import SddCard from '$lib/components/agent/SddCard.svelte';
   import {
@@ -792,6 +793,11 @@
    *  pending action card so its eventual resolution routes back to
    *  the sidecar via `resolve_action_wait`. */
   let actionIpcUnlisten: UnlistenFn | null = null;
+  /** Unlisten for the `claude:bg_done` event fired by `claude_bg.rs`
+   *  when a Claude CLI background task's output file goes idle. The
+   *  handler fires a silent continuation prompt so the agent picks up
+   *  the bg task's tail output and continues working. */
+  let claudeBgUnlisten: UnlistenFn | null = null;
   /* Window-close lifecycle handles. Both are unlisten-style — see
      the close-flush hook inside onMount for what they catch. */
   let tauriCloseUnlisten: UnlistenFn | null = null;
@@ -1095,6 +1101,22 @@
     // listener so the Preview pane (right side of Claude/Cursor solo)
     // refreshes when a process spawns / exits anywhere in the app.
     void initBgTasks();
+    /* Register the auto-fire dispatcher BEFORE initSdd so hydrate-time
+     *  catch-up (workspace left mid-substep across app restart) can
+     *  reach the chat send pipeline immediately. */
+    setSddAutoFireDispatcher(async (sessionId, prompt) => {
+      const s = sessionsState.list.find((x) => x.id === sessionId);
+      if (!s) return;
+      if (s.sending) {
+        /* Active turn in flight — park in the silent slot and let the
+         *  end-of-turn drain fire it. Same lane SddCard's Approve
+         *  click uses while a turn is running. */
+        const { setPendingSilent } = await import('$lib/state/sdd.svelte');
+        setPendingSilent(sessionId, prompt);
+        return;
+      }
+      await onSddAdvance(sessionId, prompt);
+    });
     void initSdd();
     /* Updater state store — subscribes to the `update:state` Tauri
      * event so the Settings card + the Phase 4 toast read live state
@@ -1150,6 +1172,54 @@
       'woom:action_request',
       (event) => handleActionRequest(event.payload)
     );
+    /* Claude CLI bg-task auto-resume. When the agent ran `Bash` with
+     *  `run_in_background:true`, its turn ends immediately after the
+     *  "Command running in background…" message — without a kick, the
+     *  agent would never wake up when the build/test finishes.
+     *  `claude_bg.rs` polls the output file's mtime and emits when it
+     *  goes idle; we fold the tail into a silent continuation prompt
+     *  so the agent picks up and decides whether the task is truly
+     *  done or needs another `BashOutput` call. */
+    claudeBgUnlisten = await listen<{
+      session_id: string;
+      task_id: string;
+      output_path: string;
+      tail: string;
+      timed_out: boolean;
+    }>('claude:bg_done', async (event) => {
+      const { forgetBgTask } = await import('$lib/stream/agentStream');
+      const { session_id, task_id, tail, timed_out } = event.payload;
+      // Drop the registry entry first so a second mtime tick (or a
+      // refire on rapid re-watch) doesn't double-fire.
+      forgetBgTask(session_id, task_id);
+      const sess = sessionsState.list.find((x) => x.id === session_id);
+      if (!sess) return;
+      // Cap the tail we paste into the prompt — Rust already capped
+      // at 8 KB, this is a defensive second cap so a runaway log
+      // can't blow the agent's context window.
+      const capped = tail.length > 4000 ? `…${tail.slice(tail.length - 4000)}` : tail;
+      const header = timed_out
+        ? `[Woom: bg task ${task_id} hit the 30-minute watcher cap — may still be running]`
+        : `[Woom: bg task ${task_id} output went idle — likely complete]`;
+      const promptText = [
+        header,
+        '',
+        'Output tail:',
+        '```',
+        capped.trim() || '(empty)',
+        '```',
+        '',
+        'Continue from where you were. Run `BashOutput` on the task if you need more.',
+      ].join('\n');
+      // Sequence: set input → focus session → fire silent. The send
+      // path reads session.input. If the session is busy, the silent
+      // branch parks the prompt in `pendingSilentBySession` and the
+      // post-turn drain picks it up.
+      updateSession(session_id, { input: promptText });
+      sessionsState.activeIds[sess.agentKind] = session_id;
+      sessionsState.activeClaudeId = session_id;
+      await sendClaudeMessage({ silent: true, kind: sess.agentKind });
+    });
     /* Window close / dev reload safety net.
      *
      * The session persister debounces writes (see scheduleDiskWrite
@@ -1332,6 +1402,7 @@
     if (connectionRefreshInterval) clearInterval(connectionRefreshInterval);
     removeFocusListener?.();
     actionIpcUnlisten?.();
+    claudeBgUnlisten?.();
     tauriCloseUnlisten?.();
     if (beforeUnloadHandler && typeof window !== 'undefined') {
       window.removeEventListener('beforeunload', beforeUnloadHandler);
@@ -2664,9 +2735,18 @@
   async function onSddAdvance(sessionId: string, prompt: string): Promise<void> {
     const s = sessionsState.list.find((x) => x.id === sessionId);
     if (!s) return;
+    /* Pin the active-session pointers to the SDD session BEFORE the
+     *  send fires. `sendClaudeMessage` resolves its target via
+     *  `activeSession` (= `activeClaudeId`); without this, if the
+     *  user switched chats during the streaming phase the silent
+     *  send would target the wrong session and leave the SDD
+     *  session's `input` populated with the orchestrator prompt
+     *  while the spinner stays up on no actual run. */
+    sessionsState.activeClaudeId = sessionId;
+    sessionsState.activeIds[s.agentKind] = sessionId;
     updateSession(sessionId, { input: prompt });
     await Promise.resolve();
-    await sendClaudeMessage({ silent: true });
+    await sendClaudeMessage({ silent: true, kind: s.agentKind });
   }
 
   /** Options for `sendClaudeMessage`. `silent` is used by the SDD
@@ -3150,23 +3230,21 @@
      *  Re-read the workspace from disk so the inline card reflects the
      *  new state (stage transition, new phases, status flips, etc.).
      *  Fire-and-forget; the resulting `sdd:changed:<id>` event will
-     *  update the reactive store. */
+     *  update the reactive store and `maybeAutoFire` in
+     *  `sdd.svelte.ts` will dispatch the next pass via the
+     *  `setSddAutoFireDispatcher` callback (parking silently while
+     *  the current turn is still streaming, then drained by the
+     *  pendingSilent-drain in this finally block when sending=false
+     *  lands). The dispatcher path is the single source of truth for
+     *  three-call auto-fire — earlier this block ran a second
+     *  `onSddAdvance` here as a fallback, which raced the drain and
+     *  re-fired endlessly because no `lastAutoFireKey` guard was
+     *  applied (plan_body / summary stay set, so the body-presence
+     *  check kept returning true on every subsequent end-of-turn). */
     {
       const sddWs = workspaceForSession(id);
       if (sddWs) {
-        void refreshSdd(sddWs.id).then(async (fresh) => {
-          /* Auto-fire the workflow summary once the last phase
-           *  completes. `buildPromptForStage` returns the summary
-           *  template only when stage='complete' AND no SUMMARY.md
-           *  exists yet — so this fires exactly once per workspace.
-           *  Silent send, same lane as Approve clicks. */
-          if (!fresh) return;
-          if (fresh.stage.kind !== 'complete') return;
-          if (fresh.summary_body) return;
-          const { buildPromptForStage } = await import('$lib/state/sdd.svelte');
-          const prompt = await buildPromptForStage(fresh);
-          if (prompt) await onSddAdvance(id, prompt);
-        });
+        void refreshSdd(sddWs.id);
       }
     }
     /* Stop hook — fires on every normal turn completion (errored OR
@@ -3230,8 +3308,18 @@
         const deferred = popPendingSilent(id);
         if (deferred && (sessAfterDrain?.pendingQueue?.length ?? 0) === 0) {
           updateSession(id, { input: deferred });
+          /* Pin the active-session pointers to `id` BEFORE the
+           *  microtask fires. `sendClaudeMessage` resolves its
+           *  target via `activeSession`; without this, if the
+           *  user switched chats during the stream the silent send
+           *  would target the wrong session — and the SDD session
+           *  would be left with `input` holding the orchestrator
+           *  prompt and no actual run kicking off, looking "hung". */
+          const kindForDrain = sessAfterDrain?.agentKind ?? 'claude';
+          sessionsState.activeClaudeId = id;
+          sessionsState.activeIds[kindForDrain] = id;
           queueMicrotask(() => {
-            void sendClaudeMessage({ silent: true });
+            void sendClaudeMessage({ silent: true, kind: kindForDrain });
           });
           /* Skip the normal pendingQueue drain below — the silent send
            *  we just fired will retrigger this whole `finally` block,

@@ -3,6 +3,7 @@ mod agent;
 mod bg_tasks;
 mod biometry;
 mod claude;
+mod claude_bg;
 mod claude_mcp;
 mod claude_quota;
 mod claudemd;
@@ -279,6 +280,7 @@ pub fn run() {
         .manage(watch::new_state())
         .manage(terminal::TerminalRegistry::default())
         .manage(bg_tasks::BgRegistry::new())
+        .manage(claude_bg::ClaudeBgRegistry::new())
         .manage(sdd::SddRegistry::new())
         .manage(std::sync::Arc::new(updater::UpdaterState::new()))
         .manage(action_ipc_state())
@@ -460,6 +462,13 @@ pub fn run() {
             bg_tasks::bg_logs,
             bg_tasks::bg_wait_line,
             bg_tasks::preview_open_window,
+            // Claude CLI background-task watcher — observes the
+            // `.output` files Claude writes under /tmp/claude-<uid>/…
+            // and emits `claude:bg_done` when the output goes idle so
+            // the frontend can auto-fire a silent continuation.
+            claude_bg::claude_bg_watch,
+            claude_bg::claude_bg_unwatch,
+            claude_bg::claude_bg_unwatch_session,
             // SDD (Spec-Driven Development) — orchestrated spec → plan
             // → phases workflow in a temp workspace under
             // `<app_data>/sdd-workspaces/<id>/`. See `sdd.rs`.
@@ -495,6 +504,7 @@ pub fn run() {
             sdd::sdd_get_phase_diff,
             sdd::sdd_get_file_diff,
             sdd::sdd_skip_phase_with_reason,
+            sdd::sdd_accept_phase_failed,
             sdd::sdd_append_action_log,
             sdd::sdd_append_action_log_batch,
             sdd::sdd_read_action_log,
@@ -1664,8 +1674,36 @@ async fn claude_drop_prewarm(
 }
 
 #[tauri::command]
-fn agent_status() -> AgentStatus {
-    agent::detect_all()
+async fn agent_status() -> AgentStatus {
+    /* spawn_blocking so a slow CLI detection (PATH walks, child
+     * `--version` invocations that take the full timeout) doesn't park
+     * the tokio runtime worker. Sync commands on the main IPC executor
+     * used to wedge the entire frontend's connection-status refresh —
+     * claudeStatus never resolved past `null`, and the user saw a
+     * permanent "Connect Claude Code first" empty state. With
+     * spawn_blocking the worker is free to service other invokes while
+     * detect_all completes (the per-call timeout in `read_version`
+     * still bounds the worst case). */
+    tokio::task::spawn_blocking(agent::detect_all)
+        .await
+        .unwrap_or_else(|_| AgentStatus {
+            claude: claude::ClaudeStatus {
+                detected: false,
+                path: None,
+                version: None,
+                has_config_dir: false,
+                has_api_key_env: false,
+                ready: false,
+            },
+            cursor: cursor::CursorStatus {
+                detected: false,
+                path: None,
+                version: None,
+                has_config_dir: false,
+                has_api_key_env: false,
+                ready: false,
+            },
+        })
 }
 
 /// Subscription / plan-usage panel — same numbers the Claude Code CLI

@@ -1480,6 +1480,13 @@ pub(crate) struct SddPhaseMeta {
     /// the audit log can read it without re-parsing markdown.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) skip_reason: Option<String>,
+    /// User-supplied reason when a failed phase was accepted as-is via
+    /// `sdd_accept_phase_failed` (failure card's "Accept anyway"
+    /// button). Mirrors the `accepted_reason` frontmatter key. Distinct
+    /// from `skip_reason` — accept flips status to `done`, skip flips
+    /// to `skipped`, so the audit semantics differ.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) accepted_reason: Option<String>,
     /// Number of retry attempts made on this phase. Bumped by
     /// `sdd_retry_phase` (and the edit-then-retry flow). The UI shows
     /// a soft warning starting at 3 — "3rd retry — consider editing
@@ -2746,6 +2753,74 @@ pub async fn sdd_skip_phase_with_reason(
             .with_phase(phase)
             .with_reason(trimmed)
             .with_after(serde_json::json!({"status": "skipped"})),
+    );
+    let snapshot = {
+        let mut w = cell.write();
+        rebuild_from_disk(&mut w)?;
+        w.clone()
+    };
+    emit_changed(&app, &id);
+    Ok(snapshot)
+}
+
+/// Accept a `failed` phase as-is — flips `status: failed` → `done`
+/// and records `accepted_reason` in the phase frontmatter + meta.json.
+/// Used by the failure card's "Accept anyway" button when the verifier
+/// flagged deviations the user has reviewed and decided are tolerable
+/// (e.g. acknowledged trade-offs documented in the verify summary).
+/// Requires a non-empty reason (min 5 chars) so the audit trail always
+/// has a why. Refuses to accept anything other than a `failed` phase —
+/// running / pending / done phases stay untouched.
+#[tauri::command]
+pub async fn sdd_accept_phase_failed(
+    app: AppHandle,
+    registry: State<'_, SddRegistry>,
+    id: String,
+    phase: u32,
+    reason: String,
+) -> Result<SddWorkspace, String> {
+    let trimmed = reason.trim();
+    if trimmed.len() < 5 {
+        return Err(
+            "accept reason must be at least 5 characters — explain why this failure is being accepted"
+                .into(),
+        );
+    }
+    let cell = registry
+        .workspaces
+        .read()
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| format!("unknown workspace {id}"))?;
+    let (path, root): (PathBuf, PathBuf) = {
+        let w = cell.read();
+        let p = w
+            .phases
+            .iter()
+            .find(|p| p.number == phase)
+            .ok_or_else(|| format!("phase {phase} not found"))?;
+        if p.status != "failed" {
+            return Err(format!(
+                "phase {phase} is `{}` — Accept only applies to failed phases",
+                p.status
+            ));
+        }
+        (PathBuf::from(&p.path), PathBuf::from(&w.root))
+    };
+    set_status_with_extras(
+        &path,
+        "done",
+        vec![("accepted_reason".to_string(), trimmed.to_string())],
+    )?;
+    let mut pm = read_phase_meta(&root, phase);
+    pm.accepted_reason = Some(trimmed.to_string());
+    let _ = write_phase_meta(&root, phase, &pm);
+    audit::append(
+        &root,
+        &audit::AuditEntry::new("user", "accept_phase_failed")
+            .with_phase(phase)
+            .with_reason(trimmed)
+            .with_after(serde_json::json!({"status": "done"})),
     );
     let snapshot = {
         let mut w = cell.write();

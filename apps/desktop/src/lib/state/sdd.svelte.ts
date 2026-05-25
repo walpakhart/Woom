@@ -428,9 +428,15 @@ export function showSddCard(workspaceId: string): void {
 }
 
 /** Predicate. Used by ChatThread's inlineActions snippet to skip
- *  rendering. */
+ *  rendering. `failed` workspaces are ALWAYS surfaced even when
+ *  previously hidden — failure carries user-actionable affordances
+ *  (Retry / Accept / Skip / Rollback) and a hidden failure card is a
+ *  footgun (workspace silently stuck with no entry point). */
 export function isSddCardHidden(workspaceId: string): boolean {
-  return !!sddState.hiddenWorkspaceIds[workspaceId];
+  if (!sddState.hiddenWorkspaceIds[workspaceId]) return false;
+  const ws = sddState.workspaces.find((w) => w.id === workspaceId);
+  if (ws && ws.stage.kind === 'failed') return false;
+  return true;
 }
 
 /** Open a workspace as a top-level read-only fullscreen overlay. Used
@@ -522,11 +528,99 @@ function bodyForKey(ws: SddWorkspace, key: string): string | null {
   return null;
 }
 
+/** Auto-fire dispatcher registry. `+page.svelte` registers an
+ *  implementation on mount that knows how to push a silent prompt
+ *  through `sendClaudeMessage({silent: true})`. The store calls
+ *  this whenever a workspace transitions into a stage that needs
+ *  the next agent turn fired without a user gate
+ *  (`phase_implementing` after `sdd_save_phase_plan`,
+ *  `phase_verifying` after `sdd_complete_phase_implement`,
+ *  `complete` after the last phase). Decouples store from chat
+ *  send pipeline. */
+type AutoFireDispatcher = (sessionId: string, prompt: string) => Promise<void> | void;
+let autoFireDispatcher: AutoFireDispatcher | null = null;
+export function setSddAutoFireDispatcher(fn: AutoFireDispatcher | null): void {
+  autoFireDispatcher = fn;
+}
+
+/** Per-session re-fire guard. Tracks the (stage_kind, phase) tuple
+ *  most recently dispatched for a session so we don't re-fire the
+ *  same prompt twice on repeated `sdd:changed` events. Cleared
+ *  whenever the stage changes naturally. */
+const lastAutoFireKey: Record<string, string> = {};
+
+async function maybeAutoFire(ws: SddWorkspace): Promise<void> {
+  if (!autoFireDispatcher) return;
+  if (!ws.session_id) return;
+  const stage = ws.stage;
+  let key = '';
+  let shouldFire = false;
+  if (stage.kind === 'phase_implementing') {
+    const ph = ws.phases.find((p) => p.number === stage.phase);
+    shouldFire = !!ph?.plan_body;
+    key = `phase_implementing:${stage.phase}`;
+  } else if (stage.kind === 'phase_verifying') {
+    const ph = ws.phases.find((p) => p.number === stage.phase);
+    shouldFire = !!ph?.summary;
+    key = `phase_verifying:${stage.phase}`;
+  } else if (stage.kind === 'complete') {
+    shouldFire = !ws.summary_body;
+    key = 'complete';
+  }
+  if (!shouldFire) return;
+  if (lastAutoFireKey[ws.session_id] === key) return;
+  lastAutoFireKey[ws.session_id] = key;
+  const prompt = await buildPromptForStage(ws);
+  if (!prompt) return;
+  try {
+    await autoFireDispatcher(ws.session_id, prompt);
+  } catch (e) {
+    console.warn('sdd autoFire dispatcher failed', e);
+    delete lastAutoFireKey[ws.session_id];
+  }
+}
+
+/** User-initiated re-fire for the current substep prompt. UI calls
+ *  this when an agent-turn ended without the auto-fire dispatcher
+ *  picking up — e.g. production bundle predates the auto-fire wiring,
+ *  or the agent silently dropped the turn. Bypasses the
+ *  `lastAutoFireKey` dedupe (the whole point is to retry) and supports
+ *  `phase_planning` in addition to the auto-fire stages, since the
+ *  initial plan-pass fire happens in `+page.svelte` and can fail there
+ *  too. Caller is expected to gate by `!sessionSending` so we don't
+ *  step on an in-flight turn. */
+export async function manualContinueSdd(id: string): Promise<void> {
+  if (!autoFireDispatcher) {
+    console.warn('sdd manualContinue: auto-fire dispatcher not registered');
+    return;
+  }
+  const ws = sddState.workspaces.find((w) => w.id === id);
+  if (!ws || !ws.session_id) return;
+  const stage = ws.stage;
+  if (
+    stage.kind !== 'phase_planning' &&
+    stage.kind !== 'phase_implementing' &&
+    stage.kind !== 'phase_verifying'
+  ) {
+    return;
+  }
+  const prompt = await buildPromptForStage(ws);
+  if (!prompt) return;
+  lastAutoFireKey[ws.session_id] = `${stage.kind}:${stage.phase}`;
+  try {
+    await autoFireDispatcher(ws.session_id, prompt);
+  } catch (e) {
+    console.warn('sdd manualContinue dispatch failed', e);
+    delete lastAutoFireKey[ws.session_id];
+  }
+}
+
 /** Initialise the global `sdd:changed` listener AND hydrate from disk.
  *  Idempotent — safe to call from `+page.svelte` onMount more than
  *  once. Hydration rebuilds any workspaces that existed before app
  *  restart, so the user's previous SDD session resumes seamlessly. */
 export async function initSdd(): Promise<void> {
+  console.log('[sdd] initSdd called, globalUnlisten:', !!sddState.globalUnlisten);
   if (sddState.globalUnlisten) return;
   sddState.globalUnlisten = await listen<string>('sdd:changed', async (evt) => {
     /* Broadcast carries the workspace id. Re-pull just that one — much
@@ -535,6 +629,10 @@ export async function initSdd(): Promise<void> {
     try {
       const ws = await invoke<SddWorkspace>('sdd_get', { id });
       upsertWorkspace(ws);
+      /* After every state change check if the new stage needs the
+       *  agent fired (three-call substep transitions / workflow
+       *  complete). Idempotent via `lastAutoFireKey`. */
+      void maybeAutoFire(ws);
       /* Agent-rewrite detection. For every stashed undo slot whose
        *  underlying body now DIFFERS from the snapshot we stashed at
        *  save time AND the change DIDN'T land within ~500ms of our
@@ -566,7 +664,18 @@ export async function initSdd(): Promise<void> {
    *  the user has to /sdd again. */
   try {
     const ws = await invoke<SddWorkspace[]>('sdd_hydrate');
+    console.log('[sdd] hydrated', ws.length, 'workspaces:', ws.map((w) => w.id));
     for (const w of ws) upsertWorkspace(w);
+    /* Hydrate-time auto-fire — if a workspace was left mid-substep
+     *  (e.g. agent ended the plan-pass turn but the implement-pass
+     *  never fired because the JS bundle predated the auto-fire fix),
+     *  catching up here means the user's next app launch unsticks
+     *  the workflow without manual intervention. The dispatcher
+     *  registers AFTER initSdd in `+page.svelte` onMount, so we
+     *  defer to the next microtask to give it a chance to land. */
+    queueMicrotask(() => {
+      for (const w of ws) void maybeAutoFire(w);
+    });
   } catch (e) {
     console.warn('sdd_hydrate failed', e);
   }
@@ -731,6 +840,31 @@ export async function skipSddPhaseWithReason(
     return ws;
   } catch (e) {
     console.warn('sdd_skip_phase_with_reason failed', e);
+    return null;
+  }
+}
+
+/** Accept a failed phase as-is — flips status from `failed` to `done`
+ *  with the user-supplied rationale persisted to phase frontmatter
+ *  + meta.json. Used by the failure card's "Accept anyway" button when
+ *  the user has reviewed verifier deviations and decided they are
+ *  tolerable trade-offs (e.g. agent's deviation notes already explain
+ *  why the gap is acceptable). Backend rejects reasons under 5 chars. */
+export async function acceptSddPhaseFailed(
+  id: string,
+  phase: number,
+  reason: string
+): Promise<SddWorkspace | null> {
+  try {
+    const ws = await invoke<SddWorkspace>('sdd_accept_phase_failed', {
+      id,
+      phase,
+      reason,
+    });
+    upsertWorkspace(ws);
+    return ws;
+  } catch (e) {
+    console.warn('sdd_accept_phase_failed failed', e);
     return null;
   }
 }
