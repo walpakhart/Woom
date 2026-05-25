@@ -64,6 +64,7 @@
   import SddFailureCard from './SddFailureCard.svelte';
   import SddAmendPanel from './SddAmendPanel.svelte';
   import SddConfigDrawer from './SddConfigDrawer.svelte';
+  import SddVerifyPane from './SddVerifyPane.svelte';
 
   interface Props {
     workspace: SddWorkspace;
@@ -986,53 +987,10 @@
             <Markdown source={body.markdown} />
           </div>
           {#if verifyForActiveStage}
-            <!-- Verify pane — structured render of phases/<slug>/verify.json.
-                 Surfaces below the regular body for completed phases so
-                 the user can scan task_compliance / deviations / notes
-                 without leaving the card. Empty fields hidden. See
-                 `spec-1` FR-10. -->
-            <div class="sdd-verify-pane" data-deviated={verifyForActiveStage.verdict.deviations.length > 0}>
-              <header class="sdd-verify-head mono">verify · phases/{verifyForActiveStage.slug}/verify.json</header>
-              {#if verifyForActiveStage.verdict.summary}
-                <p class="sdd-verify-summary">{verifyForActiveStage.verdict.summary}</p>
-              {/if}
-              {#if verifyForActiveStage.verdict.files_changed.length > 0}
-                <details class="sdd-verify-section">
-                  <summary class="mono">files changed · {verifyForActiveStage.verdict.files_changed.length}</summary>
-                  <ul class="sdd-verify-files mono">
-                    {#each verifyForActiveStage.verdict.files_changed as f (f)}
-                      <li>{f}</li>
-                    {/each}
-                  </ul>
-                </details>
-              {/if}
-              {#if verifyForActiveStage.verdict.task_compliance.length > 0}
-                <details class="sdd-verify-section">
-                  <summary class="mono">task compliance · {verifyForActiveStage.verdict.task_compliance.length}</summary>
-                  <ul class="sdd-verify-list">
-                    {#each verifyForActiveStage.verdict.task_compliance as t (t)}
-                      <li><span aria-label="passed">✓</span> {t}</li>
-                    {/each}
-                  </ul>
-                </details>
-              {/if}
-              {#if verifyForActiveStage.verdict.deviations.length > 0}
-                <details class="sdd-verify-section sdd-verify-section--warn" open>
-                  <summary class="mono">deviations · {verifyForActiveStage.verdict.deviations.length}</summary>
-                  <ul class="sdd-verify-list">
-                    {#each verifyForActiveStage.verdict.deviations as d (d)}
-                      <li><span aria-label="deviation">⚠️</span> {d}</li>
-                    {/each}
-                  </ul>
-                </details>
-              {/if}
-              {#if verifyForActiveStage.verdict.notes}
-                <details class="sdd-verify-section">
-                  <summary class="mono">notes</summary>
-                  <p class="sdd-verify-notes">{verifyForActiveStage.verdict.notes}</p>
-                </details>
-              {/if}
-            </div>
+            <SddVerifyPane
+              slug={verifyForActiveStage.slug}
+              verdict={verifyForActiveStage.verdict}
+            />
           {/if}
         {/if}
       {/if}
@@ -1947,60 +1905,7 @@
     margin-top: 2px;
   }
 
-  /* Verify pane — structured render of verify.json. Quiet card
-   * styling so it sits inline with the body without competing for
-   * attention. Deviations get a warn-tone accent. */
-  .sdd-verify-pane {
-    margin-top: 10px;
-    padding: 6px 0 4px 12px;
-    border-left: 2px solid color-mix(in srgb, var(--accent) 22%, transparent);
-    font-size: 12px;
-    color: var(--text-1);
-  }
-  .sdd-verify-pane[data-deviated="true"] {
-    border-left-color: color-mix(in srgb, var(--error) 50%, transparent);
-  }
-  .sdd-verify-head {
-    font-size: 10px;
-    color: var(--text-mute);
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    margin-bottom: 4px;
-  }
-  .sdd-verify-summary {
-    margin: 4px 0 6px 0;
-    line-height: 1.5;
-  }
-  .sdd-verify-section {
-    margin: 3px 0;
-  }
-  .sdd-verify-section > summary {
-    cursor: pointer;
-    font-size: 11px;
-    color: var(--text-mute);
-    padding: 2px 0;
-  }
-  .sdd-verify-section--warn > summary {
-    color: var(--error);
-  }
-  .sdd-verify-files, .sdd-verify-list {
-    margin: 4px 0 6px 0;
-    padding-left: 16px;
-    list-style: none;
-  }
-  .sdd-verify-files li {
-    padding: 1px 0;
-    color: var(--text-1);
-  }
-  .sdd-verify-list li {
-    padding: 2px 0;
-    line-height: 1.5;
-  }
-  .sdd-verify-notes {
-    margin: 4px 0;
-    color: var(--text-1);
-    font-style: italic;
-  }
+  /* Verify pane styles moved to ./SddVerifyPane.svelte (wave-14 split). */
 
   /* Actions row — buttons stay typographic but now have a visible
    *  hairline + readable text color so the user can find them
