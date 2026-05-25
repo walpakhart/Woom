@@ -61,6 +61,7 @@
     stageTone as _stageTone,
   } from './sddCardStage';
   import SddAuditOverlay from './SddAuditOverlay.svelte';
+  import SddFailureCard from './SddFailureCard.svelte';
 
   interface Props {
     workspace: SddWorkspace;
@@ -1148,81 +1149,17 @@
   {/if}
 
   {#if stage.kind === 'failed'}
-    <!-- Structured failure card — replaces v1's one-liner reason.
-         Header carries trigger label, body lists failed acceptance
-         checks (collapsible log_tail per check) + last action-log
-         entries before failure for context. Action row lives in the
-         main footer so chrome stays consistent with non-failed states. -->
-    <div class="sdd-failed">
-      <div class="sdd-failed-head">
-        <span class="sdd-failed-title">
-          {#if stage.failed_phase != null}
-            Phase {stage.failed_phase} failed
-          {:else}
-            Workflow failed
-          {/if}
-          {#if stage.trigger}
-            <span class="sdd-failed-trigger mono">· {stage.trigger.replace('_', ' ')}</span>
-          {/if}
-        </span>
-      </div>
-      <div class="sdd-failed-reason">{stage.reason}</div>
-
-      {#if (stage.failed_checks?.length ?? 0) > 0}
-        <div class="sdd-failed-checks-line mono">
-          Failed checks: {(stage.failed_checks ?? []).map((i) => `#${i + 1}`).join(', ')}
-        </div>
-      {/if}
-
-      {#if (stage.action_log_tail?.length ?? 0) > 0}
-        <details class="sdd-failed-tail">
-          <summary class="mono">
-            Last actions · {stage.action_log_tail?.length ?? 0}
-          </summary>
-          <ul class="sdd-failed-tail-list">
-            {#each (stage.action_log_tail ?? []).slice(-5) as e, idx (e.correlation_id ?? `${e.ts}-${e.kind}-${idx}`)}
-              <li class="sdd-failed-tail-row mono" data-status={e.status ?? 'done'}>
-                <span class="sdd-activity-tool">{e.tool ?? e.kind}</span>
-                <span class="sdd-activity-summary">{e.summary}</span>
-              </li>
-            {/each}
-          </ul>
-        </details>
-      {/if}
-
-      {#if skipMode}
-        <div class="sdd-skip">
-          <textarea
-            class="sdd-skip-area mono"
-            bind:value={skipDraft}
-            placeholder="Why is this phase being skipped? (min 5 chars — recorded for audit)"
-            rows="3"
-            spellcheck="false"
-            {@attach (node: HTMLTextAreaElement) => node.focus()}
-            onkeydown={(e) => {
-              if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); void submitSkip(); }
-              if (e.key === 'Escape') { e.preventDefault(); cancelSkip(); }
-            }}
-          ></textarea>
-        </div>
-      {/if}
-      {#if acceptMode}
-        <div class="sdd-skip">
-          <textarea
-            class="sdd-skip-area mono"
-            bind:value={acceptDraft}
-            placeholder="Why are these deviations acceptable? (min 5 chars — recorded for audit, phase flips to done)"
-            rows="3"
-            spellcheck="false"
-            {@attach (node: HTMLTextAreaElement) => node.focus()}
-            onkeydown={(e) => {
-              if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); void submitAccept(); }
-              if (e.key === 'Escape') { e.preventDefault(); cancelAccept(); }
-            }}
-          ></textarea>
-        </div>
-      {/if}
-    </div>
+    <SddFailureCard
+      {stage}
+      {skipMode}
+      bind:skipDraft
+      onSubmitSkip={submitSkip}
+      onCancelSkip={cancelSkip}
+      {acceptMode}
+      bind:acceptDraft
+      onSubmitAccept={submitAccept}
+      onCancelAccept={cancelAccept}
+    />
   {/if}
 
   {#if amendMode}
@@ -1978,80 +1915,8 @@
    *  trigger badge, body lists failed checks + last actions, footer
    *  chrome (retry / edit / skip / rollback) lives in the main
    *  actions row so layout stays consistent. */
-  .sdd-failed {
-    display: flex; flex-direction: column;
-    gap: 6px;
-    padding: 4px 0 4px 10px;
-    border-left: 2px solid color-mix(in srgb, #e0b16c 75%, transparent);
-    background: color-mix(in srgb, #e0b16c 6%, transparent);
-    color: var(--text-1);
-    font-size: 12.5px;
-    line-height: 1.5;
-  }
-  .sdd-failed-head {
-    display: flex; align-items: center;
-    gap: 8px;
-  }
-  .sdd-failed-title {
-    font-size: 12.5px;
-    font-weight: 500;
-    color: var(--text-0);
-  }
-  .sdd-failed-trigger {
-    color: var(--text-mute);
-    font-size: 11px;
-    font-weight: 400;
-  }
-  .sdd-failed-reason {
-    color: var(--text-1);
-  }
-  .sdd-failed-checks-line {
-    color: var(--text-mute);
-    font-size: 11.5px;
-  }
-  .sdd-failed-tail summary,
-  .sdd-failed-checks summary {
-    cursor: pointer;
-    color: var(--text-mute);
-    font-size: 11px;
-    user-select: none;
-  }
-  .sdd-failed-tail-list {
-    list-style: none;
-    padding: 4px 0 0 0;
-    margin: 0;
-    display: flex; flex-direction: column;
-    gap: 2px;
-  }
-  .sdd-failed-tail-row {
-    display: flex; gap: 8px;
-    color: var(--text-mute);
-    font-size: 11px;
-  }
-  .sdd-failed-tail-row .sdd-activity-summary {
-    color: var(--text-1);
-  }
-  /* Inline skip-with-reason form — sits inside the failure card. */
-  .sdd-skip {
-    display: flex;
-  }
-  .sdd-skip-area {
-    width: 100%;
-    min-height: 64px;
-    padding: 6px 0 6px 10px;
-    border: 0;
-    border-left: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
-    background: color-mix(in srgb, var(--bg-0) 70%, transparent);
-    color: var(--text-0);
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 12px;
-    line-height: 1.5;
-    resize: vertical;
-    outline: 0;
-  }
-  .sdd-skip-area:focus {
-    border-left-color: var(--accent);
-  }
+  /* Failure-card + skip/accept textarea styles moved to
+   * ./SddFailureCard.svelte (wave-9 split). */
 
   /* Phase-diff drawer — same chevron + mono-title grammar as
    *  `.sdd-body-toggle` so it reads as another expandable section
