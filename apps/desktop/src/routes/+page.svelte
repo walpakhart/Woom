@@ -48,6 +48,11 @@
     str as _mcpStr,
   } from './mcpInputParse';
   import {
+    actionMatchesIpcParams,
+    buildActionFromIpcRequest,
+    type ActionRequestPayload,
+  } from './actionIpcConverters';
+  import {
     restoreCanvasState,
     dropCanvasInstance,
     ensureCanvasLoaded,
@@ -821,12 +826,7 @@
   let beforeUnloadHandler: (() => void) | null = null;
   let closeFlushInProgress = false;
 
-  type ActionRequestPayload = {
-    session_id: string;
-    wait_id: string;
-    kind: 'bash' | 'commit' | 'pr' | 'switch_cwd' | 'question';
-    params: Record<string, unknown>;
-  };
+  /* ActionRequestPayload moved to ./actionIpcConverters.ts */
 
   /** Match an IPC `propose_*` request to a pending action card and
    *  attach its `waitId`. Two arrival orderings need to work:
@@ -898,106 +898,8 @@
     if (fresh) addAction(payload.session_id, fresh);
   }
 
-  function actionMatchesIpcParams(
-    a: ClaudeAction,
-    kind: ActionRequestPayload['kind'],
-    params: Record<string, unknown>
-  ): boolean {
-    if (a.kind !== kind) return false;
-    if (kind === 'bash')
-      return a.kind === 'bash' && a.command === String(params.command ?? '');
-    if (kind === 'commit')
-      return a.kind === 'commit' && a.message === String(params.message ?? '');
-    if (kind === 'pr')
-      return a.kind === 'pr' && a.title === String(params.title ?? '');
-    if (kind === 'switch_cwd')
-      return a.kind === 'switch_cwd' && a.path === String(params.path ?? '');
-    return false;
-  }
-
-  function buildActionFromIpcRequest(p: ActionRequestPayload): ClaudeAction | null {
-    const id = (typeof crypto !== 'undefined' && crypto.randomUUID)
-      ? crypto.randomUUID()
-      : `act-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const px = p.params;
-    if (p.kind === 'bash') {
-      return {
-        id,
-        kind: 'bash',
-        command: String(px.command ?? ''),
-        reason: typeof px.reason === 'string' ? px.reason : '',
-        status: 'pending',
-        waitId: p.wait_id
-      };
-    }
-    if (p.kind === 'commit') {
-      return {
-        id,
-        kind: 'commit',
-        message: String(px.message ?? ''),
-        body: typeof px.body === 'string' ? px.body : '',
-        push: px.push !== false,
-        note: typeof px.note === 'string' ? px.note : '',
-        status: 'pending',
-        waitId: p.wait_id
-      };
-    }
-    if (p.kind === 'pr') {
-      return {
-        id,
-        kind: 'pr',
-        title: String(px.title ?? ''),
-        body: typeof px.body === 'string' ? px.body : '',
-        base: typeof px.base === 'string' ? px.base : '',
-        draft: px.draft === true,
-        note: typeof px.note === 'string' ? px.note : '',
-        status: 'pending',
-        waitId: p.wait_id
-      };
-    }
-    if (p.kind === 'switch_cwd') {
-      return {
-        id,
-        kind: 'switch_cwd',
-        path: String(px.path ?? ''),
-        reason: typeof px.reason === 'string' ? px.reason : '',
-        status: 'pending',
-        waitId: p.wait_id
-      };
-    }
-    if (p.kind === 'question') {
-      const opts = Array.isArray(px.options) ? px.options : [];
-      /* The sidecar normalises `kind` for us (single/multi/text/confirm),
-       * but older serialised sessions may still carry only `multi_select`
-       * — derive from that as a fallback so resumed turns keep working. */
-      const rawKind = typeof px.kind === 'string' ? px.kind : '';
-      const questionKind: 'single' | 'multi' | 'text' | 'confirm' =
-        rawKind === 'multi'   ? 'multi'   :
-        rawKind === 'text'    ? 'text'    :
-        rawKind === 'confirm' ? 'confirm' :
-        rawKind === 'single'  ? 'single'  :
-        px.multi_select === true ? 'multi' : 'single';
-      return {
-        id,
-        kind: 'question',
-        questionKind,
-        question: String(px.question ?? ''),
-        header: typeof px.header === 'string' ? px.header : undefined,
-        options: opts
-          .map((o) => (typeof o === 'object' && o !== null
-            ? { label: String((o as Record<string, unknown>).label ?? ''),
-                description: typeof (o as Record<string, unknown>).description === 'string'
-                  ? String((o as Record<string, unknown>).description)
-                  : undefined }
-            : { label: String(o) }))
-          .filter((o) => o.label.length > 0),
-        multiSelect: questionKind === 'multi',
-        status: 'pending',
-        waitId: p.wait_id
-      };
-    }
-    return null;
-  }
+  /* actionMatchesIpcParams + buildActionFromIpcRequest moved to
+   * ./actionIpcConverters.ts (wave-3 phase-9 split). */
 
   // Wire the layout→sessions hook once. If a singleton's data is ever
   // explicitly cleared, its pinned sessions float back to the pool so
