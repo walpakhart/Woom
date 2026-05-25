@@ -34,6 +34,7 @@ mod sdd_phase_config;
 mod sdd_phase_io;
 mod sdd_plan;
 mod sdd_plan_helpers;
+mod sdd_skip_commands;
 mod sdd_structure_commands;
 mod sdd_prompts;
 mod sdd_substep;
@@ -511,7 +512,7 @@ pub fn run() {
             sdd::sdd_approve_phase_plan,
             sdd::sdd_discard_phase_plan,
             sdd::sdd_set_phase_execution_config,
-            sdd::sdd_skip_phase,
+            sdd_skip_commands::sdd_skip_phase,
             sdd_structure_commands::sdd_insert_phase,
             sdd_structure_commands::sdd_reorder_phases,
             sdd_structure_commands::sdd_delete_phase,
@@ -523,8 +524,8 @@ pub fn run() {
             sdd_git_commands::sdd_get_git_state,
             sdd_git_commands::sdd_get_phase_diff,
             sdd_git_commands::sdd_get_file_diff,
-            sdd::sdd_skip_phase_with_reason,
-            sdd::sdd_accept_phase_failed,
+            sdd_skip_commands::sdd_skip_phase_with_reason,
+            sdd_skip_commands::sdd_accept_phase_failed,
             sdd_action_log_commands::sdd_append_action_log,
             sdd_action_log_commands::sdd_append_action_log_batch,
             sdd_action_log_commands::sdd_read_action_log,
