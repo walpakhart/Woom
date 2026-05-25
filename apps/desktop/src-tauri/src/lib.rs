@@ -20,6 +20,7 @@ mod library;
 mod memory_local;
 mod sdd;
 mod sdd_action_log;
+mod sdd_action_log_commands;
 mod sdd_audit;
 mod sdd_audit_commands;
 mod sdd_frontmatter;
@@ -521,9 +522,9 @@ pub fn run() {
             sdd::sdd_get_file_diff,
             sdd::sdd_skip_phase_with_reason,
             sdd::sdd_accept_phase_failed,
-            sdd::sdd_append_action_log,
-            sdd::sdd_append_action_log_batch,
-            sdd::sdd_read_action_log,
+            sdd_action_log_commands::sdd_append_action_log,
+            sdd_action_log_commands::sdd_append_action_log_batch,
+            sdd_action_log_commands::sdd_read_action_log,
             sdd_audit_commands::sdd_audit_append,
             sdd_audit_commands::sdd_audit_read,
             sdd_audit_commands::sdd_validate_mutation,
