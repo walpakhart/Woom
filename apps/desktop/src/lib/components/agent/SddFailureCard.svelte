@@ -69,7 +69,7 @@
         Last actions · {stage.action_log_tail?.length ?? 0}
       </summary>
       <ul class="sdd-failed-tail-list">
-        {#each (stage.action_log_tail ?? []).slice(-5) as e, idx (e.correlation_id ?? `${e.ts}-${e.kind}-${idx}`)}
+        {#each (stage.action_log_tail ?? []).slice(-5) as e, idx (e.correlation_id || `${e.ts}-${e.kind}-${idx}`)}
           <li class="sdd-failed-tail-row mono" data-status={e.status ?? 'done'}>
             <span class="sdd-activity-tool">{e.tool ?? e.kind}</span>
             <span class="sdd-activity-summary">{e.summary}</span>
