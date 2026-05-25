@@ -33,6 +33,7 @@ mod sdd_prompts;
 mod sdd_substep;
 mod sdd_time;
 mod sdd_verify;
+mod sdd_watcher;
 mod sentry;
 mod skills;
 mod statusline;

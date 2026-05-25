@@ -294,7 +294,7 @@ use crate::sdd_frontmatter::write_with_frontmatter;
 /// thread can keep its own clone and refresh workspaces without going
 /// through Tauri's `State<'_, SddRegistry>` (which is bound to the
 /// command's lifetime).
-type SharedWorkspaces = Arc<RwLock<HashMap<String, Arc<RwLock<SddWorkspace>>>>>;
+pub(crate) type SharedWorkspaces = Arc<RwLock<HashMap<String, Arc<RwLock<SddWorkspace>>>>>;
 
 pub struct SddRegistry {
     workspaces: SharedWorkspaces,
@@ -626,25 +626,8 @@ pub(crate) use crate::sdd_meta::{read_phase_meta, write_phase_meta};
 #[allow(unused_imports)]
 pub(crate) use crate::sdd_hydrate::{read_action_log_tail, read_failed_check_indices};
 
-pub(crate) fn read_workspace_meta(workspace_root: &Path) -> SddMeta {
-    let raw = std::fs::read_to_string(workspace_root.join("meta.json")).unwrap_or_default();
-    if raw.trim().is_empty() {
-        return SddMeta::default();
-    }
-    serde_json::from_str(&raw).unwrap_or_default()
-}
-
-pub(crate) fn write_workspace_meta(
-    workspace_root: &Path,
-    meta: &SddMeta,
-) -> Result<(), String> {
-    let path = workspace_root.join("meta.json");
-    let body = serde_json::to_string_pretty(meta).map_err(|e| format!("serialize meta: {e}"))?;
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, body).map_err(|e| format!("write meta tmp: {e}"))?;
-    std::fs::rename(&tmp, &path).map_err(|e| format!("rename meta: {e}"))?;
-    Ok(())
-}
+// workspace_meta R/W moved to ./sdd_meta.rs (wave-6 follow-up).
+use crate::sdd_meta::{read_workspace_meta, write_workspace_meta};
 
 #[tauri::command]
 pub async fn sdd_get(
@@ -2714,119 +2697,8 @@ pub async fn sdd_discard(
     Ok(())
 }
 
-fn emit_changed(app: &AppHandle, id: &str) {
-    // Per-workspace targeted event + a broad "something changed" event
-    // for any "list of all workspaces" UI we add later (none right now).
-    let _ = app.emit(&format!("sdd:changed:{id}"), &id);
-    let _ = app.emit("sdd:changed", &id);
-}
-
-/// Boot the filesystem watcher on first workspace creation. Spawns one
-/// background OS thread that drains `notify` events, debounces them per
-/// workspace, rebuilds the workspace from disk, and emits
-/// `sdd:changed:<id>`.
-///
-/// Watching the BASE dir recursively (vs per-workspace) lets us handle
-/// "new workspace created" + "old workspace removed" without re-arming
-/// the watcher each time. Cheap — base dir is single-purpose so there
-/// are no other write sources to filter against.
-///
-/// Debounce: 250 ms per workspace. The agent often writes a file then
-/// updates frontmatter immediately after; without debouncing we'd
-/// rebuild twice in quick succession and the UI would flicker.
-fn ensure_watcher(
-    app: &AppHandle,
-    workspaces: SharedWorkspaces,
-    watcher_slot: &parking_lot::Mutex<Option<notify::RecommendedWatcher>>,
-    base_dir: &Path,
-) -> Result<(), String> {
-    use notify::{EventKind, RecursiveMode, Watcher};
-    let mut guard = watcher_slot.lock();
-    if guard.is_some() {
-        return Ok(());
-    }
-    let (tx, rx) = std::sync::mpsc::channel::<notify::Result<notify::Event>>();
-    let mut w = notify::recommended_watcher(tx).map_err(|e| format!("watcher init: {e}"))?;
-    w.watch(base_dir, RecursiveMode::Recursive)
-        .map_err(|e| format!("watch {}: {e}", base_dir.display()))?;
-    *guard = Some(w);
-    drop(guard);
-
-    let workspaces2 = Arc::clone(&workspaces);
-    let app2 = app.clone();
-    std::thread::spawn(move || {
-        use std::time::{Duration, Instant};
-        let debounce = Duration::from_millis(250);
-        let mut last_emit: HashMap<String, Instant> = HashMap::new();
-        while let Ok(res) = rx.recv() {
-            let Ok(evt) = res else { continue };
-            /* Filter to mutation events only — `notify` also emits
-             *  "Any" / metadata-only events on some platforms that
-             *  don't carry useful info. We only care about content
-             *  changes (file added / modified / removed). */
-            if !matches!(
-                evt.kind,
-                EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
-            ) {
-                continue;
-            }
-            /* Ignore noise:
-             *  - `.tmp` writes from our atomic rename pattern (we'd see
-             *    both the tmp create AND the rename-target create —
-             *    only the latter is real "content changed")
-             *  - `meta.json` side-car (session_id / user_prompt — doesn't
-             *    affect stage, would cause spurious rebuilds on init)
-             *  - anything inside `control/` (pause/stop signal files;
-             *    those are HANDLED by the agent reading them, not by
-             *    the stage-derivation path). */
-            let ignore = evt.paths.iter().any(|p| {
-                if p.extension().is_some_and(|e| e == "tmp") { return true; }
-                if p.file_name().is_some_and(|n| n == "meta.json") { return true; }
-                p.components().any(|c| c.as_os_str() == "control")
-            });
-            if ignore { continue; }
-
-            /* For each affected path, find the owning workspace
-             *  (workspace whose root is an ancestor of the path). */
-            let mut hit_workspaces: Vec<String> = Vec::new();
-            {
-                let map = workspaces2.read();
-                for path in &evt.paths {
-                    for (id, cell) in map.iter() {
-                        let root = PathBuf::from(cell.read().root.clone());
-                        if path.starts_with(&root) {
-                            if !hit_workspaces.contains(id) {
-                                hit_workspaces.push(id.clone());
-                            }
-                            break;
-                        }
-                    }
-                }
-            }
-            for id in hit_workspaces {
-                let now = Instant::now();
-                if let Some(&last) = last_emit.get(&id) {
-                    if now.duration_since(last) < debounce {
-                        continue;
-                    }
-                }
-                last_emit.insert(id.clone(), now);
-                /* Rebuild from disk under write lock; drop the lock
-                 *  before emitting the event to keep the lock window
-                 *  short. */
-                {
-                    let map = workspaces2.read();
-                    let Some(cell) = map.get(&id).cloned() else { continue };
-                    drop(map);
-                    let mut w = cell.write();
-                    let _ = rebuild_from_disk(&mut w);
-                }
-                emit_changed(&app2, &id);
-            }
-        }
-    });
-    Ok(())
-}
+// ensure_watcher + emit_changed moved to ./sdd_watcher.rs (wave-7 split).
+use crate::sdd_watcher::{emit_changed, ensure_watcher};
 
 // ---------------------------------------------------------------------------
 // Audit log — append-only JSONL of every workspace mutation, regardless of

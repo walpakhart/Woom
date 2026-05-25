@@ -121,3 +121,29 @@ pub(crate) fn write_phase_meta(
     std::fs::rename(&tmp, &path).map_err(|e| format!("rename phase-meta: {e}"))?;
     Ok(())
 }
+
+/// Read `<workspace>/meta.json` into an SddMeta — fail-open: missing,
+/// empty, or parse-broken file all yield `Default`. Used by phase
+/// approval / save / verify command paths to read the orchestrator
+/// config + retain unknown fields on round-trip.
+pub(crate) fn read_workspace_meta(workspace_root: &Path) -> SddMeta {
+    let raw = std::fs::read_to_string(workspace_root.join("meta.json")).unwrap_or_default();
+    if raw.trim().is_empty() {
+        return SddMeta::default();
+    }
+    serde_json::from_str(&raw).unwrap_or_default()
+}
+
+/// Atomically write `<workspace>/meta.json` (.tmp + rename so a
+/// concurrent reader never observes a torn file).
+pub(crate) fn write_workspace_meta(
+    workspace_root: &Path,
+    meta: &SddMeta,
+) -> Result<(), String> {
+    let path = workspace_root.join("meta.json");
+    let body = serde_json::to_string_pretty(meta).map_err(|e| format!("serialize meta: {e}"))?;
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, body).map_err(|e| format!("write meta tmp: {e}"))?;
+    std::fs::rename(&tmp, &path).map_err(|e| format!("rename meta: {e}"))?;
+    Ok(())
+}
