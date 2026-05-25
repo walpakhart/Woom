@@ -53,6 +53,7 @@
   import { handleSlashCommand as handleSlashCommandImpl } from './handleSlashCommand';
   import * as _modalActions from './modalActions';
   import * as _agentDrop from './agentDrop';
+  import * as _worktree from './worktreeActions';
   import {
     actionMatchesIpcParams,
     buildActionFromIpcRequest,
@@ -1913,70 +1914,12 @@
     woom_session: string | null;
   }
 
-  async function createWorktree() {
-    if (!activeSession) return;
-    const repo = activeSession.cwd || editorRepoPath;
-    if (!repo) {
-      notify({
-        kind: 'warning',
-        title: 'No repository picked',
-        body: 'Worktrees need a git repo to branch off — open a folder in the Editor or pick one as cwd.'
-      });
-      return;
-    }
-    const ok = confirm(
-      `Isolate this Claude session in its own git worktree?\n\n` +
-      `Woom will create a fresh branch "woom/${activeSession.id.slice(0, 8)}" ` +
-      `off your current HEAD and check it out into a private directory.\n\n` +
-      `Your main working tree stays untouched. Claude will only write there.`
-    );
-    if (!ok) return;
-    worktreeBusy = 'creating';
-    try {
-      const info = await invoke<WorktreeInfo>('worktree_create', {
-        repo,
-        sessionId: activeSession.id,
-        baseRef: null
-      });
-      updateSession(activeSession.id, {
-        worktreePath: info.path,
-        worktreeBranch: info.branch,
-        worktreeRepo: repo
-      });
-    } catch (e) {
-      notifyError(e, { title: 'Failed to create worktree' });
-    } finally {
-      worktreeBusy = null;
-    }
+  async function createWorktree(): Promise<void> {
+    return _worktree.createWorktree(_worktreeDeps());
   }
 
-  async function removeWorktree() {
-    if (!activeSession || !activeSession.worktreePath || !activeSession.worktreeRepo) return;
-    const branch = activeSession.worktreeBranch ?? '(unknown branch)';
-    const ok = confirm(
-      `Remove the isolated worktree for this session?\n\n` +
-      `Branch ${branch} will be force-deleted along with any uncommitted work ` +
-      `inside it. If you want to keep Claude's changes, merge or push the ` +
-      `branch first.`
-    );
-    if (!ok) return;
-    worktreeBusy = 'removing';
-    worktreeMenuOpen = false;
-    try {
-      await invoke('worktree_remove', {
-        repo: activeSession.worktreeRepo,
-        sessionId: activeSession.id
-      });
-      updateSession(activeSession.id, {
-        worktreePath: null,
-        worktreeBranch: null,
-        worktreeRepo: null
-      });
-    } catch (e) {
-      notifyError(e, { title: 'Failed to remove worktree' });
-    } finally {
-      worktreeBusy = null;
-    }
+  async function removeWorktree(): Promise<void> {
+    return _worktree.removeWorktree(_worktreeDeps());
   }
 
   /** Ensure at least one editor column instance exists, set its repo path,
@@ -2033,12 +1976,8 @@
     worktreeMenuOpen = !worktreeMenuOpen;
   }
 
-  async function copyWorktreeBranch() {
-    if (!activeSession?.worktreeBranch) return;
-    try {
-      await navigator.clipboard.writeText(activeSession.worktreeBranch);
-    } catch {/* ignore */}
-    worktreeMenuOpen = false;
+  async function copyWorktreeBranch(): Promise<void> {
+    return _worktree.copyWorktreeBranch(_worktreeDeps());
   }
 
   let worktreeDiffOpen = $state(false);
@@ -2047,38 +1986,15 @@
     worktreeDiffOpen = true;
   }
 
-  async function applyWorktree() {
-    if (!activeSession || !activeSession.worktreePath || !activeSession.worktreeRepo || !activeSession.worktreeBranch) return;
-    const ok = confirm(
-      `Apply Claude's work to your current branch?\n\n` +
-      `Woom will run \`git merge --no-ff ${activeSession.worktreeBranch}\` in ${activeSession.worktreeRepo} ` +
-      `and then remove the isolated worktree.\n\n` +
-      `Make sure your main repo is checked out to the branch you want to merge into, ` +
-      `and that its working tree is clean. If the merge has conflicts, the worktree stays — resolve conflicts in the main repo, commit, then discard the worktree manually.`
-    );
-    if (!ok) return;
-    worktreeBusy = 'removing';
-    worktreeMenuOpen = false;
-    try {
-      const msg = await invoke<string>('worktree_apply', {
-        repo: activeSession.worktreeRepo,
-        sessionId: activeSession.id
-      });
-      updateSession(activeSession.id, {
-        worktreePath: null,
-        worktreeBranch: null,
-        worktreeRepo: null
-      });
-      notify({ kind: 'success', title: 'Worktree applied', body: msg });
-    } catch (e) {
-      notifyError(e, {
-        title: 'Apply failed',
-        body: 'Worktree is preserved — resolve conflicts in the main repo, then retry.'
-      });
-    } finally {
-      worktreeBusy = null;
-    }
+  async function applyWorktree(): Promise<void> {
+    return _worktree.applyWorktree(_worktreeDeps());
   }
+  const _worktreeDeps = (): import('./worktreeActions').WorktreeDeps => ({
+    getActiveSession: () => activeSession,
+    getEditorRepoPath: () => editorRepoPath,
+    setWorktreeBusy: (s) => { worktreeBusy = s; },
+    setWorktreeMenuOpen: (v) => { worktreeMenuOpen = v; },
+  });
 
   async function scrollChatBottom() {
     await tick();
