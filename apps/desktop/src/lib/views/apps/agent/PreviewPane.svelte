@@ -339,7 +339,7 @@
         <div class="pv-detail-cmd mono" title={activeTask.cmd}>{activeTask.cmd}</div>
         {#if primaryUrl(activeTask)}
           <div class="pv-detail-urls">
-            {#each activeTask.detected_urls as u (u)}
+            {#each activeTask.detected_urls as u, _i (u + '|' + _i)}
               <button class="pv-url-chip mono" onclick={() => openUrl(u)} title="Open in browser">{u}</button>
             {/each}
           </div>

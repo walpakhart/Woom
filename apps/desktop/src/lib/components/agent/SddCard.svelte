@@ -852,7 +852,7 @@
 
   {#if p.workspace.phases.length > 0}
     <div class="sdd-phases">
-      {#each p.workspace.phases as ph (ph.number)}
+      {#each p.workspace.phases as ph, _i (ph.number + '|' + _i)}
         <button
           type="button"
           class="sdd-phase-pill"

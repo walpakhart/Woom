@@ -843,7 +843,7 @@
     >
       {#if attachments.length > 0}
         <div class="cmp-attach">
-          {#each attachments as a (a.mention.source + ':' + a.mention.externalId)}
+          {#each attachments as a, i (a.mention.source + ':' + a.mention.externalId + '|' + i)}
             {#if a.isImage && a.fileSrc}
               <span class="cmp-attach-img" title={a.mention.title}>
                 <img src={a.fileSrc} alt={a.mention.title} loading="lazy" />
@@ -1121,7 +1121,7 @@
            above. Picker stays open while the input is a single bare
            slash token; a space or no-match dismisses. -->
       <div class="slash-picker" role="listbox" aria-label="Slash command picker">
-        {#each slashMatches as cmd, idx (cmd)}
+        {#each slashMatches as cmd, idx (cmd + '|' + idx)}
           <button
             type="button"
             class="slash-item"

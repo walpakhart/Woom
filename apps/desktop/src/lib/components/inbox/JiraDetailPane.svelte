@@ -462,7 +462,7 @@
             </div>
           {:else if detail.labels.length}
             <div class="jdp-meta-val jdp-labels">
-              {#each detail.labels as l (l)}<span class="jdp-label mono">{l}</span>{/each}
+              {#each detail.labels as l, _i (l + '|' + _i)}<span class="jdp-label mono">{l}</span>{/each}
             </div>
           {:else}
             <span class="jdp-none">no labels</span>
