@@ -16,6 +16,7 @@ mod github;
 mod github_commands;
 mod hooks;
 mod jira;
+mod jira_commands;
 mod keychain;
 mod library;
 mod memory_local;
@@ -46,6 +47,7 @@ mod sdd_verify;
 mod sdd_verify_recover_commands;
 mod sdd_watcher;
 mod sentry;
+mod sentry_commands;
 mod skills;
 mod statusline;
 mod terminal;
@@ -63,14 +65,11 @@ use tauri::State;
 // GithubUser stays here for ConnectionStatus's `Connected { user }`
 // variant.
 use github::GithubUser;
-use jira::{
-    JiraBoard, JiraComment, JiraCredentials, JiraDetail, JiraIssueType, JiraItem, JiraProject,
-    JiraSprint, JiraStatus as JiraWorkflowStatus, JiraUser, JiraUserSummary, JiraWorklog,
-};
-use sentry::{
-    SentryCredentials, SentryEnvironment, SentryEvent, SentryEventDetail, SentryIssue,
-    SentryProject, SentryUser,
-};
+// Most jira::* and sentry::* types live inside ./jira_commands.rs and
+// ./sentry_commands.rs now. Keep only what's still referenced from
+// the shared types (`JiraStatus { user }` + `SentryConnectionStatus { user }`).
+use jira::JiraUser;
+use sentry::SentryUser;
 use serde::Serialize;
 use watch::WatcherState;
 use worktree::{Worktree, WorktreeChangedFile};
@@ -348,41 +347,41 @@ pub fn run() {
             github_commands::github_set_pr_draft,
             github_commands::github_compare,
             github_commands::github_create_pr,
-            jira_connect,
-            jira_status,
-            jira_disconnect,
-            sentry_connect,
-            sentry_status,
-            sentry_disconnect,
-            sentry_list_issues,
-            sentry_get_issue,
-            sentry_list_events,
-            sentry_list_projects,
-            sentry_list_environments,
-            sentry_get_event_detail,
-            sentry_set_status,
+            jira_commands::jira_connect,
+            jira_commands::jira_status,
+            jira_commands::jira_disconnect,
+            sentry_commands::sentry_connect,
+            sentry_commands::sentry_status,
+            sentry_commands::sentry_disconnect,
+            sentry_commands::sentry_list_issues,
+            sentry_commands::sentry_get_issue,
+            sentry_commands::sentry_list_events,
+            sentry_commands::sentry_list_projects,
+            sentry_commands::sentry_list_environments,
+            sentry_commands::sentry_get_event_detail,
+            sentry_commands::sentry_set_status,
             cursor_mcp_sync,
-            jira_list_inbox,
-            jira_list_inbox_for,
-            jira_search,
-            jira_list_projects,
-            jira_list_boards,
-            jira_list_sprints,
-            jira_list_statuses,
-            jira_list_issue_types,
-            jira_create_issue,
-            jira_search_users,
-            jira_list_assignable_users,
-            jira_get_issue_detail,
-            jira_update_issue,
-            jira_transition_issue,
-            jira_set_assignee,
-            jira_set_priority,
-            jira_set_labels,
-            jira_add_comment,
-            jira_list_worklogs,
-            jira_add_worklog,
-            jira_delete_worklog,
+            jira_commands::jira_list_inbox,
+            jira_commands::jira_list_inbox_for,
+            jira_commands::jira_search,
+            jira_commands::jira_list_projects,
+            jira_commands::jira_list_boards,
+            jira_commands::jira_list_sprints,
+            jira_commands::jira_list_statuses,
+            jira_commands::jira_list_issue_types,
+            jira_commands::jira_create_issue,
+            jira_commands::jira_search_users,
+            jira_commands::jira_list_assignable_users,
+            jira_commands::jira_get_issue_detail,
+            jira_commands::jira_update_issue,
+            jira_commands::jira_transition_issue,
+            jira_commands::jira_set_assignee,
+            jira_commands::jira_set_priority,
+            jira_commands::jira_set_labels,
+            jira_commands::jira_add_comment,
+            jira_commands::jira_list_worklogs,
+            jira_commands::jira_add_worklog,
+            jira_commands::jira_delete_worklog,
             claude_status,
             claude_ask,
             claude_prewarm,
@@ -757,371 +756,12 @@ fn cursor_mcp_sync() -> Result<Vec<String>, String> {
 
 // (continued in ./github_commands.rs)
 
+// Jira + Sentry Tauri commands moved to ./jira_commands.rs and
+// ./sentry_commands.rs (wave-28 split). Each module owns its own
+// creds-fetch helper that wraps the keychain lookup.
 
-// ---------- Jira ----------
 
-#[tauri::command]
-async fn jira_connect(
-    workspace: String,
-    email: String,
-    token: String,
-) -> Result<JiraUser, String> {
-    let creds = JiraCredentials {
-        workspace: jira::normalize_workspace(&workspace),
-        email: email.trim().to_string(),
-        token: token.trim().to_string(),
-    };
-    if creds.workspace.is_empty() {
-        return Err("workspace URL is required".into());
-    }
-    if creds.email.is_empty() {
-        return Err("email is required".into());
-    }
-    if creds.token.is_empty() {
-        return Err("API token is required".into());
-    }
-    let user = jira::fetch_myself(&creds).await.map_err(|e| e.to_string())?;
-    let payload = serde_json::to_string(&creds).map_err(|e| e.to_string())?;
-    keychain::set(JIRA_KEY, &payload).map_err(|e| e.to_string())?;
-    let _ = cursor_mcp::sync();
-    Ok(user)
-}
 
-#[tauri::command]
-async fn jira_status() -> Result<JiraStatus, String> {
-    let Some(stored) = keychain::get(JIRA_KEY).map_err(|e| e.to_string())? else {
-        return Ok(JiraStatus::Disconnected);
-    };
-    let creds: JiraCredentials = match serde_json::from_str(&stored) {
-        Ok(c) => c,
-        Err(_) => {
-            let _ = keychain::delete(JIRA_KEY);
-            return Ok(JiraStatus::Disconnected);
-        }
-    };
-    match jira::fetch_myself(&creds).await {
-        Ok(user) => Ok(JiraStatus::Connected { user }),
-        Err(jira::JiraError::InvalidCredentials) => {
-            let _ = keychain::delete(JIRA_KEY);
-            Ok(JiraStatus::Disconnected)
-        }
-        Err(e) => Err(e.to_string()),
-    }
-}
-
-#[tauri::command]
-fn jira_disconnect() -> Result<(), String> {
-    keychain::delete(JIRA_KEY).map_err(|e| e.to_string())?;
-    let _ = cursor_mcp::sync();
-    Ok(())
-}
-
-async fn jira_creds() -> Result<JiraCredentials, String> {
-    let stored = keychain::get(JIRA_KEY)
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| "Jira is not connected".to_string())?;
-    serde_json::from_str(&stored).map_err(|e| e.to_string())
-}
-
-// ---------- Sentry ----------
-
-#[tauri::command]
-async fn sentry_connect(
-    host: String,
-    organization_slug: String,
-    token: String,
-) -> Result<SentryUser, String> {
-    let creds = SentryCredentials {
-        host: sentry::normalize_host(&host),
-        organization_slug: organization_slug.trim().to_string(),
-        token: token.trim().to_string(),
-    };
-    if creds.organization_slug.is_empty() {
-        return Err("organization slug is required (e.g. 'acme-co')".into());
-    }
-    if creds.token.is_empty() {
-        return Err("auth token is required".into());
-    }
-    let user = sentry::validate(&creds).await?;
-    let payload = serde_json::to_string(&creds).map_err(|e| e.to_string())?;
-    keychain::set(SENTRY_KEY, &payload).map_err(|e| e.to_string())?;
-    let _ = cursor_mcp::sync();
-    Ok(user)
-}
-
-#[tauri::command]
-async fn sentry_status() -> Result<SentryConnectionStatus, String> {
-    let Some(stored) = keychain::get(SENTRY_KEY).map_err(|e| e.to_string())? else {
-        return Ok(SentryConnectionStatus::Disconnected);
-    };
-    let creds: SentryCredentials = match serde_json::from_str(&stored) {
-        Ok(c) => c,
-        Err(_) => {
-            let _ = keychain::delete(SENTRY_KEY);
-            return Ok(SentryConnectionStatus::Disconnected);
-        }
-    };
-    match sentry::validate(&creds).await {
-        Ok(user) => Ok(SentryConnectionStatus::Connected { user }),
-        Err(_) => {
-            // Token revoked / network blip — leave creds in keychain so the
-            // user can retry; surface as disconnected for UX.
-            Ok(SentryConnectionStatus::Disconnected)
-        }
-    }
-}
-
-#[tauri::command]
-fn sentry_disconnect() -> Result<(), String> {
-    keychain::delete(SENTRY_KEY).map_err(|e| e.to_string())?;
-    let _ = cursor_mcp::sync();
-    Ok(())
-}
-
-async fn sentry_creds() -> Result<SentryCredentials, String> {
-    let stored = keychain::get(SENTRY_KEY)
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| "Sentry is not connected".to_string())?;
-    serde_json::from_str(&stored).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn sentry_list_issues(
-    query: Option<String>,
-    project_slugs: Option<Vec<String>>,
-    environment: Option<String>,
-    sort: Option<String>,
-    limit: Option<u32>,
-) -> Result<Vec<SentryIssue>, String> {
-    let creds = sentry_creds().await?;
-    sentry::list_issues(
-        &creds,
-        query.as_deref(),
-        project_slugs.as_deref().unwrap_or(&[]),
-        environment.as_deref(),
-        sort.as_deref().unwrap_or("date"),
-        limit.unwrap_or(50),
-    )
-    .await
-}
-
-#[tauri::command]
-async fn sentry_get_issue(issue_id: String) -> Result<SentryIssue, String> {
-    let creds = sentry_creds().await?;
-    sentry::get_issue(&creds, &issue_id).await
-}
-
-#[tauri::command]
-async fn sentry_list_events(issue_id: String, limit: Option<u32>) -> Result<Vec<SentryEvent>, String> {
-    let creds = sentry_creds().await?;
-    sentry::list_events(&creds, &issue_id, limit.unwrap_or(20)).await
-}
-
-#[tauri::command]
-async fn sentry_list_projects() -> Result<Vec<SentryProject>, String> {
-    let creds = sentry_creds().await?;
-    sentry::list_projects(&creds).await
-}
-
-#[tauri::command]
-async fn sentry_list_environments(project_slug: String) -> Result<Vec<SentryEnvironment>, String> {
-    let creds = sentry_creds().await?;
-    sentry::list_environments(&creds, &project_slug).await
-}
-
-#[tauri::command]
-async fn sentry_get_event_detail(
-    issue_id: String,
-    event_id: Option<String>,
-) -> Result<SentryEventDetail, String> {
-    let creds = sentry_creds().await?;
-    sentry::get_event_detail(&creds, &issue_id, event_id.as_deref().unwrap_or("latest")).await
-}
-
-#[tauri::command]
-async fn sentry_set_status(issue_id: String, status: String) -> Result<SentryIssue, String> {
-    let creds = sentry_creds().await?;
-    sentry::set_issue_status(&creds, &issue_id, &status).await
-}
-
-#[tauri::command]
-async fn jira_list_inbox() -> Result<Vec<JiraItem>, String> {
-    let creds = jira_creds().await?;
-    jira::list_my_issues(&creds).await.map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn jira_list_inbox_for(
-    assignee_account_id: Option<String>,
-) -> Result<Vec<JiraItem>, String> {
-    let creds = jira_creds().await?;
-    jira::list_issues_for(&creds, assignee_account_id.as_deref())
-        .await
-        .map_err(|e| e.to_string())
-}
-
-/// Run a pre-built JQL query (composed by the frontend from its filter state).
-#[tauri::command]
-async fn jira_search(jql: String) -> Result<Vec<JiraItem>, String> {
-    let creds = jira_creds().await?;
-    jira::search_issues(&creds, &jql).await.map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn jira_list_projects() -> Result<Vec<JiraProject>, String> {
-    let creds = jira_creds().await?;
-    jira::list_projects(&creds).await.map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn jira_list_boards(project_key: Option<String>) -> Result<Vec<JiraBoard>, String> {
-    let creds = jira_creds().await?;
-    jira::list_boards(&creds, project_key.as_deref())
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn jira_list_sprints(board_id: u64) -> Result<Vec<JiraSprint>, String> {
-    let creds = jira_creds().await?;
-    jira::list_sprints(&creds, board_id).await.map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn jira_list_statuses(
-    project_key: Option<String>,
-) -> Result<Vec<JiraWorkflowStatus>, String> {
-    let creds = jira_creds().await?;
-    jira::list_statuses(&creds, project_key.as_deref())
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn jira_list_issue_types(project_key: String) -> Result<Vec<JiraIssueType>, String> {
-    let creds = jira_creds().await?;
-    jira::list_issue_types(&creds, &project_key).await.map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn jira_create_issue(
-    project_key: String,
-    issue_type: String,
-    summary: String,
-    description: String,
-    assignee_account_id: Option<String>,
-    sprint_id: Option<u64>,
-) -> Result<JiraItem, String> {
-    let creds = jira_creds().await?;
-    jira::create_issue(
-        &creds,
-        &project_key,
-        &issue_type,
-        &summary,
-        &description,
-        assignee_account_id.as_deref(),
-        sprint_id,
-    )
-    .await
-    .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn jira_search_users(query: String) -> Result<Vec<JiraUserSummary>, String> {
-    let creds = jira_creds().await?;
-    jira::search_users(&creds, &query).await.map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-#[allow(non_snake_case)]
-async fn jira_list_assignable_users(projectKey: String) -> Result<Vec<JiraUserSummary>, String> {
-    let creds = jira_creds().await?;
-    jira::list_assignable_users(&creds, &projectKey).await.map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn jira_set_assignee(key: String, account_id: Option<String>) -> Result<(), String> {
-    let creds = jira_creds().await?;
-    jira::set_assignee(&creds, &key, account_id.as_deref())
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn jira_set_priority(key: String, priority: String) -> Result<(), String> {
-    let creds = jira_creds().await?;
-    jira::set_priority(&creds, &key, &priority).await.map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn jira_set_labels(key: String, labels: Vec<String>) -> Result<(), String> {
-    let creds = jira_creds().await?;
-    jira::set_labels(&creds, &key, labels).await.map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn jira_get_issue_detail(key: String) -> Result<JiraDetail, String> {
-    let creds = jira_creds().await?;
-    jira::get_issue_detail(&creds, &key).await.map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn jira_update_issue(
-    key: String,
-    summary: Option<String>,
-    description: Option<String>,
-) -> Result<(), String> {
-    let creds = jira_creds().await?;
-    jira::update_issue(&creds, &key, summary.as_deref(), description.as_deref())
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn jira_transition_issue(key: String, transition_id: String) -> Result<(), String> {
-    let creds = jira_creds().await?;
-    jira::transition_issue(&creds, &key, &transition_id).await.map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn jira_add_comment(key: String, body: String) -> Result<JiraComment, String> {
-    let creds = jira_creds().await?;
-    jira::add_comment(&creds, &key, &body).await.map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn jira_list_worklogs(key: String) -> Result<Vec<JiraWorklog>, String> {
-    let creds = jira_creds().await?;
-    jira::list_worklogs(&creds, &key).await.map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn jira_add_worklog(
-    key: String,
-    #[allow(non_snake_case)] timeSpentSeconds: i64,
-    started: Option<String>,
-    comment: Option<String>,
-) -> Result<JiraWorklog, String> {
-    let creds = jira_creds().await?;
-    jira::add_worklog(
-        &creds,
-        &key,
-        timeSpentSeconds,
-        started.as_deref(),
-        comment.as_deref(),
-    )
-    .await
-    .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn jira_delete_worklog(
-    key: String,
-    #[allow(non_snake_case)] worklogId: String,
-) -> Result<(), String> {
-    let creds = jira_creds().await?;
-    jira::delete_worklog(&creds, &key, &worklogId).await.map_err(|e| e.to_string())
-}
 
 // ---------- Claude Code ----------
 
