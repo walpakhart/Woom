@@ -22,6 +22,7 @@ mod sdd;
 mod sdd_action_log;
 mod sdd_audit;
 mod sdd_frontmatter;
+mod sdd_hydrate;
 mod sdd_mcp_handlers;
 mod sdd_md_mutators;
 mod sdd_meta;
