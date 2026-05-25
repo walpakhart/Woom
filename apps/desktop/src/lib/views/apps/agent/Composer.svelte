@@ -27,9 +27,11 @@
     claudeEffort,
     claudeModels,
     cursorModels,
+    detectTriggerPosition,
     fmtPct,
     modelContextLimit,
     pctClass,
+    spliceTriggerInsertion,
   } from './composerHelpers';
 
   type Kind = 'claude' | 'cursor';
@@ -458,82 +460,48 @@
 
   function pickSlashCommand(cmd: SlashCommand): void {
     if (!sess || !ta || slashFrom < 0) return;
-    /* Splice `/cmd` in place of the `/<query>` token at the trigger
-       position — same shape as @-mention picking. Caret lands after
-       the inserted token + a trailing space so the user can keep
-       typing or hit Enter to send. parseSlashCommand still recognises
-       the result when the whole input is just `/cmd`; arg-bearing
-       commands like `/preview` accept the prose that follows. */
     const value = ta.value ?? '';
     const caret = ta.selectionStart ?? value.length;
-    const before = value.slice(0, slashFrom);
-    const after = value.slice(caret);
-    const insertion = `/${cmd} `;
-    const next = before + insertion + after;
+    const { next, caretAfter } = spliceTriggerInsertion(value, caret, slashFrom, `/${cmd} `);
     setSessionInput(sess.id, next);
     closeSlash();
     queueMicrotask(() => {
       if (!ta) return;
       ta.focus();
-      const pos = (before + insertion).length;
-      ta.selectionStart = pos;
-      ta.selectionEnd = pos;
+      ta.selectionStart = caretAfter;
+      ta.selectionEnd = caretAfter;
     });
   }
 
   function pickSkill(sk: Skill): void {
     if (!sess || !ta || slashFrom < 0) return;
-    /* Splice `/<skillname>` at the trigger position. Trailing space
-       only when the skill declares an `argument_hint` (it expects
-       prose after the name); otherwise we let the user keep editing
-       around the chip cleanly. */
     const value = ta.value ?? '';
     const caret = ta.selectionStart ?? value.length;
-    const before = value.slice(0, slashFrom);
-    const after = value.slice(caret);
     const trailing = sk.argument_hint ? ' ' : '';
-    const insertion = `/${sk.name}${trailing}`;
-    const next = before + insertion + after;
+    const { next, caretAfter } = spliceTriggerInsertion(
+      value, caret, slashFrom, `/${sk.name}${trailing}`
+    );
     setSessionInput(sess.id, next);
     closeSlash();
     queueMicrotask(() => {
       if (!ta) return;
       ta.focus();
-      const pos = (before + insertion).length;
-      ta.selectionStart = pos;
-      ta.selectionEnd = pos;
+      ta.selectionStart = caretAfter;
+      ta.selectionEnd = caretAfter;
     });
   }
 
   /** Re-evaluate whether the caret is currently inside a `/`-trigger
-   *  span. Mirrors `detectMentionTrigger` — most recent `/` before
-   *  the caret, preceded by start-of-input or whitespace, with no
-   *  whitespace between the `/` and the caret. Anchors the picker
-   *  to the textarea's left edge. */
+   *  span. Delegates to `detectTriggerPosition` for the pure
+   *  string-scan + applies the result to picker state. */
   function detectSlashTrigger() {
     if (!ta || !sess) return;
     const value = ta.value ?? '';
     const caret = ta.selectionStart ?? value.length;
-    let at = -1;
-    for (let i = caret - 1; i >= 0; i--) {
-      const c = value[i];
-      if (c === '/') {
-        if (i === 0 || /\s/.test(value[i - 1])) at = i;
-        break;
-      }
-      if (/\s/.test(c)) break;
-    }
-    if (at < 0) {
-      closeSlash();
-      return;
-    }
-    const q = value.slice(at + 1, caret);
-    if (q.includes('\n')) {
-      closeSlash();
-      return;
-    }
-    slashQuery = q;
-    slashFrom = at;
+    const hit = detectTriggerPosition(value, caret, '/');
+    if (!hit) { closeSlash(); return; }
+    slashQuery = hit.query;
+    slashFrom = hit.at;
     const rect = ta.getBoundingClientRect();
     slashAnchor = {
       left: rect.left,
@@ -568,28 +536,10 @@
     if (!ta || !sess) return;
     const value = ta.value ?? '';
     const caret = ta.selectionStart ?? value.length;
-    /* Find the last @ in [0, caret] that's either at index 0 or
-       preceded by whitespace. */
-    let at = -1;
-    for (let i = caret - 1; i >= 0; i--) {
-      const c = value[i];
-      if (c === '@') {
-        if (i === 0 || /\s/.test(value[i - 1])) at = i;
-        break;
-      }
-      if (/\s/.test(c)) break;
-    }
-    if (at < 0) {
-      closeMention();
-      return;
-    }
-    const q = value.slice(at + 1, caret);
-    if (q.includes('\n')) {
-      closeMention();
-      return;
-    }
-    mentionQuery = q;
-    mentionFrom = at;
+    const hit = detectTriggerPosition(value, caret, '@');
+    if (!hit) { closeMention(); return; }
+    mentionQuery = hit.query;
+    mentionFrom = hit.at;
     /* Anchor the popover to the textarea's left edge, slightly above. */
     const rect = ta.getBoundingClientRect();
     mentionAnchor = {

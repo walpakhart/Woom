@@ -269,83 +269,13 @@ pub enum SddRecoveryState {
     },
 }
 
-// ---------------------------------------------------------------------------
-// Plan-as-data — v2 schema. Lives alongside `plan.md` as `plan.json`.
-// Markdown stays the human-readable view; JSON is the structured source of
-// truth for verifier acceptance criteria + plan-editor mutations.
-// ---------------------------------------------------------------------------
-
-/// Top-level shape of `<workspace>/plan.json`. `version` is bumped if the
-/// schema ever changes incompatibly; `phases` mirrors the
-/// `phases/NN-*.md` files but adds metadata the markdown can't carry
-/// (acceptance criteria, complexity hint).
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct SddPlanFile {
-    pub version: u32,
-    pub phases: Vec<SddPlanPhase>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct SddPlanPhase {
-    pub number: u32,
-    pub slug: String,
-    pub title: String,
-    #[serde(default)]
-    pub depends_on: Vec<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub complexity: Option<String>,
-    /// Verifier criteria. Empty in phase 1 of the v2 roadmap; populated
-    /// by phase 2 of the roadmap when the agent learns to write them.
-    #[serde(default)]
-    pub acceptance: Vec<SddPhaseAcceptance>,
-}
-
-/// Verifier-check spec. `serde(tag = "type")` matches the JSON shape
-/// described in the SDD spec (`{ "type": "shell", "cmd": "…" }`).
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum SddPhaseAcceptance {
-    Shell {
-        cmd: String,
-        #[serde(default)]
-        expect_exit: i32,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        stdout_match: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        timeout_ms: Option<u64>,
-    },
-    FileExists {
-        paths: Vec<String>,
-    },
-    Manual {
-        description: String,
-    },
-}
-
-/// Read `<workspace>/plan.json`. `None` for legacy workspaces (file
-/// absent) AND for files that exist but parse-fail — we tolerate the
-/// latter rather than poison the workspace state. The agent (or user
-/// via the inline editor) will rewrite a healthy version on the next
-/// turn.
-pub(crate) fn read_plan_json(root: &Path) -> Option<SddPlanFile> {
-    let path = root.join("plan.json");
-    let raw = std::fs::read_to_string(&path).ok()?;
-    serde_json::from_str(&raw).ok()
-}
-
-/// Write `<workspace>/plan.json`. Atomic via `.tmp` + rename so a
-/// concurrent reader can never observe a torn file. Uses the same
-/// pattern as `set_status_on` on the markdown side.
-fn write_plan_json(root: &Path, plan: &SddPlanFile) -> Result<(), String> {
-    let path = root.join("plan.json");
-    let content = serde_json::to_string_pretty(plan)
-        .map_err(|e| format!("serialize plan.json: {e}"))?;
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, content).map_err(|e| format!("write plan.json.tmp: {e}"))?;
-    std::fs::rename(&tmp, &path)
-        .map_err(|e| format!("rename plan.json.tmp -> plan.json: {e}"))?;
-    Ok(())
-}
+// Plan-as-data types (SddPlanFile/SddPlanPhase/SddPhaseAcceptance) +
+// read_plan_json + write_plan_json moved to ./sdd_plan.rs (wave-1
+// phase-10 split). Re-exported here so existing call sites keep
+// using `crate::sdd::SddPlanFile` etc.
+pub use crate::sdd_plan::{SddPhaseAcceptance, SddPlanFile, SddPlanPhase};
+#[allow(unused_imports)]
+pub(crate) use crate::sdd_plan::{read_plan_json, write_plan_json};
 
 // Frontmatter parsing moved to `sdd_frontmatter.rs` (wave-1 phase-10
 // split). Re-export the types here so existing call sites don't have
@@ -1151,82 +1081,8 @@ pub async fn sdd_hydrate(
 // to ./sdd_phase_config.rs (wave-1 phase-10 split).
 pub use crate::sdd_phase_config::{PhaseExecutionConfig, PhaseExecutionMode};
 
-/// Side-car metadata stored at `<workspace>/meta.json`. Currently
-/// holds the bits that DON'T live in spec.md frontmatter (session id,
-/// user's original ask) so they survive an app restart even when
-/// the agent hasn't written spec.md yet.
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
-pub(crate) struct SddMeta {
-    user_prompt: Option<String>,
-    session_id: Option<String>,
-    created_at: Option<u64>,
-    /// Absolute path of the repo cwd the SDD session is editing — typically
-    /// the linked editor / agent session's cwd at start time. None when the
-    /// caller didn't supply one (legacy v1 workspaces, or non-git callers).
-    /// All git operations target this directory; if it isn't a git repo,
-    /// `git_enabled` stays false and the orchestrator skips snapshots /
-    /// commits / rollback (degraded mode per the spec).
-    #[serde(default)]
-    repo_cwd: Option<String>,
-    #[serde(default)]
-    git_enabled: bool,
-    /// `sdd/<workspace-id>` — the per-workspace branch we mint at start.
-    /// Stays None when `git_enabled = false`.
-    #[serde(default)]
-    sdd_branch: Option<String>,
-    /// Sha of `repo_cwd`'s HEAD at workspace creation. Used as the
-    /// "rollback to clean slate" target when the user wipes the whole
-    /// workspace, separate from per-phase pre-snapshots.
-    #[serde(default)]
-    parent_sha: Option<String>,
-    /// Three-call execution config — see `PhaseExecutionConfig`. Missing
-    /// on legacy workspaces; deserializes to `Default` (single_call).
-    /// The hydrate-path migration writes the default block to disk so
-    /// future reads have a populated value.
-    #[serde(default)]
-    pub(crate) phase_execution: PhaseExecutionConfig,
-}
-
-/// Per-phase meta side-car at `<workspace>/phases/phase-N-meta.json`.
-/// Holds the git shas captured around each phase so rollback / recovery
-/// can return to a known state. Kept separate from the markdown
-/// frontmatter because shas are noisy data the user shouldn't be
-/// hand-editing.
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
-pub(crate) struct SddPhaseMeta {
-    /// Sha captured immediately before the phase ran (the rollback target).
-    /// None when git_enabled was false at approve-time.
-    #[serde(default)]
-    pub(crate) pre_phase_sha: Option<String>,
-    /// Sha of the commit that captured the phase's output. None when
-    /// the phase hasn't completed verification yet, or git was off.
-    #[serde(default)]
-    pub(crate) post_phase_sha: Option<String>,
-    /// True when the workspace was non-git at approve-time so we
-    /// deliberately skipped the snapshot. Lets the UI label the
-    /// phase as "no rollback available" instead of "missing".
-    #[serde(default)]
-    pub(crate) snapshot_skipped: bool,
-    /// User-supplied reason when the phase was force-skipped via
-    /// `sdd_skip_phase_with_reason` (failure card's Skip button).
-    /// Mirrors the `skip_reason` frontmatter key but kept here too so
-    /// the audit log can read it without re-parsing markdown.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) skip_reason: Option<String>,
-    /// User-supplied reason when a failed phase was accepted as-is via
-    /// `sdd_accept_phase_failed` (failure card's "Accept anyway"
-    /// button). Mirrors the `accepted_reason` frontmatter key. Distinct
-    /// from `skip_reason` — accept flips status to `done`, skip flips
-    /// to `skipped`, so the audit semantics differ.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) accepted_reason: Option<String>,
-    /// Number of retry attempts made on this phase. Bumped by
-    /// `sdd_retry_phase` (and the edit-then-retry flow). The UI shows
-    /// a soft warning starting at 3 — "3rd retry — consider editing
-    /// the spec or skipping". Defaults to 0 for fresh phases.
-    #[serde(default)]
-    pub(crate) retry_count: u32,
-}
+// SddMeta + SddPhaseMeta moved to ./sdd_meta.rs (wave-1 phase-10 split).
+pub(crate) use crate::sdd_meta::{SddMeta, SddPhaseMeta};
 
 /// Structured output produced by the three-call verify pass.
 /// Mirrors the JSON schema instructed in
@@ -1238,40 +1094,9 @@ pub(crate) use crate::sdd_phase_io::{
     read_phase_plan_md, read_verify_json, write_phase_plan_md, write_verify_json,
 };
 
-/// Which sub-step of a three-call phase is currently in flight.
-/// Drives the `SddStage::Phase{Planning,Implementing,Verifying}`
-/// emission in `derive_stage` + the `sub_step` tag on action_log
-/// rows so the SddCard can render per-substep dividers without
-/// re-walking the JSONL. See `spec-1` FR-1 / FR-3 / FR-4.
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum SddPhaseSubstep {
-    Plan,
-    Implement,
-    Verify,
-}
-
-/// Crash-recovery checkpoint for the three-call phase pipeline. Lives
-/// at `<workspace>/control/phase-<N>-substep-state.json`, written
-/// atomically (`.tmp` + rename) at every transition. On hydrate the
-/// orchestrator reads it; if `sub_step` is `Some(_)` AND no phase
-/// result has landed since, the recovery banner labels the orphan as
-/// "Phase N (during <sub_step>)" so the user knows where the run
-/// died. See `spec-1` NFR-rel-1.
-#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
-pub struct SddPhaseSubstepState {
-    pub phase: u32,
-    /// `None` means no sub-step is in flight (cleared at phase end or
-    /// after `clear_substep_state`). `Some(sub)` means the agent is
-    /// running OR was running when Woom crashed.
-    #[serde(default)]
-    pub sub_step: Option<SddPhaseSubstep>,
-    /// Unix-ms when the current sub_step transition was written. Zero
-    /// when the state was constructed via `Default` (no transition
-    /// yet recorded).
-    #[serde(default)]
-    pub started_at: u64,
-}
+// SddPhaseSubstep + SddPhaseSubstepState moved to ./sdd_substep.rs
+// (wave-1 phase-10 split).
+pub use crate::sdd_substep::{SddPhaseSubstep, SddPhaseSubstepState};
 
 /// Read `<workspace>/control/phase-<N>-substep-state.json`. `None`
 /// when the file is missing (legacy / single-call workspace) OR the
@@ -3108,55 +2933,10 @@ pub async fn sdd_get_file_diff(
 // phase execution.
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum ActionLogKind {
-    ToolUse,
-    ToolResult,
-    AgentMessage,
-    SddEvent,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct ActionLogEntry {
-    /// Unix-ms when this entry was produced. Frontend supplies it so
-    /// the wall-clock matches the chat-stream events the user sees.
-    pub ts: u64,
-    /// Owning phase. Required so cross-phase log files don't bleed
-    /// into the wrong feed; we use it to pick the JSONL filename.
-    pub phase: u32,
-    pub kind: ActionLogKind,
-    /// Tool name verbatim from the CLI. None for `agent_message` /
-    /// `sdd_event`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tool: Option<String>,
-    /// One-line summary, ≤80 chars expected. The frontend builds this
-    /// via the same `formatToolUse` helper the chat thread uses, so
-    /// the live feed reads consistently with the trace pills.
-    pub summary: String,
-    /// Optional expandable detail (full bash command, full mcp args).
-    /// Stored verbatim — frontend handles truncation in the lightbox.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub detail: Option<String>,
-    /// Lifecycle: `running` (after tool_use, before tool_result),
-    /// `done` (tool_result, no error), `failed` (tool_result with
-    /// `is_error: true`). None for events that don't have a lifecycle
-    /// (agent_message, sdd_event).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub status: Option<String>,
-    /// Stable id from the CLI's `tool_use_id`; lets the UI match a
-    /// `running` entry to its terminal `done` / `failed` and keep one
-    /// pill per call instead of two stacked rows.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub correlation_id: Option<String>,
-    /// Three-call mode — which sub-step was in flight when this entry
-    /// was logged (`plan` / `implement` / `verify`). None for
-    /// single-call workspaces and for legacy JSONL written before
-    /// phase 5. Surfaces as group dividers in the SddCard live feed.
-    /// See `spec-1` FR-9.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sub_step: Option<SddPhaseSubstep>,
-}
+// ActionLogKind + ActionLogEntry moved to ./sdd_action_log.rs
+// (wave-1 phase-10 split). The JSONL-append / tail Tauri commands
+// stay in this file because they need the workspace registry.
+pub use crate::sdd_action_log::{ActionLogEntry, ActionLogKind};
 
 fn action_log_path(workspace_root: &Path, phase: u32) -> PathBuf {
     workspace_root
@@ -3663,233 +3443,10 @@ fn ensure_watcher(
 // deserialize, since we'll grow the schema over time.
 // ---------------------------------------------------------------------------
 
-pub mod audit {
-    use super::*;
-
-    /// Single row of the audit log. `before` / `after` are free-form
-    /// JSON snapshots of the relevant fields for the action — e.g. for
-    /// `advance_phase`, `before = {"status": "pending_approval"}`,
-    /// `after = {"status": "running"}`. Kept compact on purpose; the
-    /// goal is "did the user override our refusal?", not full diffs.
-    #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-    pub struct AuditEntry {
-        pub ts: u64,
-        /// One of: `agent`, `user`, `system`. Free-form to allow future
-        /// sources (e.g. `cli`) without breaking the schema.
-        pub source: String,
-        /// Mutation action verb. Must match one of the values in the
-        /// SDD phase 6 spec (`advance_phase`, `retry_phase`, …) so the
-        /// UI's filter dropdown stays predictable.
-        pub action: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub phase: Option<u32>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub reason: Option<String>,
-        #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
-        pub before: serde_json::Value,
-        #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
-        pub after: serde_json::Value,
-    }
-
-    impl AuditEntry {
-        pub fn new(source: &str, action: &str) -> Self {
-            Self {
-                ts: now_ms(),
-                source: source.into(),
-                action: action.into(),
-                phase: None,
-                reason: None,
-                before: serde_json::Value::Null,
-                after: serde_json::Value::Null,
-            }
-        }
-        pub fn with_phase(mut self, phase: u32) -> Self {
-            self.phase = Some(phase);
-            self
-        }
-        pub fn with_reason(mut self, reason: impl Into<String>) -> Self {
-            let r = reason.into();
-            if !r.trim().is_empty() {
-                self.reason = Some(r);
-            }
-            self
-        }
-        pub fn with_before(mut self, v: serde_json::Value) -> Self {
-            self.before = v;
-            self
-        }
-        pub fn with_after(mut self, v: serde_json::Value) -> Self {
-            self.after = v;
-            self
-        }
-    }
-
-    pub fn audit_log_path(workspace_root: &Path) -> PathBuf {
-        workspace_root.join("audit-log.jsonl")
-    }
-
-    /// Append one entry to the workspace audit log. Best-effort —
-    /// failures log to stderr but never bubble. Mirrors the
-    /// action-log append pattern: POSIX append-mode + a single
-    /// `writeln!` is atomic for lines smaller than `PIPE_BUF`.
-    pub fn append(workspace_root: &Path, entry: &AuditEntry) {
-        let path = audit_log_path(workspace_root);
-        if let Some(parent) = path.parent() {
-            if let Err(e) = std::fs::create_dir_all(parent) {
-                eprintln!("[sdd:audit] mkdir {}: {e}", parent.display());
-                return;
-            }
-        }
-        let line = match serde_json::to_string(entry) {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("[sdd:audit] serialize: {e}");
-                return;
-            }
-        };
-        use std::io::Write;
-        match std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-        {
-            Ok(mut f) => {
-                let _ = writeln!(f, "{line}");
-            }
-            Err(e) => eprintln!("[sdd:audit] open {}: {e}", path.display()),
-        }
-    }
-
-    /// Read every audit entry, oldest-first. Lines that fail to parse
-    /// are silently skipped (forward-compat). Missing file → empty
-    /// vector.
-    pub fn read_all(workspace_root: &Path) -> Vec<AuditEntry> {
-        let path = audit_log_path(workspace_root);
-        let raw = match std::fs::read_to_string(&path) {
-            Ok(s) => s,
-            Err(_) => return Vec::new(),
-        };
-        raw.lines()
-            .filter(|l| !l.trim().is_empty())
-            .filter_map(|l| serde_json::from_str::<AuditEntry>(l).ok())
-            .collect()
-    }
-
-    /// Validate a mutation reason. Phase 6's contract: every mutating
-    /// MCP tool requires `reason` ≥ 5 chars after trim, so the audit
-    /// trail always carries a "why". Empty / whitespace-only / "ok" /
-    /// "yes" all reject. Returns the trimmed reason on success.
-    pub fn validate_reason(reason: &str) -> Result<String, String> {
-        let trimmed = reason.trim();
-        if trimmed.len() < 5 {
-            return Err("reason too short — explain why you're advancing".into());
-        }
-        Ok(trimmed.to_string())
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-
-        fn td() -> PathBuf {
-            use std::sync::atomic::{AtomicU64, Ordering};
-            static C: AtomicU64 = AtomicU64::new(0);
-            let n = C.fetch_add(1, Ordering::Relaxed);
-            let pid = std::process::id();
-            let dir = std::env::temp_dir().join(format!("woom-sdd-audit-{pid}-{n}"));
-            let _ = std::fs::remove_dir_all(&dir);
-            std::fs::create_dir_all(&dir).unwrap();
-            dir
-        }
-
-        #[test]
-        fn append_then_read_round_trip() {
-            let dir = td();
-            let e1 = AuditEntry::new("user", "advance_phase")
-                .with_phase(1)
-                .with_reason("approved manually")
-                .with_before(serde_json::json!({"status":"pending_approval"}))
-                .with_after(serde_json::json!({"status":"running"}));
-            let e2 = AuditEntry::new("agent", "retry_phase")
-                .with_phase(2)
-                .with_reason("verifier failed once, trying again");
-            append(&dir, &e1);
-            append(&dir, &e2);
-            let got = read_all(&dir);
-            assert_eq!(got.len(), 2);
-            assert_eq!(got[0].action, "advance_phase");
-            assert_eq!(got[0].source, "user");
-            assert_eq!(got[0].phase, Some(1));
-            assert_eq!(got[1].action, "retry_phase");
-            assert_eq!(got[1].source, "agent");
-        }
-
-        #[test]
-        fn read_missing_returns_empty() {
-            let dir = td();
-            assert!(read_all(&dir).is_empty());
-        }
-
-        #[test]
-        fn append_creates_workspace_dir_if_missing() {
-            // The workspace dir itself exists (td creates it) but the
-            // append path must work even when called on a fresh
-            // workspace before any other file landed.
-            let dir = td();
-            let e = AuditEntry::new("system", "boot");
-            append(&dir, &e);
-            assert!(audit_log_path(&dir).exists());
-        }
-
-        #[test]
-        fn read_skips_corrupted_lines() {
-            let dir = td();
-            let good = AuditEntry::new("user", "pause");
-            let body = format!(
-                "{}\n{}\n{}\n",
-                serde_json::to_string(&good).unwrap(),
-                "{ not valid json …",
-                serde_json::to_string(&good).unwrap(),
-            );
-            std::fs::write(audit_log_path(&dir), body).unwrap();
-            let got = read_all(&dir);
-            assert_eq!(got.len(), 2, "good lines kept, bad line dropped");
-        }
-
-        #[test]
-        fn validate_reason_rejects_short() {
-            assert!(validate_reason("").is_err());
-            assert!(validate_reason("   ").is_err());
-            assert!(validate_reason("ok").is_err());
-            assert!(validate_reason("yes!").is_err());
-        }
-
-        #[test]
-        fn validate_reason_accepts_long_enough() {
-            assert_eq!(
-                validate_reason("approved").unwrap(),
-                "approved".to_string()
-            );
-            assert_eq!(
-                validate_reason("  approved manually  ").unwrap(),
-                "approved manually".to_string()
-            );
-        }
-
-        #[test]
-        fn entry_skip_serializes_nulls() {
-            // `before` / `after` default to Null and skip on serialize
-            // — keeps the JSONL compact for actions that don't need a
-            // payload (pause / resume).
-            let e = AuditEntry::new("user", "pause");
-            let s = serde_json::to_string(&e).unwrap();
-            assert!(!s.contains("\"before\""), "before should be omitted");
-            assert!(!s.contains("\"after\""), "after should be omitted");
-            assert!(!s.contains("\"phase\""), "phase should be omitted");
-            assert!(!s.contains("\"reason\""), "reason should be omitted");
-        }
-    }
-}
+// Audit log moved to ./sdd_audit.rs (wave-1 phase-10 split). Aliased
+// as `audit::*` here so all `audit::AuditEntry::new(...)` / `audit::append`
+// call sites stay unchanged.
+pub(crate) use crate::sdd_audit as audit;
 
 // ---------------------------------------------------------------------------
 // MCP-handler helpers — shared validation between the woom-app sidecar's
@@ -3898,90 +3455,10 @@ pub mod audit {
 // a clear target. Pure functions, no IO.
 // ---------------------------------------------------------------------------
 
-pub mod mcp_handlers {
-    use super::audit::validate_reason;
-
-    /// Mutation actions accepted by the audit log + MCP tool surface.
-    /// Listed in the same order as the phase 6 spec for grep-ability.
-    pub const MUTATING_ACTIONS: &[&str] = &[
-        "advance_phase",
-        "retry_phase",
-        "skip_phase",
-        "approve_spec",
-        "approve_plan",
-        "rollback_phase",
-        "pause",
-        "resume",
-        "stop",
-        "discard",
-        "edit_body",
-        "insert_phase",
-        "delete_phase",
-        "manual_check_marked",
-    ];
-
-    /// Read-only tools that DON'T require a `reason` and never emit
-    /// audit entries. Kept here so the sidecar + frontend can agree on
-    /// the split without duplicating the list.
-    #[allow(dead_code)] // Used by tests + future frontend feature-detection.
-    pub const READ_ONLY_TOOLS: &[&str] = &[
-        "sdd_get",
-        "sdd_list_phases",
-        "sdd_get_phase",
-        "sdd_get_action_log",
-        "sdd_get_results",
-    ];
-
-    /// Validate a mutating MCP request. Today the only check is the
-    /// shared reason-length gate, but the function gives us a single
-    /// place to grow into per-action validation (e.g. refusing
-    /// `advance_phase` when the previous phase isn't `done`).
-    pub fn validate_mutation(action: &str, reason: &str) -> Result<String, String> {
-        if !MUTATING_ACTIONS.contains(&action) {
-            return Err(format!(
-                "unknown mutating action `{action}` — see MUTATING_ACTIONS"
-            ));
-        }
-        validate_reason(reason)
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-
-        #[test]
-        fn validate_mutation_rejects_short_reason() {
-            let err = validate_mutation("advance_phase", "ok").unwrap_err();
-            assert!(err.contains("reason too short"));
-        }
-
-        #[test]
-        fn validate_mutation_accepts_known_action_with_long_reason() {
-            let r = validate_mutation("retry_phase", "verifier flaked, retrying").unwrap();
-            assert_eq!(r, "verifier flaked, retrying");
-        }
-
-        #[test]
-        fn validate_mutation_rejects_unknown_action() {
-            let err = validate_mutation("delete_universe", "burn it all down").unwrap_err();
-            assert!(err.contains("unknown mutating action"));
-        }
-
-        #[test]
-        fn read_only_tools_disjoint_from_mutating_actions() {
-            // Sanity: a read-only tool name should never appear in the
-            // mutating-actions list (the two surfaces are explicitly
-            // separated in the phase 6 spec).
-            for r in READ_ONLY_TOOLS {
-                let stripped = r.strip_prefix("sdd_").unwrap_or(r);
-                assert!(
-                    !MUTATING_ACTIONS.contains(&stripped),
-                    "{stripped} is in both lists"
-                );
-            }
-        }
-    }
-}
+// MCP-handler helpers moved to ./sdd_mcp_handlers.rs (wave-1 phase-10
+// split). Aliased here so existing `mcp_handlers::*` call sites stay
+// unchanged.
+pub(crate) use crate::sdd_mcp_handlers as mcp_handlers;
 
 // ---------------------------------------------------------------------------
 // Tauri commands — audit log read/append + a tiny convenience wrapper that

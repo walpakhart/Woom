@@ -75,3 +75,49 @@ export const claudeEffort: { value: string; label: string }[] = [
   { value: 'high', label: 'Effort · high' },
   { value: 'max', label: 'Effort · max' },
 ];
+
+/** Trigger detector for the `/` slash-command + `@` mention pickers.
+ *  Both pickers anchor to the most recent occurrence of their marker
+ *  character (preceded by start-of-string or whitespace) and treat
+ *  everything between marker and caret as a live query string. The
+ *  query closes when a whitespace lands between marker and caret
+ *  (so `/foo ` cancels the picker on the trailing space) or when the
+ *  query crosses a newline. Returns `{ at, query }` on a live trigger,
+ *  null otherwise. Pure — no DOM mutation, no reactive read. */
+export function detectTriggerPosition(
+  value: string,
+  caret: number,
+  marker: '/' | '@'
+): { at: number; query: string } | null {
+  let at = -1;
+  for (let i = caret - 1; i >= 0; i--) {
+    const c = value[i];
+    if (c === marker) {
+      if (i === 0 || /\s/.test(value[i - 1])) at = i;
+      break;
+    }
+    if (/\s/.test(c)) break;
+  }
+  if (at < 0) return null;
+  const query = value.slice(at + 1, caret);
+  if (query.includes('\n')) return null;
+  return { at, query };
+}
+
+/** Splice a token in place of the active trigger query. Used by
+ *  `pickSlashCommand` / `pickSkill` / `pickMention` — they all
+ *  share the same "replace `/<query>` (or `@<query>`) with
+ *  `<insertion>` and place caret immediately after" pattern.
+ *  Returns the rewritten string + the post-insertion caret offset
+ *  so the caller can apply both to the textarea in one go. */
+export function spliceTriggerInsertion(
+  value: string,
+  caret: number,
+  triggerFrom: number,
+  insertion: string
+): { next: string; caretAfter: number } {
+  const before = value.slice(0, triggerFrom);
+  const after = value.slice(caret);
+  const next = before + insertion + after;
+  return { next, caretAfter: (before + insertion).length };
+}
