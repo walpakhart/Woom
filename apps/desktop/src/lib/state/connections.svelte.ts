@@ -253,8 +253,26 @@ async function refreshAgentsWithBootRetry(): Promise<void> {
     await refreshClaudeStatus();
     const claudeLast = lastEventForSource('claude');
     const cursorLast = lastEventForSource('cursor');
+    /* Retry on plain errors AND on the "binary detected, but
+     *  `--version` returned None within the 2 s timeout" path —
+     *  cold-launch on macOS routinely needs 1–3 s for the first
+     *  child spawn to actually run, and the `detect` call's tight
+     *  budget means the first attempt comes back as not-ready
+     *  even though Claude is installed and ready. Without this,
+     *  users had to manually reload the webview to see the agent
+     *  UI; the boot retry loop already exists, we just need to
+     *  arm it for this case too. */
+    const claudeColdMiss =
+      connectionsState.claude?.detected === true &&
+      connectionsState.claude.version === null &&
+      connectionsState.claude.ready === false;
+    const cursorColdMiss =
+      connectionsState.cursor?.detected === true &&
+      connectionsState.cursor.version === null &&
+      connectionsState.cursor.ready === false;
     const stillErroring =
-      (claudeLast?.kind === 'error') || (cursorLast?.kind === 'error');
+      (claudeLast?.kind === 'error') || (cursorLast?.kind === 'error') ||
+      claudeColdMiss || cursorColdMiss;
     if (!stillErroring) break;
   }
   connectionsState.retrying.claude = false;
