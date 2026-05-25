@@ -905,7 +905,7 @@
         {/if}
       </div>
       <ul class="sdd-activity-list">
-        {#each (liveActivityShowAll ? liveActivity.entries : liveActivity.headEntries) as e, idx (e.correlation_id || `${e.ts}-${e.kind}-${idx}`)}
+        {#each (liveActivityShowAll ? liveActivity.entries : liveActivity.headEntries) as e, idx (`${e.correlation_id ?? ''}|${e.kind}|${idx}`)}
           <li class="sdd-activity-row" data-status={e.status ?? 'running'} in:fly={{ y: 4, duration: 120, easing: cubicOut }}>
             <span class="sdd-activity-dot" aria-hidden="true"></span>
             <span class="sdd-activity-tool mono">{e.tool ?? e.kind}</span>
