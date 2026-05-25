@@ -23,7 +23,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+// `SystemTime`/`UNIX_EPOCH` moved with `now_ms` to sdd_time.rs.
 
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
@@ -31,18 +31,8 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 const WORKSPACE_DIR: &str = "sdd-workspaces";
 
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
-}
-
-fn short_id() -> String {
-    use uuid::Uuid;
-    let s = Uuid::new_v4().simple().to_string();
-    format!("sdd-{}", &s[..10])
-}
+// now_ms + short_id moved to ./sdd_time.rs (wave-1 phase-10 split).
+use crate::sdd_time::{now_ms, short_id};
 
 // ---------------------------------------------------------------------------
 // Public types — serialized to the frontend over Tauri IPC.
@@ -357,97 +347,12 @@ fn write_plan_json(root: &Path, plan: &SddPlanFile) -> Result<(), String> {
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Frontmatter parsing — small, self-contained, no `gray-matter` crate.
-// ---------------------------------------------------------------------------
-
-/// YAML frontmatter shape for spec/plan/phase files. All fields optional —
-/// we read what's there and fall back to defaults for missing keys.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
-struct FrontMatter {
-    #[serde(default)]
-    id: Option<String>,
-    #[serde(default)]
-    title: Option<String>,
-    #[serde(default)]
-    status: Option<String>,
-    #[serde(default)]
-    phase: Option<serde_yaml::Value>, // can be u32 or "01-foo"
-    #[serde(default)]
-    depends_on: Vec<u32>,
-    #[serde(default)]
-    tasks_total: Option<u32>,
-    #[serde(default)]
-    tasks_completed: Option<u32>,
-    #[serde(default)]
-    total_phases: Option<u32>,
-    #[serde(default)]
-    created: Option<String>,
-    #[serde(default)]
-    updated: Option<String>,
-    /// Explicit `FailureTrigger` discriminant written by commands like
-    /// `sdd_discard_phase_plan`. Free-form string here so unknown
-    /// variants don't fail deserialisation; `derive_stage` re-parses
-    /// into the typed enum.
-    #[serde(default)]
-    trigger: Option<String>,
-}
-
-/// Split a markdown file with leading `---\n…\n---\n` YAML frontmatter
-/// into (parsed_yaml, body). Files with no frontmatter return
-/// `(default, full_content)` — we tolerate sloppy agent output rather
-/// than 500-erroring.
-fn parse_frontmatter(content: &str) -> (FrontMatter, String) {
-    let trimmed = content.trim_start_matches('\u{feff}'); // strip BOM
-    if !trimmed.starts_with("---") {
-        return (FrontMatter::default(), content.to_string());
-    }
-    // Find the closing `---` on its own line.
-    let after_open = &trimmed[3..];
-    // Skip the trailing newline of the opening fence.
-    let after_open = after_open.strip_prefix('\n').unwrap_or(after_open);
-    // Search for `\n---` followed by newline-or-EOF.
-    let close_idx = after_open
-        .find("\n---")
-        .or_else(|| if after_open.starts_with("---") { Some(0) } else { None });
-    let Some(idx) = close_idx else {
-        return (FrontMatter::default(), content.to_string());
-    };
-    let yaml_str = &after_open[..idx];
-    let rest = &after_open[idx..];
-    // Strip the closing fence + optional newline.
-    let body = rest
-        .strip_prefix("\n---")
-        .or_else(|| rest.strip_prefix("---"))
-        .unwrap_or(rest)
-        .trim_start_matches('\n')
-        .to_string();
-    let fm = serde_yaml::from_str::<FrontMatter>(yaml_str).unwrap_or_default();
-    (fm, body)
-}
-
-/// Inverse of `parse_frontmatter` — write `<--- yaml ---> body`. Writes
-/// atomically (`.tmp` + rename) so a reader can never observe a half-
-/// written file. Borrowed straight from brain's `ProgressWriter`
-/// pattern — same reason: the orchestrator (TS) is racing with the
-/// agent's file writes and a torn read would crash the YAML parser.
-///
-/// NOTE: currently unused — F1 only modifies existing frontmatter via
-/// `set_status_on` (which preserves unknown fields). Kept for v2 when
-/// we'll write skeleton spec.md / plan.md placeholders into a fresh
-/// workspace before the agent fills them in (helps agents that struggle
-/// with "the file doesn't exist yet" framing).
-#[allow(dead_code)]
-fn write_with_frontmatter(path: &Path, fm: &FrontMatter, body: &str) -> Result<(), String> {
-    let yaml = serde_yaml::to_string(fm).map_err(|e| format!("yaml: {e}"))?;
-    let content = format!("---\n{yaml}---\n\n{}\n", body.trim_end());
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
-    }
-    let tmp = path.with_extension("md.tmp");
-    std::fs::write(&tmp, content).map_err(|e| format!("write tmp {}: {e}", tmp.display()))?;
-    std::fs::rename(&tmp, path).map_err(|e| format!("rename {} → {}: {e}", tmp.display(), path.display()))
-}
+// Frontmatter parsing moved to `sdd_frontmatter.rs` (wave-1 phase-10
+// split). Re-export the types here so existing call sites don't have
+// to update their `use` lines.
+use crate::sdd_frontmatter::{parse_frontmatter, FrontMatter};
+#[allow(unused_imports)]
+use crate::sdd_frontmatter::write_with_frontmatter;
 
 // ---------------------------------------------------------------------------
 // Registry + lifecycle.
@@ -1016,97 +921,17 @@ fn reset_phase_status(path: &Path) -> Result<(), String> {
 
 /// Split markdown content into raw YAML frontmatter string + body, no
 /// parsing. Used by `set_status_on` to preserve unknown fields.
-fn split_frontmatter_raw(content: &str) -> (String, String) {
-    let trimmed = content.trim_start_matches('\u{feff}');
-    if !trimmed.starts_with("---") {
-        return (String::new(), content.to_string());
-    }
-    let after_open = &trimmed[3..];
-    let after_open = after_open.strip_prefix('\n').unwrap_or(after_open);
-    let Some(idx) = after_open.find("\n---") else {
-        return (String::new(), content.to_string());
-    };
-    let yaml_str = &after_open[..idx];
-    let rest = &after_open[idx..];
-    let body = rest
-        .strip_prefix("\n---")
-        .unwrap_or(rest)
-        .trim_start_matches('\n')
-        .to_string();
-    (yaml_str.to_string(), body)
-}
+use crate::sdd_frontmatter::split_frontmatter_raw;
 
-fn format_iso(_ms: u64) -> String {
-    // chrono not in deps; use a coarse YYYY-MM-DD via SystemTime.
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    // Naive: days since epoch → date. Good enough for "created/updated"
-    // tracking; we don't need precision down to the second here.
-    let days = secs / 86_400;
-    let (y, m, d) = days_to_ymd(days as i64);
-    format!("{y:04}-{m:02}-{d:02}")
-}
+// format_iso + days_to_ymd moved to ./sdd_time.rs (wave-1 phase-10 split).
+#[allow(unused_imports)]
+use crate::sdd_time::{days_to_ymd, format_iso};
 
-// Civil date arithmetic from days-since-epoch. Algorithm by Howard Hinnant.
-fn days_to_ymd(z: i64) -> (i32, u32, u32) {
-    let z = z + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = (z - era * 146_097) as u64;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe as i64 + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
-    let m = (if mp < 10 { mp + 3 } else { mp - 9 }) as u32;
-    let y = if m <= 2 { y + 1 } else { y };
-    (y as i32, m, d)
-}
-
-// ---------------------------------------------------------------------------
-// Prompt templates — embedded at compile time. The orchestrator (TS) reads
-// these via the `sdd_prompt` Tauri command and injects them into the next
-// agent message. Keeping templates in Rust (vs TS) means they live next
-// to the schema they reference and survive a JS bundle reload.
-// ---------------------------------------------------------------------------
-
-const SPEC_TEMPLATE_PROMPT: &str = include_str!("./sdd_prompts/spec.md");
-const PLAN_TEMPLATE_PROMPT: &str = include_str!("./sdd_prompts/plan.md");
-const PHASE_TEMPLATE_PROMPT: &str = include_str!("./sdd_prompts/phase.md");
-const SUMMARY_TEMPLATE_PROMPT: &str = include_str!("./sdd_prompts/summary.md");
-const AMEND_TEMPLATE_PROMPT: &str = include_str!("./sdd_prompts/amend.md");
-/// Three-call mode plan pass — read-only analysis producing a plan
-/// markdown body. See `spec-1` FR-1 / `plan-1` §Prompt + agent flow.
-const PHASE_PLAN_TEMPLATE_PROMPT: &str = include_str!("./sdd_prompts/phase_plan.md");
-/// Three-call mode implement pass — executes the plan with edits.
-const PHASE_IMPLEMENT_TEMPLATE_PROMPT: &str = include_str!("./sdd_prompts/phase_implement.md");
-/// Three-call mode verify pass — produces structured JSON verdict.
-const PHASE_VERIFY_TEMPLATE_PROMPT: &str = include_str!("./sdd_prompts/phase_verify.md");
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SddPromptKind {
-    Spec,
-    Plan,
-    Phase,
-    Summary,
-    /// In-place correction of the active spec / plan / phase. Used
-    /// when the user types a delta mid-workflow instead of approving
-    /// the current artifact — the agent edits files in place rather
-    /// than scaffolding a fresh workspace.
-    Amend,
-    /// Three-call mode — plan pass (read-only analysis producing
-    /// `phases/<slug>/plan.md`). See `spec-1` FR-1.
-    PhasePlan,
-    /// Three-call mode — implement pass (executes the plan against
-    /// the repo). See `spec-1` FR-3.
-    PhaseImplement,
-    /// Three-call mode — verify pass (structured JSON self-review).
-    /// See `spec-1` FR-4.
-    PhaseVerify,
-}
+// Prompt templates + `sdd_prompt` command moved to ./sdd_prompts.rs
+// (wave-1 phase-10 split). SddPromptKind re-exported here for any
+// remaining call site in this file.
+#[allow(unused_imports)]
+pub use crate::sdd_prompts::SddPromptKind;
 
 // ---------------------------------------------------------------------------
 // Tauri commands.
@@ -1322,101 +1147,9 @@ pub async fn sdd_hydrate(
     Ok(out)
 }
 
-/// Per-workspace toggle for the three-call execution mode (plan →
-/// implement → verify) introduced in `spec-1`. `single_call` is the
-/// historical Woom behaviour where each phase fires one agent turn;
-/// `three_call` fans the phase out into three discrete passes with
-/// structured verify output. Migration hook in `sdd_hydrate` sets
-/// legacy workspaces to `SingleCall` so in-flight workflows don't
-/// shift behaviour mid-execution.
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum PhaseExecutionMode {
-    SingleCall,
-    ThreeCall,
-}
-
-impl Default for PhaseExecutionMode {
-    fn default() -> Self {
-        // Legacy workspaces lacking the `phase_execution` block
-        // deserialize with this default — the migration hook
-        // explicitly writes the same value to disk so future reads
-        // are deterministic. See `plan-1` §Compatibility + migration.
-        Self::SingleCall
-    }
-}
-
-fn default_plan_budget_pct() -> f32 {
-    0.25
-}
-fn default_implement_budget_pct() -> f32 {
-    0.70
-}
-fn default_verify_budget_pct() -> f32 {
-    0.05
-}
-
-/// `<workspace>/meta.json#phase_execution` — orchestrator config for
-/// the three-call phase execution mode. Every field has a `serde`
-/// default so a meta.json lacking the block (legacy workspace) still
-/// deserializes cleanly via `#[serde(default)]` on the parent field.
-/// Budget percentages are informational this release — persisted now
-/// so a future budget-enforcement spec can consume them without a
-/// schema migration. See `spec-1` FR-11 / FR-12.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct PhaseExecutionConfig {
-    #[serde(default)]
-    pub mode: PhaseExecutionMode,
-    /// When true, three-call mode halts between `PhasePlanning` and
-    /// `PhaseImplementing` so the user can Approve / Amend / Discard
-    /// the generated plan.md. Default false — auto-advance to
-    /// implement when the plan-pass finishes. See `spec-1` FR-7.
-    #[serde(default)]
-    pub plan_gate: bool,
-    /// Share of the per-phase budget reserved for the plan-pass call.
-    /// Sum of `plan_budget_pct + implement_budget_pct +
-    /// verify_budget_pct` MUST be ≤ 1.0 (enforced by `validate()`).
-    #[serde(default = "default_plan_budget_pct")]
-    pub plan_budget_pct: f32,
-    #[serde(default = "default_implement_budget_pct")]
-    pub implement_budget_pct: f32,
-    #[serde(default = "default_verify_budget_pct")]
-    pub verify_budget_pct: f32,
-}
-
-impl Default for PhaseExecutionConfig {
-    fn default() -> Self {
-        Self {
-            mode: PhaseExecutionMode::default(),
-            plan_gate: false,
-            plan_budget_pct: default_plan_budget_pct(),
-            implement_budget_pct: default_implement_budget_pct(),
-            verify_budget_pct: default_verify_budget_pct(),
-        }
-    }
-}
-
-impl PhaseExecutionConfig {
-    /// Reject configs whose budget percentages sum past 1.0. The
-    /// `sdd_set_phase_execution_config` Tauri command (lands in
-    /// phase 6) calls this before persisting to surface a typed
-    /// error instead of writing garbage that later math relies on.
-    /// Per-percentage clamping (e.g. negative values) is not enforced
-    /// — `f32` is the wire type and we trust validators on the UI
-    /// side to keep inputs in `[0.0, 1.0]`. See `spec-1` FR-12.
-    #[allow(dead_code)] // wired by sdd_set_phase_execution_config in phase 6
-    pub fn validate(&self) -> Result<(), String> {
-        let sum = self.plan_budget_pct + self.implement_budget_pct + self.verify_budget_pct;
-        // Allow a small float slop so 0.25 + 0.70 + 0.05 = 1.0 + ε
-        // doesn't false-positive.
-        if sum > 1.0 + f32::EPSILON * 4.0 {
-            return Err(format!(
-                "budget percentages exceed 1.0 (got {sum:.3})"
-            ));
-        }
-        Ok(())
-    }
-}
+// PhaseExecutionMode + PhaseExecutionConfig + budget defaults moved
+// to ./sdd_phase_config.rs (wave-1 phase-10 split).
+pub use crate::sdd_phase_config::{PhaseExecutionConfig, PhaseExecutionMode};
 
 /// Side-car metadata stored at `<workspace>/meta.json`. Currently
 /// holds the bits that DON'T live in spec.md frontmatter (session id,
@@ -1497,114 +1230,13 @@ pub(crate) struct SddPhaseMeta {
 
 /// Structured output produced by the three-call verify pass.
 /// Mirrors the JSON schema instructed in
-/// `sdd_prompts/phase_verify.md` (FR-4 of `spec-1`). Every field has
-/// `#[serde(default)]` so a malformed payload still produces a usable
-/// struct — `parse_or_fallback` masks parse failures behind a fixed
-/// `deviations: ["Unable to parse verification output"]` row so
-/// downstream code never sees `null`.
-#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
-pub struct VerifyOutput {
-    #[serde(default)]
-    pub summary: String,
-    #[serde(default)]
-    pub files_changed: Vec<String>,
-    #[serde(default)]
-    pub task_compliance: Vec<String>,
-    #[serde(default)]
-    pub deviations: Vec<String>,
-    #[serde(default)]
-    pub notes: String,
-}
-
-impl VerifyOutput {
-    /// Parse the raw agent response into a `VerifyOutput`. Tolerates
-    /// markdown code-fences around the JSON (the verify-pass prompt
-    /// asks for raw JSON but agents sometimes wrap anyway) and a few
-    /// common stripping cases. On hard parse failure returns a
-    /// fallback with `deviations = ["Unable to parse verification
-    /// output"]` so callers can persist a deterministic shape and
-    /// the failure card has something to render. See `spec-1`
-    /// NFR-rel-2.
-    pub fn parse_or_fallback(raw: &str) -> Self {
-        let stripped = strip_json_fences(raw);
-        serde_json::from_str(&stripped).unwrap_or_else(|_| Self {
-            deviations: vec!["Unable to parse verification output".into()],
-            ..Default::default()
-        })
-    }
-}
-
-/// Trim leading/trailing whitespace plus an optional surrounding
-/// triple-backtick fence (with or without a `json` language tag).
-/// Idempotent on already-clean payloads.
-fn strip_json_fences(raw: &str) -> String {
-    let trimmed = raw.trim();
-    let without_open = trimmed
-        .strip_prefix("```json")
-        .or_else(|| trimmed.strip_prefix("```"))
-        .map(|s| s.trim_start())
-        .unwrap_or(trimmed);
-    let without_close = without_open.strip_suffix("```").unwrap_or(without_open);
-    without_close.trim().to_string()
-}
-
-/// Read `<workspace>/phases/<slug>/plan.md`. `None` when the file
-/// is missing — interpreted by callers as "plan pass hasn't landed
-/// yet" (legacy single-call or three-call still in flight).
-#[allow(dead_code)] // surfaced via SddCard Plan tab in phase 4
-pub(crate) fn read_phase_plan_md(workspace_root: &Path, slug: &str) -> Option<String> {
-    let path = workspace_root.join("phases").join(slug).join("plan.md");
-    std::fs::read_to_string(&path).ok()
-}
-
-/// Atomically write the plan-pass output as `phases/<slug>/plan.md`.
-/// Creates the per-phase directory lazily. Body is stored verbatim
-/// (markdown, no frontmatter) — `spec-1` FR-2 captures the agent's
-/// last assistant message as-is so the user sees the exact text the
-/// implement pass will consume.
-pub(crate) fn write_phase_plan_md(
-    workspace_root: &Path,
-    slug: &str,
-    body: &str,
-) -> Result<(), String> {
-    let dir = workspace_root.join("phases").join(slug);
-    std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir phase dir: {e}"))?;
-    let path = dir.join("plan.md");
-    let tmp = path.with_extension("md.tmp");
-    std::fs::write(&tmp, body).map_err(|e| format!("write plan.md tmp: {e}"))?;
-    std::fs::rename(&tmp, &path).map_err(|e| format!("rename plan.md: {e}"))?;
-    Ok(())
-}
-
-/// Read `<workspace>/phases/<slug>/verify.json`. `None` when missing
-/// (verify pass hasn't completed) OR when JSON parse fails (returning
-/// `None` keeps callers honest — they should treat that as "no soft
-/// verdict yet" rather than synthesising one). See `spec-1` FR-4.
-#[allow(dead_code)] // surfaced via SddCard Verify tab in phase 4
-pub(crate) fn read_verify_json(workspace_root: &Path, slug: &str) -> Option<VerifyOutput> {
-    let path = workspace_root.join("phases").join(slug).join("verify.json");
-    let raw = std::fs::read_to_string(&path).ok()?;
-    serde_json::from_str(&raw).ok()
-}
-
-/// Atomically write the verify-pass JSON. Pretty-printed for human
-/// readability (the file is read by both the SddCard renderer and
-/// the user inspecting on disk).
-pub(crate) fn write_verify_json(
-    workspace_root: &Path,
-    slug: &str,
-    verdict: &VerifyOutput,
-) -> Result<(), String> {
-    let dir = workspace_root.join("phases").join(slug);
-    std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir phase dir: {e}"))?;
-    let path = dir.join("verify.json");
-    let body = serde_json::to_string_pretty(verdict)
-        .map_err(|e| format!("serialize verify.json: {e}"))?;
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, body).map_err(|e| format!("write verify.json tmp: {e}"))?;
-    std::fs::rename(&tmp, &path).map_err(|e| format!("rename verify.json: {e}"))?;
-    Ok(())
-}
+// VerifyOutput + strip_json_fences + phases/<slug>/{plan.md, verify.json}
+// I/O helpers moved to ./sdd_phase_io.rs (wave-1 phase-10 split).
+pub use crate::sdd_phase_io::VerifyOutput;
+#[allow(unused_imports)]
+pub(crate) use crate::sdd_phase_io::{
+    read_phase_plan_md, read_verify_json, write_phase_plan_md, write_verify_json,
+};
 
 /// Which sub-step of a three-call phase is currently in flight.
 /// Drives the `SddStage::Phase{Planning,Implementing,Verifying}`
@@ -2000,23 +1632,7 @@ fn flip_stage(
     Ok(snapshot)
 }
 
-/// Return the canned prompt template the orchestrator should send to the
-/// agent for a given stage. The orchestrator interpolates `{{workspace_root}}`
-/// and `{{user_prompt}}` placeholders before sending.
-#[tauri::command]
-pub async fn sdd_prompt(kind: SddPromptKind) -> Result<String, String> {
-    let s = match kind {
-        SddPromptKind::Spec => SPEC_TEMPLATE_PROMPT,
-        SddPromptKind::Plan => PLAN_TEMPLATE_PROMPT,
-        SddPromptKind::Phase => PHASE_TEMPLATE_PROMPT,
-        SddPromptKind::Summary => SUMMARY_TEMPLATE_PROMPT,
-        SddPromptKind::Amend => AMEND_TEMPLATE_PROMPT,
-        SddPromptKind::PhasePlan => PHASE_PLAN_TEMPLATE_PROMPT,
-        SddPromptKind::PhaseImplement => PHASE_IMPLEMENT_TEMPLATE_PROMPT,
-        SddPromptKind::PhaseVerify => PHASE_VERIFY_TEMPLATE_PROMPT,
-    };
-    Ok(s.to_string())
-}
+/* `sdd_prompt` command moved to ./sdd_prompts.rs */
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]

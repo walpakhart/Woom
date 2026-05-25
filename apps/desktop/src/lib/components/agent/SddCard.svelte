@@ -52,6 +52,14 @@
   } from '$lib/state/sdd.svelte';
   import { sessionsState } from '$lib/state/sessions.svelte';
   import { diffMarkdown, renderDiffHtml } from '$lib/util/markdownDiff';
+  import {
+    actionLabel as _actionLabel,
+    bodyForStage as _bodyForStage,
+    editTarget as _editTarget,
+    phaseBody as _phaseBody,
+    stageLabel as _stageLabel,
+    stageTone as _stageTone,
+  } from './sddCardStage';
 
   interface Props {
     workspace: SddWorkspace;
@@ -270,32 +278,10 @@
     };
   });
 
-  function stageLabel(): string {
-    switch (stage.kind) {
-      case 'drafting': return 'Drafting spec';
-      case 'spec_ready': return 'Spec ready';
-      case 'planning': return 'Drafting plan';
-      case 'plan_ready': return 'Plan ready';
-      case 'phase_pending_approval': return `Phase ${stage.phase} — review`;
-      case 'phase_running': return `Phase ${stage.phase} running`;
-      case 'phase_planning': return `Phase ${stage.phase} — planning`;
-      case 'phase_plan_review': return `Phase ${stage.phase} — plan review`;
-      case 'phase_implementing': return `Phase ${stage.phase} — implementing`;
-      case 'phase_verifying': return `Phase ${stage.phase} verifying`;
-      case 'phase_done': return `Phase ${stage.phase} done`;
-      case 'complete': return 'All phases done';
-      case 'paused': return 'Paused';
-      case 'stopped': return 'Stopped';
-      case 'failed': return 'Failed';
-    }
-  }
-
+  /* stageLabel / stageTone moved to ./sddCardStage.ts (wave-1 phase-8). */
+  function stageLabel(): string { return _stageLabel(stage); }
   function stageTone(): 'live' | 'ok' | 'warn' | 'dim' {
-    if (isInFlight) return 'live';
-    if (stage.kind === 'phase_plan_review') return 'warn';
-    if (stage.kind === 'failed' || stage.kind === 'stopped') return 'warn';
-    if (stage.kind === 'complete') return 'ok';
-    return 'dim';
+    return _stageTone(stage, isInFlight);
   }
 
   /* Resolve the prompt for the next agent turn. Called by the action
@@ -357,51 +343,9 @@
     return { slug: ph.slug, verdict: ph.verify };
   });
 
-  /* Body chunk to preview — show spec for spec_ready, plan for
-   *  plan_ready, current phase's body for phase_running, prior phase
-   *  summary for phase_done. */
+  /* bodyForStage moved to ./sddCardStage.ts */
   function bodyForStage(): { title: string; markdown: string } | null {
-    if (stage.kind === 'spec_ready' && p.workspace.spec_body) {
-      return { title: 'spec.md', markdown: p.workspace.spec_body };
-    }
-    if (stage.kind === 'plan_ready' && p.workspace.plan_body) {
-      return { title: 'plan.md', markdown: p.workspace.plan_body };
-    }
-    if (stage.kind === 'phase_running') {
-      const ph = p.workspace.phases.find((x) => x.number === stage.phase);
-      if (ph) return { title: `phases/${ph.slug}.md`, markdown: ph.body };
-    }
-    if (stage.kind === 'phase_planning' || stage.kind === 'phase_implementing' || stage.kind === 'phase_verifying') {
-      const ph = p.workspace.phases.find((x) => x.number === stage.phase);
-      // During verify/implement we already have the plan.md — show it
-      // so the user can scan the agent's intended approach while the
-      // pass is running. During planning, plan.md may not exist yet.
-      if (ph?.plan_body) return { title: `phases/${ph.slug}/plan.md`, markdown: ph.plan_body };
-      if (ph) return { title: `phases/${ph.slug}.md`, markdown: ph.body };
-    }
-    if (stage.kind === 'phase_plan_review') {
-      const ph = p.workspace.phases.find((x) => x.number === stage.phase);
-      if (ph?.plan_body) return { title: `phases/${ph.slug}/plan.md`, markdown: ph.plan_body };
-      if (ph) return { title: `phases/${ph.slug}.md`, markdown: ph.body };
-    }
-    if (stage.kind === 'phase_done') {
-      const ph = p.workspace.phases.find((x) => x.number === stage.phase);
-      if (ph?.summary) return { title: `results/${ph.slug}-result.md`, markdown: ph.summary };
-      if (ph) return { title: `phases/${ph.slug}.md`, markdown: ph.body };
-    }
-    if (stage.kind === 'complete') {
-      /* Prefer the agent's wrap-up (SUMMARY.md) when present — it's
-       *  the curated digest. Fall back to concatenated phase
-       *  summaries while the summary is still being written. */
-      if (p.workspace.summary_body) {
-        return { title: 'SUMMARY.md', markdown: p.workspace.summary_body };
-      }
-      const all = p.workspace.phases
-        .map((ph) => `### Phase ${ph.number}: ${ph.title}\n\n${ph.summary ?? '_no summary written_'}\n`)
-        .join('\n');
-      return { title: 'all phases', markdown: all || '_no phase summaries — waiting for wrap-up…_' };
-    }
-    return null;
+    return _bodyForStage(p.workspace, stage);
   }
 
   /** Phase-pill click override. When set, the body slot renders the
@@ -411,25 +355,9 @@
    *  (see the lastStageKind effect above). */
   let selectedPhaseOverride = $state<number | null>(null);
 
-  /** Compose a phase's body — plan section first, result/summary
-   *  appended below when the phase has completed. Renders as a real
-   *  document, so the lightbox view of a single phase shows the
-   *  agent's intent + what shipped side-by-side. */
+  /* phaseBody moved to ./sddCardStage.ts */
   function phaseBody(num: number): { title: string; markdown: string } | null {
-    const ph = p.workspace.phases.find((x) => x.number === num);
-    if (!ph) return null;
-    const parts: string[] = [];
-    parts.push(`# Phase ${ph.number}: ${ph.title}`);
-    parts.push(`_Status: **${ph.status}**_`);
-    parts.push('');
-    parts.push('## Plan');
-    parts.push(ph.body?.trim() || '_no plan body yet_');
-    if (ph.summary && ph.summary.trim()) {
-      parts.push('');
-      parts.push('## Result');
-      parts.push(ph.summary.trim());
-    }
-    return { title: `phases/${ph.slug}.md`, markdown: parts.join('\n') };
+    return _phaseBody(p.workspace, num);
   }
 
   const body = $derived(
@@ -452,24 +380,10 @@
    *  to the next pending phase. */
   const nextPhase = $derived(p.workspace.phases.find((ph) => ph.status === 'pending'));
 
-  function actionLabel(): string {
-    if (stage.kind === 'spec_ready') return 'Approve spec · draft plan';
-    if (stage.kind === 'plan_ready') return nextPhase ? `Approve plan · start phase ${nextPhase.number}` : 'Approve plan';
-    if (stage.kind === 'phase_done') return nextPhase ? `Continue · phase ${nextPhase.number}` : 'Done';
-    if (stage.kind === 'phase_pending_approval') return `Approve · start phase ${stage.phase}`;
-    if (stage.kind === 'phase_plan_review') return `Approve plan · run phase ${stage.phase}`;
-    return '';
-  }
-
-  /* Edit-mode helpers. Save target depends on current stage — spec
-   *  when SpecReady, plan when PlanReady, current phase otherwise. */
+  function actionLabel(): string { return _actionLabel(stage, nextPhase); }
+  /* editTarget moved to ./sddCardStage.ts */
   function editTarget(): { kind: 'spec' } | { kind: 'plan' } | { kind: 'phase'; number: number } | null {
-    if (stage.kind === 'spec_ready') return { kind: 'spec' };
-    if (stage.kind === 'plan_ready') return { kind: 'plan' };
-    if (stage.kind === 'phase_running' || stage.kind === 'phase_done') {
-      return { kind: 'phase', number: stage.phase };
-    }
-    return null;
+    return _editTarget(stage);
   }
   function startEdit() {
     if (!body) return;

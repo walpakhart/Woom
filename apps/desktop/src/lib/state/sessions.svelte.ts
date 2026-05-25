@@ -18,366 +18,82 @@ import { notify } from '$lib/state/toaster.svelte';
 import { isImagePath } from '$lib/format';
 import { contextWindowFor } from '$lib/usage';
 import { buildContinuationRecap } from '$lib/services/sessionCwd';
+import {
+  applyOpsToSession,
+  drainStreamQueue,
+  dropStreamQueueFor,
+  enqueueStream,
+  flushStreamQueueNow as _flushStreamQueueImpl,
+  setStreamFlushHandler,
+} from './sessions_stream';
+import { capMessageEvents, serializeSession } from './sessions_serialize';
+import {
+  flushAllNow,
+  flushNow,
+  getDiskDir,
+  resetLastWrittenSnapshot,
+  scheduleDiskWrite,
+  sessionFilePathFor,
+  sessionIndexFilePath,
+  setDiskDir,
+} from './sessions_disk.svelte';
+import { persistError as _sharedPersistError } from './sessions_persist_error.svelte';
+
+// Re-export so existing imports (`import { persistError } from
+// '$lib/state/sessions.svelte'`) keep working post-split. New code
+// should import directly from `sessions_persist_error.svelte`.
+export const persistError = _sharedPersistError;
 
 export const SESSIONS_STORAGE_KEY = 'woom:claude-sessions:v1';
 export const RULES_STORAGE_KEY = 'woom:claude-rules:v1';
 export const EDITOR_STATE_STORAGE_KEY = 'woom:editor-state:v1';
 
-// ---- Disk persistence internals ----
-// After `initSessionsFromDisk()` runs, `_diskDir` is set and disk is the
-// source of truth. Pre-migration, we fall back to localStorage so the app
-// still works on the very first run with existing localStorage data.
-
-let _diskDir: string | null = null; // e.g. "…/Woom/sessions"
-let _diskWriteTimer: ReturnType<typeof setTimeout> | null = null;
-/* Wall-clock of the last write that actually hit the disk. The
-   debouncer below uses this to enforce a hard ceiling on how long
-   the trailing flush can be deferred during continuous streaming —
-   without it, a rapid succession of `appendAssistantDelta` calls
-   would keep resetting the 400ms timer indefinitely, and a force-
-   quit mid-stream would lose every message since the last natural
-   pause. With the ceiling, we flush at least every 2.5s even if
-   changes keep arriving. */
-let _diskLastFlushAt = 0;
-const DISK_DEBOUNCE_MS = 800;
-const DISK_MAX_DEFER_MS = 2_500;
-
-/* Identity-based dirty tracking — `flushToDisk` was unconditionally
- * writing ALL session files on every burst (one Promise.all rebuild
- * of N session files per debounce window). For a 10-session workspace
- * with one active stream that's 9 wasted writes per flush. We instead
- * compare each session's object identity against the snapshot from
- * the last successful write. Every mutator does
- * `sessionsState.list = sessionsState.list.map(...)` which creates a
- * new reference for the changed session only — so the ref-equality
- * check catches exactly the dirty ones. `null` sentinel means "never
- * written" (first flush after init writes everything once). */
-const _lastWrittenRef: Map<string, ClaudeSession> = new Map();
-let _lastWrittenActiveId: string | null | undefined = undefined; // undefined = never written
+// ---- Disk persistence ----
+// Internals (_diskDir, _diskWriteTimer, _lastWrittenRef, debounce
+// timing, flushToDisk) moved to `./sessions_disk.svelte.ts` (wave-1
+// phase-7 split). The host owns the reactive store + the $effect
+// that calls `scheduleDiskWrite` on every change; the module
+// handles the actual write logic + ceiling debounce.
+// `initSessionsFromDisk` is called from +page.svelte onMount and
+// migrates sessions from localStorage → disk on first run, then
+// keeps disk as the source of truth. Pre-migration, we fall back
+// to localStorage so the app still works on the very first run.
 
 // ---- Streaming-delta batch queue ----
-// `appendToLastAssistant` / `appendToLastThinking` get called once per
-// token by the agent CLI's streaming pipeline (~50/s during a hot
-// reply, times N parallel sessions). Each call used to do a full
-// `sessionsState.list.map(...)` rebuild + spread of the last message's
-// `events` array — O(sessions × messages) per token. On a long chat
-// (300 msgs) with 4 sessions open this was the dominant cost during
-// streaming and made the chat itself feel laggy.
-//
-// We coalesce all text / thinking deltas that land within the same
-// animation frame into a single per-session list.map that applies
-// every queued op in one pass. Any other mutator that touches the
-// same `sessionsState.list` reference (`appendToLastTrace`,
-// `attachOutputToLastTrace`, `replaceLastAssistant`,
-// `updateLastAssistantUsage`, `flushSessionsNow`, …) calls
-// `flushStreamQueueNow()` first so the queued deltas land BEFORE the
-// direct mutation — preserving causal order in the event log
-// (text → trace → text shows up that way, not all-text-then-trace).
-type StreamOp =
-  | { kind: 'text'; delta: string }
-  | { kind: 'thinking'; delta: string };
+// Mechanics moved to `./sessions_stream.ts` (wave-1 phase-7 split).
+// The host-side glue below registers a flush handler that drains
+// the module-level queue and writes results back into the reactive
+// `sessionsState.list` — keeping the actual store mutation inside
+// this file so `sessions_stream.ts` stays free of $state imports
+// (avoids a circular dep, and the queue stays unit-testable).
 
-const _streamQueue = new Map<string, StreamOp[]>();
-let _streamRaf: number | null = null;
+setStreamFlushHandler(() => {
+  const work = drainStreamQueue();
+  if (work.size === 0) return;
+  sessionsState.list = sessionsState.list.map((s) => applyOpsToSession(s, work.get(s.id)));
+});
 
-function _scheduleStreamFlush() {
-  if (_streamRaf !== null) return;
-  if (typeof requestAnimationFrame === 'undefined') {
-    queueMicrotask(_flushStreamQueue);
-    return;
-  }
-  _streamRaf = requestAnimationFrame(() => {
-    _streamRaf = null;
-    _flushStreamQueue();
-  });
-}
-
-function _enqueueStream(sessionId: string, op: StreamOp): void {
-  let ops = _streamQueue.get(sessionId);
-  if (!ops) {
-    ops = [];
-    _streamQueue.set(sessionId, ops);
-  }
-  // Merge consecutive same-kind ops — 50 text tokens collapse to one
-  // op with a long delta, so the flush only walks the events array
-  // once per session instead of once per token.
-  const last = ops[ops.length - 1];
-  if (last && last.kind === op.kind) {
-    last.delta += op.delta;
-  } else {
-    ops.push(op);
-  }
-  _scheduleStreamFlush();
-}
-
-function _flushStreamQueue(): void {
-  if (_streamQueue.size === 0) return;
-  // Snapshot the per-session ops then clear the live queue so any
-  // re-entrant enqueue (e.g. a Svelte effect kicked off by the
-  // list.map below) lands in the NEXT frame's batch instead of being
-  // replayed inside the current pass.
-  const work = new Map(_streamQueue);
-  _streamQueue.clear();
-  sessionsState.list = sessionsState.list.map((s) => {
-    const ops = work.get(s.id);
-    if (!ops || ops.length === 0) return s;
-    const msgs = [...s.messages];
-    const last = msgs[msgs.length - 1];
-    if (!last || last.role !== 'assistant') return s;
-    let content = last.content;
-    let thinking = last.thinking;
-    const events = [...(last.events ?? [])];
-    for (const op of ops) {
-      if (op.kind === 'text') {
-        content += op.delta;
-        const lastEv = events[events.length - 1];
-        if (lastEv && lastEv.kind === 'text') {
-          events[events.length - 1] = { kind: 'text', body: lastEv.body + op.delta };
-        } else {
-          events.push({ kind: 'text', body: op.delta });
-        }
-      } else {
-        thinking = (thinking ?? '') + op.delta;
-      }
-    }
-    msgs[msgs.length - 1] = { ...last, content, thinking, events };
-    return { ...s, messages: msgs };
-  });
-}
-
-/** Drain any queued streaming deltas synchronously. Called at the top
- *  of every other mutator on `sessionsState.list` so direct mutations
- *  (trace pills, action cards, edit cards, replaceLastAssistant, …)
- *  always see the latest text/thinking state instead of stomping over
- *  a stale snapshot that the rAF batch hadn't applied yet. Also called
- *  by `flushSessionsNow` so the on-disk copy is current before the
- *  app quits. */
+/** Drain any queued streaming deltas synchronously. Re-exported from
+ *  `sessions_stream` so existing callers in `+page.svelte`,
+ *  `agentStream.ts`, etc. keep working unchanged. */
 export function flushStreamQueueNow(): void {
-  if (_streamRaf !== null) {
-    if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(_streamRaf);
-    _streamRaf = null;
-  }
-  _flushStreamQueue();
+  _flushStreamQueueImpl();
 }
 
-function sessionIndexPath(): string { return `${_diskDir}/index.json`; }
-function sessionFilePath(id: string): string { return `${_diskDir}/${id}.json`; }
-
-/* Per-event byte cap. Tool-use traces (especially Cursor's `edit` events
- * with full `oldText`/`newText` payloads) used to balloon to 240KB+ each;
- * a long agent run accumulated 100MB+ across the session list and froze
- * the app at boot (JSON.parse + Svelte reactivity choked on the deep
- * tree). 64KB is plenty for a sane Edit diff — anything bigger is a
- * file-dump that's not useful to keep in the chat transcript. */
-const EVENT_BYTE_CAP = 64 * 1024;
-
-/** Cheap size estimator for a MessageEvent — sums string-length of the
- *  fields that dominate JSON size, no allocation. Skips the per-event
- *  JSON.stringify the old check ran on every hydrate — that was the
- *  dominant cost when loading a 4 MB session at boot. */
-function estimateEventSize(e: MessageEvent): number {
-  switch (e.kind) {
-    case 'text': return e.body?.length ?? 0;
-    case 'trace': {
-      let n = 0;
-      for (const s of e.segments) n += s.length;
-      return n;
-    }
-    case 'edit':
-      return (e.oldText?.length ?? 0) + (e.newText?.length ?? 0);
-    default:
-      return 0;
-  }
-}
-
-/** Replace events whose payload exceeds `EVENT_BYTE_CAP` with a small
- *  trace stub. Applied symmetrically on serialize (so disk stays lean)
- *  and on hydrate (so existing oversize files self-heal at boot).
- *  Pure — never mutates the input. */
-function capMessageEvents(messages: ClaudeMessage[]): ClaudeMessage[] {
-  let touchedAny = false;
-  const next = messages.map((m) => {
-    if (m.role !== 'assistant' || !m.events || m.events.length === 0) return m;
-    let touched = false;
-    const evs: MessageEvent[] = m.events.map((e) => {
-      const size = estimateEventSize(e);
-      if (size <= EVENT_BYTE_CAP) return e;
-      touched = true;
-      const hint = e.kind === 'edit' ? ` path=${e.filePath}` : '';
-      return {
-        kind: 'trace',
-        segments: [
-          `‹toolcall›\n[event truncated: kind=${e.kind}${hint}, ${Math.round(size / 1024)}KB > ${EVENT_BYTE_CAP / 1024}KB cap]\n‹/toolcall›`,
-        ],
-      };
-    });
-    if (!touched) return m;
-    touchedAny = true;
-    return { ...m, events: evs };
-  });
-  return touchedAny ? next : messages;
-}
-
-function serializeSession(s: ClaudeSession): object {
-  return {
-    id: s.id,
-    title: s.title,
-    mentions: s.mentions,
-    messages: capMessageEvents(s.messages),
-    cwd: s.cwd,
-    input: s.input,
-    worktreePath: s.worktreePath,
-    worktreeBranch: s.worktreeBranch,
-    worktreeRepo: s.worktreeRepo,
-    actions: s.actions,
-    claudeUuid: s.claudeUuid,
-    claudeResumable: s.claudeResumable,
-    agentKind: s.agentKind,
-    cursorModel: s.cursorModel,
-    claudeModel: s.claudeModel,
-    lastContextSize: s.lastContextSize,
-    linkedToEditor: s.linkedToEditor,
-    linkedToEditorInstanceId: s.linkedToEditorInstanceId,
-    linkedCanvasId: s.linkedCanvasId,
-    linkedTerminalInstanceId: s.linkedTerminalInstanceId,
-    agentInstanceId: s.agentInstanceId,
-    cwdSwitchRecap: s.cwdSwitchRecap,
-    cwdUuids: s.cwdUuids,
-    awaitingApproval: s.awaitingApproval,
-    pendingActionResults: s.pendingActionResults,
-    pendingTurn: s.pendingTurn ?? null
-  };
-}
-
-async function flushToDisk(sessions: ClaudeSession[], activeId: string | null) {
-  if (!_diskDir) return;
-  try {
-    /* Identity-diff against the last-written snapshot — write ONLY the
-       sessions whose object reference changed since last flush. Every
-       mutator allocates a fresh ClaudeSession for the touched id (via
-       `list.map((s) => s.id === id ? {...s, ...} : s)`) so a !== check
-       reliably tells us which ids carry new content. */
-    const ids = sessions.map((s) => s.id);
-    const dirty: ClaudeSession[] = [];
-    const liveIds = new Set<string>(ids);
-    for (const s of sessions) {
-      if (_lastWrittenRef.get(s.id) !== s) dirty.push(s);
-    }
-    /* Index needs a rewrite when the list of ids changed (add / remove /
-       reorder) OR when the active pointer moved. */
-    let indexDirty = activeId !== _lastWrittenActiveId;
-    if (!indexDirty) {
-      if (_lastWrittenActiveId === undefined) {
-        indexDirty = true;
-      } else if (ids.length !== _lastWrittenRef.size) {
-        indexDirty = true;
-      } else {
-        for (const id of _lastWrittenRef.keys()) {
-          if (!liveIds.has(id)) { indexDirty = true; break; }
-        }
-      }
-    }
-    /* Parallel per-session writes — sequential `await invoke()` in a
-       for-loop was the dominant cost during a force-quit's grace
-       window. With Promise.all every dirty session goes out
-       concurrently and we only await the slowest one before the
-       index gets written. The index write stays sequential so we
-       never persist an ids[] pointing at a file that hasn't landed
-       yet. */
-    if (dirty.length > 0) {
-      await Promise.all(
-        dirty.map((s) =>
-          invoke('fs_write_file', {
-            path: sessionFilePath(s.id),
-            contents: JSON.stringify(serializeSession(s))
-          })
-        )
-      );
-      for (const s of dirty) _lastWrittenRef.set(s.id, s);
-    }
-    /* Prune removed ids from the snapshot map so a re-added id with the
-       same value isn't silently skipped on next flush. */
-    if (_lastWrittenRef.size !== liveIds.size) {
-      for (const id of [..._lastWrittenRef.keys()]) {
-        if (!liveIds.has(id)) _lastWrittenRef.delete(id);
-      }
-    }
-    if (indexDirty) {
-      await invoke('fs_write_file', {
-        path: sessionIndexPath(),
-        contents: JSON.stringify({ activeId, ids })
-      });
-      _lastWrittenActiveId = activeId;
-    }
-    _diskLastFlushAt = Date.now();
-    if (persistError.sessions) persistError.sessions = null;
-  } catch (e) {
-    const msg = asMessage(e);
-    persistError.sessions = msg;
-    if (!sessionsToastFired) {
-      sessionsToastFired = true;
-      notify({
-        kind: 'error',
-        title: "Couldn't save chats",
-        body: `${msg}. New messages stay in memory but won't survive a restart. See Settings → Storage.`,
-        ttlMs: null
-      });
-    }
-  }
-}
-
-function scheduleDiskWrite() {
-  /* Two-phase debounce. The trailing 400ms timer coalesces bursts
-     of mutations (every assistant streaming delta retriggers this
-     function), and the `DISK_MAX_DEFER_MS` ceiling guarantees the
-     timer can't be pushed past 2.5s since the last flush. Without
-     that ceiling a continuous stream would reset the timer on every
-     tick and the file would never be written until streaming
-     ended — making the "I just sent a message and force-quit"
-     scenario lose every byte of the in-flight turn. */
-  const now = Date.now();
-  const sinceLastFlush = now - _diskLastFlushAt;
-  if (sinceLastFlush >= DISK_MAX_DEFER_MS) {
-    /* We've been deferring too long — flush right away on a microtask
-       so we don't block the current call site. The fresh write
-       resets `_diskLastFlushAt`, after which the trailing timer
-       below can debounce subsequent changes. */
-    if (_diskWriteTimer) {
-      clearTimeout(_diskWriteTimer);
-      _diskWriteTimer = null;
-    }
-    queueMicrotask(() =>
-      void flushToDisk(sessionsState.list, sessionsState.activeClaudeId)
-    );
-    return;
-  }
-  if (_diskWriteTimer) clearTimeout(_diskWriteTimer);
-  /* Hard cap on the trailing wait: how much defer-budget we still
-     have until the ceiling kicks in. Min with the regular debounce
-     so short bursts still benefit from coalescing. */
-  const remainingDefer = Math.max(0, DISK_MAX_DEFER_MS - sinceLastFlush);
-  const wait = Math.min(DISK_DEBOUNCE_MS, remainingDefer);
-  _diskWriteTimer = setTimeout(() => {
-    _diskWriteTimer = null;
-    void flushToDisk(sessionsState.list, sessionsState.activeClaudeId);
-  }, wait);
-}
+/* Per-event byte cap + `serializeSession` / `capMessageEvents` moved
+ * to `./sessions_serialize.ts` (wave-1 phase-7 split). They're pure
+ * functions with no reactive store dependency, so isolating them
+ * makes the store file smaller and the utilities trivially unit-
+ * testable. The cap value lives next to its only callers. */
 
 /** Force an immediate, awaitable flush. Bypasses the debounce timer
  *  so callers (window-close hook, manual "Save now" affordance, …)
  *  can guarantee the on-disk copy reflects the in-memory state
- *  before the next browser tick / quit. */
+ *  before the next browser tick / quit. Thin wrapper around the
+ *  disk module's `flushNow` so the existing public symbol survives
+ *  the split. */
 export async function flushSessionsNow(): Promise<void> {
-  // Drain any in-flight rAF batch before we serialize — otherwise the
-  // on-disk copy would miss the trailing few tokens that hadn't
-  // landed in state yet.
-  flushStreamQueueNow();
-  if (_diskWriteTimer) {
-    clearTimeout(_diskWriteTimer);
-    _diskWriteTimer = null;
-  }
-  if (!_diskDir) return;
-  await flushToDisk(sessionsState.list, sessionsState.activeClaudeId);
+  await flushNow(sessionsState.list, sessionsState.activeClaudeId);
 }
 
 function loadStoredEditorState(): Record<
@@ -511,14 +227,15 @@ export const sessionsState = $state<{
 // source of truth. `persistSessionsEffect` wires the reactive $effect that
 // schedules debounced disk writes on every state change; pre-migration it
 // falls back to localStorage so the app works on the very first run.
+// `persistError` is re-exported above; sessions-write toast lives in the
+// disk module, rules-write toast stays here.
 
-export const persistError = $state<{ sessions: string | null; rules: string | null }>({
-  sessions: null,
-  rules: null
-});
-
-let sessionsToastFired = false;
 let rulesToastFired = false;
+/* localStorage-fallback toast — separate from the disk-write toast
+ * inside `sessions_disk` because the two paths can fail independently
+ * (disk write succeeds but localStorage migration cleanup fails, or
+ * vice versa pre-migration). */
+let sessionsLocalToastFired = false;
 
 function asMessage(e: unknown): string {
   if (e instanceof Error) return e.message || e.name;
@@ -591,11 +308,13 @@ function hydrateSession(s: ClaudeSession): ClaudeSession {
  *  Tries to load sessions from disk; if no disk sessions exist yet,
  *  migrates whatever is in localStorage to disk, then clears localStorage. */
 export async function initSessionsFromDisk(appDataDir: string): Promise<void> {
-  _diskDir = `${appDataDir}/sessions`;
+  setDiskDir(`${appDataDir}/sessions`);
   try {
-    const exists = await invoke<boolean>('fs_path_exists', { path: sessionIndexPath() });
+    const indexPath = sessionIndexFilePath();
+    if (!indexPath) throw new Error('disk dir not set');
+    const exists = await invoke<boolean>('fs_path_exists', { path: indexPath });
     if (exists) {
-      const raw = await invoke<string>('fs_read_file', { path: sessionIndexPath() });
+      const raw = await invoke<string>('fs_read_file', { path: indexPath });
       const index = JSON.parse(raw) as { activeId: string | null; ids: string[] };
       // Read every session file in parallel — sequential `for ... await`
       // here used to scale boot time linearly with N sessions (one IPC
@@ -607,7 +326,9 @@ export async function initSessionsFromDisk(appDataDir: string): Promise<void> {
       const settled = await Promise.all(
         ids.map(async (id): Promise<ClaudeSession | null> => {
           try {
-            const sessionRaw = await invoke<string>('fs_read_file', { path: sessionFilePath(id) });
+            const filePath = sessionFilePathFor(id);
+            if (!filePath) return null;
+            const sessionRaw = await invoke<string>('fs_read_file', { path: filePath });
             return hydrateSession(JSON.parse(sessionRaw) as ClaudeSession);
           } catch {
             return null;
@@ -648,26 +369,29 @@ export async function initSessionsFromDisk(appDataDir: string): Promise<void> {
       sessionsState.activeClaudeId = index.activeId ?? sessions[0]?.id ?? null;
       const active = sessions.find((s) => s.id === sessionsState.activeClaudeId);
       if (active) sessionsState.activeIds[active.agentKind] = active.id;
+      /* Seed the disk module's "last written" snapshot so the first
+       *  post-init scheduleDiskWrite doesn't think every session is
+       *  new and redundantly rewrite all files. */
+      resetLastWrittenSnapshot(sessions, sessionsState.activeClaudeId);
     } else {
       // First run with disk persistence — migrate localStorage to disk.
-      await flushToDisk(sessionsState.list, sessionsState.activeClaudeId);
+      await flushAllNow(sessionsState.list, sessionsState.activeClaudeId);
     }
     // localStorage is no longer the source of truth. Clear it to free quota.
     try { localStorage.removeItem(SESSIONS_STORAGE_KEY); } catch { /* ignore */ }
   } catch (e) {
     console.error('[sessions] disk init failed, falling back to localStorage:', e);
-    _diskDir = null; // Keep localStorage path active.
+    setDiskDir(null); // Keep localStorage path active.
   }
 }
 
 export function persistSessionsEffect() {
   $effect(() => {
-    if (_diskDir) {
+    if (getDiskDir()) {
       // Disk is active — debounce writes to avoid hammering disk during streaming.
       const list = sessionsState.list;
       const activeId = sessionsState.activeClaudeId;
-      void list; void activeId; // ensure svelte tracks these reactive reads
-      scheduleDiskWrite();
+      scheduleDiskWrite(list, activeId);
       return;
     }
     // Pre-migration localStorage fallback.
@@ -682,8 +406,8 @@ export function persistSessionsEffect() {
     } catch (e) {
       const msg = asMessage(e);
       persistError.sessions = msg;
-      if (!sessionsToastFired) {
-        sessionsToastFired = true;
+      if (!sessionsLocalToastFired) {
+        sessionsLocalToastFired = true;
         notify({
           kind: 'error',
           title: "Couldn't save chats",
@@ -1456,7 +1180,7 @@ export function appendToLastAssistant(sessionId: string, delta: string) {
   // queued op mirrors into both `content` (legacy concat) and
   // `events` (ordered array) on flush, identical to the previous
   // synchronous behavior.
-  _enqueueStream(sessionId, { kind: 'text', delta });
+  enqueueStream(sessionId, { kind: 'text', delta });
 }
 
 /** Mirror of `appendToLastAssistant` for `thinking` content blocks.
@@ -1465,7 +1189,7 @@ export function appendToLastAssistant(sessionId: string, delta: string) {
     into a "Thinking ✓" button the user can expand to inspect after
     the final answer lands. Batched via the same rAF queue as text. */
 export function appendToLastThinking(sessionId: string, delta: string) {
-  _enqueueStream(sessionId, { kind: 'thinking', delta });
+  enqueueStream(sessionId, { kind: 'thinking', delta });
 }
 
 /** Append a tool-use trace line (already formatted by `formatToolUse`)
@@ -1631,8 +1355,7 @@ export function replaceLastAssistant(sessionId: string, content: string) {
   // pending stream deltas for this session first so they don't
   // re-apply on top of the replacement on the next frame. Other
   // sessions' queued deltas are unaffected.
-  const ops = _streamQueue.get(sessionId);
-  if (ops && ops.length > 0) _streamQueue.delete(sessionId);
+  dropStreamQueueFor(sessionId);
   flushStreamQueueNow();
   sessionsState.list = sessionsState.list.map((s) => {
     if (s.id !== sessionId) return s;

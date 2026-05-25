@@ -23,6 +23,14 @@
   } from '$lib/services/slashCommands';
   import { skillsState, refreshSkills, type Skill } from '$lib/state/skills.svelte';
   import { statuslineState } from '$lib/state/statusline.svelte';
+  import {
+    claudeEffort,
+    claudeModels,
+    cursorModels,
+    fmtPct,
+    modelContextLimit,
+    pctClass,
+  } from './composerHelpers';
 
   type Kind = 'claude' | 'cursor';
 
@@ -701,19 +709,6 @@
      models that actually have 5× the headroom. Numbers tracked
      against Anthropic's published limits as of late-2025; if a new
      model lands, fall through to the `200_000` Sonnet/Haiku default. */
-  function modelContextLimit(model: string | null | undefined): number {
-    if (!model) return 200_000;
-    /* Opus 4.x ships with a 1M-token window by default (the same
-       extended-context tier Sonnet 4.5 has). */
-    if (model.startsWith('claude-opus-4')) return 1_000_000;
-    if (model.startsWith('claude-sonnet-4-6')) return 200_000;
-    if (model.startsWith('claude-sonnet')) return 1_000_000;
-    if (model.startsWith('claude-haiku')) return 200_000;
-    /* Cursor models inherit the Anthropic limits when proxied. */
-    if (model.includes('opus-4')) return 1_000_000;
-    if (model.includes('sonnet-4-6')) return 200_000;
-    return 200_000;
-  }
   const tokenLimit = $derived(
     p.kind === 'claude'
       ? modelContextLimit(sess?.claudeModel ?? null)
@@ -756,45 +751,9 @@
     p.kind === 'claude' ? quotaState.usage?.seven_day ?? null : null
   );
 
-  /* Real model ids only — Claude CLI rejects the run with "model
-     does not exist" if we pass anything it can't resolve. The 1M /
-     legacy variants we sketched earlier weren't actual ids on
-     anthropic's side, so they're gone. */
-  const claudeModels = [
-    { value: 'claude-opus-4-7', label: 'Opus 4.7' },
-    { value: 'claude-sonnet-4-6', label: 'Sonnet 4.6' },
-    { value: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5' }
-  ];
-  /* Curated subset of Cursor's model catalogue (the CLI exposes ~100
-     SKUs via `cursor-agent --list-models`, including every effort
-     tier and "fast" variant). We surface the headline picks across
-     vendors so the dropdown stays scannable; advanced effort tiers
-     stay reachable through the CLI directly. Keep ids EXACTLY as
-     `--list-models` reports — cursor-agent rejects the run with
-     "model does not exist" if we pass an alias it doesn't know. */
-  const cursorModels = [
-    { value: 'auto', label: 'Auto' },
-    { value: 'composer-2', label: 'Composer 2' },
-    { value: 'claude-4.6-sonnet-medium', label: 'Sonnet 4.6' },
-    { value: 'claude-4.6-sonnet-medium-thinking', label: 'Sonnet 4.6 Thinking' },
-    { value: 'claude-opus-4-7-medium', label: 'Opus 4.7' },
-    { value: 'claude-opus-4-7-high', label: 'Opus 4.7 High' },
-    { value: 'claude-opus-4-7-thinking-medium', label: 'Opus 4.7 Thinking' },
-    { value: 'gpt-5.5-medium', label: 'GPT 5.5' },
-    { value: 'gpt-5.5-high', label: 'GPT 5.5 High' },
-    { value: 'gpt-5.4-medium', label: 'GPT 5.4' },
-    { value: 'gpt-5.3-codex', label: 'Codex 5.3' },
-    { value: 'gpt-5.1', label: 'GPT 5.1' },
-    { value: 'gemini-3.1-pro', label: 'Gemini 3.1 Pro' },
-    { value: 'grok-4.3', label: 'Grok 4.3' }
-  ];
-  const claudeEffort = [
-    { value: 'auto', label: 'Effort · auto' },
-    { value: 'low', label: 'Effort · low' },
-    { value: 'medium', label: 'Effort · medium' },
-    { value: 'high', label: 'Effort · high' },
-    { value: 'max', label: 'Effort · max' }
-  ];
+  /* Model catalogues + claudeEffort moved to ./composerHelpers.ts
+   * (wave-1 phase-6 split). Edit the lists there when adding new
+   * SKUs or changing labels — Composer just renders them. */
 
   function setModel(v: string | null) {
     if (!sess) return;
@@ -810,16 +769,7 @@
     updateSession(sess.id, { thinkingEffort: v ?? null } as never);
   }
 
-  function fmtPct(b: { utilization: number | null } | null): string {
-    if (!b || b.utilization == null) return '—';
-    return `${Math.round(b.utilization)}%`;
-  }
-  function pctClass(b: { utilization: number | null } | null): string {
-    if (!b || b.utilization == null) return '';
-    if (b.utilization >= 90) return 'cmp-q--err';
-    if (b.utilization >= 70) return 'cmp-q--warn';
-    return '';
-  }
+  /* fmtPct + pctClass moved to ./composerHelpers.ts. */
 
   /* Attachments — only files / images dragged or pasted from OUTSIDE the
      app. In-app @-mentions (picker, editor-tree drag, line ranges) are

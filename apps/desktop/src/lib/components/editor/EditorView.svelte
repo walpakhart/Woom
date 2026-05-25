@@ -5,6 +5,8 @@
   import { open as openDialog } from '@tauri-apps/plugin-dialog';
   import Editor from '$lib/components/editor/Editor.svelte';
   import FileTree from '$lib/components/editor/FileTree.svelte';
+  import EditorFileSearch from '$lib/components/editor/EditorFileSearch.svelte';
+  import EditorTabs from '$lib/components/editor/EditorTabs.svelte';
   import GitPanel from '$lib/components/editor/GitPanel.svelte';
   import HistoryPanel from '$lib/components/editor/HistoryPanel.svelte';
   import DiffView from '$lib/components/editor/DiffView.svelte';
@@ -187,64 +189,10 @@
     active?.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'instant' });
   });
 
-  // ---- File-name search ---------------------------------------------------
-  let searchQuery = $state('');
-  let searchInclude = $state('');
-  let searchExclude = $state('');
-  let showSearchFilters = $state(false);
-  let searchResults = $state<{ path: string; name: string; rel: string }[]>([]);
-  let searching = $state(false);
-  let searchTimer: ReturnType<typeof setTimeout> | null = null;
-
-  async function searchFiles(
-    root: string,
-    query: string,
-    include: string,
-    exclude: string
-  ): Promise<{ path: string; name: string; rel: string }[]> {
-    const q = query.toLowerCase();
-    const incl = include.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
-    const excl = exclude.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
-    const results: { path: string; name: string; rel: string }[] = [];
-    const queue: string[] = [root];
-    while (queue.length > 0 && results.length < 80) {
-      const dir = queue.shift()!;
-      let entries: { name: string; path: string; is_dir: boolean }[] = [];
-      try {
-        entries = await invoke('fs_list_dir', { path: dir });
-      } catch { continue; }
-      for (const e of entries) {
-        if (e.is_dir) {
-          const skip = excl.some((p) => e.name.toLowerCase().includes(p));
-          if (!skip) queue.push(e.path);
-        } else {
-          const rel = e.path.startsWith(root + '/') ? e.path.slice(root.length + 1) : e.path;
-          const relLow = rel.toLowerCase();
-          if (excl.some((p) => relLow.includes(p))) continue;
-          if (incl.length > 0 && !incl.some((p) => relLow.includes(p))) continue;
-          if (e.name.toLowerCase().includes(q)) {
-            results.push({ path: e.path, name: e.name, rel });
-            if (results.length >= 80) break;
-          }
-        }
-      }
-    }
-    return results;
-  }
-
-  $effect(() => {
-    const q = searchQuery.trim();
-    const inc = searchInclude;
-    const exc = searchExclude;
-    if (searchTimer) { clearTimeout(searchTimer); searchTimer = null; }
-    if (q.length < 2) { searchResults = []; searching = false; return; }
-    searching = true;
-    searchTimer = setTimeout(async () => {
-      if (!repoPath) { searching = false; return; }
-      searchResults = await searchFiles(repoPath, q, inc, exc);
-      searching = false;
-    }, 280);
-  });
+  /* File-name search state + effect moved to EditorFileSearch.svelte
+   *  in the wave-1 phase-4 split. The search pane is self-contained
+   *  (own query/include/exclude state, debounced fs walk, result
+   *  list) and now mounts directly under the sidebar's "search" tab. */
 
   /** Lower-cased extension (without dot) of an absolute file path,
    *  empty string when the path has no extension. Used by the
@@ -1059,74 +1007,7 @@
                 {/snippet}
               </Splitter>
             {:else if sidebarTab === 'search'}
-              <div class="ev-sidebar-pane">
-                <div class="ev-search-bar">
-                  <input
-                    class="ev-search-input mono"
-                    placeholder="Search files by name…"
-                    type="search"
-                    bind:value={searchQuery}
-                  />
-                  <button
-                    class="ev-search-filter-toggle"
-                    class:ev-search-filter-toggle--active={showSearchFilters}
-                    title={showSearchFilters ? 'Hide filters' : 'Show include / exclude filters'}
-                    onclick={() => (showSearchFilters = !showSearchFilters)}
-                    aria-label="Toggle filters"
-                  >
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M22 3H2l8 9.46V19l4 2v-8.54L22 3z"/></svg>
-                  </button>
-                </div>
-                {#if showSearchFilters}
-                  <div class="ev-search-filters">
-                    <label class="ev-filter-row">
-                      <span class="ev-filter-label mono">include</span>
-                      <input
-                        class="ev-filter-input mono"
-                        placeholder="src/lib, *.ts, …"
-                        bind:value={searchInclude}
-                        title="Comma-separated substrings — only match files whose path contains one of these"
-                      />
-                    </label>
-                    <label class="ev-filter-row">
-                      <span class="ev-filter-label mono">exclude</span>
-                      <input
-                        class="ev-filter-input mono"
-                        placeholder="node_modules, dist, …"
-                        bind:value={searchExclude}
-                        title="Comma-separated substrings — skip dirs/files whose path contains one of these"
-                      />
-                    </label>
-                  </div>
-                {/if}
-                {#if searchQuery.trim().length < 2}
-                  <div class="ev-sidebar-empty">
-                    <p class="ev-sidebar-empty-h serif">Find files</p>
-                    <p class="ev-sidebar-empty-p">Type 2+ characters to search filenames in <span class="mono">{repoPath ? fileName(repoPath) : 'this repo'}</span>.</p>
-                  </div>
-                {:else if searching}
-                  <div class="ev-sidebar-empty">
-                    <p class="ev-sidebar-empty-p">Searching…</p>
-                  </div>
-                {:else if searchResults.length === 0}
-                  <div class="ev-sidebar-empty">
-                    <p class="ev-sidebar-empty-p">No files found for <span class="mono">"{searchQuery}"</span></p>
-                  </div>
-                {:else}
-                  <div class="ev-search-results">
-                    {#each searchResults as r (r.path)}
-                      <button
-                        class="ev-search-result"
-                        onclick={() => openFile(r.path)}
-                        title={r.path}
-                      >
-                        <span class="ev-search-result-name mono">{r.name}</span>
-                        <span class="ev-search-result-dir mono">{r.rel.slice(0, r.rel.length - r.name.length - 1) || '/'}</span>
-                      </button>
-                    {/each}
-                  </div>
-                {/if}
-              </div>
+              <EditorFileSearch rootPath={repoPath} onSelect={openFile} />
             {:else if sidebarTab === 'review'}
               <ReviewPane
                 linkedAgents={linkedAgents}
@@ -1159,46 +1040,18 @@
       {/snippet}
       {#snippet end()}
         <main class="ev-main">
-          <div class="ev-tabbar" bind:this={tabbarEl}>
-            {#if diffTarget}
-              <div class="ev-tab-wrap active" title={diffTarget.path}>
-                <button class="ev-tab-btn" onclick={closeDiff}>
-                  <span class="ev-tab-diff-icon" title="Diff">Δ</span>
-                  <span class="ev-tab-name mono">{diffTarget.path}</span>
-                  <span class="ev-tab-side">{diffTarget.staged ? 'staged' : 'working'}</span>
-                </button>
-                <button class="ev-tab-x" onclick={closeDiff} title="Close diff">
-                  <svg class="i i-sm" viewBox="0 0 24 24"><path d="M6 6l12 12M6 18L18 6" /></svg>
-                </button>
-              </div>
-            {:else if tabs.length === 0}
-              <div class="ev-tab-empty">Pick a file in the tree to open it here.</div>
-            {:else}
-              {#each tabs as path (path)}
-                <div
-                  class="ev-tab-wrap"
-                  class:active={path === activePath}
-                  class:dirty={dirtyByPath[path]}
-                  title={path}
-                >
-                  <button
-                    class="ev-tab-btn"
-                    onclick={() => void switchTab(path)}
-                    onauxclick={(e) => void onTabMiddleClick(path, e)}
-                  >
-                    <span class="ev-tab-name mono">{tabDisplayName(path)}</span>
-                  </button>
-                  <button class="ev-tab-x" onclick={(e) => void closeTab(path, e)} title={dirtyByPath[path] ? 'Close (unsaved)' : 'Close'}>
-                    {#if dirtyByPath[path]}
-                      <span class="ev-tab-dot"></span>
-                    {:else}
-                      <svg class="i i-sm" viewBox="0 0 24 24"><path d="M6 6l12 12M6 18L18 6" /></svg>
-                    {/if}
-                  </button>
-                </div>
-              {/each}
-            {/if}
-          </div>
+          <EditorTabs
+            {tabs}
+            {activePath}
+            {dirtyByPath}
+            {diffTarget}
+            {tabDisplayName}
+            onSwitch={(p) => void switchTab(p)}
+            onClose={(p, e) => void closeTab(p, e)}
+            onMiddleClick={(p, e) => void onTabMiddleClick(p, e)}
+            onCloseDiff={closeDiff}
+            bind:tabbarEl
+          />
           <div class="ev-editor-wrap">
             {#if diffTarget}
               {#key `${diffTarget.path}:${diffTarget.staged}`}
@@ -1737,21 +1590,6 @@
     gap: 12px;
     overflow-y: auto;
   }
-  .ev-search-input {
-    width: 100%;
-    padding: 8px 10px;
-    background: var(--bg-2);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    color: var(--text-0);
-    font-size: 12px;
-    transition: border-color 140ms, box-shadow 140ms;
-  }
-  .ev-search-input:focus {
-    outline: none;
-    border-color: var(--border-accent);
-    box-shadow: 0 0 0 3px var(--accent-soft);
-  }
   .ev-sidebar-empty {
     margin: auto;
     text-align: center;
@@ -1786,89 +1624,6 @@
     color: var(--accent-bright);
   }
 
-  .ev-search-bar {
-    flex-shrink: 0;
-    display: flex; gap: 6px; align-items: center;
-  }
-  .ev-search-bar .ev-search-input { flex: 1; }
-  .ev-search-filter-toggle {
-    flex-shrink: 0;
-    width: 28px; height: 28px;
-    display: grid; place-items: center;
-    background: var(--bg-2);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    color: var(--text-mute);
-    cursor: pointer;
-    transition: color 120ms, border-color 120ms, background 120ms;
-  }
-  .ev-search-filter-toggle:hover { color: var(--text-0); border-color: var(--border-hi); }
-  .ev-search-filter-toggle--active {
-    color: var(--accent-bright);
-    background: var(--accent-soft);
-    border-color: var(--border-accent-2);
-  }
-  .ev-search-filter-toggle svg { width: 13px; height: 13px; }
-
-  .ev-search-filters {
-    flex-shrink: 0;
-    display: flex; flex-direction: column; gap: 6px;
-  }
-  .ev-filter-row {
-    display: flex; align-items: center; gap: 8px;
-  }
-  .ev-filter-label {
-    font-size: 10px; font-weight: 600;
-    letter-spacing: 0.06em; text-transform: uppercase;
-    color: var(--text-mute);
-    width: 46px; flex-shrink: 0; text-align: right;
-  }
-  .ev-filter-input {
-    flex: 1;
-    padding: 5px 8px;
-    background: var(--bg-2);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    color: var(--text-0);
-    font-size: 11.5px;
-    transition: border-color 140ms;
-  }
-  .ev-filter-input:focus {
-    outline: none;
-    border-color: var(--border-accent);
-  }
-  .ev-filter-input::placeholder { color: var(--text-mute); }
-  .ev-search-results {
-    flex: 1; min-height: 0;
-    display: flex; flex-direction: column; gap: 2px;
-    overflow-y: auto;
-  }
-  .ev-search-result {
-    display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
-    padding: 6px 10px;
-    border-radius: 6px;
-    background: transparent;
-    border: none;
-    cursor: pointer;
-    text-align: left;
-    transition: background 120ms;
-    width: 100%;
-  }
-  .ev-search-result:hover { background: var(--bg-2); }
-  .ev-search-result-name {
-    font-size: 12px;
-    color: var(--text-0);
-    font-weight: 500;
-  }
-  .ev-search-result-dir {
-    font-size: 10.5px;
-    color: var(--text-mute);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    max-width: 100%;
-  }
-
   .ev-main { flex: 1; display: flex; flex-direction: column; min-width: 0; height: 100%; min-height: 0; }
   /* Hide horizontal scrollbar on the editor content (CodeMirror's
      `.cm-scroller`) and any other descendant that would otherwise
@@ -1882,100 +1637,9 @@
   /* v8 — chip-style tabs floating on the editor surface, with a per-tab
      brand dot indicating dirty/saved state. The bar gets a soft top
      edge that fades into the file content below; no hard border. */
-  .ev-tabbar {
-    display: flex; align-items: center; gap: 6px;
-    padding: 8px 10px 6px;
-    min-height: 42px;
-    background: var(--bg-1);
-    overflow-x: auto;
-    flex-shrink: 0;
-    border-bottom: 1px solid var(--border);
-  }
-  .ev-tabbar::-webkit-scrollbar { height: 0; }
-  .ev-tab-empty {
-    padding: 6px 10px;
-    font-size: 12px; color: var(--text-mute); 
-    white-space: nowrap;
-  }
-  .ev-tab-wrap {
-    display: inline-flex; align-items: center; gap: 0;
-    height: 28px;
-    padding: 0 4px 0 10px;
-    background: var(--bg-2);
-    border: 1px solid var(--border);
-    border-radius: 7px;
-    flex-shrink: 0;
-    max-width: 260px;
-    transition: background 120ms, border-color 120ms;
-    cursor: pointer;
-  }
-  .ev-tab-wrap:hover { background: var(--bg-3); border-color: var(--border-hi); }
-  .ev-tab-wrap.active {
-    background: var(--bg-3);
-    border-color: var(--border-hi);
-    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent);
-  }
-  /* Leading brand dot — terracotta on active, muted on inactive,
-     amber on dirty unsaved buffer. Matches the screenshot's bullet
-     glyph next to the file name. */
-  .ev-tab-wrap::before {
-    content: '';
-    flex-shrink: 0;
-    width: 6px; height: 6px;
-    border-radius: 50%;
-    margin-right: 7px;
-    background: var(--text-mute);
-    transition: background 140ms, box-shadow 140ms;
-  }
-  .ev-tab-wrap.active::before {
-    background: var(--accent-bright);
-    box-shadow: 0 0 6px var(--accent-glow);
-  }
-  .ev-tab-wrap.dirty::before {
-    background: var(--warning);
-    box-shadow: 0 0 6px rgba(217, 184, 110, 0.45);
-  }
-  .ev-tab-btn {
-    display: inline-flex; align-items: center; gap: 6px;
-    padding: 0;
-    font-size: 12.5px; color: var(--text-1);
-    background: transparent; border: 0;
-    min-width: 0;
-    cursor: pointer;
-  }
-  .ev-tab-wrap.active .ev-tab-btn { color: var(--text-0); }
-  .ev-tab-name {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 11.5px;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  }
-  .ev-tab-x {
-    display: inline-flex; align-items: center; justify-content: center;
-    width: 18px; height: 18px; border-radius: 4px;
-    margin-left: 6px;
-    color: var(--text-mute);
-    background: transparent; border: 0;
-    align-self: center;
-    flex-shrink: 0;
-    cursor: pointer;
-    transition: background 100ms, color 100ms;
-  }
-  .ev-tab-x:hover { background: rgba(232, 130, 100, 0.10); color: var(--error); }
-  .ev-tab-x :global(svg) { width: 10px; height: 10px; }
-  /* Inline dirty dot inside the close-button slot — only used when
-     the buffer is unsaved and the user hasn't hovered the row yet. */
-  .ev-tab-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--warning); box-shadow: 0 0 6px rgba(217,184,110,0.4); }
-  .ev-tab-diff-icon {
-    color: var(--accent-bright); font-weight: 700;
-    width: 14px; text-align: center;
-    flex-shrink: 0;
-  }
-  .ev-tab-side {
-    font-size: 10px; padding: 1px 5px;
-    border-radius: 3px; background: var(--bg-3);
-    color: var(--text-2);
-    flex-shrink: 0;
-  }
+  /* Top tab strip styles moved to EditorTabs.svelte in the wave-1
+   *  phase-4 split. The bar is rendered by `<EditorTabs />` directly
+   *  under `.ev-main`; visual rhythm preserved 1:1. */
 
   .ev-editor-wrap { flex: 1; min-height: 0; position: relative; display: flex; flex-direction: column; }
 

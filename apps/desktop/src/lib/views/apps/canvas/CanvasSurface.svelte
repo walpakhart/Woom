@@ -30,6 +30,13 @@
   //   - Agent link + MCP tools (M-canvas-7+).
 
   import { onMount, onDestroy, untrack } from 'svelte';
+  import {
+    intrinsicFromDataUrl,
+    looksLikeImage,
+    marqueeFromPoints,
+    readAsDataUrl,
+    rectIntersects,
+  } from './canvasGeometry';
   import CanvasShape from '$lib/components/canvas/CanvasShape.svelte';
   import CanvasToolbar from '$lib/components/canvas/CanvasToolbar.svelte';
   import CanvasEdges from '$lib/components/canvas/CanvasEdges.svelte';
@@ -743,18 +750,9 @@
 
   function marqueeRect() {
     if (!marquee) return null;
-    return {
-      x: Math.min(marquee.ax, marquee.bx),
-      y: Math.min(marquee.ay, marquee.by),
-      w: Math.abs(marquee.bx - marquee.ax),
-      h: Math.abs(marquee.by - marquee.ay)
-    };
+    return marqueeFromPoints(marquee.ax, marquee.ay, marquee.bx, marquee.by);
   }
-
-  function rectIntersects(a: { x: number; y: number; w: number; h: number },
-                          b: { x: number; y: number; w: number; h: number }) {
-    return !(a.x > b.x + b.w || a.x + a.w < b.x || a.y > b.y + b.h || a.y + a.h < b.y);
-  }
+  /* rectIntersects moved to ./canvasGeometry.ts */
 
   // ---- Draw ------------------------------------------------------------
 
@@ -1000,37 +998,8 @@
    *  document the move-to-disk migration in CANVAS.md §11.1. */
   const MAX_IMAGE_BYTES = 1_500_000;
 
-  function looksLikeImage(file: { type: string; name: string }): boolean {
-    if (file.type.startsWith('image/')) return true;
-    const lower = file.name.toLowerCase();
-    return /\.(png|jpg|jpeg|gif|webp|svg)$/.test(lower);
-  }
-
-  /** Read a Blob/File as base64 dataURL. Resolves with `null` on error
-   *  so callers can branch silently. */
-  function readAsDataUrl(blob: Blob): Promise<string | null> {
-    return new Promise((resolve) => {
-      const reader = new FileReader();
-      reader.onerror = () => resolve(null);
-      reader.onload = () => {
-        const r = reader.result;
-        resolve(typeof r === 'string' ? r : null);
-      };
-      reader.readAsDataURL(blob);
-    });
-  }
-
-  /** Decode a dataURL into intrinsic dimensions so the placed shape
-   *  starts at native size (capped to a max so a giant screenshot
-   *  doesn't dominate the canvas). */
-  function intrinsicFromDataUrl(dataUrl: string): Promise<{ w: number; h: number }> {
-    return new Promise((resolve) => {
-      const img = new Image();
-      img.onerror = () => resolve({ w: 320, h: 200 });
-      img.onload = () => resolve({ w: img.naturalWidth || 320, h: img.naturalHeight || 200 });
-      img.src = dataUrl;
-    });
-  }
+  /* looksLikeImage / readAsDataUrl / intrinsicFromDataUrl moved to
+   * ./canvasGeometry.ts (wave-1 phase-5 split). */
 
   /** Drop the image on the canvas at `at` (canvas px). `at` is the
    *  desired *center* of the inserted shape, so the image lands under

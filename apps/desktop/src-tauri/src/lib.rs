@@ -19,6 +19,11 @@ mod keychain;
 mod library;
 mod memory_local;
 mod sdd;
+mod sdd_frontmatter;
+mod sdd_phase_config;
+mod sdd_phase_io;
+mod sdd_prompts;
+mod sdd_time;
 mod sdd_verify;
 mod sentry;
 mod skills;
@@ -481,7 +486,7 @@ pub fn run() {
             sdd::sdd_pause,
             sdd::sdd_resume,
             sdd::sdd_stop,
-            sdd::sdd_prompt,
+            sdd_prompts::sdd_prompt,
             sdd::sdd_save_body,
             sdd::sdd_retry_phase,
             sdd::sdd_approve_phase,

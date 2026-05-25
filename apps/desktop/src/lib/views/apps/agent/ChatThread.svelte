@@ -17,6 +17,8 @@
   import { setDragPayload } from '$lib/state/drag.svelte';
   import { attachDragChip } from '$lib/dragImage';
   import type { ClaudeAction, ClaudeMessage } from '$lib/types';
+  import { parseToolHint, parseTraceSegment, type ToolHint, type ToolKind } from './chatTraceParse';
+  import { computeDiffRows, diffStats, type DiffRow } from './chatDiff';
 
   type Kind = 'claude' | 'cursor';
 
@@ -348,168 +350,12 @@
     });
   });
 
-  /** Parse a single trace segment. `appendToLastTrace` /
-   *  `attachOutputToLastTrace` wrap each tool invocation in unicode
-   *  guillemet markers (U+2039/U+203A — `‹toolcall›…‹/toolcall›` and
-   *  `‹output›…‹/output›`) so they don't collide with literal HTML
-   *  the agent might emit in its prose. We forgive minor layout
-   *  variation (inline vs newline, missing close on a partial
-   *  stream) and also accept legacy plain-angle `<toolcall>…` for
-   *  any pre-migration message that survived in the persisted log.
-   *  Plain segments (already markdown-formatted by `formatToolUse`)
-   *  fall through to a Markdown render. */
-  function parseTraceSegment(
-    seg: string
-  ): { kind: 'tool'; cmd: string; output: string } | { kind: 'text' } {
-    /* Detect either marker style. The unicode guillemets are the
-       canonical wrapping today; plain `<…>` survives only on old
-       persisted messages. */
-    if (!/[‹<](toolcall|output)\b/.test(seg)) return { kind: 'text' };
-    function extract(tag: 'toolcall' | 'output'): string {
-      /* Try unicode markers first, then plain. Closed pair preferred,
-         falling back to "open + rest of segment" for partial streams. */
-      const closedU = new RegExp(`‹${tag}›([\\s\\S]*?)‹\\/${tag}›`).exec(seg);
-      if (closedU) return closedU[1];
-      const closedA = new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`).exec(seg);
-      if (closedA) return closedA[1];
-      const openU = new RegExp(`‹${tag}›([\\s\\S]*)`).exec(seg);
-      if (openU) return openU[1];
-      const openA = new RegExp(`<${tag}>([\\s\\S]*)`).exec(seg);
-      return openA ? openA[1] : '';
-    }
-    /* Strip any inner output chunk first — output is spliced INSIDE
-       the toolcall envelope by `attachOutputToLastTrace`, so the
-       closing toolcall marker only matches AFTER the output. Without
-       this strip, cmd would include the whole captured text. Then
-       drop any stray leftover tag markers + the leading `$ ` shell
-       prompt (the ▸ glyph already conveys "this is a command"). */
-    function clean(s: string, dropOutput: boolean): string {
-      let r = s;
-      if (dropOutput) {
-        r = r.replace(/‹output›[\s\S]*?‹\/output›/g, '');
-        r = r.replace(/<output>[\s\S]*?<\/output>/g, '');
-      }
-      return r
-        .replace(/‹\/?toolcall›/g, '')
-        .replace(/‹\/?output›/g, '')
-        .replace(/<\/?toolcall>/g, '')
-        .replace(/<\/?output>/g, '')
-        .trim();
-    }
-    let cmd = clean(extract('toolcall'), true);
-    cmd = cmd
-      .replace(/^[`'"]?\s*\$\s+/, '')
-      .replace(/[`'"]$/, '')
-      .trim();
-    const output = clean(extract('output'), false);
-    return { kind: 'tool', cmd, output };
-  }
-
-  /** Tool kinds we render with a dedicated icon + colour. Anything else
-   *  falls through to the neutral `unknown` style — still renders, just
-   *  without the per-tool flair. */
-  type ToolKind =
-    | 'read' | 'edit' | 'write' | 'create' | 'delete'
-    | 'bash' | 'grep' | 'glob' | 'webfetch' | 'websearch'
-    | 'todo' | 'todos' | 'switch_cwd' | 'commit' | 'pr'
-    | 'ask'
-    | 'mcp' | 'unknown';
-
-  type ToolHint = {
-    kind: ToolKind;
-    /** Human-readable verb shown on the chip ("Read", "Bash", "Grep"…). */
-    label: string;
-    /** Primary subject — usually a path or command body. Rendered mono. */
-    target: string;
-    /** Optional secondary qualifier ("in <path>" for grep, "(L12–)" for read). */
-    scope: string;
-  };
-
-  /** Convert a `formatToolUse`-shaped hint string back into structure
-   *  so the trace renderer can pick an icon/colour/label per tool kind
-   *  instead of dumping every step as a same-looking `$ …` pill. We
-   *  keep this on the UI side because the over-the-wire format
-   *  (`_read_ \`path\``) is markdown-stable and shared across both
-   *  agents, so any structural decoration belongs in the renderer. */
-  function parseToolHint(raw: string): ToolHint {
-    const fallback = (k: ToolKind, label: string, target = ''): ToolHint => ({
-      kind: k, label, target, scope: '',
-    });
-    const s = raw.trim();
-    /* Bash carries no italics — it ships as `` `$ command` ``. The
-       leading `$ ` was already stripped by `parseTraceSegment` so
-       what's left is the bare command body. */
-    if (!s.startsWith('_')) {
-      /* Could still be a generic Markdown line; treat the whole thing
-         as a Bash command if it looks like one (no leading `_kind_`
-         marker and no markdown emphasis at all). */
-      return fallback('bash', 'Bash', s.replace(/^`|`$/g, ''));
-    }
-    /* `_kind_ \`primary\`[ in \`secondary\`]` — italics + inline-code.
-       We tolerate optional trailing parens like `(L12–)` from Read. */
-    const m = /^_([a-zA-Z][\w. ]*?)_\s*(.*)$/.exec(s);
-    if (!m) return fallback('unknown', 'Tool', s);
-    const verb = m[1].toLowerCase().trim();
-    const rest = m[2].trim();
-    const codes = [...rest.matchAll(/`([^`]+)`/g)].map((mm) => mm[1]);
-    const primary = codes[0] ?? '';
-    const secondary = codes[1] ?? '';
-    /* Pick out trailing parenthetical hint from Read (`(L12–)`). */
-    const parenMatch = / \(([^)]+)\)\s*$/.exec(rest);
-    const paren = parenMatch ? parenMatch[1] : '';
-    const inMatch = / in $/.test(rest.split('`')[2] ?? '');
-    const scope = secondary ? (inMatch ? `in ${secondary}` : secondary) : paren;
-
-    /* Map verb → kind + nice label. The verb space includes mcp
-       calls flattened by formatToolUse (`jira.get_issue`,
-       `app.open_github_pr`, …) — we treat the whole `mcp.*`
-       family as one kind but show the dotted name as the label. */
-    if (verb === 'read') return { kind: 'read', label: 'Read', target: primary, scope };
-    if (verb === 'edit') return { kind: 'edit', label: 'Edit', target: primary, scope };
-    if (verb === 'write') return { kind: 'write', label: 'Write', target: primary, scope };
-    if (verb === 'grep') return { kind: 'grep', label: 'Grep', target: primary, scope };
-    if (verb === 'glob') return { kind: 'glob', label: 'Glob', target: primary, scope };
-    if (verb === 'todos') {
-      // `formatTodos` ships either "_todos_ \`N items · k done · …\`"
-      // or "_todos_ \`…\` — Active label". The label-after-em-dash is
-      // captured into `rest` past the first inline-code, so reconstruct
-      // it here as the row's scope (rendered to the right of the
-      // summary by the trace template).
-      const afterCode = rest.replace(/`[^`]+`/, '').trim();
-      const trailing = afterCode.startsWith('—') ? afterCode.slice(1).trim() : '';
-      return {
-        kind: 'todos',
-        label: 'Update todos',
-        target: primary,
-        scope: trailing,
-      };
-    }
-    if (verb === 'webfetch') return { kind: 'webfetch', label: 'Fetch', target: primary, scope };
-    if (verb === 'websearch') return { kind: 'websearch', label: 'Search', target: primary, scope };
-    if (verb === 'switch cwd') return { kind: 'switch_cwd', label: 'Switch cwd', target: primary, scope };
-    if (verb === 'commit') return { kind: 'commit', label: 'Commit', target: primary, scope };
-    if (verb === 'open pr') return { kind: 'pr', label: 'PR', target: primary, scope };
-    if (verb === 'ask') return { kind: 'ask', label: 'Ask', target: primary, scope };
-    if (verb === 'notebook edit') return { kind: 'edit', label: 'Notebook', target: primary, scope };
-    if (verb === 'using bash…' || verb === 'propose bash…') {
-      return { kind: 'bash', label: 'Bash', target: primary, scope };
-    }
-    /* mcp__server__tool gets flattened to `server.tool` by formatToolUse. */
-    if (verb.includes('.')) {
-      const segs = verb.split('.');
-      const server = segs[0];
-      const tool = segs.slice(1).join('.').replace(/_/g, ' ');
-      return { kind: 'mcp', label: `${server} · ${tool}`, target: primary, scope };
-    }
-    /* Fallback: surface the verb as the label, keep its own
-       capitalisation (without the underscores formatToolUse used). */
-    return {
-      kind: 'unknown',
-      label: verb.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase()),
-      target: primary,
-      scope,
-    };
-  }
+  /* Trace-segment + tool-hint parsing moved to ./chatTraceParse.ts
+   * (wave-1 phase-6 split). Pure string-in / object-out utilities
+   * with no Svelte state — kept on the UI side because the
+   * over-the-wire format is shared by both agents but the
+   * structural decoration (icon + colour + label) belongs in the
+   * renderer. */
 
   /** Set of pending question-action ids that are already anchored to
    *  a `_ask_` trace step in the current session — so the
@@ -563,83 +409,9 @@
     return null;
   }
 
-  function diffStats(oldText: string, newText: string): { add: number; rem: number } {
-    const rows = computeDiffRows(oldText ?? '', newText ?? '');
-    let add = 0, rem = 0;
-    for (const r of rows) {
-      if (r.kind === 'add') add++;
-      else if (r.kind === 'rem') rem++;
-    }
-    return { add, rem };
-  }
-
-  /** Tiny LCS-based line diff. Good enough for the chat-card preview —
-   *  we're not trying to compete with `diff` here, just show the user
-   *  what the agent changed without leaving the conversation.
-   *  Returns ordered rows tagged add / rem / ctx. */
-  type DiffRow = { kind: 'add' | 'rem' | 'ctx'; oldNo?: number; newNo?: number; text: string };
-  function computeDiffRows(oldText: string, newText: string): DiffRow[] {
-    const a = oldText.split('\n');
-    const b = newText.split('\n');
-    /* Build LCS dp table. O(m*n) — bounded to ~400 lines per side via
-       the slice cap below so a giant write doesn't freeze the UI. */
-    const CAP = 400;
-    const aTrim = a.length > CAP ? a.slice(0, CAP) : a;
-    const bTrim = b.length > CAP ? b.slice(0, CAP) : b;
-    const m = aTrim.length, n = bTrim.length;
-    const dp: number[][] = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
-    for (let i = 1; i <= m; i++) {
-      for (let j = 1; j <= n; j++) {
-        if (aTrim[i - 1] === bTrim[j - 1]) dp[i][j] = dp[i - 1][j - 1] + 1;
-        else dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
-      }
-    }
-    const rows: DiffRow[] = [];
-    let i = m, j = n;
-    while (i > 0 && j > 0) {
-      if (aTrim[i - 1] === bTrim[j - 1]) {
-        rows.push({ kind: 'ctx', oldNo: i, newNo: j, text: aTrim[i - 1] });
-        i--; j--;
-      } else if (dp[i - 1][j] >= dp[i][j - 1]) {
-        rows.push({ kind: 'rem', oldNo: i, text: aTrim[i - 1] });
-        i--;
-      } else {
-        rows.push({ kind: 'add', newNo: j, text: bTrim[j - 1] });
-        j--;
-      }
-    }
-    while (i > 0) { rows.push({ kind: 'rem', oldNo: i, text: aTrim[i - 1] }); i--; }
-    while (j > 0) { rows.push({ kind: 'add', newNo: j, text: bTrim[j - 1] }); j--; }
-    rows.reverse();
-    /* Collapse long stretches of unchanged context. Keep 2 lines of
-       padding around each change so the user still gets locality. */
-    return collapseContext(rows, 2);
-  }
-  function collapseContext(rows: DiffRow[], pad: number): DiffRow[] {
-    const out: DiffRow[] = [];
-    const n = rows.length;
-    for (let i = 0; i < n; i++) {
-      const r = rows[i];
-      if (r.kind !== 'ctx') { out.push(r); continue; }
-      /* Find next change. */
-      let next = i;
-      while (next < n && rows[next].kind === 'ctx') next++;
-      const runLen = next - i;
-      const isHead = out.length === 0;
-      const isTail = next >= n;
-      const head = isHead ? 0 : pad;
-      const tail = isTail ? 0 : pad;
-      if (runLen <= head + tail + 1) {
-        for (let k = i; k < next; k++) out.push(rows[k]);
-      } else {
-        for (let k = i; k < i + head; k++) out.push(rows[k]);
-        out.push({ kind: 'ctx', text: `··· ${runLen - head - tail} unchanged lines ···` });
-        for (let k = next - tail; k < next; k++) out.push(rows[k]);
-      }
-      i = next - 1;
-    }
-    return out;
-  }
+  /* LCS line diff helpers moved to ./chatDiff.ts (wave-1 phase-6
+   * split). Pure utility — used by the inline edit-card preview to
+   * show what the agent changed without leaving the conversation. */
 </script>
 
 {#if !sess}

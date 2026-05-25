@@ -31,6 +31,23 @@
   import SymbolPickerOverlay from '$lib/components/editor/SymbolPickerOverlay.svelte';
   import ModalsRoot from '$lib/components/modals/ModalsRoot.svelte';
   import {
+    blobToBase64,
+    deriveCwd,
+    formatBytesShort,
+    guessExt,
+    imageFilesFromEvent,
+  } from './page_helpers';
+  import {
+    coerceString,
+    INSTANCE_ID_KEYS_DEEP,
+    INSTANCE_NAME_KEYS_DEEP,
+    num as _mcpNum,
+    pickDeep,
+    pickFrom,
+    REPO_PATH_KEYS_DEEP,
+    str as _mcpStr,
+  } from './mcpInputParse';
+  import {
     restoreCanvasState,
     dropCanvasInstance,
     ensureCanvasLoaded,
@@ -1388,11 +1405,7 @@
     }, 8000);
   });
 
-  function formatBytesShort(b: number): string {
-    if (b < 1024 * 1024) return `${(b / 1024).toFixed(0)} KB`;
-    if (b < 1024 * 1024 * 1024) return `${(b / 1024 / 1024).toFixed(1)} MB`;
-    return `${(b / 1024 / 1024 / 1024).toFixed(2)} GB`;
-  }
+  /* formatBytesShort moved to ./page_helpers.ts */
 
   onDestroy(() => {
     if (githubPollInterval) clearInterval(githubPollInterval);
@@ -1613,18 +1626,7 @@
   /** Read a Blob/File as base64 (without the `data:...;base64,` prefix). Uses
       FileReader to avoid the `String.fromCharCode.apply` stack-overflow that
       bites on multi-MB images. */
-  function blobToBase64(blob: Blob): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const r = new FileReader();
-      r.onload = () => {
-        const s = String(r.result ?? '');
-        const i = s.indexOf(',');
-        resolve(i >= 0 ? s.slice(i + 1) : s);
-      };
-      r.onerror = () => reject(r.error);
-      r.readAsDataURL(blob);
-    });
-  }
+  /* blobToBase64 moved to ./page_helpers.ts */
 
   /** Save a list of in-memory image blobs to disk + attach them to a session.
       Used for Files drops (Cmd+Shift+5 floating preview, drag from another
@@ -1656,12 +1658,7 @@
     return attachPathsToSession(sessionId, savedPaths);
   }
 
-  function guessExt(mime: string): string {
-    if (mime.includes('jpeg')) return 'jpg';
-    if (mime.includes('gif')) return 'gif';
-    if (mime.includes('webp')) return 'webp';
-    return 'png';
-  }
+  /* guessExt moved to ./page_helpers.ts */
 
   /** Cmd+V of one or more images in a chat composer. Routes through the same
       blob → on-disk → mention pipeline as drag-drop, so the resulting
@@ -1692,21 +1689,7 @@
     return n;
   }
 
-  /** Pull image File blobs out of a DragEvent's dataTransfer.files. Used as
-      a fallback for the Cmd+Shift+5 floating preview drag (which exposes
-      Files but NO text/uri-list, so the OS-path branch above misses it). */
-  function imageFilesFromEvent(e: DragEvent): { name: string; type: string; blob: Blob }[] {
-    const out: { name: string; type: string; blob: Blob }[] = [];
-    const files = e.dataTransfer?.files;
-    if (!files || files.length === 0) return out;
-    for (let i = 0; i < files.length; i++) {
-      const f = files[i];
-      if (f && (f.type.startsWith('image/') || /\.(png|jpe?g|gif|webp|bmp|svg|heic|heif|avif)$/i.test(f.name))) {
-        out.push({ name: f.name, type: f.type || 'image/png', blob: f });
-      }
-    }
-    return out;
-  }
+  /* imageFilesFromEvent moved to ./page_helpers.ts */
 
   function onAgentDrop(instanceId: string, kind: 'claude' | 'cursor', e: DragEvent) {
     e.preventDefault();
@@ -2023,11 +2006,7 @@
   }
 
   /** If user drops a file before setting cwd, infer the enclosing directory. */
-  function deriveCwd(path: string, isDir: boolean): string | null {
-    if (isDir) return path;
-    const idx = path.lastIndexOf('/');
-    return idx > 0 ? path.slice(0, idx) : null;
-  }
+  /* deriveCwd moved to ./page_helpers.ts */
 
   /** Builds the JSON payload piped to the user's statusline script.
    *  Reads from the currently-active session (across Claude / Cursor).
@@ -3489,96 +3468,14 @@
     name: string,
     input: Record<string, unknown>
   ) {
-    const str = (k: string): string =>
-      typeof input[k] === 'string' ? (input[k] as string).trim() : '';
-    const num = (k: string): number => {
-      const v = input[k];
-      return typeof v === 'number' ? v : Number(v);
-    };
-    /* `pick` accepts a canonical key plus a list of aliases and
-       returns the first one that's a non-empty string. Mirrors the
-       `#[serde(alias = "...")]` set on the sidecar's params struct
-       so the frontend dispatcher accepts the same shapes the sidecar
-       does — LLMs love shortening field names. */
+    /* Input-parser shims — input-bound thin wrappers around the
+     * shared helpers in `./mcpInputParse.ts` (wave-1 phase-9 split).
+     * Kept as local closures so every existing `case 'foo':` block
+     * can keep calling `str('key')` / `pick('a','b')` without a
+     * mechanical rewrite. */
+    const str = (k: string): string => _mcpStr(input, k);
+    const num = (k: string): number => _mcpNum(input, k);
     const pick = (...keys: string[]): string => pickFrom(input, ...keys);
-    /* `pickFrom` is the same idea but works against any object — used
-       by batch handlers (`canvas_add_edges`) that walk an array of
-       sub-records, each of which may have its own alias-renamed
-       fields. */
-    const pickFrom = (obj: Record<string, unknown>, ...keys: string[]): string => {
-      for (const k of keys) {
-        const v = obj[k];
-        if (typeof v === 'string' && v.trim()) return v.trim();
-      }
-      return '';
-    };
-    /* `coerceString` mirrors the sidecar's `coerce_to_string` —
-       cursor-agent has shipped the same field as a string, a single-
-       element array, or even a wrapped object with an inner `path`/
-       `value` key. We accept any of those shapes and return the first
-       plausible non-empty string (or empty string when nothing
-       resolves). */
-    const coerceString = (v: unknown): string => {
-      if (typeof v === 'string') return v.trim();
-      if (Array.isArray(v)) {
-        for (const x of v) {
-          const s = coerceString(x);
-          if (s) return s;
-        }
-        return '';
-      }
-      if (v && typeof v === 'object') {
-        const obj = v as Record<string, unknown>;
-        for (const k of ['repo_path', 'path', 'folder', 'directory', 'dir', 'cwd', 'value', 'text', 'string']) {
-          if (k in obj) {
-            const s = coerceString(obj[k]);
-            if (s) return s;
-          }
-        }
-      }
-      return '';
-    };
-    /* `pickDeep` is the alias-aware analogue of `pickFrom` that ALSO
-       drills into the wrapper objects cursor-agent / claude have been
-       known to nest payloads under (`args` / `arguments` / `params` /
-       `input`). Used by `set_editor_repo_path` / `set_agent_cwd` —
-       both have been observed receiving fully-wrapped payloads where
-       `repo_path` is two levels deep. Walks up to depth 4 to cover
-       the `{"args":{"args":{...}}}` case we've seen in the wild. */
-    const pickDeep = (obj: Record<string, unknown> | null | undefined, keys: string[], depth = 4): string => {
-      if (!obj || typeof obj !== 'object' || depth === 0) return '';
-      for (const k of keys) {
-        if (k in obj) {
-          const s = coerceString(obj[k]);
-          if (s) return s;
-        }
-      }
-      for (const wrap of ['args', 'arguments', 'params', 'parameters', 'input', 'data', 'payload']) {
-        const inner = obj[wrap];
-        if (inner && typeof inner === 'object' && !Array.isArray(inner)) {
-          const s = pickDeep(inner as Record<string, unknown>, keys, depth - 1);
-          if (s) return s;
-        }
-      }
-      return '';
-    };
-    /* Canonical alias lists for the deep extractors — kept in sync
-       with the sidecar's `REPO_PATH_KEYS` / `INSTANCE_NAME_KEYS` /
-       `INSTANCE_ID_KEYS` so both halves of the round-trip recognise
-       the same payload shapes. */
-    const REPO_PATH_KEYS_DEEP = [
-      'repo_path', 'repoPath', 'path', 'folder', 'directory', 'dir',
-      'cwd', 'repo', 'repository_path', 'folderPath', 'dirPath',
-      'fullPath', 'absolutePath', 'target_path', 'target'
-    ];
-    const INSTANCE_NAME_KEYS_DEEP = [
-      'instance_name', 'instanceName', 'name', 'column_name', 'columnName',
-      'editor_name', 'agent_name', 'label'
-    ];
-    const INSTANCE_ID_KEYS_DEEP = [
-      'instance_id', 'instanceId', 'id', 'column_id', 'columnId',
-      'editor_id', 'agent_id', 'uuid'
-    ];
     /* Shared edge-spec parser used by both `canvas_add_edge` (single)
        and `canvas_add_edges` (batch). Mirrors the alias set on the
        sidecar's CanvasAddEdgeParams; returns null when required ids
