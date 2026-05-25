@@ -39,7 +39,16 @@
     readAsDataUrl,
     rectIntersects,
     type CanonicalAnchor,
+    anchorStyleCss,
+    computeResize,
+    handleCursor,
+    handleStyleCss,
+    HANDLE_IDS,
+    isTypingTarget,
+    rescaleShapePoints,
+    type HandleId,
   } from './canvasGeometry';
+  import { buildLiveCardShape } from './canvasLiveCard';
   import CanvasShape from '$lib/components/canvas/CanvasShape.svelte';
   import CanvasToolbar from '$lib/components/canvas/CanvasToolbar.svelte';
   import CanvasEdges from '$lib/components/canvas/CanvasEdges.svelte';
@@ -334,8 +343,7 @@
   let pendingCaptureId = $state<number | null>(null);
   const DRAG_DEADZONE_PX = 4;
 
-  type HandleId = 'tl' | 'tc' | 'tr' | 'ml' | 'mr' | 'bl' | 'bc' | 'br';
-
+  // HandleId moved to ./canvasGeometry (wave-29).
   // ---- Coord conversion -----------------------------------------------
 
   function cssToCanvas(cssX: number, cssY: number): { x: number; y: number } {
@@ -1118,111 +1126,8 @@
    *  CARD_W × CARD_H matches the typical inbox-card height. */
   function insertLiveCard(payload: DragPayload, at: { x: number; y: number }) {
     if (!activeCanvas) return;
-    const CARD_W = 280;
-    const CARD_H = 96;
-    /* Anchor at click point, centered on the cursor. Snap to grid
-       unless ⌘ held — but DragEvent has metaKey too. */
-    const x = at.x - CARD_W / 2;
-    const y = at.y - CARD_H / 2;
-
-    let shape;
-    if (payload.source === 'jira') {
-      const item = payload.item;
-      shape = makeShape({
-        kind: 'jira-card',
-        x, y, w: CARD_W, h: CARD_H,
-        props: {
-          ticketKey: item.key,
-          /* Snapshot the fields we render so the card still looks right
-             when no Jira column has it loaded later. */
-          snapshot: {
-            key: item.key,
-            summary: item.summary,
-            status: item.status,
-            priority: item.priority,
-            issueType: item.issue_type,
-            assignee: item.assignee?.display_name ?? null,
-            updated: item.updated
-          }
-        }
-      });
-    } else if (payload.source === 'github') {
-      const item = payload.item;
-      const owner = item.repo?.owner ?? '';
-      const repoName = item.repo?.name ?? '';
-      shape = makeShape({
-        kind: item.is_pull_request ? 'github-pr-card' : 'github-issue-card',
-        x, y, w: CARD_W, h: CARD_H,
-        props: {
-          owner,
-          repo: repoName,
-          number: item.number,
-          snapshot: {
-            title: item.title,
-            state: item.state,
-            merged: item.merged,
-            draft: item.draft,
-            author: item.author?.login ?? null,
-            comments: item.comments,
-            updated: item.updated_at
-          }
-        }
-      });
-    } else if (payload.source === 'sentry') {
-      const item = payload.item;
-      shape = makeShape({
-        kind: 'sentry-event-card',
-        x, y, w: CARD_W, h: CARD_H,
-        props: {
-          issueId: item.id,
-          shortId: item.short_id,
-          snapshot: {
-            title: item.title,
-            level: item.level,
-            status: item.status,
-            count: item.count,
-            culprit: item.culprit,
-            project: item.project_slug
-          }
-        }
-      });
-    } else if (payload.source === 'file') {
-      shape = makeShape({
-        kind: 'file-card',
-        x, y, w: CARD_W, h: 70,
-        props: {
-          repoRoot: null,
-          relPath: payload.path,
-          isDir: payload.isDir
-        }
-      });
-    } else if (payload.source === 'chat-message') {
-      const snap = payload.snapshot;
-      /* Chat messages are taller because the excerpt body needs room
-         (sticky-style markdown render). Cap at a sensible height — the
-         user can resize. */
-      shape = makeShape({
-        kind: 'chat-message-card',
-        x: at.x - CARD_W / 2,
-        y: at.y - 100,
-        w: CARD_W,
-        h: 200,
-        props: {
-          sessionId: payload.sessionId,
-          messageIndex: payload.messageIndex,
-          snapshot: {
-            role: snap.role,
-            agentKind: snap.agentKind,
-            sessionTitle: snap.sessionTitle,
-            excerpt: snap.excerpt,
-            at: snap.at
-          }
-        }
-      });
-    } else {
-      return;
-    }
-
+    const shape = buildLiveCardShape(payload, at);
+    if (!shape) return;
     addShape(activeCanvas.id, shape);
     setSelection(activeCanvas.id, [shape.id]);
   }
@@ -1249,51 +1154,10 @@
   function applyResize(current: { x: number; y: number }, e: PointerEvent) {
     if (!activeCanvas || !gesture || gesture.kind !== 'resize') return;
     const { handle, shapeId, before, startCanvas } = gesture;
-    let nx = before.x;
-    let ny = before.y;
-    let nw = before.w;
-    let nh = before.h;
     const dx = current.x - startCanvas.x;
     const dy = current.y - startCanvas.y;
-    /* For each handle, decide which sides move. Diagonal handles move
-       two sides; cardinal handles move one. Negative widths are flipped
-       at commit so a backward drag past the opposite edge still
-       produces a valid bbox. */
-    if (handle.includes('l')) { nx = before.x + dx; nw = before.w - dx; }
-    if (handle.includes('r')) { nw = before.w + dx; }
-    if (handle.startsWith('t')) { ny = before.y + dy; nh = before.h - dy; }
-    if (handle.startsWith('b')) { nh = before.h + dy; }
-
-    if (!(e.metaKey || e.ctrlKey) && activeCanvas) {
-      const g = activeCanvas.gridSize;
-      /* Snap edges, not deltas. We compute the absolute world edge for
-         each side that's moving and snap it. Keeps shapes hugging the
-         grid even when the user dragged from a non-aligned start. */
-      if (handle.includes('l')) {
-        const right = before.x + before.w;
-        nx = snapToGrid(before.x + dx, g);
-        nw = right - nx;
-      }
-      if (handle.includes('r')) {
-        nw = snapToGrid(before.x + before.w + dx, g) - before.x;
-      }
-      if (handle.startsWith('t')) {
-        const bottom = before.y + before.h;
-        ny = snapToGrid(before.y + dy, g);
-        nh = bottom - ny;
-      }
-      if (handle.startsWith('b')) {
-        nh = snapToGrid(before.y + before.h + dy, g) - before.y;
-      }
-    }
-
-    /* Flip negative dimensions: dragging a left handle past the right
-       edge swaps the rect, like Figma. */
-    if (nw < 0) { nx += nw; nw = -nw; }
-    if (nh < 0) { ny += nh; nh = -nh; }
-    /* Clamp very small shapes to 1px so we don't lose them. */
-    nw = Math.max(1, nw);
-    nh = Math.max(1, nh);
+    const grid = (e.metaKey || e.ctrlKey) ? 0 : activeCanvas.gridSize;
+    const { x: nx, y: ny, w: nw, h: nh } = computeResize(handle, before, dx, dy, grid);
 
     /* Scale shape-internal point sets proportionally so they follow
        the bbox. Line / arrow have endpoint props; freehand has a list
@@ -1301,40 +1165,7 @@
        mermaid, code, image) just resize the bbox — their renderers
        handle the scaling internally. */
     const shape = activeCanvas.shapes.find((s) => s.id === shapeId);
-    let extra: Partial<Shape> = {};
-    if (shape && (shape.kind === 'line' || shape.kind === 'arrow-shape')) {
-      const sx = before.w === 0 ? 1 : nw / before.w;
-      const sy = before.h === 0 ? 1 : nh / before.h;
-      const props = shape.props as Record<string, unknown>;
-      const from = props.from as { x: number; y: number };
-      const to = props.to as { x: number; y: number };
-      if (from && to) {
-        extra = {
-          props: {
-            ...props,
-            from: { x: from.x * sx, y: from.y * sy },
-            to:   { x: to.x   * sx, y: to.y   * sy }
-          }
-        };
-      }
-    } else if (shape && shape.kind === 'freehand') {
-      const sx = before.w === 0 ? 1 : nw / before.w;
-      const sy = before.h === 0 ? 1 : nh / before.h;
-      const props = shape.props as Record<string, unknown>;
-      const points = props.points;
-      if (Array.isArray(points)) {
-        extra = {
-          props: {
-            ...props,
-            points: points.map((pt) => {
-              if (!Array.isArray(pt) || pt.length < 2) return pt;
-              const [x, y, p] = pt as [number, number, number?];
-              return [x * sx, y * sy, p ?? 0.5];
-            })
-          }
-        };
-      }
-    }
+    const extra = rescaleShapePoints(shape, before, { w: nw, h: nh });
 
     patchShape(activeCanvas.id, shapeId,
       { x: nx, y: ny, w: nw, h: nh, ...extra },
@@ -1411,12 +1242,7 @@
 
   // ---- Keyboard --------------------------------------------------------
 
-  function isTypingTarget() {
-    const el = document.activeElement;
-    if (!el) return false;
-    const tag = el.tagName;
-    return tag === 'INPUT' || tag === 'TEXTAREA' || (el as HTMLElement).isContentEditable;
-  }
+  // isTypingTarget moved to ./canvasGeometry (wave-29).
 
   function onKeyDown(e: KeyboardEvent) {
     /* Tool shortcuts: only fire when the canvas surface is hovered or
@@ -1628,24 +1454,8 @@
     selectedShapes.length === 1 ? selectedShapes[0] : null
   );
 
-  function anchorStyle(a: 'tc' | 'mr' | 'bc' | 'ml', shape: Shape): string {
-    const size = 12 * cz;
-    let cx = shape.x;
-    let cy = shape.y;
-    if (a === 'tc') { cx = shape.x + shape.w / 2; cy = shape.y; }
-    if (a === 'mr') { cx = shape.x + shape.w;     cy = shape.y + shape.h / 2; }
-    if (a === 'bc') { cx = shape.x + shape.w / 2; cy = shape.y + shape.h; }
-    if (a === 'ml') { cx = shape.x;               cy = shape.y + shape.h / 2; }
-    return `
-      left: ${cx}px;
-      top: ${cy}px;
-      width: ${size}px;
-      height: ${size}px;
-      margin-left: ${-size / 2}px;
-      margin-top: ${-size / 2}px;
-      border-width: ${1.5 * cz}px;
-    `;
-  }
+  const anchorStyle = (a: 'tc' | 'mr' | 'bc' | 'ml', shape: Shape) =>
+    anchorStyleCss(a, shape, cz);
 
   /** Edge-preview state in render-friendly shape. Keeps the template
    *  free of nested closures over the reactive `gesture` (which TS
@@ -1725,42 +1535,11 @@
     }
   });
 
-  const handleIds: HandleId[] = ['tl', 'tc', 'tr', 'ml', 'mr', 'bl', 'bc', 'br'];
+  const handleIds = HANDLE_IDS;
 
-  function handleStyle(handle: HandleId, box: { x: number; y: number; w: number; h: number }): string {
-    /* Each handle is positioned in canvas coords; the stage transform
-       scales them with the camera. We counter-zoom width/height so the
-       hit target stays a reasonable screen size at any zoom. */
-    const size = 10 * cz;
-    let cx = box.x;
-    let cy = box.y;
-    if (handle.includes('r')) cx = box.x + box.w;
-    if (handle.includes('c') && handle.startsWith('t')) cx = box.x + box.w / 2;
-    if (handle.includes('c') && handle.startsWith('b')) cx = box.x + box.w / 2;
-    if (handle === 'ml' || handle === 'mr') cy = box.y + box.h / 2;
-    if (handle.startsWith('b')) cy = box.y + box.h;
-    /* Special-case 'tc' and 'bc' which were already handled above. */
-    if (handle === 'tc') { cx = box.x + box.w / 2; cy = box.y; }
-    if (handle === 'bc') { cx = box.x + box.w / 2; cy = box.y + box.h; }
-    return `
-      left: ${cx}px;
-      top: ${cy}px;
-      width: ${size}px;
-      height: ${size}px;
-      margin-left: ${-size / 2}px;
-      margin-top: ${-size / 2}px;
-      border-width: ${1.5 * cz}px;
-    `;
-  }
+  const handleStyle = (handle: HandleId, box: { x: number; y: number; w: number; h: number }) =>
+    handleStyleCss(handle, box, cz);
 
-  function handleCursor(h: HandleId): string {
-    switch (h) {
-      case 'tl': case 'br': return 'nwse-resize';
-      case 'tr': case 'bl': return 'nesw-resize';
-      case 'tc': case 'bc': return 'ns-resize';
-      case 'ml': case 'mr': return 'ew-resize';
-    }
-  }
 </script>
 
 <section

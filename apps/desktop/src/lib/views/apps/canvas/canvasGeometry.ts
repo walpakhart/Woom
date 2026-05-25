@@ -150,3 +150,200 @@ export function anchorWorld(
     case 'br': return { x: rx, y: by };
   }
 }
+
+/** The 8 resize handle ids on a single-shape selection. Order matches
+ *  the historical render order in CanvasSurface so existing CSS keeps
+ *  matching the right corners. */
+export type HandleId = 'tl' | 'tc' | 'tr' | 'ml' | 'mr' | 'bl' | 'bc' | 'br';
+export const HANDLE_IDS: HandleId[] = ['tl', 'tc', 'tr', 'ml', 'mr', 'bl', 'bc', 'br'];
+
+/** CSS for one of the 4 edge anchors (`tc`/`mr`/`bc`/`ml`). Counter-
+ *  zooms width/height/border so the hit target stays a reasonable
+ *  screen size at any camera zoom (`cz`). Used by CanvasSurface to
+ *  render the edge-anchor dots on a single-selection box. */
+export function anchorStyleCss(
+  a: 'tc' | 'mr' | 'bc' | 'ml',
+  shape: { x: number; y: number; w: number; h: number },
+  cz: number
+): string {
+  const size = 12 * cz;
+  let cx = shape.x;
+  let cy = shape.y;
+  if (a === 'tc') { cx = shape.x + shape.w / 2; cy = shape.y; }
+  if (a === 'mr') { cx = shape.x + shape.w;     cy = shape.y + shape.h / 2; }
+  if (a === 'bc') { cx = shape.x + shape.w / 2; cy = shape.y + shape.h; }
+  if (a === 'ml') { cx = shape.x;               cy = shape.y + shape.h / 2; }
+  return `
+      left: ${cx}px;
+      top: ${cy}px;
+      width: ${size}px;
+      height: ${size}px;
+      margin-left: ${-size / 2}px;
+      margin-top: ${-size / 2}px;
+      border-width: ${1.5 * cz}px;
+    `;
+}
+
+/** CSS for one of the 8 resize handles. Same counter-zoom trick as
+ *  `anchorStyleCss`. `box` is the shape's canvas-space bbox. */
+export function handleStyleCss(
+  handle: HandleId,
+  box: { x: number; y: number; w: number; h: number },
+  cz: number
+): string {
+  /* Each handle is positioned in canvas coords; the stage transform
+     scales them with the camera. We counter-zoom width/height so the
+     hit target stays a reasonable screen size at any zoom. */
+  const size = 10 * cz;
+  let cx = box.x;
+  let cy = box.y;
+  if (handle.includes('r')) cx = box.x + box.w;
+  if (handle.includes('c') && handle.startsWith('t')) cx = box.x + box.w / 2;
+  if (handle.includes('c') && handle.startsWith('b')) cx = box.x + box.w / 2;
+  if (handle === 'ml' || handle === 'mr') cy = box.y + box.h / 2;
+  if (handle.startsWith('b')) cy = box.y + box.h;
+  /* Special-case 'tc' and 'bc' which were already handled above. */
+  if (handle === 'tc') { cx = box.x + box.w / 2; cy = box.y; }
+  if (handle === 'bc') { cx = box.x + box.w / 2; cy = box.y + box.h; }
+  return `
+      left: ${cx}px;
+      top: ${cy}px;
+      width: ${size}px;
+      height: ${size}px;
+      margin-left: ${-size / 2}px;
+      margin-top: ${-size / 2}px;
+      border-width: ${1.5 * cz}px;
+    `;
+}
+
+/** OS cursor name for the given handle. Stays in sync with the
+ *  pointer the user expects when grabbing a corner / edge handle. */
+export function handleCursor(h: HandleId): string {
+  switch (h) {
+    case 'tl': case 'br': return 'nwse-resize';
+    case 'tr': case 'bl': return 'nesw-resize';
+    case 'tc': case 'bc': return 'ns-resize';
+    case 'ml': case 'mr': return 'ew-resize';
+  }
+}
+
+/** Pure resize math — pick the new bbox + grid-snap + flip-negative.
+ *  Takes the handle id, the bbox at gesture start, the cursor delta in
+ *  canvas-space, the optional grid size (0 = no snap, e.g. ⌘ held).
+ *  Returns the four-component bbox the caller patches onto the shape.
+ *  The caller is responsible for any shape-internal point-set rescaling
+ *  (line endpoints, freehand strokes); this helper only solves the
+ *  rectangle math. */
+export function computeResize(
+  handle: HandleId,
+  before: { x: number; y: number; w: number; h: number },
+  dx: number,
+  dy: number,
+  gridSize: number
+): { x: number; y: number; w: number; h: number } {
+  let nx = before.x;
+  let ny = before.y;
+  let nw = before.w;
+  let nh = before.h;
+  /* For each handle, decide which sides move. Diagonal handles move
+     two sides; cardinal handles move one. Negative widths are flipped
+     at commit so a backward drag past the opposite edge still produces
+     a valid bbox. */
+  if (handle.includes('l')) { nx = before.x + dx; nw = before.w - dx; }
+  if (handle.includes('r')) { nw = before.w + dx; }
+  if (handle.startsWith('t')) { ny = before.y + dy; nh = before.h - dy; }
+  if (handle.startsWith('b')) { nh = before.h + dy; }
+
+  if (gridSize > 0) {
+    /* Snap edges, not deltas. We compute the absolute world edge for
+       each side that's moving and snap it. Keeps shapes hugging the
+       grid even when the user dragged from a non-aligned start. */
+    if (handle.includes('l')) {
+      const right = before.x + before.w;
+      nx = snap(before.x + dx, gridSize);
+      nw = right - nx;
+    }
+    if (handle.includes('r')) {
+      nw = snap(before.x + before.w + dx, gridSize) - before.x;
+    }
+    if (handle.startsWith('t')) {
+      const bottom = before.y + before.h;
+      ny = snap(before.y + dy, gridSize);
+      nh = bottom - ny;
+    }
+    if (handle.startsWith('b')) {
+      nh = snap(before.y + before.h + dy, gridSize) - before.y;
+    }
+  }
+
+  /* Flip negative dimensions: dragging a left handle past the right
+     edge swaps the rect, like Figma. */
+  if (nw < 0) { nx += nw; nw = -nw; }
+  if (nh < 0) { ny += nh; nh = -nh; }
+  /* Clamp very small shapes to 1px so we don't lose them. */
+  nw = Math.max(1, nw);
+  nh = Math.max(1, nh);
+  return { x: nx, y: ny, w: nw, h: nh };
+}
+
+function snap(value: number, grid: number): number {
+  return Math.round(value / grid) * grid;
+}
+
+/** When the user resizes a shape whose props carry their own
+ *  geometry (line/arrow endpoints, freehand stroke samples), the
+ *  bbox alone isn't enough — we also need to scale those internal
+ *  point sets so the rendered glyph keeps tracking the new box.
+ *  Returns a `Partial<Shape>`-shaped patch the caller spreads into
+ *  the main bbox patch, OR an empty object for kinds that don't
+ *  need point-set rescaling. */
+export function rescaleShapePoints(
+  shape: { kind: string; props: unknown } | undefined,
+  before: { w: number; h: number },
+  after: { w: number; h: number }
+): { props?: Record<string, unknown> } {
+  if (!shape) return {};
+  const sx = before.w === 0 ? 1 : after.w / before.w;
+  const sy = before.h === 0 ? 1 : after.h / before.h;
+  if (shape.kind === 'line' || shape.kind === 'arrow-shape') {
+    const props = shape.props as Record<string, unknown>;
+    const from = props.from as { x: number; y: number } | undefined;
+    const to = props.to as { x: number; y: number } | undefined;
+    if (from && to) {
+      return {
+        props: {
+          ...props,
+          from: { x: from.x * sx, y: from.y * sy },
+          to:   { x: to.x   * sx, y: to.y   * sy },
+        },
+      };
+    }
+  } else if (shape.kind === 'freehand') {
+    const props = shape.props as Record<string, unknown>;
+    const points = props.points;
+    if (Array.isArray(points)) {
+      return {
+        props: {
+          ...props,
+          points: points.map((pt) => {
+            if (!Array.isArray(pt) || pt.length < 2) return pt;
+            const [x, y, p] = pt as [number, number, number?];
+            return [x * sx, y * sy, p ?? 0.5];
+          }),
+        },
+      };
+    }
+  }
+  return {};
+}
+
+/** Whether the active DOM element is something we should not steal
+ *  key shortcuts from (text input, textarea, contentEditable). Used
+ *  by canvas key handlers to bail out of shortcuts when typing in a
+ *  composer field. */
+export function isTypingTarget(): boolean {
+  const el = document.activeElement;
+  if (!el) return false;
+  const tag = el.tagName;
+  return tag === 'INPUT' || tag === 'TEXTAREA' || (el as HTMLElement).isContentEditable;
+}
