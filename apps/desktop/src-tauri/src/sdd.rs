@@ -525,8 +525,14 @@ pub async fn sdd_hydrate(
             Some(s) if s.starts_with("sdd-") => s.to_string(),
             _ => continue,
         };
-        // Skip if already in memory.
-        if registry.workspaces.read().contains_key(&id) {
+        // Already in memory from the previous session? Webview reloads
+        // re-fire `sdd_hydrate` but the Tauri backend state survives —
+        // every in-memory workspace must still flow into `out` or the
+        // frontend store wipes itself ("0 SDD workspaces") even though
+        // the workspace dir on disk is intact. Push the current
+        // snapshot under a short-lived read lock, then move on.
+        if let Some(cell) = registry.workspaces.read().get(&id).cloned() {
+            out.push(cell.read().clone());
             continue;
         }
         /* Bootstrap with placeholder values; rebuild_from_disk fills
