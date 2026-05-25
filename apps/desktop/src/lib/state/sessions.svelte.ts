@@ -45,12 +45,48 @@ const DISK_MAX_DEFER_MS = 2_500;
 function sessionIndexPath(): string { return `${_diskDir}/index.json`; }
 function sessionFilePath(id: string): string { return `${_diskDir}/${id}.json`; }
 
+/* Per-event byte cap. Tool-use traces (especially Cursor's `edit` events
+ * with full `oldText`/`newText` payloads) used to balloon to 240KB+ each;
+ * a long agent run accumulated 100MB+ across the session list and froze
+ * the app at boot (JSON.parse + Svelte reactivity choked on the deep
+ * tree). 64KB is plenty for a sane Edit diff — anything bigger is a
+ * file-dump that's not useful to keep in the chat transcript. */
+const EVENT_BYTE_CAP = 64 * 1024;
+
+/** Replace events whose JSON exceeds `EVENT_BYTE_CAP` with a small trace
+ *  stub. Applied symmetrically on serialize (so disk stays lean) and on
+ *  hydrate (so existing oversize files self-heal at boot). Pure — never
+ *  mutates the input. */
+function capMessageEvents(messages: ClaudeMessage[]): ClaudeMessage[] {
+  let touchedAny = false;
+  const next = messages.map((m) => {
+    if (m.role !== 'assistant' || !m.events || m.events.length === 0) return m;
+    let touched = false;
+    const evs: MessageEvent[] = m.events.map((e) => {
+      const size = JSON.stringify(e).length;
+      if (size <= EVENT_BYTE_CAP) return e;
+      touched = true;
+      const hint = e.kind === 'edit' ? ` path=${e.filePath}` : '';
+      return {
+        kind: 'trace',
+        segments: [
+          `‹toolcall›\n[event truncated: kind=${e.kind}${hint}, ${Math.round(size / 1024)}KB > ${EVENT_BYTE_CAP / 1024}KB cap]\n‹/toolcall›`,
+        ],
+      };
+    });
+    if (!touched) return m;
+    touchedAny = true;
+    return { ...m, events: evs };
+  });
+  return touchedAny ? next : messages;
+}
+
 function serializeSession(s: ClaudeSession): object {
   return {
     id: s.id,
     title: s.title,
     mentions: s.mentions,
-    messages: s.messages,
+    messages: capMessageEvents(s.messages),
     cwd: s.cwd,
     input: s.input,
     worktreePath: s.worktreePath,
@@ -320,7 +356,11 @@ function hydrateSession(s: ClaudeSession): ClaudeSession {
     sending: false,
     cwd: s.cwd || null,
     mentions: s.mentions || [],
-    messages: s.messages || [],
+    /* Run the same per-event cap on load: existing on-disk sessions
+     * that pre-date the serialize-side cap still have giant edit
+     * payloads; capping here means a single launch heals them, and
+     * the next persist round writes the trimmed shape back to disk. */
+    messages: capMessageEvents(s.messages || []),
     worktreePath: s.worktreePath ?? null,
     worktreeBranch: s.worktreeBranch ?? null,
     worktreeRepo: s.worktreeRepo ?? null,

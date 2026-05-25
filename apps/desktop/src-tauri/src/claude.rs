@@ -154,16 +154,47 @@ fn is_executable(path: &Path) -> bool {
 }
 
 fn read_version(path: &Path) -> Option<String> {
-    let output = Command::new(path).arg("--version").output().ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let s = String::from_utf8_lossy(&output.stdout).to_string();
-    let trimmed = s.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_string())
+    /* Hard 2-second timeout. `claude --version` should be instant —
+     * just prints version string. Some claude builds spawn a
+     * sub-process for auth check / telemetry and hang indefinitely.
+     * Without timeout, sync `agent_status` Tauri command blocks
+     * forever, IPC await on frontend never resolves,
+     * `connectionsState.claude` stays null, agent UI stuck on
+     * "Connect Claude Code first" even though binary is on disk.
+     * Spawn → poll with 50ms sleep until deadline, kill child on
+     * timeout. */
+    use std::io::Read;
+    use std::time::{Duration, Instant};
+    let mut child = Command::new(path)
+        .arg("--version")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                if !status.success() {
+                    return None;
+                }
+                let mut buf = String::new();
+                if let Some(mut out) = child.stdout.take() {
+                    out.read_to_string(&mut buf).ok()?;
+                }
+                let trimmed = buf.trim();
+                return if trimmed.is_empty() { None } else { Some(trimmed.to_string()) };
+            }
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return None;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(_) => return None,
+        }
     }
 }
 

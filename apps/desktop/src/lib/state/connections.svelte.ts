@@ -159,11 +159,20 @@ export async function refreshSentryStatus() {
 }
 
 export async function refreshClaudeStatus() {
-  /* `agent_status` returns both CLIs in one round trip — cheaper than two
-   *  separate Tauri calls and keeps the two status flags in lockstep. */
+  /* `agent_status` returns both CLIs in one round trip — cheaper than
+   *  two separate Tauri calls and keeps the two status flags in
+   *  lockstep. Race against an 8s timer so a wedged IPC bridge can't
+   *  freeze the boot-retry loop on this await indefinitely (Rust side
+   *  has its own per-call timeouts but a stuck Tauri main-thread
+   *  message would still hang the await). */
   const start = performance.now();
   try {
-    const agentStatus = await invoke<AgentStatus>('agent_status');
+    const agentStatus = await Promise.race([
+      invoke<AgentStatus>('agent_status'),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('agent_status timeout (8s)')), 8000)
+      ),
+    ]);
     connectionsState.claude = agentStatus.claude;
     connectionsState.cursor = agentStatus.cursor;
     const latencyMs = Math.round(performance.now() - start);

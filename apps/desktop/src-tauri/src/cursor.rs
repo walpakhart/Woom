@@ -1723,12 +1723,43 @@ fn is_executable(p: &Path) -> bool {
 }
 
 fn read_version(path: &Path) -> Option<String> {
-    let out = Command::new(path).arg("--version").output().ok()?;
-    if !out.status.success() {
-        return None;
+    /* 2-second timeout — mirror of claude-side fix. Hung CLI
+     * `--version` wedges sync `agent_status` Tauri command forever.
+     * Spawn + poll + kill on deadline. Version cosmetic — detected
+     * stays true. */
+    use std::io::Read;
+    use std::time::{Duration, Instant};
+    let mut child = Command::new(path)
+        .arg("--version")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                if !status.success() {
+                    return None;
+                }
+                let mut buf = String::new();
+                if let Some(mut o) = child.stdout.take() {
+                    o.read_to_string(&mut buf).ok()?;
+                }
+                let s = buf.trim().to_string();
+                return if s.is_empty() { None } else { Some(s) };
+            }
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return None;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(_) => return None,
+        }
     }
-    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if s.is_empty() { None } else { Some(s) }
 }
 
 fn home_dir() -> Option<PathBuf> {
