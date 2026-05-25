@@ -1,0 +1,215 @@
+/* Rail solo — shared chrome. Loaded as a plain CSS module from
+ * `Rail.svelte` so rules apply globally and reach every child
+ * component (RailSourceButton, RailSystemButton, RailAppButton, etc.)
+ * without per-component style blocks. Svelte's component-scoped
+ * styles otherwise can't cross the parent → child boundary. */
+
+.rail-btn {
+  position: relative;
+  width: 44px; height: 44px;
+  display: grid; place-items: center;
+  color: var(--text-mute);
+  background: transparent;
+  border: 0;
+  border-radius: 11px;
+  cursor: pointer;
+  padding: 0;
+  transition: color 140ms, background 140ms, box-shadow 220ms;
+  --rail-tone: var(--accent-bright);
+  --rail-glow: var(--accent-glow);
+}
+.rail-btn svg { width: 19px; height: 19px; }
+
+/* Brand PNGs (Claude / Cursor) — match inline SVG footprint and
+ * keep ratio. `display: block` + `pointer-events: none` prevents
+ * image from intercepting clicks meant for the rail button.
+ *
+ * `currentColor` doesn't tint a raster image, so we lean on CSS
+ * filters to mirror how the SVG siblings respond to active /
+ * hover state. */
+.rail-brand-img {
+  width: 22px; height: 22px;
+  object-fit: contain;
+  display: block;
+  pointer-events: none;
+  -webkit-user-drag: none;
+  filter: grayscale(1) opacity(0.78);
+  transition: filter 160ms;
+}
+.rail-btn:hover .rail-brand-img,
+.rail-btn.active .rail-brand-img {
+  filter: none;
+}
+/* Cursor's white-on-transparent icon is too bright at default
+ * opacity — dial down further so it reads as clearly inactive. */
+.rail-brand-img--cursor {
+  filter: grayscale(1) opacity(0.35);
+}
+.rail-btn:hover .rail-brand-img--cursor,
+.rail-btn.active .rail-brand-img--cursor {
+  filter: none;
+}
+
+.rail-btn:hover {
+  color: var(--rail-tone);
+  background: color-mix(in srgb, var(--rail-tone) 10%, transparent);
+}
+.rail-btn.active {
+  color: var(--rail-tone);
+  background: linear-gradient(180deg,
+    color-mix(in srgb, var(--rail-tone) 20%, transparent),
+    color-mix(in srgb, var(--rail-tone) 8%, transparent));
+  /* Only the inset 1px ring stays on the button — the 22px outer
+   * halo lives on `.rail-halo` (rendered outside `.rail-scroll`
+   * so it isn't clipped at the scroll container's right edge). */
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--rail-tone) 35%, transparent);
+}
+.rail-btn.active::after {
+  content: '';
+  position: absolute;
+  bottom: -3px; left: 50%; transform: translateX(-50%);
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  background: var(--rail-tone);
+  box-shadow: 0 0 10px var(--rail-glow);
+}
+
+/* Drop highlight — terracotta dashed ring + halo while a payload is
+ * hovering the rail button. Mirrors composer-shell drop hint so user
+ * reads the same affordance everywhere. */
+.rail-btn.rail-dropping {
+  color: var(--rail-tone);
+  background: color-mix(in srgb, var(--rail-tone) 22%, transparent);
+  box-shadow:
+    inset 0 0 0 1.5px var(--rail-tone),
+    0 0 0 4px color-mix(in srgb, var(--rail-glow) 40%, transparent),
+    0 0 22px color-mix(in srgb, var(--rail-glow) 70%, transparent);
+  transform: scale(1.04);
+}
+.rail-btn.rail-dropping > svg {
+  transform: scale(1.05);
+  filter: drop-shadow(0 0 8px var(--rail-glow));
+}
+
+/* Ambient "thinking" pulse — applied to Claude / Cursor when active
+ * session for that kind is mid-turn. Two-layer halo pulses on 1.6s
+ * sine so eye reads as heartbeat, not strobe. Source-tinted. Gated
+ * upstream so drop-target pulse wins when both fire. */
+.rail-btn.rail-busy:not(.rail-dropping) {
+  animation: rail-busy-pulse 1.6s ease-in-out infinite;
+}
+@keyframes rail-busy-pulse {
+  0%, 100% {
+    box-shadow:
+      inset 0 0 0 1px color-mix(in srgb, var(--rail-tone) 20%, transparent),
+      0 0 0 0 color-mix(in srgb, var(--rail-glow) 0%, transparent);
+  }
+  50% {
+    box-shadow:
+      inset 0 0 0 1.5px color-mix(in srgb, var(--rail-tone) 55%, transparent),
+      0 0 18px color-mix(in srgb, var(--rail-glow) 55%, transparent);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rail-btn.rail-busy:not(.rail-dropping) {
+    animation: none;
+    box-shadow:
+      inset 0 0 0 1.5px color-mix(in srgb, var(--rail-tone) 40%, transparent),
+      0 0 10px color-mix(in srgb, var(--rail-glow) 35%, transparent);
+  }
+}
+
+/* Retry / disconnect dot */
+.rail-dot {
+  position: absolute;
+  top: 8px; right: 8px;
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--warning);
+  box-shadow: 0 0 0 2px var(--bg-1), 0 0 8px rgba(217, 184, 110, 0.5);
+}
+.rail-dot--retrying {
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--bg-1), 0 0 8px var(--accent-glow);
+  animation: rail-dot-pulse 1.4s ease-in-out infinite;
+}
+@keyframes rail-dot-pulse {
+  0%, 100% { opacity: 0.55; }
+  50%      { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rail-dot--retrying { animation: none; opacity: 0.85; }
+}
+
+/* Unread badge — small numeric pill in source-accent tone. Anchored
+ * to top-right of rail-btn, painted with same `--rail-tone` as icon
+ * so each source's brand colour reads on its own badge (Jira blue,
+ * GitHub purple, Sentry plum). Capped to "99+" upstream so pill
+ * never blows past the 44px footprint. Hidden when user views that
+ * solo — opening the source IS the "mark seen" gesture. */
+.rail-badge {
+  position: absolute;
+  top: 2px; right: 2px;
+  min-width: 16px; height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--rail-tone);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+  letter-spacing: -0.01em;
+  text-align: center;
+  box-shadow:
+    0 0 0 2px rgba(20, 24, 26, 0.92),
+    0 0 8px color-mix(in srgb, var(--rail-glow) 60%, transparent);
+  pointer-events: none;
+  animation: rail-badge-in 220ms var(--ease-out, ease-out);
+}
+@keyframes rail-badge-in {
+  from { opacity: 0; transform: scale(0.6); }
+  to   { opacity: 1; transform: scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rail-badge { animation: none; }
+}
+
+/* Drag-active attention: while a payload is in flight, pulse the
+ * three drop targets (Claude + Cursor + Canvas) with a soft glow
+ * so user can find them at a glance — discoverability fix for the
+ * silent drag affordance. Pulse uses rail-btn's own `--rail-glow`
+ * so each agent keeps its brand tone. Dimmed when actual
+ * `.rail-dropping` state takes over, so dragover highlight reads
+ * clearly over the pulse. */
+.rail.is-drag-active .rail-btn[data-view="claudeApp"],
+.rail.is-drag-active .rail-btn[data-view="cursorApp"],
+.rail.is-drag-active .rail-btn[data-view="canvasApp"] {
+  animation: rail-drop-pulse 1.6s ease-in-out infinite;
+}
+.rail.is-drag-active .rail-btn[data-view="claudeApp"].rail-dropping,
+.rail.is-drag-active .rail-btn[data-view="cursorApp"].rail-dropping,
+.rail.is-drag-active .rail-btn[data-view="canvasApp"].rail-dropping {
+  animation: none;
+}
+@keyframes rail-drop-pulse {
+  0%, 100% {
+    box-shadow:
+      0 0 0 0 color-mix(in srgb, var(--rail-glow) 0%, transparent),
+      0 0 0 0 color-mix(in srgb, var(--rail-glow) 0%, transparent);
+  }
+  50% {
+    box-shadow:
+      0 0 0 3px color-mix(in srgb, var(--rail-glow) 35%, transparent),
+      0 0 18px color-mix(in srgb, var(--rail-glow) 55%, transparent);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rail.is-drag-active .rail-btn[data-view="claudeApp"],
+  .rail.is-drag-active .rail-btn[data-view="cursorApp"],
+  .rail.is-drag-active .rail-btn[data-view="canvasApp"] {
+    animation: none;
+    box-shadow:
+      0 0 0 2px color-mix(in srgb, var(--rail-glow) 30%, transparent);
+  }
+}
