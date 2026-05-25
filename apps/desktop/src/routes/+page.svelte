@@ -57,6 +57,7 @@
   import * as _sessionLinks from './sessionLinks';
   import * as _agentTurn from './agentTurn';
   import { createSendClaudeMessage as _createSendClaudeMessage } from './sendClaudeMessage';
+  import * as _kbd from './keyboardShortcuts';
   import {
     actionMatchesIpcParams,
     buildActionFromIpcRequest,
@@ -2477,283 +2478,51 @@
   const disconnectJiraAll = () => _modalActions.disconnectJiraAll();
   const openBrowser = (u: string) => _modalActions.openBrowser(u);
 
-  function onKey(e: KeyboardEvent) {
-    if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
-      e.preventDefault();
-      paletteMode = 'normal';
-      paletteOpen = !paletteOpen;
-    } else if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'a' || e.key === 'A')) {
-      /* ⌘⇧A — Agent View dashboard. Mirrors Claude Code's `claude
-       * agents` table — every Claude / Cursor session grouped by
-       * lifecycle (Needs input / Working / Recent / Older + Pinned).
-       * Toggle so a second press dismisses. */
-      e.preventDefault();
-      agentDashboardOpen = !agentDashboardOpen;
-    } else if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'f' || e.key === 'F')) {
-      /* ⌘⇧F — project-wide find. Standard IDE shortcut every
-       * dev coming from VSCode / Cursor / JetBrains expects.
-       * Toggle: pressing again while open closes (matches ⌘K). */
-      e.preventDefault();
-      searchInFilesOpen = !searchInFilesOpen;
-    } else if ((e.metaKey || e.ctrlKey) && (e.key === 'p' || e.key === 'P') && !e.shiftKey && !e.altKey) {
-      /* ⌘P — quick-open file picker. Mirror of VSCode / Cursor /
-       * Sublime; the most-used IDE shortcut after Esc. Toggle so
-       * a stray second press dismisses cleanly. */
-      e.preventDefault();
-      quickOpenOpen = !quickOpenOpen;
-    } else if (
-      (e.metaKey || e.ctrlKey) && e.shiftKey &&
-      (e.key === '?' || e.key === '/' || e.code === 'Slash')
-    ) {
-      /* ⇧⌘? — toggle the Welcome / Help overlay. We accept both `?`
-       * (shift-/ on US layouts surfaces the printable char) and `/`
-       * + `e.code === 'Slash'` so non-US layouts where shift-/ resolves
-       * to something else still hit the binding. Mutually exclusive
-       * with the bare-`?` cheatsheet — closing one before flipping
-       * the other keeps the modal stack legible. */
-      e.preventDefault();
-      cheatsheetOpen = false;
-      welcomeOpen = !welcomeOpen;
-    } else if (
-      (e.metaKey || e.ctrlKey) && e.shiftKey &&
-      (e.key === 'v' || e.key === 'V' || e.code === 'KeyV') &&
-      view === 'editorApp'
-    ) {
-      /* ⇧⌘V — cycle Markdown preview mode (off → split → only → off).
-       * Mirrors VSCode's "Open Preview to the Side" muscle memory.
-       * Scoped to the editor solo so the binding doesn't fight Apple's
-       * paste-without-formatting binding when the user is in another
-       * surface. */
-      e.preventDefault();
-      window.dispatchEvent(new CustomEvent('woom:editor:toggle-md-preview'));
-    } else if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'o' || e.key === 'O' || e.code === 'KeyO')) {
-      /* ⇧⌘O — Go to symbol in file. Same shortcut VSCode / Cursor
-       * already train people on, so muscle memory carries over.
-       * `e.code` fallback because the shifted-O may report differently
-       * on non-US layouts (Cmd-Shift remaps the printable char). */
-      e.preventDefault();
-      symbolPickerOpen = !symbolPickerOpen;
-    } else if (
-      (e.metaKey || e.ctrlKey) && e.shiftKey &&
-      (e.key === 'b' || e.key === 'B' || e.code === 'KeyB') &&
-      view === 'editorApp'
-    ) {
-      /* ⇧⌘B — create a new git branch from anywhere in the editor
-       * surface. Dispatches a window-level event the GitPanel listens
-       * for: it pops the branch picker open, flips to "create" mode,
-       * and the new-branch-name input auto-focuses via its attach
-       * directive. Scoped to the editor solo so the binding doesn't
-       * fire while the user is buried in a chat / canvas / terminal. */
-      e.preventDefault();
-      window.dispatchEvent(new CustomEvent('woom:editor:new-branch'));
-    } else if (
-      (e.metaKey || e.ctrlKey) &&
-      !e.shiftKey && !e.altKey &&
-      (e.key === '[' || e.code === 'BracketLeft') &&
-      !isTextInput(e.target)
-    ) {
-      /* ⌘[ — solo-history back. Browser-style nav across solos so
-       * the user can jump GitHub PR → Jira ticket → Sentry issue
-       * and walk back through the trail without re-clicking icons.
-       * Skip when focus is in a text input (Composer / Editor / list
-       * search) so the binding doesn't fight the system's outdent /
-       * "previous word" Emacs binding. */
-      e.preventDefault();
-      navBack();
-    } else if (
-      (e.metaKey || e.ctrlKey) &&
-      !e.shiftKey && !e.altKey &&
-      (e.key === ']' || e.code === 'BracketRight') &&
-      !isTextInput(e.target)
-    ) {
-      /* ⌘] — solo-history forward. Mirror of ⌘[. Only meaningful
-       * after at least one ⌘[ press; idle no-op otherwise. */
-      e.preventDefault();
-      navForward();
-    } else if (
-      (e.metaKey || e.ctrlKey) &&
-      !e.shiftKey && !e.altKey &&
-      (e.key === '\\' || e.code === 'Backslash') &&
-      !isTextInput(e.target)
-    ) {
-      /* ⌘\ — toggle UI density (comfortable ↔ compact). Mirrors
-       * Slack's keyboard binding for the same toggle. Skipped when a
-       * text input has focus so the binding doesn't fight a literal
-       * `\` keystroke in the composer or editor. */
-      e.preventDefault();
-      toggleDensity();
-    } else if (
-      (e.metaKey || e.ctrlKey) &&
-      !e.shiftKey && !e.altKey &&
-      (e.key === '.' || e.code === 'Period')
-    ) {
-      /* ⌘. — interrupt the active agent run. Mirrors macOS's
-       * "Cancel" muscle memory (used to abort everything from a
-       * stuck Spotlight query to a print job). Scoped to whichever
-       * agent solo the user is currently looking at so the binding
-       * doesn't accidentally kill a Cursor turn while you're in
-       * Claude's column. No-op when there's no in-flight session;
-       * `stopAgentForKind` already guards with `if (!s) return`. */
-      const kind: 'claude' | 'cursor' | null =
-        view === 'claudeApp' ? 'claude'
-        : view === 'cursorApp' ? 'cursor'
-        : null;
-      if (kind) {
-        const activeId = sessionsState.activeIds[kind];
-        const s = activeId ? sessionsState.list.find((x) => x.id === activeId) : null;
-        if (s?.sending) {
-          e.preventDefault();
-          void stopAgentForKind(kind);
-        }
-      }
-    } else if ((e.metaKey || e.ctrlKey) && e.key === 'e' && !e.shiftKey && !e.altKey) {
-      /* ⌘E — quick switcher to most-recently-touched things. Open in
-       * `recents` mode (other sections hidden until the typed query
-       * stops matching any recent row). Mirrors JetBrains' Recent
-       * Files / VS Code's "Quick Open Last" muscle memory. */
-      e.preventDefault();
-      paletteMode = 'recents';
-      paletteOpen = true;
-    } else if (
-      (e.metaKey || e.ctrlKey) &&
-      !e.shiftKey && !e.altKey &&
-      e.key >= '0' && e.key <= '8'
-    ) {
-      /* ⌘0..⌘8 — solo switcher. The rail tooltips have promised
-       * these shortcuts since the rail's first pass (`Home · ⌘0`,
-       * `Jira · ⌘1`, …, `Terminal · ⌘8`) but the keyboard handler
-       * never landed — this closes that gap. Order matches the rail
-       * top-to-bottom so the digit reads as the icon's row. */
-      e.preventDefault();
-      const targetView = SOLO_BY_DIGIT[e.key];
-      if (targetView) view = targetView;
-    } else if (e.key === 'Escape') {
-      /* Cheatsheet / Welcome win on their own Escape — neither
-         lives in the modal stack the rest of the cascade walks, so
-         we shortcut out before clearing inbox / palette state.
-         Welcome takes priority because it's the bigger surface. */
-      if (welcomeOpen) {
-        welcomeOpen = false;
-        return;
-      }
-      if (cheatsheetOpen) {
-        cheatsheetOpen = false;
-        return;
-      }
-      paletteOpen = false;
-      searchInFilesOpen = false;
-      quickOpenOpen = false;
-      symbolPickerOpen = false;
-      if (patModal && !patModal.busy) closeModal('pat');
-      if (jiraModal && !jiraModal.busy) closeModal('jiraConnect');
-      if (claudeModal && !claudeModal.loading) closeModal('claudeStatus');
-      if (modalsState.cursorStatus && !modalsState.cursorStatus.loading) closeModal('cursorStatus');
-      if (modalsState.userPicker) closeModal('userPicker');
-      if (commentModal && !commentModal.busy) closeModal('comment');
-      if (reviewModal && !reviewModal.busy) closeModal('review');
-      if (mergeModal && !mergeModal.busy) closeModal('merge');
-      if (commitModal) closeModal('commit');
-      if (confirmModal && !confirmModal.busy) closeModal('confirm');
-      if (jiraCreateModal && !jiraCreateModal.busy) closeModal('jiraCreate');
-      if (githubCreatePrModal && !githubCreatePrModal.busy) closeModal('githubCreatePr');
-      if (inboxState.focusItem) closeFocusItem();
-      if (inboxState.jiraFocusKey) inboxState.jiraFocusKey = null;
-      if (inboxState.sentryFocusId) inboxState.sentryFocusId = null;
-    } else if (e.key === '?' && !isTextInput(e.target) && !anyModalOpen()) {
-      /* `?` toggles the cheatsheet. Skip when an input/textarea has
-         focus so it doesn't hijack a literal `?` the user is typing. */
-      e.preventDefault();
-      cheatsheetOpen = !cheatsheetOpen;
-    } else if (e.key === 'j' && isSourceApp && !anyModalOpen()) {
-      moveSelection(1);
-    } else if (e.key === 'k' && isSourceApp && !(e.metaKey || e.ctrlKey) && !anyModalOpen()) {
-      moveSelection(-1);
-    } else if (e.key === 'o' && !isTextInput(e.target) && !anyModalOpen() && !(e.metaKey || e.ctrlKey)) {
-      /* Open the focused inbox row in the system browser
-       * (M4 §2.3.6 — same shape as GitHub's `gh pr view --web`).
-       * GitHub's focused PR/issue uses `focusItem.url`; Jira and
-       * Sentry resolve the URL from the open detail object since
-       * `jiraFocusKey` / `sentryFocusId` are bare ids. Silently
-       * no-ops when nothing is focused — keyboard ergonomics, not
-       * a destructive action. */
-      const targetUrl = focusedRowUrl();
-      if (targetUrl) {
-        e.preventDefault();
-        void openUrl(targetUrl);
-      }
-    }
-  }
-
-  function focusedRowUrl(): string | null {
-    if (inboxState.focusItem?.url) return inboxState.focusItem.url;
-    if (inboxState.jiraFocusKey) {
-      /* Look up the focused Jira issue across both the tab slice and
-       * every column slice — JiraItem carries the upstream `url`
-       * straight from `/rest/api/3/issue/{key}`, so we don't need
-       * to reconstruct it from the workspace + key. */
-      for (const list of Object.values(inboxState.jiraItemsByInstance)) {
-        const hit = list.find((it) => it.key === inboxState.jiraFocusKey);
-        if (hit) return hit.url;
-      }
-      const hitTab = inboxState.jiraTabItems.find((it) => it.key === inboxState.jiraFocusKey);
-      if (hitTab) return hitTab.url;
-    }
-    if (inboxState.sentryFocusId) {
-      for (const list of Object.values(inboxState.sentryItemsByInstance)) {
-        const hit = list.find((it) => it.id === inboxState.sentryFocusId);
-        if (hit?.permalink) return hit.permalink;
-      }
-      const hitTab = inboxState.sentryTabItems.find((it) => it.id === inboxState.sentryFocusId);
-      if (hitTab?.permalink) return hitTab.permalink;
-    }
-    return null;
-  }
-
-  /** Heuristic: is the keyboard event aimed at a text-entry surface
-   *  (input / textarea / contenteditable)? Used to keep `?` from
-   *  swallowing a literal question mark the user is typing. */
-  function isTextInput(target: EventTarget | null): boolean {
-    if (!(target instanceof HTMLElement)) return false;
-    const tag = target.tagName;
-    if (tag === 'INPUT' || tag === 'TEXTAREA') return true;
-    if (target.isContentEditable) return true;
-    return false;
-  }
-
-  function anyModalOpen() {
-    return !!(
-      patModal ||
-      jiraModal ||
-      claudeModal ||
-      modalsState.userPicker ||
-      commentModal ||
-      reviewModal ||
-      mergeModal ||
-      commitModal ||
-      confirmModal ||
-      jiraCreateModal ||
-      githubCreatePrModal ||
-      inboxState.focusItem ||
-      inboxState.jiraFocusKey ||
-      inboxState.sentryFocusId ||
-      paletteOpen ||
-      searchInFilesOpen ||
-      quickOpenOpen ||
-      symbolPickerOpen ||
-      cheatsheetOpen ||
-      welcomeOpen
-    );
-  }
-
-
-  function mergeDisabled(): boolean {
-    if (!inboxState.focusItem?.is_pull_request) return true;
-    if (!inboxState.prDetail) return true;
-    if (inboxState.prDetail.merged) return true;
-    if (inboxState.prDetail.state !== 'open') return true;
-    if (inboxState.prDetail.draft) return true;
-    return inboxState.prDetail.mergeable === false;
-  }
+  // onKey + focusedRowUrl + isTextInput + anyModalOpen + mergeDisabled
+  // moved to ./keyboardShortcuts.ts (wave-40 split). Big deps interface
+  // because every binding flips a different `let`-state local.
+  const onKey = _kbd.createOnKey({
+    getView: () => view,
+    setView: (v) => { view = v as View; },
+    setPaletteMode: (m) => { paletteMode = m; },
+    togglePaletteOpen: () => { paletteOpen = !paletteOpen; },
+    setPaletteOpen: (open) => { paletteOpen = open; },
+    SOLO_BY_DIGIT,
+    toggleAgentDashboard: () => { agentDashboardOpen = !agentDashboardOpen; },
+    toggleSearchInFiles: () => { searchInFilesOpen = !searchInFilesOpen; },
+    toggleQuickOpen: () => { quickOpenOpen = !quickOpenOpen; },
+    toggleSymbolPicker: () => { symbolPickerOpen = !symbolPickerOpen; },
+    toggleCheatsheet: () => { cheatsheetOpen = !cheatsheetOpen; },
+    setCheatsheet: (o) => { cheatsheetOpen = o; },
+    toggleWelcome: () => { welcomeOpen = !welcomeOpen; },
+    setWelcome: (o) => { welcomeOpen = o; },
+    setSearchInFiles: (o) => { searchInFilesOpen = o; },
+    setQuickOpen: (o) => { quickOpenOpen = o; },
+    setSymbolPicker: (o) => { symbolPickerOpen = o; },
+    isSourceApp: () => isSourceApp,
+    isWelcomeOpen: () => welcomeOpen,
+    isCheatsheetOpen: () => cheatsheetOpen,
+    isPaletteOpen: () => paletteOpen,
+    isSearchInFilesOpen: () => searchInFilesOpen,
+    isQuickOpenOpen: () => quickOpenOpen,
+    isSymbolPickerOpen: () => symbolPickerOpen,
+    navBack,
+    navForward,
+    stopAgentForKind,
+    getPatModal: () => patModal,
+    getJiraModal: () => jiraModal,
+    getClaudeModal: () => claudeModal,
+    getCommentModal: () => commentModal,
+    getReviewModal: () => reviewModal,
+    getMergeModal: () => mergeModal,
+    getCommitModal: () => commitModal,
+    getConfirmModal: () => confirmModal,
+    getJiraCreateModal: () => jiraCreateModal,
+    getGithubCreatePrModal: () => githubCreatePrModal,
+  });
+  const focusedRowUrl = _kbd.focusedRowUrl;
+  const isTextInput = _kbd.isTextInput;
+  const mergeDisabled = _kbd.mergeDisabled;
 
   // ---- Jira Create Issue ----
 
