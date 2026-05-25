@@ -1082,6 +1082,7 @@ pub async fn sdd_hydrate(
 pub use crate::sdd_phase_config::{PhaseExecutionConfig, PhaseExecutionMode};
 
 // SddMeta + SddPhaseMeta moved to ./sdd_meta.rs (wave-1 phase-10 split).
+#[allow(unused_imports)]
 pub(crate) use crate::sdd_meta::{SddMeta, SddPhaseMeta};
 
 /// Structured output produced by the three-call verify pass.
@@ -1098,85 +1099,12 @@ pub(crate) use crate::sdd_phase_io::{
 // (wave-1 phase-10 split).
 pub use crate::sdd_substep::{SddPhaseSubstep, SddPhaseSubstepState};
 
-/// Read `<workspace>/control/phase-<N>-substep-state.json`. `None`
-/// when the file is missing (legacy / single-call workspace) OR the
-/// JSON fails to parse (treat as missing — fail open so a corrupted
-/// checkpoint doesn't permanently block recovery). The caller's
-/// expected behaviour for `None` is "fall back to `PhaseRunning`".
-pub(crate) fn read_substep_state(
-    workspace_root: &Path,
-    phase: u32,
-) -> Option<SddPhaseSubstepState> {
-    let path = workspace_root
-        .join("control")
-        .join(format!("phase-{phase}-substep-state.json"));
-    let raw = std::fs::read_to_string(&path).ok()?;
-    serde_json::from_str(&raw).ok()
-}
+// substep-state R/W helpers moved to ./sdd_substep.rs (wave-2 follow-up).
+#[allow(unused_imports)]
+pub(crate) use crate::sdd_substep::{clear_substep_state, read_substep_state, write_substep_state};
 
-/// Atomically write the checkpoint. Same write-tmp + rename pattern
-/// as `write_phase_meta` so readers never see a partial file (POSIX
-/// `rename` is atomic on the same filesystem). Creates the
-/// `<root>/control/` directory lazily.
-#[allow(dead_code)] // wired by sdd_save_phase_plan / sdd_save_phase_verify in phase 3
-pub(crate) fn write_substep_state(
-    workspace_root: &Path,
-    state: &SddPhaseSubstepState,
-) -> Result<(), String> {
-    let dir = workspace_root.join("control");
-    std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir control: {e}"))?;
-    let path = dir.join(format!("phase-{}-substep-state.json", state.phase));
-    let body = serde_json::to_string_pretty(state)
-        .map_err(|e| format!("serialize substep-state: {e}"))?;
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, body).map_err(|e| format!("write substep-state tmp: {e}"))?;
-    std::fs::rename(&tmp, &path).map_err(|e| format!("rename substep-state: {e}"))?;
-    Ok(())
-}
-
-/// Remove the checkpoint file. Called at phase end (verify-pass done)
-/// so a successful phase doesn't leave a stale checkpoint that would
-/// re-trigger the recovery banner on next boot. Missing file is not
-/// an error — idempotent semantics match `write_substep_state`'s
-/// "fail open" reader.
-#[allow(dead_code)] // wired by sdd_save_phase_verify in phase 3
-pub(crate) fn clear_substep_state(workspace_root: &Path, phase: u32) -> Result<(), String> {
-    let path = workspace_root
-        .join("control")
-        .join(format!("phase-{phase}-substep-state.json"));
-    match std::fs::remove_file(&path) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(format!("remove substep-state: {e}")),
-    }
-}
-
-pub(crate) fn read_phase_meta(workspace_root: &Path, phase: u32) -> SddPhaseMeta {
-    let path = workspace_root
-        .join("phases")
-        .join(format!("phase-{phase}-meta.json"));
-    let raw = match std::fs::read_to_string(&path) {
-        Ok(s) => s,
-        Err(_) => return SddPhaseMeta::default(),
-    };
-    serde_json::from_str(&raw).unwrap_or_default()
-}
-
-pub(crate) fn write_phase_meta(
-    workspace_root: &Path,
-    phase: u32,
-    meta: &SddPhaseMeta,
-) -> Result<(), String> {
-    let dir = workspace_root.join("phases");
-    std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir phases: {e}"))?;
-    let path = dir.join(format!("phase-{phase}-meta.json"));
-    let body =
-        serde_json::to_string_pretty(meta).map_err(|e| format!("serialize phase-meta: {e}"))?;
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, body).map_err(|e| format!("write phase-meta tmp: {e}"))?;
-    std::fs::rename(&tmp, &path).map_err(|e| format!("rename phase-meta: {e}"))?;
-    Ok(())
-}
+// phase-meta R/W helpers moved to ./sdd_meta.rs (wave-2 follow-up).
+pub(crate) use crate::sdd_meta::{read_phase_meta, write_phase_meta};
 
 /// Pull the indices of acceptance checks that ended in `Failed` for the
 /// given phase, by reading `<workspace>/results/phase-N-acceptance.json`

@@ -43,3 +43,58 @@ pub struct SddPhaseSubstepState {
     #[serde(default)]
     pub started_at: u64,
 }
+
+use std::path::Path;
+
+/// Read `<workspace>/control/phase-<N>-substep-state.json`. `None`
+/// when the file is missing (legacy / single-call workspace) OR the
+/// JSON fails to parse (treat as missing — fail open so a corrupted
+/// checkpoint doesn't permanently block recovery). The caller's
+/// expected behaviour for `None` is "fall back to `PhaseRunning`".
+pub(crate) fn read_substep_state(
+    workspace_root: &Path,
+    phase: u32,
+) -> Option<SddPhaseSubstepState> {
+    let path = workspace_root
+        .join("control")
+        .join(format!("phase-{phase}-substep-state.json"));
+    let raw = std::fs::read_to_string(&path).ok()?;
+    serde_json::from_str(&raw).ok()
+}
+
+/// Atomically write the checkpoint. Same write-tmp + rename pattern
+/// as `write_phase_meta` so readers never see a partial file (POSIX
+/// `rename` is atomic on the same filesystem). Creates the
+/// `<root>/control/` directory lazily.
+#[allow(dead_code)] // wired by sdd_save_phase_plan / sdd_save_phase_verify in phase 3
+pub(crate) fn write_substep_state(
+    workspace_root: &Path,
+    state: &SddPhaseSubstepState,
+) -> Result<(), String> {
+    let dir = workspace_root.join("control");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir control: {e}"))?;
+    let path = dir.join(format!("phase-{}-substep-state.json", state.phase));
+    let body = serde_json::to_string_pretty(state)
+        .map_err(|e| format!("serialize substep-state: {e}"))?;
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, body).map_err(|e| format!("write substep-state tmp: {e}"))?;
+    std::fs::rename(&tmp, &path).map_err(|e| format!("rename substep-state: {e}"))?;
+    Ok(())
+}
+
+/// Remove the checkpoint file. Called at phase end (verify-pass done)
+/// so a successful phase doesn't leave a stale checkpoint that would
+/// re-trigger the recovery banner on next boot. Missing file is not
+/// an error — idempotent semantics match `write_substep_state`'s
+/// "fail open" reader.
+#[allow(dead_code)] // wired by sdd_save_phase_verify in phase 3
+pub(crate) fn clear_substep_state(workspace_root: &Path, phase: u32) -> Result<(), String> {
+    let path = workspace_root
+        .join("control")
+        .join(format!("phase-{phase}-substep-state.json"));
+    match std::fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("remove substep-state: {e}")),
+    }
+}

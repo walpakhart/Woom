@@ -85,3 +85,39 @@ pub(crate) struct SddPhaseMeta {
     #[serde(default)]
     pub(crate) retry_count: u32,
 }
+
+use std::path::Path;
+
+/// Read `<workspace>/phases/phase-<N>-meta.json`. Returns the
+/// `Default` shape on missing OR parse-failed file — fail-open so a
+/// corrupted side-car doesn't permanently block recovery flows.
+pub(crate) fn read_phase_meta(workspace_root: &Path, phase: u32) -> SddPhaseMeta {
+    let path = workspace_root
+        .join("phases")
+        .join(format!("phase-{phase}-meta.json"));
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(_) => return SddPhaseMeta::default(),
+    };
+    serde_json::from_str(&raw).unwrap_or_default()
+}
+
+/// Atomically write phase meta (`.tmp` + rename so concurrent
+/// readers never observe a torn file). Creates the `phases/` dir
+/// lazily — the per-phase markdown file may not exist yet when a
+/// snapshot lands.
+pub(crate) fn write_phase_meta(
+    workspace_root: &Path,
+    phase: u32,
+    meta: &SddPhaseMeta,
+) -> Result<(), String> {
+    let dir = workspace_root.join("phases");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir phases: {e}"))?;
+    let path = dir.join(format!("phase-{phase}-meta.json"));
+    let body =
+        serde_json::to_string_pretty(meta).map_err(|e| format!("serialize phase-meta: {e}"))?;
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, body).map_err(|e| format!("write phase-meta tmp: {e}"))?;
+    std::fs::rename(&tmp, &path).map_err(|e| format!("rename phase-meta: {e}"))?;
+    Ok(())
+}
