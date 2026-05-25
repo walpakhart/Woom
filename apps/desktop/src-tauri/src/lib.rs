@@ -34,6 +34,7 @@ mod sdd_phase_config;
 mod sdd_phase_io;
 mod sdd_plan;
 mod sdd_plan_helpers;
+mod sdd_structure_commands;
 mod sdd_prompts;
 mod sdd_substep;
 mod sdd_time;
@@ -511,10 +512,10 @@ pub fn run() {
             sdd::sdd_discard_phase_plan,
             sdd::sdd_set_phase_execution_config,
             sdd::sdd_skip_phase,
-            sdd::sdd_insert_phase,
-            sdd::sdd_reorder_phases,
-            sdd::sdd_delete_phase,
-            sdd::sdd_upgrade_workspace,
+            sdd_structure_commands::sdd_insert_phase,
+            sdd_structure_commands::sdd_reorder_phases,
+            sdd_structure_commands::sdd_delete_phase,
+            sdd_structure_commands::sdd_upgrade_workspace,
             sdd::sdd_run_verification,
             sdd::sdd_mark_manual_check,
             sdd::sdd_rollback_phase,
