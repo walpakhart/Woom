@@ -24,6 +24,7 @@ mod sdd_action_log_commands;
 mod sdd_audit;
 mod sdd_audit_commands;
 mod sdd_frontmatter;
+mod sdd_git_commands;
 mod sdd_hydrate;
 mod sdd_lifecycle_commands;
 mod sdd_mcp_handlers;
@@ -517,9 +518,9 @@ pub fn run() {
             sdd::sdd_mark_manual_check,
             sdd::sdd_rollback_phase,
             sdd::sdd_recover_workspace,
-            sdd::sdd_get_git_state,
-            sdd::sdd_get_phase_diff,
-            sdd::sdd_get_file_diff,
+            sdd_git_commands::sdd_get_git_state,
+            sdd_git_commands::sdd_get_phase_diff,
+            sdd_git_commands::sdd_get_file_diff,
             sdd::sdd_skip_phase_with_reason,
             sdd::sdd_accept_phase_failed,
             sdd_action_log_commands::sdd_append_action_log,
