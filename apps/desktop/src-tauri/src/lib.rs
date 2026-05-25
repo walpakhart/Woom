@@ -41,6 +41,7 @@ mod sdd_prompts;
 mod sdd_substep;
 mod sdd_time;
 mod sdd_verify;
+mod sdd_verify_recover_commands;
 mod sdd_watcher;
 mod sentry;
 mod skills;
@@ -518,10 +519,10 @@ pub fn run() {
             sdd_structure_commands::sdd_reorder_phases,
             sdd_structure_commands::sdd_delete_phase,
             sdd_structure_commands::sdd_upgrade_workspace,
-            sdd::sdd_run_verification,
-            sdd::sdd_mark_manual_check,
-            sdd::sdd_rollback_phase,
-            sdd::sdd_recover_workspace,
+            sdd_verify_recover_commands::sdd_run_verification,
+            sdd_verify_recover_commands::sdd_mark_manual_check,
+            sdd_verify_recover_commands::sdd_rollback_phase,
+            sdd_verify_recover_commands::sdd_recover_workspace,
             sdd_git_commands::sdd_get_git_state,
             sdd_git_commands::sdd_get_phase_diff,
             sdd_git_commands::sdd_get_file_diff,
