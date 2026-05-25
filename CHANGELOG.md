@@ -8,21 +8,16 @@ release runbook (how this CHANGELOG feeds `latest-mac.json`) lives in
 
 ## Unreleased
 
-### Fixed
+## 0.1.4 — 2026-05-25
 
-- **SDD three-call mode close-out tools** — `sdd_save_phase_plan`,
-  `sdd_complete_phase_implement`, `sdd_save_phase_verify`,
-  `sdd_approve_phase_plan`, and `sdd_discard_phase_plan` are now
-  exposed via the `woom-app` MCP sidecar, allowlisted in
-  `claude_mcp.rs`, and routed through `+page.svelte`'s
-  `handleAppNavigation` so the Tauri commands actually fire when the
-  agent calls them. Without this, three-call execution mode was stuck
-  after the plan pass — the agent couldn't advance the substep
-  checkpoint. Adds new Tauri command `sdd_complete_phase_implement`
-  (advances `Implement` → `Verify`, carries the implement-pass
-  summary onto phase frontmatter). Updates `phase_implement.md`
-  prompt to call the new tool instead of the no-op
-  `sdd_log_phase_done`.
+Bumps version 0.1.3 → 0.1.4 across `package.json`, `apps/desktop/package.json`,
+`apps/desktop/src-tauri/Cargo.toml`, `apps/desktop/src-tauri/tauri.conf.json`,
+`apps/desktop/src-tauri/Cargo.lock`. CHANGELOG entry added for 0.1.4.
+
+Bundles the SDD three-call execution mode (post-0.1.3 unreleased work)
+with a fresh batch of stuck-state escapes (manual Continue, Accept
+anyway), a Claude-CLI background-task watcher, two big component
+splits (Settings, Rail), and a streaming/disk perf pass.
 
 ### Added
 
@@ -37,8 +32,7 @@ release runbook (how this CHANGELOG feeds `latest-mac.json`) lives in
   exposes per-workspace mode toggle + plan-gate checkbox. Legacy
   workspaces auto-migrate to `single_call` mode on first hydrate so
   in-flight workflows don't shift behaviour mid-execution. See SDD
-  workspace `sdd-926d553a7b` for the full design (`spec.md` +
-  `plan.md` + six phase markdown files).
+  workspace `sdd-926d553a7b` for the full design.
 - **SDD sub-step badges + verify pane in SddCard** — running phases
   surface `Phase N — planning / implementing / verifying` labels in
   warm-live tone; completed phases gain an inline Verify pane
@@ -50,16 +44,35 @@ release runbook (how this CHANGELOG feeds `latest-mac.json`) lives in
   is recovered from `control/phase-N-substep-state.json`.
 - **Per-workspace config cog in SddCard** — `⚙` button in the card
   header opens an inline drawer with mode select (single-call /
-  three-call) + plan-review gate checkbox, scoped to the workspace
-  (no global toggle needed). Settings card retains the same
-  controls for cross-workspace overview.
+  three-call) + plan-review gate checkbox, scoped to the workspace.
 - **Dedicated `plan_discarded` failure trigger** — Discard button
   during plan-review now calls `sdd_discard_phase_plan` (instead of
   the legacy `skipSddPhaseWithReason` workaround), flips the phase
   to `failed { trigger: plan_discarded }` so the standard failure
-  card (Retry / Edit & retry / Skip) surfaces. Reason persists into
-  `phase-N-meta.json#skip_reason` for audit + frontmatter
-  `trigger:` for stage derivation.
+  card (Retry / Edit & retry / Skip) surfaces.
+- **SDD manual Continue + Accept-anyway buttons** — when an agent turn
+  ends without the auto-fire dispatcher picking up (silent-drop or
+  stale bundle), the SddCard footer now surfaces a Continue button for
+  `phase_planning` / `phase_implementing` / `phase_verifying` stages
+  that re-fires the substep prompt through the chat send pipeline
+  (`manualContinueSdd` bypasses the `lastAutoFireKey` dedupe). New
+  Tauri command `sdd_accept_phase_failed(id, phase, reason)` flips a
+  `failed` phase to `done` with `accepted_reason` persisted to phase
+  frontmatter + `phase-meta.json` for the audit trail; surfaced as the
+  "✓ Accept anyway" button alongside Retry / Edit & retry / Skip /
+  Rollback. Failure footer now also renders inside `viewOnly` standalone
+  view so popover-opened failed workspaces have a recovery path.
+- **Claude CLI background-task watcher** (`claude_bg.rs`) — polls the
+  output file's mtime for Bash tasks fired with `run_in_background:true`
+  and emits `claude:bg_done` with a tail snapshot when the file goes
+  idle (or `timed_out` when the watch cap is reached). `+page.svelte`
+  folds the tail into a silent continuation prompt so the agent picks
+  up the bg task's output without the user having to nudge.
+- **SDD auto-fire dispatcher** — `+page.svelte` registers an auto-fire
+  dispatcher before `initSdd` so hydrate-time catch-up (workspace left
+  mid-substep across app restart) reaches the chat send pipeline
+  immediately. Pending silent prompts park in `pendingSilentBySession`
+  when a turn is in flight and drain at end-of-turn.
 
 ### Changed
 
@@ -69,6 +82,54 @@ release runbook (how this CHANGELOG feeds `latest-mac.json`) lives in
   emitting `PhaseRunning` byte-for-byte. New `FailureTrigger`
   variants — `PlanMutatedDisk` / `VerifyFailed` / `VerifyParseFail` /
   `PlanDiscarded` — drive richer failure-card copy.
+- **Failed SDD workspaces always render inline** — `isSddCardHidden`
+  now ignores the hidden flag for `failed` stage. A hidden failure
+  card was a footgun (workspace silently stuck with no entry point).
+
+### Fixed
+
+- **SDD three-call mode close-out tools** — `sdd_save_phase_plan`,
+  `sdd_complete_phase_implement`, `sdd_save_phase_verify`,
+  `sdd_approve_phase_plan`, and `sdd_discard_phase_plan` are now
+  exposed via the `woom-app` MCP sidecar, allowlisted in
+  `claude_mcp.rs`, and routed through `+page.svelte`'s
+  `handleAppNavigation` so the Tauri commands actually fire when the
+  agent calls them. Without this, three-call execution mode was stuck
+  after the plan pass — the agent couldn't advance the substep
+  checkpoint.
+- **Cold-start cursor/claude detection retry** — `refreshAgentsWithBootRetry`
+  now retries when the binary is detected but `--version` returned
+  None within the 2 s timeout (first child spawn on macOS routinely
+  needs 1–3 s). Users no longer have to reload the webview after a
+  fresh launch.
+
+### Refactor
+
+- **SettingsView split** — the 2166-line monolith carved into a thin
+  shell plus eight per-section components (`Storage`, `Appearance`,
+  `Memory`, `Updates`, `SDD`, `Privacy`, `Agents`, `About`) under
+  `lib/views/settings/`. Shared chrome lives in `chrome.css`. All 14
+  cards preserved, no behaviour change.
+- **Rail split** — `Rail.svelte` carved into five focused subcomponents
+  (`RailActiveHalo`, `RailIdentityAvatar`, `RailSourceButton`,
+  `RailSystemButton`, `RailTooltip`) under `components/ui/rail/`.
+
+### Performance
+
+- **Coalesced streaming deltas** — `appendToLastAssistant` /
+  `appendToLastThinking` no longer rebuild the full session list on
+  every token. Per-token text/thinking deltas batch into an rAF-aligned
+  `_streamQueue` that flushes once per frame per session with merged
+  consecutive same-kind ops. Causal order preserved via
+  `flushStreamQueueNow()` calls in non-streaming mutators.
+- **Dirty-tracked session writes** — `flushToDisk` ref-compares each
+  session against the last-written snapshot, so a 10-session workspace
+  with one active stream rewrites one file per debounce window instead
+  of ten. Disk debounce raised 400 ms → 800 ms.
+- **Lazy-mount chat bodies** — `ChatThread` mounts message bodies via
+  IntersectionObserver with `FRESH_TAIL = 5` always-eager near the tail.
+  Early-exit in `anchoredQuestionIds` skips the O(messages × events ×
+  segments) regex traversal when no pending question actions exist.
 
 ## 0.1.3 — 2026-05-22
 
