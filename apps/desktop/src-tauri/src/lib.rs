@@ -24,6 +24,7 @@ mod sdd_audit;
 mod sdd_audit_commands;
 mod sdd_frontmatter;
 mod sdd_hydrate;
+mod sdd_lifecycle_commands;
 mod sdd_mcp_handlers;
 mod sdd_md_mutators;
 mod sdd_meta;
@@ -493,9 +494,9 @@ pub fn run() {
             sdd::sdd_list,
             sdd::sdd_refresh,
             sdd::sdd_approve,
-            sdd::sdd_pause,
-            sdd::sdd_resume,
-            sdd::sdd_stop,
+            sdd_lifecycle_commands::sdd_pause,
+            sdd_lifecycle_commands::sdd_resume,
+            sdd_lifecycle_commands::sdd_stop,
             sdd_prompts::sdd_prompt,
             sdd::sdd_save_body,
             sdd::sdd_retry_phase,
