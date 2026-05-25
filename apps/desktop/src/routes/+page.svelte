@@ -55,6 +55,7 @@
   import * as _agentDrop from './agentDrop';
   import * as _worktree from './worktreeActions';
   import * as _sessionLinks from './sessionLinks';
+  import * as _agentTurn from './agentTurn';
   import {
     actionMatchesIpcParams,
     buildActionFromIpcRequest,
@@ -1706,7 +1707,7 @@
     // the worst case is a CLI process that gets reaped by the TTL
     // sweeper a few minutes later.
     void stopAgentRequest(sessionId).catch(() => {});
-    continuationInFlight.delete(sessionId);
+    clearContinuationInFlight(sessionId);
     deleteClaudeSession(sessionId);
   }
 
@@ -2915,222 +2916,28 @@
   // synthesised user message so the agent can continue from there
   // (e.g. propose_pr after the commit lands) without the user having
   // to manually type "now make the PR".
-  function executeAction(sessionId: string, action: ClaudeAction) {
-    dispatchAction(sessionId, action, onActionResolved);
-  }
-
-  /** Drop an action card AND tell the sidecar's IPC waiter that the
-   *  user dismissed (so its blocking MCP call returns and the agent
-   *  can react to "user said no" in the same turn instead of hanging
-   *  the CLI on a never-arriving response). Cards without a waitId
-   *  (legacy fire-and-forget path) just get removed locally. */
-  function dismissAction(sessionId: string, actionId: string) {
-    const sess = sessionsState.list.find((s) => s.id === sessionId);
-    const a = sess?.actions.find((x) => x.id === actionId);
-    const waitId = a?.waitId;
-    removeAction(sessionId, actionId);
-    if (waitId) {
-      void invoke('resolve_action_wait', {
-        waitId,
-        ok: false,
-        summary: 'User dismissed the card. The action was not run. Decide whether to propose a different approach or stop and ask the user what they want.'
-      }).catch((e) => console.warn('[action-ipc] dismiss resolve failed', e));
-    }
-  }
-
-  /** Per-session re-entry guard. Two cards finishing in the same
-   *  microtask both pass the `stillBusy=false` check above (Svelte
-   *  state writes aren't synchronous gates) and would each fire
-   *  `continueAgentTurn`, so the agent gets the same recap twice and
-   *  produces a duplicate turn. The Set tracks "continuation already
-   *  fired for this batch" — entries are cleared when continueAgentTurn
-   *  finishes (in finally) so the next user-initiated batch can fire. */
-  const continuationInFlight = new Set<string>();
-
-  /** Called by every executeXxx after the action ran. The executor
-   *  already pushed the outcome onto the pending-action-results
-   *  queue (see `enqueuePendingActionResult`). All this hook does is
-   *  decide whether to AUTO-FIRE the next agent turn so the user
-   *  doesn't have to type "continue" by hand. The continuation
-   *  itself drains the same queue inside `continueAgentTurn`, so
-   *  the recap is built from one source of truth — no risk of the
-   *  manual-send and auto-fire paths reporting different things. */
-  function onActionResolved(
-    sessionId: string,
-    _action: ClaudeAction,
-    _result: { ok: boolean; summary: string }
-  ) {
-    const sess = sessionsState.list.find((s) => s.id === sessionId);
-    if (!sess) return;
-    // Wait for ALL pending actions before continuing — agent may have
-    // proposed a sequence (commit + PR) that we want to resolve in one
-    // batch. `executing` counts as "still in flight".
-    const stillBusy = sess.actions.some(
-      (a) => a.status === 'pending' || a.status === 'executing'
-    );
-    if (stillBusy) return;
-    if (continuationInFlight.has(sessionId)) return;
-    // BLOCK auto-continue when the previous turn errored. Without this
-    // guard, a CLI-stopped-responding / forced-shutdown cascades into
-    // a second auto-resume that hits the now-locked session-id ("Session
-    // ID … is already in use"), and so on. The user can hit the explicit
-    // "Retry" button on the error chip if they want to try again — that
-    // path goes through the recovery flow that handles uuid rotation.
-    const lastMsg = sess.messages[sess.messages.length - 1];
-    const lastErrored =
-      lastMsg?.role === 'assistant' &&
-      (lastMsg.content.startsWith('**Claude failed:') ||
-        lastMsg.content.startsWith('**Cursor failed:'));
-    if (lastErrored) return;
-    // We DON'T require `sess.awaitingApproval` here. That flag is only
-    // stamped at the END of `sendClaudeMessage`'s finally block, so
-    // when the user approves a card before the flag lands (fast clicks,
-    // streaming still settling) the continuation would silently no-op
-    // and they'd have to type "продолжи" by hand. Downstream guards
-    // (`sending`, drained-queue empty, in-flight Set above) cover the
-    // real concurrency cases.
-    continuationInFlight.add(sessionId);
-    if (sess.awaitingApproval) {
-      updateSession(sessionId, { awaitingApproval: false });
-    }
-    void continueAgentTurn(sessionId);
-  }
-
-  /** Re-enter `runAgentRequest` for an auto-continuation. The prompt
-   *  is built from the pending-action-results queue, drained inside
-   *  this function — same code path the manual `sendClaudeMessage`
-   *  uses, so the agent sees identical "since-last-turn outcomes"
-   *  formatting whether it picks up automatically or after the user
-   *  types something. No `prompt` arg from the caller because the
-   *  drained queue IS the prompt; an empty drain means the caller
-   *  has nothing meaningful to send. */
-  async function continueAgentTurn(sessionId: string) {
-    const sess = sessionsState.list.find((s) => s.id === sessionId);
-    if (!sess || sess.sending) {
-      // Bail without firing the turn but still release the guard so
-      // a future approval batch can continue. Otherwise a stuck
-      // continuationInFlight entry would silently swallow the next
-      // auto-resume.
-      continuationInFlight.delete(sessionId);
-      return;
-    }
-    // Drain the pending-action-results queue and turn it into the
-    // prompt. If nothing's there (e.g. the user manually triggered
-    // continuation but no actions are awaiting), bail — there's no
-    // meaningful prompt to send and runAgentRequest with empty
-    // content would just confuse the agent.
-    const drained = drainPendingActionResultsForAgent(sessionId);
-    if (drained.length === 0) {
-      continuationInFlight.delete(sessionId);
-      return;
-    }
-    const prompt = formatActionResultsForPrompt(drained);
-    const kind = (sess.agentKind ?? 'claude') as 'claude' | 'cursor';
-    updateSession(sessionId, { sending: true });
-    appendSessionMessage(sessionId, {
-      role: 'assistant',
-      content: '',
-      at: new Date().toISOString()
-    });
-    startThinkingTimer(kind);
-    const runStartedAt = Date.now();
-    void scrollChatBottom();
-
-    const cwd = sess.worktreePath || sess.cwd || editorRepoPath || null;
-    const claudeUuid = sess.claudeUuid;
-    const resume = Boolean(sess.claudeResumable);
-    const rules = sessionsState.userRules.trim();
-    const agentKind = sess.agentKind;
-    const cursorModel = agentKind === 'cursor' ? sess.cursorModel : null;
-    const claudeModel = agentKind === 'claude' ? sess.claudeModel : null;
-    const appContext = buildAgentAppContext(sessionId);
-
-    try {
-      const result = await runAgentRequest({
-        sessionId,
-        prompt,
-        cwd,
-        claudeUuid,
-        resume,
-        rules: rules || null,
-        agentKind,
-        cursorModel,
-        claudeModel,
-        appContext,
-        onAssistantDelta: appendAssistantDelta,
-        onAppNavigation: handleAppNavigation
-      });
-      const sessAfter = sessionsState.list.find((s) => s.id === sessionId);
-      const lastMsg = sessAfter?.messages[sessAfter.messages.length - 1];
-      const streamed = lastMsg?.role === 'assistant' ? lastMsg.content.trim() : '';
-      const finalReply = result.reply.trim();
-      const uuidStable = !!sessAfter && sessAfter.claudeUuid === claudeUuid;
-      const patch: Partial<ClaudeSession> = {};
-      if (uuidStable) {
-        patch.claudeResumable = true;
-        if (result.sessionUuid && result.sessionUuid !== claudeUuid) {
-          patch.claudeUuid = result.sessionUuid;
-        }
-      }
-      if (!streamed) {
-        replaceLastAssistant(sessionId, finalReply || '(empty response)');
-      }
-      // One-shot recap consumed — clear so it doesn't re-inject on every
-      // subsequent turn. (Same as sendClaudeMessage's success path —
-      // missing this caused the recap to live forever after an
-      // auto-continuation chain that included a propose_switch_cwd.)
-      if (sess.cwdSwitchRecap) {
-        patch.cwdSwitchRecap = null;
-      }
-      // Mark awaitingApproval again if the continuation also added
-      // pending action cards — chains of commit → PR are common.
-      const sessAfter2 = sessionsState.list.find((s) => s.id === sessionId);
-      const stillPending = sessAfter2?.actions.some((a) => a.status === 'pending') ?? false;
-      if (stillPending) patch.awaitingApproval = true;
-      updateSession(sessionId, patch);
-    } catch (e) {
-      const msg = typeof e === 'string' ? e : String(e);
-      const cancelled = msg.toLowerCase().includes('cancelled');
-      const agentLabel = sess.agentKind === 'cursor' ? 'Cursor' : 'Claude';
-      if (cancelled) {
-        appendSessionMessage(sessionId, {
-          role: 'system',
-          content: 'Cancelled.',
-          at: new Date().toISOString()
-        });
-      } else {
-        replaceLastAssistant(sessionId, `**${agentLabel} failed:** ${msg}`);
-        if (appHasFocus()) {
-          notifyError(e, { title: `${agentLabel} run failed` });
-        } else {
-          notifyClaudeRunComplete({
-            agentLabel,
-            sessionTitle: sess.title || 'Untitled chat',
-            ok: false,
-            durationMs: Date.now() - runStartedAt
-          });
-        }
-      }
-    }
-    stopThinkingTimer(kind);
-    // Same flush hook as sendClaudeMessage's: any action-card outcomes
-    // that landed during this continuation (e.g. the agent proposed a
-    // PR and the user approved before this turn finished) get their
-    // chips appended now, after streaming is done.
-    flushActionResultsToUI(sessionId);
-    updateSession(sessionId, { sending: false });
-    continuationInFlight.delete(sessionId);
-    void scrollChatBottom();
-    // Belt-and-braces: even if an exception escapes the catch above,
-    // make sure sending and the in-flight guard get cleared so a
-    // future approval batch isn't blocked by stuck state. Idempotent.
-    const sessNow = sessionsState.list.find((s) => s.id === sessionId);
-    if (sessNow?.sending) {
-      updateSession(sessionId, { sending: false });
-    }
-    continuationInFlight.delete(sessionId);
-  }
-
+  // executeAction / dismissAction / onActionResolved / continueAgentTurn
+  // moved to ./agentTurn.ts (wave-38 split). continuationInFlight Set
+  // moved with them — kept module-local in agentTurn so the route
+  // file doesn't import it directly.
+  const _turnDeps = (): import('./agentTurn').AgentTurnDeps => ({
+    getEditorRepoPath: () => editorRepoPath,
+    startThinkingTimer,
+    stopThinkingTimer,
+    appendAssistantDelta,
+    scrollChatBottom,
+    handleAppNavigation,
+  });
+  const executeAction = (sid: string, action: ClaudeAction) =>
+    _agentTurn.executeAction(sid, action, _turnDeps());
+  const dismissAction = (sid: string, aid: string) =>
+    _agentTurn.dismissAction(sid, aid);
+  const onActionResolved = (sid: string, action: ClaudeAction, result: { ok: boolean; summary: string }) =>
+    _agentTurn.onActionResolved(sid, action, result, _turnDeps());
+  const continueAgentTurn = (sid: string) =>
+    _agentTurn.continueAgentTurn(sid, _turnDeps());
+  const clearContinuationInFlight = (sid: string) =>
+    _agentTurn.clearContinuationInFlight(sid);
   // ---- Agent execution ----
 
   async function stopAgentForKind(kind: 'claude' | 'cursor') {
