@@ -30,6 +30,7 @@ mod sdd_lifecycle_commands;
 mod sdd_mcp_handlers;
 mod sdd_md_mutators;
 mod sdd_meta;
+mod sdd_phase_commands;
 mod sdd_phase_config;
 mod sdd_phase_io;
 mod sdd_plan;
@@ -506,12 +507,12 @@ pub fn run() {
             sdd::sdd_save_body,
             sdd::sdd_retry_phase,
             sdd::sdd_approve_phase,
-            sdd::sdd_save_phase_plan,
-            sdd::sdd_complete_phase_implement,
-            sdd::sdd_save_phase_verify,
-            sdd::sdd_approve_phase_plan,
-            sdd::sdd_discard_phase_plan,
-            sdd::sdd_set_phase_execution_config,
+            sdd_phase_commands::sdd_save_phase_plan,
+            sdd_phase_commands::sdd_complete_phase_implement,
+            sdd_phase_commands::sdd_save_phase_verify,
+            sdd_phase_commands::sdd_approve_phase_plan,
+            sdd_phase_commands::sdd_discard_phase_plan,
+            sdd_phase_commands::sdd_set_phase_execution_config,
             sdd_skip_commands::sdd_skip_phase,
             sdd_structure_commands::sdd_insert_phase,
             sdd_structure_commands::sdd_reorder_phases,
