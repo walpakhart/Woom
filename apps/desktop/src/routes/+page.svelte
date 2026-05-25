@@ -164,7 +164,8 @@
     refreshJiraStatus,
     refreshSentryStatus,
     refreshClaudeStatus,
-    refreshAllStatusOnBoot
+    refreshAllStatusOnBoot,
+    refreshAgentsOnBoot
   } from '$lib/state/connections.svelte';
   import {
     markTokenInstalled,
@@ -1254,7 +1255,18 @@
     };
     window.addEventListener('focus', focusHandler);
     removeFocusListener = () => window.removeEventListener('focus', focusHandler);
-    // Biometric gate runs first — refreshAllStatus + inbox fetches live
+    // Pre-warm agent detection BEFORE biometric unlock — Claude /
+    // Cursor `--version` is local-only (no keychain, no network) so
+    // it's safe to run during the lock screen. Cold-launch on macOS
+    // routinely needs 1–3 s for the first child spawn to actually
+    // return; running this in parallel with the Touch ID prompt
+    // means by the time the user unlocks, `connectionsState.claude`
+    // is already populated instead of `null`, and the agent pane
+    // renders straight into the AgentApp instead of flashing the
+    // "Connect Claude Code first" empty state. Wrap in the same
+    // boot-retry loop so the first slow spawn still recovers.
+    void refreshAgentsOnBoot().catch(() => {});
+    // Biometric gate runs second — refreshAllStatus + inbox fetches live
     // inside `biometricUnlock` so nothing hits the keychain before the
     // user authenticates.
     void biometricUnlock();
@@ -2806,7 +2818,24 @@
 
     {:else if view === 'claudeApp'}
       {#if !connectedClaude}
-        {@render soloEmpty('Claude', 'var(--src-claude)', 'rgba(232,155,125,0.42)', 'Connect Claude Code first — the agent needs a working CLI.', 'claude')}
+        {#if claudeStatus === null || connectionsState.retrying.claude}
+          <!-- Boot detection still in flight — don't flash the "Connect"
+               empty state. Cold-launch on macOS routinely needs 1–3 s
+               for the first `claude --version` to return; the boot
+               retry covers up to 22 s. Show a passive "detecting"
+               cue so the user doesn't think the app is broken. -->
+          <section class="full-center app-stub-shell" style="--app-tone: var(--src-claude); --app-glow: rgba(232,155,125,0.42);">
+            <div class="app-stub">
+              <div class="app-stub-icon">
+                <BrandIcon kind="claude" size={36} />
+              </div>
+              <h2 class="app-stub-title">Claude</h2>
+              <p class="app-stub-sub">Detecting Claude Code CLI…</p>
+            </div>
+          </section>
+        {:else}
+          {@render soloEmpty('Claude', 'var(--src-claude)', 'rgba(232,155,125,0.42)', 'Connect Claude Code first — the agent needs a working CLI.', 'claude')}
+        {/if}
       {:else}
         <AgentApp
           kind="claude"
@@ -2849,7 +2878,19 @@
 
     {:else if view === 'cursorApp'}
       {#if !connectedCursor}
-        {@render soloEmpty('Cursor', 'var(--src-cursor)', 'rgba(220,220,220,0.30)', 'Cursor CLI not detected. Install Cursor and re-check connections.', 'cursor')}
+        {#if cursorStatus === null || connectionsState.retrying.cursor}
+          <section class="full-center app-stub-shell" style="--app-tone: var(--src-cursor); --app-glow: rgba(220,220,220,0.30);">
+            <div class="app-stub">
+              <div class="app-stub-icon">
+                <BrandIcon kind="cursor" size={36} />
+              </div>
+              <h2 class="app-stub-title">Cursor</h2>
+              <p class="app-stub-sub">Detecting Cursor CLI…</p>
+            </div>
+          </section>
+        {:else}
+          {@render soloEmpty('Cursor', 'var(--src-cursor)', 'rgba(220,220,220,0.30)', 'Cursor CLI not detected. Install Cursor and re-check connections.', 'cursor')}
+        {/if}
       {:else}
         <AgentApp
           kind="cursor"

@@ -240,6 +240,14 @@ async function refreshWithBootRetry(
   connectionsState.retrying[source] = false;
 }
 
+/** Public entry point for the agent-only boot retry. Fired on mount
+ *  in parallel with the biometric prompt so cold-launch detect lag
+ *  doesn't make the agent pane flash the "Connect Claude Code first"
+ *  empty state before the regular boot refresh kicks in. */
+export async function refreshAgentsOnBoot(): Promise<void> {
+  await refreshAgentsWithBootRetry();
+}
+
 /** Claude + Cursor share a single Tauri call (`agent_status`), so the
  *  retry loop has to look at *both* sources' last events to decide
  *  whether to keep going. We retry while either is still erroring. */
