@@ -62,6 +62,8 @@
   } from './sddCardStage';
   import SddAuditOverlay from './SddAuditOverlay.svelte';
   import SddFailureCard from './SddFailureCard.svelte';
+  import SddAmendPanel from './SddAmendPanel.svelte';
+  import SddConfigDrawer from './SddConfigDrawer.svelte';
 
   interface Props {
     workspace: SddWorkspace;
@@ -802,45 +804,7 @@
   </header>
 
   {#if configOpen}
-    <!-- Inline workspace config drawer — mirrors the Settings card
-         controls but scoped to this workspace. See `spec-1` FR-11. -->
-    <div class="sdd-config-drawer">
-      <label class="sdd-config-row">
-        <span class="sdd-config-label">Execution mode</span>
-        <select
-          class="sdd-config-select mono"
-          value={p.workspace.phase_execution?.mode ?? 'single_call'}
-          onchange={(e) => {
-            const mode = (e.currentTarget as HTMLSelectElement).value as 'single_call' | 'three_call';
-            void setSddPhaseExecutionConfig(p.workspace.id, {
-              ...(p.workspace.phase_execution ?? DEFAULT_PHASE_EXECUTION_CONFIG),
-              mode,
-            } satisfies PhaseExecutionConfig);
-          }}
-        >
-          <option value="single_call">single-call (legacy)</option>
-          <option value="three_call">three-call (plan → implement → verify)</option>
-        </select>
-      </label>
-      <label class="sdd-config-row sdd-config-row--toggle">
-        <input
-          type="checkbox"
-          checked={p.workspace.phase_execution?.plan_gate ?? false}
-          disabled={(p.workspace.phase_execution?.mode ?? 'single_call') !== 'three_call'}
-          onchange={(e) => {
-            const plan_gate = (e.currentTarget as HTMLInputElement).checked;
-            void setSddPhaseExecutionConfig(p.workspace.id, {
-              ...(p.workspace.phase_execution ?? DEFAULT_PHASE_EXECUTION_CONFIG),
-              plan_gate,
-            } satisfies PhaseExecutionConfig);
-          }}
-        />
-        <span class="sdd-config-label">Pause between plan and implement (plan-review gate)</span>
-      </label>
-      <p class="sdd-config-hint">
-        Three-call mode runs each phase as three discrete agent passes — adds ~5–15% cost per phase, improves auditability. Config persists in <span class="mono">meta.json#phase_execution</span>.
-      </p>
-    </div>
+    <SddConfigDrawer workspace={p.workspace} />
   {/if}
 
   <div class="sdd-prompt-line">
@@ -1163,27 +1127,12 @@
   {/if}
 
   {#if amendMode}
-    <!-- Amend panel — user describes a change to the CURRENT artifact;
-         on send the agent gets an "edit existing files" prompt instead
-         of the natural next-stage prompt. Cancels back to the normal
-         actions row. -->
-    <div class="sdd-amend">
-      <label class="sdd-amend-label">
-        <span class="sdd-amend-hint">Describe the change. Agent will edit `{p.workspace.root.split('/').pop()}` in place — spec / plan / current phase — instead of starting over.</span>
-        <textarea
-          class="sdd-amend-area mono"
-          bind:value={amendDraft}
-          placeholder="e.g. drop phase 4, retitle phase 2 to “Combat”, replace Unity with Godot, add an audio router task…"
-          rows="4"
-          spellcheck="false"
-          {@attach (node: HTMLTextAreaElement) => node.focus()}
-          onkeydown={(e) => {
-            if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); void sendAmend(); }
-            if (e.key === 'Escape') { e.preventDefault(); cancelAmend(); }
-          }}
-        ></textarea>
-      </label>
-    </div>
+    <SddAmendPanel
+      workspaceRoot={p.workspace.root}
+      bind:draft={amendDraft}
+      onSend={sendAmend}
+      onCancel={cancelAmend}
+    />
   {/if}
 
   {#if p.viewOnly && stage.kind === 'failed'}
@@ -1687,39 +1636,7 @@
     background: color-mix(in srgb, var(--accent) 12%, transparent);
     color: var(--accent-bright);
   }
-  .sdd-config-drawer {
-    margin: 6px 0 8px 0;
-    padding: 8px 12px;
-    border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
-    border-radius: 6px;
-    background: color-mix(in srgb, var(--accent) 4%, transparent);
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    font-size: 12px;
-  }
-  .sdd-config-row {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-  }
-  .sdd-config-row--toggle { font-size: 11.5px; color: var(--text-1); }
-  .sdd-config-row--toggle input[disabled] { opacity: 0.4; }
-  .sdd-config-label { color: var(--text-1); }
-  .sdd-config-select {
-    padding: 3px 6px;
-    border-radius: 4px;
-    border: 1px solid var(--border);
-    background: var(--bg-1);
-    color: var(--text-0);
-    font-size: 11px;
-  }
-  .sdd-config-hint {
-    margin: 2px 0 0 0;
-    font-size: 11px;
-    color: var(--text-mute);
-    line-height: 1.4;
-  }
+  /* Config drawer styles moved to ./SddConfigDrawer.svelte (wave-13 split). */
 
   .sdd-close:hover {
     background: color-mix(in srgb, var(--error) 14%, transparent);
@@ -2148,31 +2065,7 @@
    * card itself: left accent rail + transparent bg + a single
    * textarea. Reads as "type a change" alongside the card content,
    * not as a modal popup. */
-  .sdd-amend {
-    margin-top: 4px;
-    padding: 6px 0 4px 12px;
-    border-left: 2px solid color-mix(in srgb, var(--accent) 35%, transparent);
-  }
-  .sdd-amend-label { display: flex; flex-direction: column; gap: 4px; }
-  .sdd-amend-hint {
-    font-size: 11px;
-    color: var(--text-mute);
-    line-height: 1.45;
-  }
-  .sdd-amend-area {
-    width: 100%;
-    padding: 6px 8px;
-    border: 1px solid var(--border-neutral-hi);
-    border-radius: 4px;
-    background: color-mix(in srgb, var(--bg-0) 70%, transparent);
-    color: var(--text-0);
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 12.5px;
-    line-height: 1.55;
-    resize: vertical;
-    outline: 0;
-  }
-  .sdd-amend-area:focus { border-color: var(--accent); }
+  /* Amend panel styles moved to ./SddAmendPanel.svelte (wave-13 split). */
 
   /* -------- Audit log (phase 6) -------- */
   .vh {
