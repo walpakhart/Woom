@@ -9,9 +9,12 @@
 //! log stay in `sdd.rs` because they need access to the workspace
 //! registry.
 
+use std::path::{Path, PathBuf};
+
 use serde::{Deserialize, Serialize};
 
 use crate::sdd_substep::SddPhaseSubstep;
+use crate::sdd_time::now_ms;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -61,4 +64,67 @@ pub struct ActionLogEntry {
     /// See `spec-1` FR-9.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sub_step: Option<SddPhaseSubstep>,
+}
+
+/// Path to the per-phase JSONL feed under `<workspace>/phases/`. Used
+/// by the orchestrator's substep divider + the
+/// `sdd_append_action_log` / `sdd_read_action_log` Tauri commands
+/// (which stay in `sdd.rs` because they need the workspace registry).
+pub(crate) fn action_log_path(workspace_root: &Path, phase: u32) -> PathBuf {
+    workspace_root
+        .join("phases")
+        .join(format!("phase-{phase}.log.jsonl"))
+}
+
+/// Append a synthetic `sdd_event` row marking the start of a
+/// three-call sub-step. Used by the orchestrator (NOT the agent) to
+/// drop a divider into the JSONL so SddCard's live feed can group
+/// tool rows by pass. Best-effort — IO failures are logged but never
+/// block the caller. See `spec-1` FR-9.
+pub(crate) fn append_substep_started_event(
+    workspace_root: &Path,
+    phase: u32,
+    sub_step: SddPhaseSubstep,
+) {
+    let summary = match sub_step {
+        SddPhaseSubstep::Plan => "— plan —",
+        SddPhaseSubstep::Implement => "— implement —",
+        SddPhaseSubstep::Verify => "— verify —",
+    };
+    let entry = ActionLogEntry {
+        ts: now_ms(),
+        phase,
+        kind: ActionLogKind::SddEvent,
+        tool: None,
+        summary: summary.into(),
+        detail: None,
+        status: None,
+        correlation_id: None,
+        sub_step: Some(sub_step),
+    };
+    let path = action_log_path(workspace_root, phase);
+    if let Some(parent) = path.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            eprintln!("[sdd] substep_event mkdir {}: {e}", parent.display());
+            return;
+        }
+    }
+    let line = match serde_json::to_string(&entry) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("[sdd] substep_event serialize: {e}");
+            return;
+        }
+    };
+    use std::io::Write;
+    match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        Ok(mut f) => {
+            let _ = writeln!(f, "{line}");
+        }
+        Err(e) => eprintln!("[sdd] substep_event open {}: {e}", path.display()),
+    }
 }
