@@ -54,6 +54,7 @@
   import * as _modalActions from './modalActions';
   import * as _agentDrop from './agentDrop';
   import * as _worktree from './worktreeActions';
+  import * as _sessionLinks from './sessionLinks';
   import {
     actionMatchesIpcParams,
     buildActionFromIpcRequest,
@@ -1709,198 +1710,22 @@
     deleteClaudeSession(sessionId);
   }
 
-  /** Link the active chat session to an editor instance WITHOUT touching
-      either side's folder. If the agent's cwd and the editor's repoPath
-      diverge, the WorktreeBar shows an orange mismatch button — the user
-      explicitly chooses which side wins. This avoids the old "auto-push"
-      surprise where picking an editor silently overwrote either side.
-      When the agent has no folder of its own (first link, no worktree),
-      we still pull the editor's folder in so the session has something
-      to work with. */
-  function linkActiveSessionToEditor(editorInstanceId: string) {
-    if (!activeSession) return;
-    const editorPath =
-      sessionsState.editorInstanceState[editorInstanceId]?.repoPath ?? '';
-    const hasOwnFolder = !!(activeSession.worktreePath || activeSession.cwd);
-    const patch: Partial<typeof activeSession> = {
-      linkedToEditor: true,
-      linkedToEditorInstanceId: editorInstanceId
-    };
-    // First-time link with no agent cwd yet → adopt the editor's folder
-    // (zero-config UX). Otherwise leave both sides alone; mismatch UI
-    // surfaces a deliberate sync choice.
-    if (!hasOwnFolder && editorPath) {
-      patch.cwd = editorPath;
-    }
-    updateSession(activeSession.id, patch);
-  }
-
-  /** Sync the active session's cwd to its linked editor's repoPath.
-      Wired to the "Use editor folder" choice in WorktreeBar's mismatch
-      menu. Uses `applySessionCwd` (not raw updateSession) so the CLI
-      uuid rotates and the next turn's prompt gets a cwd-switch recap. */
-  function syncAgentToLinkedEditor() {
-    if (!activeSession?.linkedToEditorInstanceId) return;
-    const editorPath =
-      sessionsState.editorInstanceState[activeSession.linkedToEditorInstanceId]?.repoPath ?? '';
-    if (!editorPath) return;
-    applySessionCwd(activeSession.id, editorPath);
-    void dropPrewarm(activeSession.id);
-  }
-
-  /** Sync the linked editor's repoPath to the active session's cwd /
-      worktree. Wired to the "Use agent folder" choice in WorktreeBar's
-      mismatch menu. */
-  function syncLinkedEditorToAgent() {
-    if (!activeSession?.linkedToEditorInstanceId) return;
-    const agentPath = activeSession.worktreePath || activeSession.cwd || '';
-    if (!agentPath) return;
-    setEditorRepoPath(agentPath, activeSession.linkedToEditorInstanceId);
-  }
-
-  function toggleSessionEditorLink() {
-    if (!activeSession) return;
-    if (activeSession.linkedToEditor) {
-      updateSession(activeSession.id, {
-        linkedToEditor: false,
-        linkedToEditorInstanceId: null
-      });
-    } else {
-      /* Link to whichever editor instance the rail currently has
-         active (default = primary). Multi-instance aware. */
-      linkActiveSessionToEditor(layoutState.activeInstance.editor);
-    }
-  }
-
-  /** Bind the active session to a specific terminal instance from the
-   *  cwd-bar's "Link terminal…" picker. Thin wrapper around
-   *  `linkSessionToTerminal` that resolves the active session for the
-   *  caller (the picker only knows which terminal the user picked). */
-  function linkActiveSessionToTerminal(terminalInstanceId: string) {
-    if (!activeSession) return;
-    linkSessionToTerminal(terminalInstanceId, activeSession.id);
-  }
-
-  /** Drop the active session's terminal link. Wired to the cwd-bar's
-   *  terminal chip × so the user can untap a chat without bouncing
-   *  to the terminal app. */
-  function toggleSessionTerminalLink() {
-    if (!activeSession) return;
-    if (activeSession.linkedTerminalInstanceId) {
-      unlinkSessionFromTerminal(activeSession.id);
-    } else {
-      linkSessionToTerminal(layoutState.activeInstance.terminal, activeSession.id);
-    }
-  }
-
-  /** Initiate a link from the Editor side. Always links the *currently
-      active* session in the target agent column — never spawns a new chat.
-      The chat's cwd just snaps to the editor's folder and the session
-      becomes linked. If the column has no active session, we create one
-      (empty column → there was nothing to link). */
-  /** Link a chat session to this terminal instance — mirror of
-   *  `linkEditorToAgent` but for the terminal side. After linking, the
-   *  session's MCP `terminal_run` / `terminal_write` default to this
-   *  terminal id, AND selecting text in this terminal will surface
-   *  an "Apply to <agent>" chip wired to the same session. We don't
-   *  touch cwd here — the terminal uses its session-derived
-   *  `autoLinkedCwd` only when the chat ALSO links an editor; if the
-   *  user just links a chat-to-terminal (no editor link), the
-   *  terminal keeps whatever cwd was already set. */
-  function linkSessionToTerminal(terminalInstanceId: string, sessionId: string) {
-    const sess = sessionsState.list.find((s) => s.id === sessionId);
-    if (!sess) return;
-    /* Floating sessions (agentInstanceId === null) need a canonical
-       agent-app id so the terminal's inline-agents pane can render
-       their card AND surface "Apply to <agent>" — both consumers
-       require a non-null id to resolve which app to route into. We
-       use the singleton app id for the session's kind, which matches
-       what `setActiveSessionInInstance` would set on first focus. */
-    const patch: Partial<typeof sess> = { linkedTerminalInstanceId: terminalInstanceId };
-    if (!sess.agentInstanceId) patch.agentInstanceId = APP_INSTANCE_IDS[sess.agentKind];
-    updateSession(sessionId, patch);
-    /* Eager-spawn the PTY so the agent's `mcp__app__terminal_*` calls
-       hit a live session immediately — previously the PTY only spawned
-       on first surface mount, so an agent linked through the cwd-bar
-       (without the user opening the Terminal solo) saw an empty
-       `terminal_list` and bounced off. Picks up the editor's repoPath
-       when the session is also editor-linked; otherwise inherits the
-       layout's last-used cwd / $HOME. Idempotent — second call is a
-       no-op when the session already exists. */
-    const layoutName =
-      layoutState.instances.terminal.find((i) => i.id === terminalInstanceId)?.name ?? null;
-    const editorCwd =
-      sess.linkedToEditor && sess.linkedToEditorInstanceId
-        ? sessionsState.editorInstanceState[sess.linkedToEditorInstanceId]?.repoPath ?? null
-        : null;
-    const spawnCwd = editorCwd ?? layoutState.active.terminal.cwd ?? null;
-    void ensureTerminalSession(terminalInstanceId, spawnCwd, 120, 32, layoutName);
-  }
-
-  function unlinkSessionFromTerminal(sessionId: string) {
-    updateSession(sessionId, { linkedTerminalInstanceId: null });
-  }
-
-  function linkActiveSessionToCanvas(canvasId: string) {
-    if (!activeSession) return;
-    updateSession(activeSession.id, { linkedCanvasId: canvasId });
-  }
-
-  function toggleSessionCanvasLink() {
-    if (!activeSession) return;
-    updateSession(activeSession.id, { linkedCanvasId: null });
-  }
-
-  function linkEditorToAgent(
-    editorInstanceId: string,
-    agentInstanceId: string,
-    sessionId?: string
-  ) {
-    const editorPath = sessionsState.editorInstanceState[editorInstanceId]?.repoPath || '';
-    if (!editorPath) return;
-    const kind = kindForInstanceId(agentInstanceId);
-    if (kind !== 'claude' && kind !== 'cursor') return;
-    /* If the picker passed a specific session id, link that one (and
-       activate it in its column so the editor's chat header switches
-       to match). Otherwise fall back to whatever session is already
-       active in the agent column — original behaviour. */
-    const explicit = sessionId
-      ? sessionsState.list.find((s) => s.id === sessionId) ?? null
-      : null;
-    // The session's folder must NOT change automatically. Only when
-    // the session has no folder of its own (first-link) do we pull
-    // editorPath in — otherwise we leave the divergence in place
-    // and let WorktreeBar surface the mismatch chip.
-    function patchForLink(sess: { worktreePath?: string | null; cwd?: string | null }) {
-      const hasOwn = !!(sess.worktreePath || sess.cwd);
-      const base = {
-        linkedToEditor: true,
-        linkedToEditorInstanceId: editorInstanceId,
-        agentInstanceId
-      } as const;
-      return hasOwn ? base : { ...base, cwd: editorPath };
-    }
-    if (explicit) {
-      setActiveSessionInInstance(agentInstanceId, explicit.id);
-      updateSession(explicit.id, patchForLink(explicit));
-      return;
-    }
-    const currentId = sessionsState.activeByInstance[agentInstanceId] ?? null;
-    const current = currentId
-      ? sessionsState.list.find((s) => s.id === currentId) ?? null
-      : null;
-    if (current) {
-      updateSession(current.id, patchForLink(current));
-    } else {
-      newClaudeSession({
-        agentKind: kind,
-        cwd: editorPath,
-        linkedToEditor: true,
-        linkedToEditorInstanceId: editorInstanceId,
-        agentInstanceId: agentInstanceId
-      });
-    }
-  }
+  // Session-link helpers moved to ./sessionLinks.ts (wave-37 split).
+  const _linkDeps = (): import('./sessionLinks').SessionLinkDeps => ({
+    getActiveSession: () => activeSession,
+    setEditorRepoPath,
+  });
+  const linkActiveSessionToEditor = (id: string) => _sessionLinks.linkActiveSessionToEditor(id, _linkDeps());
+  const syncAgentToLinkedEditor = () => _sessionLinks.syncAgentToLinkedEditor(_linkDeps());
+  const syncLinkedEditorToAgent = () => _sessionLinks.syncLinkedEditorToAgent(_linkDeps());
+  const toggleSessionEditorLink = () => _sessionLinks.toggleSessionEditorLink(_linkDeps());
+  const linkActiveSessionToTerminal = (id: string) => _sessionLinks.linkActiveSessionToTerminal(id, _linkDeps());
+  const toggleSessionTerminalLink = () => _sessionLinks.toggleSessionTerminalLink(_linkDeps());
+  const linkSessionToTerminal = (tid: string, sid: string) => _sessionLinks.linkSessionToTerminal(tid, sid);
+  const unlinkSessionFromTerminal = (sid: string) => _sessionLinks.unlinkSessionFromTerminal(sid);
+  const linkActiveSessionToCanvas = (cid: string) => _sessionLinks.linkActiveSessionToCanvas(cid, _linkDeps());
+  const toggleSessionCanvasLink = () => _sessionLinks.toggleSessionCanvasLink(_linkDeps());
+  const linkEditorToAgent = (eid: string, aid: string, sid?: string) => _sessionLinks.linkEditorToAgent(eid, aid, sid);
 
   // ---- Worktree management for the active Claude session ----
   let worktreeBusy = $state<'creating' | 'removing' | null>(null);
