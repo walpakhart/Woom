@@ -42,6 +42,8 @@
     loadAuditLog,
     buildPromptForStage,
     manualContinueSdd,
+    fixDeviationsAndRetry,
+    quickSkipFailedPhase,
     acceptSddPhaseFailed,
     targetKey,
     stashUndo,
@@ -603,6 +605,41 @@
     await rollbackSddPhase(p.workspace.id, failed.number);
   }
 
+  /** Fix-and-retry shortcut for verify deviations: re-fires the failed
+   *  phase with a follow-up prompt that lists each deviation + asks the
+   *  agent to address them. Goes through the same auto-fire dispatcher
+   *  as the normal three-call advance, so the next agent turn picks up
+   *  automatically. */
+  let fixClicked = $state(false);
+  async function onFixDeviations() {
+    if (fixClicked) return;
+    const failed = p.workspace.phases.find((ph) => ph.status === 'failed');
+    if (!failed) return;
+    fixClicked = true;
+    try {
+      await fixDeviationsAndRetry(p.workspace.id, failed.number);
+    } finally {
+      fixClicked = false;
+    }
+  }
+
+  /** Quick-skip without the inline reason textarea. Stamps a default
+   *  "user clicked Skip & continue" reason so the audit trail still
+   *  has an entry, then flips the phase to skipped and lets the
+   *  workflow advance. */
+  let quickSkipClicked = $state(false);
+  async function onQuickSkip() {
+    if (quickSkipClicked) return;
+    const failed = p.workspace.phases.find((ph) => ph.status === 'failed');
+    if (!failed) return;
+    quickSkipClicked = true;
+    try {
+      await quickSkipFailedPhase(p.workspace.id, failed.number);
+    } finally {
+      quickSkipClicked = false;
+    }
+  }
+
   /* Inline accept-with-reason flow. Mirror of the skip flow but flips
    *  `failed` → `done` instead of `skipped`. Used when the user has
    *  reviewed verifier deviations and decided they are tolerable. */
@@ -1118,9 +1155,25 @@
           title="⌘↵ to submit — flips status to done"
         >Accept with reason</button>
       {:else}
-        <button class="sdd-btn sdd-btn--primary" disabled={advanceClicked} onclick={onRetry}>Retry phase</button>
+        <button
+          class="sdd-btn sdd-btn--primary"
+          disabled={fixClicked || advanceClicked}
+          onclick={onFixDeviations}
+          title="Re-fire this phase with a prompt listing the verify deviations + an instruction to address them"
+        >
+          {fixClicked ? 'sending…' : '↻ Fix & continue'}
+        </button>
+        <button class="sdd-btn" disabled={advanceClicked} onclick={onRetry}>Retry phase</button>
         <button class="sdd-btn" onclick={startAccept} title="Mark this failed phase as done with an audit reason">
           ✓ Accept anyway
+        </button>
+        <button
+          class="sdd-btn"
+          disabled={quickSkipClicked}
+          onclick={onQuickSkip}
+          title="Skip without writing a reason — advances workflow with an auto-stamped audit entry"
+        >
+          {quickSkipClicked ? 'skipping…' : '⤳ Skip & continue'}
         </button>
         <button class="sdd-btn" onclick={startSkip} title="Force-skip with audit reason">Skip phase</button>
         <button class="sdd-btn" onclick={onRollbackFailed} title="Reset working tree to pre-phase commit">↶ Rollback</button>
@@ -1203,7 +1256,19 @@
             title="⌘↵ to submit — flips status to done"
           >Accept with reason</button>
         {:else}
-          <button class="sdd-btn sdd-btn--primary" disabled={advanceClicked} onclick={onRetry}>Retry phase</button>
+          <!-- Fix deviations & re-fire — verifier deviations get
+               formatted into a follow-up prompt and the phase is
+               reset to pending. Agent picks the next turn up
+               automatically via the auto-fire dispatcher. -->
+          <button
+            class="sdd-btn sdd-btn--primary"
+            disabled={fixClicked || advanceClicked}
+            onclick={onFixDeviations}
+            title="Re-fire this phase with a prompt listing the verify deviations + an instruction to address them"
+          >
+            {fixClicked ? 'sending…' : '↻ Fix & continue'}
+          </button>
+          <button class="sdd-btn" disabled={advanceClicked} onclick={onRetry}>Retry phase</button>
           <button class="sdd-btn" disabled={advanceClicked} onclick={startEditAndRetry} title="Edit phase body, then retry">
             ✎ Edit & retry
           </button>
@@ -1214,6 +1279,16 @@
                the phase un-done. -->
           <button class="sdd-btn" onclick={startAccept} title="Mark this failed phase as done with an audit reason — workflow continues from next phase">
             ✓ Accept anyway
+          </button>
+          <!-- Quick-skip — stamps a default reason and advances
+               without the inline textarea step. -->
+          <button
+            class="sdd-btn"
+            disabled={quickSkipClicked}
+            onclick={onQuickSkip}
+            title="Skip without writing a reason — advances workflow with an auto-stamped audit entry"
+          >
+            {quickSkipClicked ? 'skipping…' : '⤳ Skip & continue'}
           </button>
           <button class="sdd-btn" onclick={startSkip} title="Force-skip with audit reason">Skip phase</button>
           <button class="sdd-btn" onclick={onRollbackFailed} title="Reset working tree to pre-phase commit">↶ Rollback</button>

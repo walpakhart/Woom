@@ -617,6 +617,67 @@ export async function manualContinueSdd(id: string): Promise<void> {
   }
 }
 
+/** Fix-deviations-and-retry: combines `sdd_retry_phase` (resets the
+ *  failed phase back to `pending`) with a custom follow-up prompt that
+ *  lists the verify deviations + asks the agent to address each one
+ *  before re-running implement/verify. Used by the "Fix deviations"
+ *  button on the failure card when the user wants the workflow to
+ *  self-heal rather than skip/accept the deviations as-is.
+ *
+ *  Dispatches via the same auto-fire channel so the agent picks the
+ *  next turn up automatically — no manual Send required. */
+export async function fixDeviationsAndRetry(id: string, phaseNumber: number): Promise<void> {
+  const ws = sddState.workspaces.find((w) => w.id === id);
+  if (!ws || !ws.session_id) return;
+  const phase = ws.phases.find((p) => p.number === phaseNumber);
+  if (!phase) return;
+  const deviations = phase.verify?.deviations ?? [];
+  const summary = phase.verify?.summary ?? '';
+  // Reset phase to pending so the standard flow re-fires it.
+  const { retrySddPhase } = await import('./sdd_commands.svelte');
+  await retrySddPhase(id, phaseNumber);
+  if (!autoFireDispatcher) {
+    console.warn('sdd fixDeviationsAndRetry: auto-fire dispatcher not registered');
+    return;
+  }
+  const deviationList = deviations.length > 0
+    ? deviations.map((d, i) => `${i + 1}. ${d}`).join('\n')
+    : '(no parseable deviation list on the verify.json — re-read the file before starting)';
+  const prompt = [
+    `# Phase ${phaseNumber} — fix deviations`,
+    '',
+    'The previous verify pass flagged the following deviations from the phase plan:',
+    '',
+    deviationList,
+    '',
+    summary ? `Verify summary:\n${summary}\n` : '',
+    'Address each deviation. Re-run the phase: plan adjustments → implement the fixes → verify again.',
+    'Call `sdd_save_phase_plan` → `sdd_complete_phase_implement` → `sdd_save_phase_verify` as usual; the workflow will advance automatically when verify passes.',
+  ].filter(Boolean).join('\n');
+  lastAutoFireKey[ws.session_id] = `fix_deviations:${phaseNumber}`;
+  try {
+    await autoFireDispatcher(ws.session_id, prompt);
+  } catch (e) {
+    console.warn('sdd fixDeviationsAndRetry dispatch failed', e);
+    delete lastAutoFireKey[ws.session_id];
+  }
+}
+
+/** Quick-skip a failed phase with a default reason. Bypasses the
+ *  inline textarea — useful when the user has already reviewed the
+ *  deviations in the verify pane and just wants to move on. The
+ *  reason stamped here ("user clicked Skip & continue without
+ *  comment") still satisfies the audit-trail minimum so the action
+ *  is reversible later. */
+export async function quickSkipFailedPhase(id: string, phaseNumber: number): Promise<void> {
+  const { skipSddPhaseWithReason } = await import('./sdd_commands.svelte');
+  await skipSddPhaseWithReason(
+    id,
+    phaseNumber,
+    'Skipped from the failure-card quick action — user reviewed deviations and chose to advance without an explicit reason.',
+  );
+}
+
 /** Initialise the global `sdd:changed` listener AND hydrate from disk.
  *  Idempotent — safe to call from `+page.svelte` onMount more than
  *  once. Hydration rebuilds any workspaces that existed before app
