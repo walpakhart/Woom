@@ -303,6 +303,32 @@
 
   /* stageLabel / stageTone moved to ./sddCardStage.ts (wave-1 phase-8). */
   function stageLabel(): string { return _stageLabel(stage); }
+
+  /** "Fixing" badge — visible when the stage is one of the running
+   *  three-call substeps (plan / implement / verify) AND the user has
+   *  clicked "Fix deviations" at least once on this same phase. Lets
+   *  the user tell "agent is iterating on a fix" apart from "fresh
+   *  phase running" without having to scroll the chat for the
+   *  fix-attempt prompt. Drops back to null on the first `phase_done`
+   *  flip (counter cleared in `upsertWorkspace`). */
+  const fixingAttempt = $derived.by((): number | null => {
+    const running =
+      stage.kind === 'phase_planning' ||
+      stage.kind === 'phase_implementing' ||
+      stage.kind === 'phase_verifying' ||
+      stage.kind === 'phase_running';
+    if (!running) return null;
+    const phaseNumber =
+      stage.kind === 'phase_planning' ||
+      stage.kind === 'phase_implementing' ||
+      stage.kind === 'phase_verifying' ||
+      stage.kind === 'phase_running'
+        ? (stage as { phase: number }).phase
+        : null;
+    if (phaseNumber == null) return null;
+    const n = sddState.fixAttempts[p.workspace.id]?.[phaseNumber] ?? 0;
+    return n > 0 ? n : null;
+  });
   function stageTone(): 'live' | 'ok' | 'warn' | 'dim' {
     return _stageTone(stage, isInFlight);
   }
@@ -552,6 +578,24 @@
       advanceClicked = false;
     }
   }
+  /** Resolve the "currently failed" phase number. Stage's
+   *  `failed_phase` is the canonical source — set by the Rust
+   *  orchestrator when it derives `stage.kind === 'failed'`. The
+   *  raw `phases[].status` array can briefly disagree during a
+   *  fix-attempt round-trip (phase status flips to `running` while
+   *  the agent re-plans even though the stage is still rendered as
+   *  `failed` to the user), which used to silently no-op every
+   *  failure-card action — including the "Next phase" button users
+   *  spammed wondering why nothing happened. Fall back to scanning
+   *  the phases list only when the stage isn't `failed` for some
+   *  reason (defensive). */
+  function resolveFailedPhaseNumber(): number | null {
+    if (stage.kind === 'failed' && stage.failed_phase != null) {
+      return stage.failed_phase;
+    }
+    return p.workspace.phases.find((ph) => ph.status === 'failed')?.number ?? null;
+  }
+
   async function onRetry() {
     if (advanceClicked) return;
     advanceClicked = true;
@@ -559,9 +603,9 @@
      *  marked failed (there's at most one in sequential mode) and
      *  reset its status — derive_stage flips us back to PhaseDone
      *  for the prior phase, so the next advance re-issues this one. */
-    const failed = p.workspace.phases.find((ph) => ph.status === 'failed');
-    if (failed) {
-      const fresh = await retrySddPhase(p.workspace.id, failed.number);
+    const failedNumber = resolveFailedPhaseNumber();
+    if (failedNumber != null) {
+      const fresh = await retrySddPhase(p.workspace.id, failedNumber);
       if (fresh) {
         const prompt = await buildPromptForStage(fresh);
         if (prompt) {
@@ -584,9 +628,9 @@
     /* Failed stage's edit target is the failed phase. Switch the peek
      *  to that phase first so `body` resolves to its content; then
      *  open editMode. */
-    const failed = p.workspace.phases.find((ph) => ph.status === 'failed');
-    if (!failed) return;
-    selectedPhaseOverride = failed.number;
+    const failedNumber = resolveFailedPhaseNumber();
+    if (failedNumber == null) return;
+    selectedPhaseOverride = failedNumber;
     editAndRetryArmed = true;
     /* Defer one tick so the `body` $derived sees the override. */
     queueMicrotask(() => startEdit());
@@ -608,17 +652,17 @@
   async function submitSkip() {
     const reason = skipDraft.trim();
     if (reason.length < 5) return;
-    const failed = p.workspace.phases.find((ph) => ph.status === 'failed');
-    if (!failed) return;
-    await skipSddPhaseWithReason(p.workspace.id, failed.number, reason);
+    const failedNumber = resolveFailedPhaseNumber();
+    if (failedNumber == null) return;
+    await skipSddPhaseWithReason(p.workspace.id, failedNumber, reason);
     skipMode = false;
     skipDraft = '';
   }
 
   async function onRollbackFailed() {
-    const failed = p.workspace.phases.find((ph) => ph.status === 'failed');
-    if (!failed) return;
-    await rollbackSddPhase(p.workspace.id, failed.number);
+    const failedNumber = resolveFailedPhaseNumber();
+    if (failedNumber == null) return;
+    await rollbackSddPhase(p.workspace.id, failedNumber);
   }
 
   /** Fix-and-retry shortcut for verify deviations: re-fires the failed
@@ -629,11 +673,11 @@
   let fixClicked = $state(false);
   async function onFixDeviations() {
     if (fixClicked) return;
-    const failed = p.workspace.phases.find((ph) => ph.status === 'failed');
-    if (!failed) return;
+    const failedNumber = resolveFailedPhaseNumber();
+    if (failedNumber == null) return;
     fixClicked = true;
     try {
-      await fixDeviationsAndRetry(p.workspace.id, failed.number);
+      await fixDeviationsAndRetry(p.workspace.id, failedNumber);
     } finally {
       fixClicked = false;
     }
@@ -646,11 +690,11 @@
   let quickSkipClicked = $state(false);
   async function onQuickSkip() {
     if (quickSkipClicked) return;
-    const failed = p.workspace.phases.find((ph) => ph.status === 'failed');
-    if (!failed) return;
+    const failedNumber = resolveFailedPhaseNumber();
+    if (failedNumber == null) return;
     quickSkipClicked = true;
     try {
-      await quickSkipFailedPhase(p.workspace.id, failed.number);
+      await quickSkipFailedPhase(p.workspace.id, failedNumber);
     } finally {
       quickSkipClicked = false;
     }
@@ -664,13 +708,13 @@
   let quickAcceptClicked = $state(false);
   async function onQuickAccept() {
     if (quickAcceptClicked) return;
-    const failed = p.workspace.phases.find((ph) => ph.status === 'failed');
-    if (!failed) return;
+    const failedNumber = resolveFailedPhaseNumber();
+    if (failedNumber == null) return;
     quickAcceptClicked = true;
     try {
       await acceptSddPhaseFailed(
         p.workspace.id,
-        failed.number,
+        failedNumber,
         'Accepted from the failure-card quick action — user reviewed and chose to advance without an explicit reason.',
       );
     } finally {
@@ -694,9 +738,9 @@
   async function submitAccept() {
     const reason = acceptDraft.trim();
     if (reason.length < 5) return;
-    const failed = p.workspace.phases.find((ph) => ph.status === 'failed');
-    if (!failed) return;
-    await acceptSddPhaseFailed(p.workspace.id, failed.number, reason);
+    const failedNumber = resolveFailedPhaseNumber();
+    if (failedNumber == null) return;
+    await acceptSddPhaseFailed(p.workspace.id, failedNumber, reason);
     acceptMode = false;
     acceptDraft = '';
   }
@@ -812,6 +856,11 @@
   <header class="sdd-head">
     <span class="sdd-glyph" aria-hidden="true">SDD</span>
     <span class="sdd-stage">{stageLabel()}</span>
+    {#if fixingAttempt != null}
+      <span class="sdd-fixing" title="Agent is iterating on a previously-failed phase. Counter resets when the phase eventually flips to done.">
+        · fixing #{fixingAttempt}
+      </span>
+    {/if}
     {#if isInFlight}
       <span class="sdd-spin" aria-label="Agent working"></span>
     {/if}
@@ -1477,6 +1526,15 @@
     font-size: 12px;
     font-weight: 500;
     color: var(--text-0);
+  }
+  .sdd-fixing {
+    /* Amber tone — mirrors `.sdd-failed-attempt` on the failure card
+     * so the two iteration states read as the same UX motif. Slightly
+     * lighter weight here because the running header is already busy
+     * with the spinner + workspace id. */
+    color: var(--warn, #d18b3a);
+    font-size: 11.5px;
+    font-weight: 500;
   }
   .sdd-spin {
     width: 10px; height: 10px;
