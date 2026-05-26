@@ -32,7 +32,7 @@ use std::time::{Duration, SystemTime};
 use parking_lot::Mutex;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
-use tokio::task::JoinHandle;
+use tauri::async_runtime::JoinHandle;
 
 /// How often the poll loop re-stats the output file.
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
@@ -99,7 +99,19 @@ pub fn claude_bg_watch(
         }
     }
 
-    let handle = tokio::spawn(async move {
+    /* `tauri::async_runtime::spawn` instead of `tokio::spawn` — this
+     *  command is declared as a sync `pub fn` (no `async`), so Tauri
+     *  runs it on the main thread which has NO Tokio runtime context.
+     *  A bare `tokio::spawn(...)` here panics with
+     *  `there is no reactor running, must be called from the context
+     *  of a Tokio 1.x runtime` the first time the agent emits a Claude
+     *  CLI background-task spawn line. The Tauri-provided spawn talks
+     *  to the runtime managed by `tauri::async_runtime::set` (which
+     *  Tauri configures at startup), so it works from sync command
+     *  bodies as well as from `async fn` ones. Captured via the
+     *  panic-hook log (`~/Library/Logs/Woom/panic.log`) added in
+     *  v0.1.5 — first concrete root cause it surfaced. */
+    let handle = tauri::async_runtime::spawn(async move {
         let start = std::time::Instant::now();
         let mut last_mtime: Option<SystemTime> = None;
         let mut last_change = std::time::Instant::now();
