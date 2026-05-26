@@ -855,6 +855,7 @@ export {
 // keep their imports.
 export {
   approveSddPhasePlan,
+  attachSddToSession,
   completeSddPhaseImplement,
   deleteSddPhase,
   discardSdd,

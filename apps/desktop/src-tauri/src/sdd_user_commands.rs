@@ -25,7 +25,7 @@ use crate::sdd_audit as audit;
 use crate::sdd_hydrate::rebuild_from_disk;
 use crate::sdd_lifecycle_commands::set_control_file;
 use crate::sdd_md_mutators::{replace_body_on, reset_phase_status, set_status_on};
-use crate::sdd_meta::{read_phase_meta, read_workspace_meta, write_phase_meta};
+use crate::sdd_meta::{read_phase_meta, read_workspace_meta, write_phase_meta, write_workspace_meta};
 use crate::sdd_phase_config::PhaseExecutionMode;
 use crate::sdd_substep::{write_substep_state, SddPhaseSubstep, SddPhaseSubstepState};
 use crate::sdd_time::now_ms;
@@ -326,4 +326,48 @@ pub async fn sdd_discard(
     registry.workspaces.write().remove(&id);
     let _ = app.emit("sdd:discarded", &id);
     Ok(())
+}
+
+/// Rebind a workspace to a different session id. The popover's
+/// "Attach to this chat" affordance — useful when the user opens a
+/// past SDD card and wants it to live in the currently-active chat
+/// so SddCard interactions (Approve / Amend / advance) route to the
+/// agent CLI bound to that session. Persists to meta.json so the
+/// new binding survives reload.
+#[tauri::command]
+pub async fn sdd_attach_to_session(
+    app: AppHandle,
+    registry: State<'_, SddRegistry>,
+    id: String,
+    session_id: String,
+) -> Result<SddWorkspace, String> {
+    let trimmed = session_id.trim();
+    if trimmed.is_empty() {
+        return Err("session_id is empty".into());
+    }
+    let cell = registry
+        .workspaces
+        .read()
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| format!("unknown workspace {id}"))?;
+    let root = PathBuf::from(cell.read().root.clone());
+    let mut meta = read_workspace_meta(&root);
+    let before = meta.session_id.clone();
+    meta.session_id = Some(trimmed.to_string());
+    write_workspace_meta(&root, &meta)?;
+    audit::append(
+        &root,
+        &audit::AuditEntry::new("user", "attach_to_session")
+            .with_before(serde_json::json!({"session_id": before}))
+            .with_after(serde_json::json!({"session_id": trimmed})),
+    );
+    let snapshot = {
+        let mut w = cell.write();
+        w.session_id = Some(trimmed.to_string());
+        w.updated_at = now_ms();
+        w.clone()
+    };
+    emit_changed(&app, &id);
+    Ok(snapshot)
 }

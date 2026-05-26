@@ -535,6 +535,7 @@ pub fn run() {
             sdd_audit_commands::sdd_audit_read,
             sdd_audit_commands::sdd_validate_mutation,
             sdd_user_commands::sdd_discard,
+            sdd_user_commands::sdd_attach_to_session,
             // User-defined hooks — agent-lifecycle scripts. See
             // `hooks.rs` for the contract (stdin JSON / exit code /
             // stdout JSON). `hooks_run` is called from the frontend

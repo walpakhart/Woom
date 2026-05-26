@@ -451,3 +451,22 @@ export async function discardSdd(id: string): Promise<void> {
   try { await invoke('sdd_discard', { id }); } catch (e) { console.warn(e); }
   removeWorkspace(id);
 }
+
+/** Rebind an existing SDD workspace to a different session id.
+ *  Used by the chat header's workspace popover "Attach to this chat"
+ *  action — lets the user pull a past spec onto whichever session
+ *  they have open right now so its SddCard buttons route through
+ *  that session's agent CLI. Backend persists to meta.json. */
+export async function attachSddToSession(
+  id: string,
+  sessionId: string
+): Promise<SddWorkspace | null> {
+  try {
+    const ws = await invoke<SddWorkspace>('sdd_attach_to_session', { id, sessionId });
+    upsertWorkspace(ws);
+    return ws;
+  } catch (e) {
+    console.warn('sdd_attach_to_session failed', e);
+    return null;
+  }
+}

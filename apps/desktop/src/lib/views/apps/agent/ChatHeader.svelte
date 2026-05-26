@@ -19,6 +19,7 @@
     openStandaloneView,
     discardSdd,
     showSddCard,
+    attachSddToSession,
     type SddWorkspace,
     type SddPhase,
   } from '$lib/state/sdd.svelte';
@@ -280,6 +281,15 @@
   async function sddDiscardWorkspace(workspaceId: string) {
     await discardSdd(workspaceId);
   }
+  /** Pull a workspace onto the current chat — rebinds its
+   *  `session_id` so SddCard's Approve / Amend / advance buttons
+   *  route their MCP calls through the agent CLI bound to `sess.id`. */
+  async function sddAttachWorkspace(workspaceId: string) {
+    if (!sess) return;
+    await attachSddToSession(workspaceId, sess.id);
+    showSddCard(workspaceId);
+    closeSddPopover();
+  }
 
   function memDate(epoch: number): string {
     const d = new Date(epoch * 1000);
@@ -464,13 +474,25 @@
               {@const activeWid = sess ? sddState.workspaceBySession[sess.id] : null}
               {@const isActive = w.id === activeWid}
               <div class="ch-sdd-row" data-tone={sddStageTone(w)} class:active={isActive}>
-                <button class="ch-sdd-row-main" type="button" onclick={() => sddOpenWorkspace(w.id)} title="Open this workspace in the current chat">
+                <button class="ch-sdd-row-main" type="button" onclick={() => sddOpenWorkspace(w.id)} title="Open this workspace in the current chat (read-only overlay)">
                   <span class="ch-sdd-stage mono">{sddStageLabel(w)}</span>
                   <span class="ch-sdd-ask">{w.user_prompt || '(no ask)'}</span>
                   {#if sddPhaseProgress(w)}
                     <span class="ch-sdd-prog mono">{sddPhaseProgress(w)}</span>
                   {/if}
                 </button>
+                {#if sess && w.session_id !== sess.id}
+                  <button
+                    class="ch-sdd-attach"
+                    type="button"
+                    onclick={() => void sddAttachWorkspace(w.id)}
+                    title="Attach this workspace to the current chat — SddCard buttons will drive the agent here"
+                  >
+                    <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
+                    </svg>
+                  </button>
+                {/if}
                 <button class="ch-sdd-discard" type="button" onclick={() => void sddDiscardWorkspace(w.id)} title="Delete this workspace">
                   <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                     <polyline points="3 6 5 6 21 6"/><path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6"/>
@@ -808,6 +830,17 @@
     transition: color 120ms, background 120ms;
   }
   .ch-sdd-discard:hover { color: var(--error); background: var(--bg-3); }
+  .ch-sdd-attach {
+    width: 22px; height: 22px;
+    display: grid; place-items: center;
+    background: transparent; border: 0;
+    color: var(--text-mute);
+    border-radius: 4px;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: color 120ms, background 120ms;
+  }
+  .ch-sdd-attach:hover { color: var(--accent); background: var(--bg-3); }
 
   .ch-mem-row {
     border: 1px solid var(--border);
