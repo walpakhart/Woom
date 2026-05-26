@@ -31,16 +31,25 @@ jobs:
       - name: Install pnpm
         run: npm install -g pnpm@10.17.1
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      # rustup is preinstalled on macos-14. Direct invoke — see
+      # release.yml for the codeload-404 background.
+      - name: Setup Rust toolchain (universal targets)
+        run: |
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+          rustup default stable
 
-      - name: Cache cargo + target
-        uses: Swatinem/rust-cache@v2
+      # Native `actions/cache` instead of `Swatinem/rust-cache`.
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
         with:
-          workspaces: |
-            apps/desktop/src-tauri
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            apps/desktop/src-tauri/target
+          key: ${{ runner.os }}-cargo-verify-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-verify-
 
       - name: Install JS deps
         run: pnpm install --frozen-lockfile
