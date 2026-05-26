@@ -562,8 +562,15 @@ async function maybeAutoFire(ws: SddWorkspace): Promise<void> {
     shouldFire = !!ph?.plan_body;
     key = `phase_implementing:${stage.phase}`;
   } else if (stage.kind === 'phase_verifying') {
-    const ph = ws.phases.find((p) => p.number === stage.phase);
-    shouldFire = !!ph?.summary;
+    /* Fire verify-pass unconditionally on substep transition.
+     * Earlier this gated on `ph.summary` truthy — but
+     * `sdd_complete_phase_implement` only writes summary when the
+     * agent's call carried a non-empty `summary` arg. Empty summary
+     * (or an agent that dropped the field) left the verify pass
+     * stuck behind a manual "Continue verify-pass" click. The verify
+     * prompt is built from the phase doc anyway; the summary field
+     * is decorative. */
+    shouldFire = true;
     key = `phase_verifying:${stage.phase}`;
   } else if (stage.kind === 'complete') {
     shouldFire = !ws.summary_body;
