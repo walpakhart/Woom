@@ -62,6 +62,8 @@
     stageLabel as _stageLabel,
     stageTone as _stageTone,
   } from './sddCardStage';
+  import { notify } from '$lib/state/toaster.svelte';
+  import { invoke } from '@tauri-apps/api/core';
   import SddAuditOverlay from './SddAuditOverlay.svelte';
   import SddFailureCard from './SddFailureCard.svelte';
   import SddAmendPanel from './SddAmendPanel.svelte';
@@ -674,10 +676,25 @@
   async function onFixDeviations() {
     if (fixClicked) return;
     const failedNumber = resolveFailedPhaseNumber();
-    if (failedNumber == null) return;
+    if (failedNumber == null) {
+      notify({
+        kind: 'warning',
+        title: 'No failed phase to fix',
+        body: `Stage is "${stage.kind}".`,
+        ttlMs: 6000,
+      });
+      return;
+    }
     fixClicked = true;
     try {
       await fixDeviationsAndRetry(p.workspace.id, failedNumber);
+    } catch (e) {
+      notify({
+        kind: 'error',
+        title: `Couldn't start fix for phase ${failedNumber}`,
+        body: String(e),
+        ttlMs: 8000,
+      });
     } finally {
       fixClicked = false;
     }
@@ -709,14 +726,43 @@
   async function onQuickAccept() {
     if (quickAcceptClicked) return;
     const failedNumber = resolveFailedPhaseNumber();
-    if (failedNumber == null) return;
+    if (failedNumber == null) {
+      /* Surface the no-op explicitly — earlier this branch was a
+       *  silent return, which made the button look unresponsive when
+       *  `stage.failed_phase` somehow missed and the status scan
+       *  fallback also returned nothing. The toast tells the user
+       *  what happened so they don't keep clicking. */
+      notify({
+        kind: 'warning',
+        title: 'No failed phase to accept',
+        body: `Stage is "${stage.kind}". If the modal still shows "Failed" the workspace snapshot may be stale — try Discard + reopen.`,
+        ttlMs: 6000,
+      });
+      return;
+    }
     quickAcceptClicked = true;
     try {
-      await acceptSddPhaseFailed(
-        p.workspace.id,
-        failedNumber,
-        'Accepted from the failure-card quick action — user reviewed and chose to advance without an explicit reason.',
-      );
+      /* Direct invoke instead of the wrapper. The wrapper swallows
+       *  Rust errors into `console.warn` + returns null, which makes
+       *  the failure mode invisible — server-side rejection ("phase X
+       *  is `running` — Accept only applies to failed phases") simply
+       *  disappeared. Surface it via notify so we always see why a
+       *  click didn't advance. */
+      const fresh = await invoke<SddWorkspace>('sdd_accept_phase_failed', {
+        id: p.workspace.id,
+        phase: failedNumber,
+        reason:
+          'Accepted from the failure-card quick action — user reviewed and chose to advance without an explicit reason.',
+      });
+      const { upsertWorkspace } = await import('$lib/state/sdd.svelte');
+      upsertWorkspace(fresh);
+    } catch (e) {
+      notify({
+        kind: 'error',
+        title: `Couldn't advance phase ${failedNumber}`,
+        body: String(e),
+        ttlMs: 8000,
+      });
     } finally {
       quickAcceptClicked = false;
     }

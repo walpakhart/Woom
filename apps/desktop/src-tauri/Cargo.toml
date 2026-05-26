@@ -3,7 +3,7 @@ members = ["sidecars/woom-jira", "sidecars/woom-github", "sidecars/woom-memory",
 
 [package]
 name = "woom-desktop"
-version = "0.1.8"
+version = "0.1.9"
 description = "Woom — a focused, warm-lit workspace for software work"
 authors = ["Woom"]
 edition = "2021"
