@@ -32,8 +32,8 @@
     instanceId: string;
     /** Тикер времени для elapsed-counter в header / thinking. */
     now: number;
-    thinkingStartedAt: number | null;
-    thinkingTick: number;
+    thinkingStartedAt: Record<string, number | null>;
+    thinkingTick: Record<string, number>;
     worktreeBusy: 'creating' | 'removing' | null;
 
     /** Editor cwd — для cwd-bar editor-link hint. */

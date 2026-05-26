@@ -59,8 +59,8 @@ export interface SendClaudeMessageDeps {
   getActiveSession(): ClaudeSession | null;
   /** Editor's open-folder fallback when the session has no cwd. */
   getEditorRepoPath(): string;
-  startThinkingTimer(kind: 'claude' | 'cursor'): void;
-  stopThinkingTimer(kind: 'claude' | 'cursor'): void;
+  startThinkingTimer(sessionId: string): void;
+  stopThinkingTimer(sessionId: string): void;
   scrollChatBottom(): Promise<void> | void;
   appendAssistantDelta(sessionId: string, delta: string): void;
   handleAppNavigation(sessionId: string, name: string, input: Record<string, unknown>): void;
@@ -198,7 +198,7 @@ export function createSendClaudeMessage(deps: SendClaudeMessageDeps) {
       content: '',
       at: new Date().toISOString(),
     });
-    deps.startThinkingTimer(kind);
+    deps.startThinkingTimer(id);
     const runStartedAt = Date.now();
     void deps.scrollChatBottom();
 
@@ -316,7 +316,7 @@ export function createSendClaudeMessage(deps: SendClaudeMessageDeps) {
             });
             replaceLastAssistant(id, '');
             updateSession(id, { sending: false, input: text, mentions: mentionsSnapshotPre });
-            deps.stopThinkingTimer(kind);
+            deps.stopThinkingTimer(id);
             await send();
             return;
           }
@@ -342,7 +342,7 @@ export function createSendClaudeMessage(deps: SendClaudeMessageDeps) {
           });
         }
       }
-      deps.stopThinkingTimer(kind);
+      deps.stopThinkingTimer(id);
       flushActionResultsToUI(id);
       const finalSess = sessionsState.list.find((x) => x.id === id);
       const erroredOut = finalSess?.messages.some(
@@ -378,7 +378,7 @@ export function createSendClaudeMessage(deps: SendClaudeMessageDeps) {
     } finally {
       const stillSending = sessionsState.list.find((sx) => sx.id === id)?.sending;
       if (stillSending) {
-        deps.stopThinkingTimer(kind);
+        deps.stopThinkingTimer(id);
         updateSession(id, { sending: false });
       }
       const sessAfterDrain = sessionsState.list.find((x) => x.id === id);

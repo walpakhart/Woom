@@ -622,11 +622,14 @@
     return _groupAgentSessions(sessionsState.list, kind, nowMs);
   }
 
-  // Thinking-time label for the typing indicator — per-kind so Claude and
-  // Cursor timers don't interfere with each other.
-  let thinkingStartedAt = $state<Record<'claude' | 'cursor', number | null>>({ claude: null, cursor: null });
-  let thinkingTick = $state<Record<'claude' | 'cursor', number>>({ claude: 0, cursor: 0 });
-  const thinkingTimers: Record<'claude' | 'cursor', ReturnType<typeof setInterval> | null> = { claude: null, cursor: null };
+  // Thinking-time label for the typing indicator — keyed by session id
+  // so two chats of the same kind (or one Claude + one Cursor) each get
+  // an independent timer. Earlier the maps were keyed by `kind` which
+  // meant starting one Claude chat's run made every other Claude chat
+  // show the same elapsed-seconds counter.
+  let thinkingStartedAt = $state<Record<string, number | null>>({});
+  let thinkingTick = $state<Record<string, number>>({});
+  const thinkingTimers: Record<string, ReturnType<typeof setInterval> | null> = {};
 
   // Auto-create initial chat in the Claude app singleton when Claude
   // connects for the first time and the user has no sessions yet. App
@@ -1851,21 +1854,21 @@
     }
   }
 
-  function startThinkingTimer(kind: 'claude' | 'cursor') {
-    thinkingStartedAt[kind] = Date.now();
-    thinkingTick[kind] = 0;
-    if (thinkingTimers[kind]) clearInterval(thinkingTimers[kind]!);
-    thinkingTimers[kind] = setInterval(() => {
-      thinkingTick[kind] += 1;
+  function startThinkingTimer(sessionId: string) {
+    thinkingStartedAt[sessionId] = Date.now();
+    thinkingTick[sessionId] = 0;
+    if (thinkingTimers[sessionId]) clearInterval(thinkingTimers[sessionId]!);
+    thinkingTimers[sessionId] = setInterval(() => {
+      thinkingTick[sessionId] = (thinkingTick[sessionId] ?? 0) + 1;
     }, 1000);
   }
 
-  function stopThinkingTimer(kind: 'claude' | 'cursor') {
-    if (thinkingTimers[kind]) {
-      clearInterval(thinkingTimers[kind]!);
-      thinkingTimers[kind] = null;
+  function stopThinkingTimer(sessionId: string) {
+    if (thinkingTimers[sessionId]) {
+      clearInterval(thinkingTimers[sessionId]!);
+      thinkingTimers[sessionId] = null;
     }
-    thinkingStartedAt[kind] = null;
+    thinkingStartedAt[sessionId] = null;
   }
 
   // Thin wrapper around `runCompactSessionService` so the AgentApp
@@ -2841,8 +2844,8 @@
           kind="claude"
           instanceId={APP_INSTANCE_IDS.claude}
           {now}
-          thinkingStartedAt={thinkingStartedAt.claude}
-          thinkingTick={thinkingTick.claude}
+          thinkingStartedAt={thinkingStartedAt}
+          thinkingTick={thinkingTick}
           {worktreeBusy}
           {editorRepoPath}
           onPickCwd={pickCwd}
@@ -2896,8 +2899,8 @@
           kind="cursor"
           instanceId={APP_INSTANCE_IDS.cursor}
           {now}
-          thinkingStartedAt={thinkingStartedAt.cursor}
-          thinkingTick={thinkingTick.cursor}
+          thinkingStartedAt={thinkingStartedAt}
+          thinkingTick={thinkingTick}
           {worktreeBusy}
           {editorRepoPath}
           onPickCwd={pickCwd}

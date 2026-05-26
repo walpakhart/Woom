@@ -36,8 +36,8 @@ export interface AgentTurnDeps {
   /** Current editor repo path — fallback cwd when the session lacks one. */
   getEditorRepoPath(): string;
   /** Route-local thinking-timer hooks. */
-  startThinkingTimer(kind: 'claude' | 'cursor'): void;
-  stopThinkingTimer(kind: 'claude' | 'cursor'): void;
+  startThinkingTimer(sessionId: string): void;
+  stopThinkingTimer(sessionId: string): void;
   /** Route-local streaming delta + scroll helpers. */
   appendAssistantDelta(sessionId: string, delta: string): void;
   scrollChatBottom(): Promise<void> | void;
@@ -129,7 +129,7 @@ export async function continueAgentTurn(sessionId: string, deps: AgentTurnDeps):
     content: '',
     at: new Date().toISOString(),
   });
-  deps.startThinkingTimer(kind);
+  deps.startThinkingTimer(sessionId);
   const runStartedAt = Date.now();
   void deps.scrollChatBottom();
 
@@ -203,7 +203,7 @@ export async function continueAgentTurn(sessionId: string, deps: AgentTurnDeps):
       }
     }
   }
-  deps.stopThinkingTimer(kind);
+  deps.stopThinkingTimer(sessionId);
   flushActionResultsToUI(sessionId);
   updateSession(sessionId, { sending: false });
   continuationInFlight.delete(sessionId);

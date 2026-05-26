@@ -28,8 +28,8 @@
   interface Props {
     kind: Kind;
     instanceId: string;
-    thinkingStartedAt: number | null;
-    thinkingTick: number;
+    thinkingStartedAt: Record<string, number | null>;
+    thinkingTick: Record<string, number>;
     onStop: () => void;
   }
 
@@ -40,9 +40,10 @@
   );
 
   const elapsed = $derived.by(() => {
-    if (!p.thinkingStartedAt || !sess?.sending) return '';
-    void p.thinkingTick;
-    const ms = Date.now() - p.thinkingStartedAt;
+    const startedAt = sess ? p.thinkingStartedAt[sess.id] ?? null : null;
+    if (!startedAt || !sess?.sending) return '';
+    void (sess ? p.thinkingTick[sess.id] : 0);
+    const ms = Date.now() - startedAt;
     const s = Math.floor(ms / 1000);
     if (s < 60) return `${s}s`;
     const m = Math.floor(s / 60);
