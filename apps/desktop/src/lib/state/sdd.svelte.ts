@@ -361,6 +361,17 @@ interface SddStoreShape {
    *  `<workspace>/phases/phase-<N>.log.jsonl`; the in-memory copy is
    *  the live fast path, disk is for crash-recovery rehydration. */
   actionLogByWorkspace: Record<string, Record<number, ActionLogEntry[]>>;
+  /** Fix-iteration counter, indexed `[wsId][phase]` -> integer. Bumped
+   *  every time the user clicks "Fix deviations" on a failed verify;
+   *  cleared when the phase eventually flips to `done`. Surfaced in
+   *  the SddFailureCard ("Fix attempt 2 · still failing") and injected
+   *  into the retry prompt so the agent's chat acknowledgement says
+   *  "Phase X fix-attempt N verify recorded." instead of an
+   *  indistinguishable repeat of the original "Phase X verify
+   *  recorded." line. Pure in-memory: a reload starts the count back
+   *  at zero, which is acceptable since the failure card itself shows
+   *  the latest deviations regardless. */
+  fixAttempts: Record<string, Record<number, number>>;
 }
 
 export type ActionKind = 'tool_use' | 'tool_result' | 'agent_message' | 'sdd_event';
@@ -411,6 +422,7 @@ export const sddState = $state<SddStoreShape>({
   standaloneViewWorkspaceId: null,
   hiddenWorkspaceIds: {},
   actionLogByWorkspace: {},
+  fixAttempts: {},
 });
 
 /** Hide the inline SddCard for `workspaceId` without deleting the
@@ -640,6 +652,14 @@ export async function fixDeviationsAndRetry(id: string, phaseNumber: number): Pr
   if (!phase) return;
   const deviations = phase.verify?.deviations ?? [];
   const summary = phase.verify?.summary ?? '';
+  /* Bump the fix-iteration counter BEFORE we dispatch — surfaces in
+   *  the SddFailureCard while the agent works on this attempt, so
+   *  the user can tell "fix in flight" apart from "first failure"
+   *  even before the new verify lands. */
+  const wsAttempts = sddState.fixAttempts[id] ?? {};
+  const attemptNumber = (wsAttempts[phaseNumber] ?? 0) + 1;
+  wsAttempts[phaseNumber] = attemptNumber;
+  sddState.fixAttempts[id] = wsAttempts;
   // Reset phase to pending so the standard flow re-fires it.
   const { retrySddPhase } = await import('./sdd_commands.svelte');
   await retrySddPhase(id, phaseNumber);
@@ -651,7 +671,7 @@ export async function fixDeviationsAndRetry(id: string, phaseNumber: number): Pr
     ? deviations.map((d, i) => `${i + 1}. ${d}`).join('\n')
     : '(no parseable deviation list on the verify.json — re-read the file before starting)';
   const prompt = [
-    `# Phase ${phaseNumber} — fix deviations`,
+    `# Phase ${phaseNumber} — fix attempt #${attemptNumber}`,
     '',
     'The previous verify pass flagged the following deviations from the phase plan:',
     '',
@@ -660,13 +680,32 @@ export async function fixDeviationsAndRetry(id: string, phaseNumber: number): Pr
     summary ? `Verify summary:\n${summary}\n` : '',
     'Address each deviation. Re-run the phase: plan adjustments → implement the fixes → verify again.',
     'Call `sdd_save_phase_plan` → `sdd_complete_phase_implement` → `sdd_save_phase_verify` as usual; the workflow will advance automatically when verify passes.',
+    '',
+    /* Distinct chat acknowledgement per attempt — without this every
+     *  fix-retry would echo the identical "Phase X verify recorded."
+     *  line as the original failure, making the chat log impossible
+     *  to scan for iteration progress. */
+    `IMPORTANT: After \`sdd_save_phase_verify\`, reply with EXACTLY this one line: "Phase ${phaseNumber} fix-attempt ${attemptNumber} verify recorded."`,
   ].filter(Boolean).join('\n');
-  lastAutoFireKey[ws.session_id] = `fix_deviations:${phaseNumber}`;
+  lastAutoFireKey[ws.session_id] = `fix_deviations:${phaseNumber}:${attemptNumber}`;
   try {
     await autoFireDispatcher(ws.session_id, prompt);
   } catch (e) {
     console.warn('sdd fixDeviationsAndRetry dispatch failed', e);
     delete lastAutoFireKey[ws.session_id];
+  }
+}
+
+/** Reset the fix-attempt counter for a workspace's phase. Called when
+ *  the phase eventually flips to `done` so the next time the same
+ *  phase fails (e.g. user reverts + reruns) the count starts at 1
+ *  again instead of "fix attempt 7". */
+export function clearFixAttempts(workspaceId: string, phaseNumber: number): void {
+  const map = sddState.fixAttempts[workspaceId];
+  if (!map) return;
+  if (map[phaseNumber] != null) {
+    delete map[phaseNumber];
+    sddState.fixAttempts[workspaceId] = map;
   }
 }
 
@@ -760,6 +799,13 @@ export async function initSdd(): Promise<void> {
 
 export function upsertWorkspace(ws: SddWorkspace): void {
   const idx = sddState.workspaces.findIndex((w) => w.id === ws.id);
+  /* Compare the inbound phase statuses against the previous snapshot
+   *  so we can clear `fixAttempts[wsId][phaseN]` the moment a phase
+   *  transitions to `done`. Without this the counter would persist
+   *  forever and a user retrying the SAME phase later (e.g. after a
+   *  rollback) would see "Fix attempt 8" with no relation to the
+   *  current iteration. */
+  const previous = idx === -1 ? null : sddState.workspaces[idx];
   if (idx === -1) {
     sddState.workspaces = [ws, ...sddState.workspaces];
   } else {
@@ -770,6 +816,19 @@ export function upsertWorkspace(ws: SddWorkspace): void {
   if (ws.session_id) {
     sddState.workspaceBySession[ws.session_id] = ws.id;
   }
+  if (previous) {
+    const attempts = sddState.fixAttempts[ws.id];
+    if (attempts) {
+      for (const newPhase of ws.phases) {
+        if (newPhase.status !== 'done') continue;
+        const oldPhase = previous.phases.find((p) => p.number === newPhase.number);
+        if (oldPhase && oldPhase.status !== 'done' && attempts[newPhase.number] != null) {
+          delete attempts[newPhase.number];
+        }
+      }
+      sddState.fixAttempts[ws.id] = attempts;
+    }
+  }
 }
 
 export function removeWorkspace(id: string): void {
@@ -777,6 +836,8 @@ export function removeWorkspace(id: string): void {
   for (const [sid, wid] of Object.entries(sddState.workspaceBySession)) {
     if (wid === id) delete sddState.workspaceBySession[sid];
   }
+  // Drop the per-phase fix-attempt map for this workspace.
+  if (sddState.fixAttempts[id]) delete sddState.fixAttempts[id];
   const un = sddState.unlistenByWorkspace[id];
   if (un) {
     try { un(); } catch { /* noop */ }

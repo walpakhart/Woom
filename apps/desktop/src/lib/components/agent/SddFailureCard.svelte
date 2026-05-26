@@ -9,6 +9,7 @@
      binds skip/accept text + invokes callbacks. Keeps SddCard
      focused on top-level orchestration. */
   import type { ActionLogEntry, SddWorkspace } from '$lib/state/sdd.svelte';
+  import { sddState } from '$lib/state/sdd.svelte';
 
   /** SddStage.Failed payload shape — extracted from the discriminated
    *  union so the parent can pass it directly without re-narrowing. */
@@ -16,6 +17,10 @@
 
   interface Props {
     stage: FailedStage;
+    /** Owning workspace id — used to look up the per-phase fix-attempt
+     *  counter from `sddState.fixAttempts`. Optional so the component
+     *  stays renderable in isolation (Storybook / tests). */
+    workspaceId?: string;
     /** Whether the inline "Skip phase" textarea is open. Toggled by
      *  the parent's `startSkip` / `cancelSkip` actions. */
     skipMode: boolean;
@@ -31,6 +36,7 @@
   }
   let {
     stage,
+    workspaceId,
     skipMode,
     skipDraft = $bindable(),
     onSubmitSkip,
@@ -40,6 +46,16 @@
     onSubmitAccept,
     onCancelAccept,
   }: Props = $props();
+
+  /* Reactive fix-attempt count for the failed phase. `undefined` (or 0)
+   *  means no fix retries have been triggered yet for this iteration —
+   *  show the plain "failed" title. >0 means at least one Fix click
+   *  has fired; surface the attempt number so the user can tell the
+   *  iteration apart from the original failure. */
+  const fixAttemptCount = $derived.by((): number => {
+    if (!workspaceId || stage.failed_phase == null) return 0;
+    return sddState.fixAttempts[workspaceId]?.[stage.failed_phase] ?? 0;
+  });
 </script>
 
 <div class="sdd-failed">
@@ -52,6 +68,11 @@
       {/if}
       {#if stage.trigger}
         <span class="sdd-failed-trigger mono">· {stage.trigger.replace('_', ' ')}</span>
+      {/if}
+      {#if fixAttemptCount > 0}
+        <span class="sdd-failed-attempt" title="Number of times the Fix-deviations button has been clicked for this phase since the last `done` flip.">
+          · fix attempt {fixAttemptCount} · still failing
+        </span>
       {/if}
     </span>
   </div>
@@ -137,6 +158,14 @@
     color: var(--text-mute);
     font-size: 11px;
     font-weight: 400;
+  }
+  .sdd-failed-attempt {
+    /* Amber-tinted to read as "in progress / iterating" instead of
+     * blending into the regular failure grey. Subdued enough that it
+     * doesn't shout once the user has clicked Fix a few times. */
+    color: var(--warn, #d18b3a);
+    font-size: 11px;
+    font-weight: 500;
   }
   .sdd-failed-reason {
     color: var(--text-1);

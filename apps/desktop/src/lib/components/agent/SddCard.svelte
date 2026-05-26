@@ -1148,6 +1148,7 @@
   {#if stage.kind === 'failed'}
     <SddFailureCard
       {stage}
+      workspaceId={p.workspace.id}
       {skipMode}
       bind:skipDraft
       onSubmitSkip={submitSkip}
