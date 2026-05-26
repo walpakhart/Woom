@@ -70,12 +70,14 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-      # Pinned to v4 SHA — floating `@v4` was hitting codeload 404s from
-      # the runner image's stale cache after upstream rewrote the tag.
-      # SHA-pin keeps the download URL stable across reruns.
-      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
-        with:
-          version: 10.17.1
+      # pnpm install via npm instead of `pnpm/action-setup` action.
+      # The action download was hitting codeload.github.com 404s on the
+      # macOS-14-arm64 runner image (codeload works fine from other
+      # networks — Azure region-level block / WAF mistrigger). Direct
+      # npm install bypasses the Actions marketplace tarball download
+      # entirely and is one network hop instead of two.
+      - name: Install pnpm
+        run: npm install -g pnpm@10.17.1
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
