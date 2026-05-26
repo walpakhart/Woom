@@ -58,6 +58,17 @@
   import * as _agentTurn from './agentTurn';
   import { createSendClaudeMessage as _createSendClaudeMessage } from './sendClaudeMessage';
   import * as _kbd from './keyboardShortcuts';
+  import { buildPaletteActions } from './paletteActions';
+  import {
+    isGithubFilterMode,
+    isSentryStatus,
+    isSentryLevel,
+    mapAgentViewToInternal,
+    parseSprintScopes,
+    type SentryStatus,
+    type SentryLevel,
+    type SentryFilterPatch,
+  } from './mcpTypeGuards';
   import {
     actionMatchesIpcParams,
     buildActionFromIpcRequest,
@@ -677,79 +688,23 @@
       connectionsState.retrying.cursor
   );
 
-  /* Top-level palette actions (M4 §2.8.6 — action verbs). Built as a
-   * derived so connect/disconnect labels flip based on the live
-   * `connectionsState` — typing "connect github" surfaces the connect
-   * verb when disconnected and the disconnect verb when already on. */
-  const paletteActions = $derived.by(() => {
-    type PA = { id: string; label: string; sub?: string; keywords?: string; pick: () => void };
-    const a: PA[] = [];
-    /* Source connect / disconnect. Use the connectionsMeta source list
-     * so this stays in sync if a new source is added. */
-    for (const conn of sourceConns) {
-      if (!conn.implemented) continue;
-      const status = connectionsState[conn.id as 'github' | 'jira' | 'sentry'];
-      const isConnected = status?.kind === 'connected';
-      a.push({
-        id: `connect:${conn.id}`,
-        label: isConnected ? `Reconnect ${conn.name}` : `Connect ${conn.name}`,
-        sub: isConnected ? 'Re-enter token in the modal' : 'Open the connect modal',
-        keywords: `${conn.id} pat token auth`,
-        pick: () => openConnectModal(conn)
-      });
-      if (isConnected) {
-        a.push({
-          id: `disconnect:${conn.id}`,
-          label: `Disconnect ${conn.name}`,
-          sub: 'Drop the token from Keychain',
-          keywords: `${conn.id} sign out logout`,
-          pick: () => {
-            if (conn.id === 'github') void disconnectGithub();
-            else if (conn.id === 'jira') void disconnectJiraAll();
-            else if (conn.id === 'sentry') void disconnectSentryAll();
-          }
-        });
-      }
-    }
-    /* Agents — open status modals so the user can verify the binary
-     * is detected. */
-    for (const conn of agentConns) {
-      if (!conn.implemented) continue;
-      a.push({
-        id: `status:${conn.id}`,
-        label: `Check ${conn.name} status`,
-        sub: 'Detect binary + version',
-        keywords: `${conn.id} cli agent`,
-        pick: () => openConnectModal(conn)
-      });
-    }
-    a.push({
-      id: 'cheatsheet',
-      label: 'Show keyboard shortcuts',
-      sub: 'Cheatsheet of every binding',
-      keywords: 'help ? shortcuts hotkeys',
-      pick: () => (cheatsheetOpen = true)
-    });
-    a.push({
-      id: 'view:settings',
-      label: 'Open settings',
-      keywords: 'preferences config theme privacy updates docs',
-      pick: () => (view = 'settings')
-    });
-    a.push({
-      id: 'view:connections',
-      label: 'Open connections',
-      keywords: 'sources tokens auth',
-      pick: () => (view = 'connections')
-    });
-    a.push({
-      id: 'view:rules',
-      label: 'Open rules',
-      keywords: 'system prompt agent',
-      pick: () => (view = 'rules')
-    });
-    return a;
-  });
+  /* Top-level palette actions — extracted to ./paletteActions.ts
+   * (phase-9 split). The derived re-runs whenever `connectionsState`
+   * changes (live read inside `buildPaletteActions`), so the
+   * connect/disconnect verb flips correctly. */
+  const paletteActions = $derived.by(() =>
+    buildPaletteActions({
+      connectionsState,
+      sourceConns,
+      agentConns,
+      openConnectModal,
+      disconnectGithub,
+      disconnectJiraAll,
+      disconnectSentryAll,
+      openCheatsheet: () => (cheatsheetOpen = true),
+      setView: (v) => (view = v),
+    })
+  );
   const connectedGithub = $derived(githubStatus.kind === 'connected');
   const connectedJira = $derived(jiraStatus.kind === 'connected');
   const connectedSentry = $derived(sentryStatus.kind === 'connected');
@@ -2009,92 +1964,7 @@
    *  When inputs are bad (unknown view name, blank id) we silently no-op
    *  rather than throw — the chat still shows the inline `> *Tool* …` hint
    *  so the user can see what the agent tried. */
-  /** Narrow a string to the GithubFilterMode union — anything else (typo
-   *  from the agent, future mode the frontend doesn't know) silently no-
-   *  ops, matching the rest of handleAppNavigation's "bad input = skip"
-   *  contract. Defined here instead of inboxState because it's only
-   *  needed for the agent-driven path; the UI dropdowns build the union
-   *  by construction. */
-  function isGithubFilterMode(s: string): s is GithubFilterMode {
-    return (
-      s === 'involving' ||
-      s === 'authored' ||
-      s === 'review_requested' ||
-      s === 'assigned' ||
-      s === 'user' ||
-      s === 'all'
-    );
-  }
-  type SentryStatus = 'unresolved' | 'resolved' | 'ignored' | 'all';
-  type SentryLevel = 'all' | 'fatal' | 'error' | 'warning' | 'info' | 'debug';
-  function isSentryStatus(s: string): s is SentryStatus {
-    return s === 'unresolved' || s === 'resolved' || s === 'ignored' || s === 'all';
-  }
-  function isSentryLevel(s: string): s is SentryLevel {
-    return (
-      s === 'all' ||
-      s === 'fatal' ||
-      s === 'error' ||
-      s === 'warning' ||
-      s === 'info' ||
-      s === 'debug'
-    );
-  }
-  /** SentryFilters in the column store carries 7 fields including `sort`
-   *  (which the agent doesn't expose) — we accept any subset matching
-   *  what the tool advertises. Pulled out as its own type so the agent-
-   *  driven setter doesn't reference the persisted-filter shape verbatim
-   *  (its `sort` field would be a typed-`unknown` mismatch). */
-  type SentryFilterPatch = {
-    projects?: string[];
-    search?: string;
-    status?: SentryStatus;
-    level?: SentryLevel;
-    environment?: string | null;
-  };
-  /** MCP `switch_view` ships platform-named views (`github` / `jira` /
-   *  `sentry` / `claude` / `cursor` / `editor` / `canvas` / `terminal`)
-   *  so a future GitLab/Bitbucket tab can claim its own slot. Translate
-   *  to the internal `…App` view name. Returns `null` for unknown
-   *  values so the handler can no-op cleanly. */
-  function mapAgentViewToInternal(v: string): View | null {
-    switch (v) {
-      case 'github':       return 'githubApp';
-      case 'jira':         return 'jiraApp';
-      case 'sentry':       return 'sentryApp';
-      case 'claude':       return 'claudeApp';
-      case 'cursor':       return 'cursorApp';
-      case 'editor':       return 'editorApp';
-      case 'canvas':       return 'canvasApp';
-      case 'terminal':     return 'terminalApp';
-      case 'rules':
-      case 'connections':
-      case 'settings':
-        return v;
-      default:
-        return null;
-    }
-  }
-  /** Coerce raw `sprint_ids` payload entries into the persisted
-   *  `SprintScope[]` shape (numeric id or the literal `'backlog'`).
-   *  The MCP tool's JSON schema accepts string|number; we accept either
-   *  here too because cursor-agent and Claude have shipped both. */
-  function parseSprintScopes(raw: unknown[]): SprintScope[] {
-    const out: SprintScope[] = [];
-    for (const x of raw) {
-      if (typeof x === 'number' && Number.isFinite(x) && x > 0) {
-        out.push(x);
-      } else if (typeof x === 'string') {
-        if (x === 'backlog') {
-          out.push('backlog');
-        } else {
-          const n = Number(x);
-          if (Number.isFinite(n) && n > 0) out.push(n);
-        }
-      }
-    }
-    return out;
-  }
+  /* MCP type guards + parsers moved to ./mcpTypeGuards.ts (phase-9 split). */
   function handleAppNavigation(
     _sessionId: string,
     name: string,

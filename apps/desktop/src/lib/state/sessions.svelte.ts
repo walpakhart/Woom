@@ -70,7 +70,22 @@ export const EDITOR_STATE_STORAGE_KEY = 'woom:editor-state:v1';
 setStreamFlushHandler(() => {
   const work = drainStreamQueue();
   if (work.size === 0) return;
-  sessionsState.list = sessionsState.list.map((s) => applyOpsToSession(s, work.get(s.id)));
+  /* Per-index mutation instead of full-list rebuild. The old
+   * `.list = .list.map(...)` reassigned the array reference, which
+   * Svelte 5 treats as a coarse-grained dirty on EVERY consumer of
+   * `sessionsState.list` (ChatThread, ChatHeader, sidebar lists,
+   * SDD cards, palette derivations, …). When 1 of 8 sessions
+   * receives a delta we don't want the other 7's reactive subscribers
+   * to re-run — fine-grained mutation of `.list[i]` only dirties
+   * readers of that index. Cuts streaming-token reactive cost
+   * proportional to parallel-session count. */
+  const list = sessionsState.list;
+  for (let i = 0; i < list.length; i++) {
+    const ops = work.get(list[i].id);
+    if (!ops || ops.length === 0) continue;
+    const next = applyOpsToSession(list[i], ops);
+    if (next !== list[i]) list[i] = next;
+  }
 });
 
 /** Drain any queued streaming deltas synchronously. Re-exported from
@@ -695,7 +710,19 @@ export function updateSession(id: string, patch: Partial<ClaudeSession>) {
   // (and similar one-shot toggles) can't land before the tail of the
   // stream's last few tokens. No-op when the queue is empty.
   flushStreamQueueNow();
-  sessionsState.list = sessionsState.list.map((s) => (s.id === id ? { ...s, ...patch } : s));
+  /* Index-based mutation — see the streaming flush handler at the top
+   * of this file. Replacing `.list = .list.map(...)` with `.list[i] =
+   * ...` so Svelte's fine-grained reactivity only dirties subscribers
+   * of THIS session, not every component that reads `sessionsState.list`.
+   * Matters under typical usage where 5-10 chats are open + visible
+   * sidebar lists subscribe to the whole array. */
+  const list = sessionsState.list;
+  for (let i = 0; i < list.length; i++) {
+    if (list[i].id === id) {
+      list[i] = { ...list[i], ...patch };
+      return;
+    }
+  }
 }
 
 /** Stamp `pendingTurn` on the session as a crash-detection marker.
@@ -716,9 +743,15 @@ export function markTurnStart(id: string) {
    * messages exist yet (defensive), record 0 — the recap path falls
    * back to "no specific message" framing. */
   const idx = Math.max(0, s.messages.length - 1);
-  sessionsState.list = sessionsState.list.map((x) =>
-    x.id === id ? { ...x, pendingTurn: { startedAt: Date.now(), userMessageIndex: idx } } : x
-  );
+  // Fine-grained per-index mutation — see `updateSession` for the
+  // reactive-cost rationale.
+  const list = sessionsState.list;
+  for (let i = 0; i < list.length; i++) {
+    if (list[i].id === id) {
+      list[i] = { ...list[i], pendingTurn: { startedAt: Date.now(), userMessageIndex: idx } };
+      break;
+    }
+  }
   void flushSessionsNow();
 }
 
@@ -728,9 +761,14 @@ export function markTurnStart(id: string) {
 export function markTurnEnd(id: string) {
   const s = sessionsState.list.find((x) => x.id === id);
   if (!s || s.pendingTurn == null) return;
-  sessionsState.list = sessionsState.list.map((x) =>
-    x.id === id ? { ...x, pendingTurn: null } : x
-  );
+  // Fine-grained per-index mutation — see `updateSession`.
+  const list = sessionsState.list;
+  for (let i = 0; i < list.length; i++) {
+    if (list[i].id === id) {
+      list[i] = { ...list[i], pendingTurn: null };
+      break;
+    }
+  }
 }
 
 /** Acknowledge the interrupted-session banner without taking recovery
@@ -739,9 +777,14 @@ export function markTurnEnd(id: string) {
 export function dismissInterrupted(id: string) {
   const s = sessionsState.list.find((x) => x.id === id);
   if (!s || !s.interrupted) return;
-  sessionsState.list = sessionsState.list.map((x) =>
-    x.id === id ? { ...x, interrupted: false } : x
-  );
+  // Fine-grained per-index mutation — see `updateSession`.
+  const list = sessionsState.list;
+  for (let i = 0; i < list.length; i++) {
+    if (list[i].id === id) {
+      list[i] = { ...list[i], interrupted: false };
+      break;
+    }
+  }
 }
 
 /** Attach a specific line range of a file as a `@path:start-end` mention

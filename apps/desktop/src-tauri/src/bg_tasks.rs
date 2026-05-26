@@ -354,6 +354,14 @@ pub async fn spawn(
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(false);
+    /* Put the shell in its own process group so `kill(-pid, SIGKILL)`
+     *  reaps both the shell AND its forked children (sleep, node, etc).
+     *  Without this, killing only the shell leaves long-running children
+     *  orphaned (re-parented to init) and the BgTask UI thinks it's dead
+     *  while ports stay bound. process_group(0) → new pgrp with the
+     *  child as leader; pgid == pid for our purposes. */
+    #[cfg(unix)]
+    cmd.process_group(0);
 
     if let Some(env) = &args.env {
         for (k, v) in env {
@@ -584,22 +592,69 @@ pub async fn kill(app: AppHandle, registry: &BgRegistry, id: &str) -> Result<(),
         .get(id)
         .cloned()
         .ok_or_else(|| format!("no such task: {id}"))?;
-    let child_arc = state.read().child.clone();
-    let Some(child_arc) = child_arc else {
-        // Already dead — treat as success.
+    /* Snapshot the PID *and* whether we have a live child handle. We
+     *  must NOT call `child_arc.lock().await` here — the waiter task in
+     *  `spawn()` holds that mutex for the entire lifetime of the child
+     *  (it awaits `child.wait()` while holding the guard). Acquiring it
+     *  again deadlocks the kill call indefinitely — which is the bug the
+     *  UI surfaces as "kill button does nothing".
+     *
+     *  Instead we send SIGKILL via libc directly using the stored PID.
+     *  The waiter wakes up, sets status, releases the mutex normally. */
+    let (pid_opt, had_child) = {
+        let s = state.read();
+        (s.task.pid, s.child.is_some())
+    };
+    if !had_child {
+        // Already reaped — UI just hasn't caught up. Idempotent OK.
+        return Ok(());
+    }
+    let Some(pid) = pid_opt else {
         return Ok(());
     };
-    // SIGTERM via tokio's Child::start_kill (which sends SIGKILL on Unix
-    // anyway; we don't have a portable SIGTERM here without `libc`).
-    // For phase 1, immediate kill is acceptable — KILL_GRACE_MS reserved
-    // for the future when we layer SIGTERM-first behaviour.
+    #[cfg(unix)]
     {
-        let mut guard = child_arc.lock().await;
-        let _ = guard.start_kill();
+        /* Negative pid → kill the whole process group (`spawn()` sets
+         *  `process_group(0)` so pgid == pid). Reaps shell + every child
+         *  it forked (sleep / node / etc) in one syscall. */
+        let gpid = -(pid as i32);
+        unsafe {
+            // SIGTERM first — gives clean shutdown a brief window. The
+            // waiter task will flip status on wait() completion below.
+            let _ = libc::kill(gpid, libc::SIGTERM);
+        }
+        // Spawn a grace timer that escalates to SIGKILL if the process
+        // group is still alive after KILL_GRACE_MS. Detached — kill()
+        // returns immediately.
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(KILL_GRACE_MS)).await;
+            unsafe {
+                // kill(pid, 0) probes liveness; ESRCH = already dead.
+                if libc::kill(pid as i32, 0) == 0 {
+                    let _ = libc::kill(gpid, libc::SIGKILL);
+                }
+            }
+        });
     }
-    // Status is flipped by the waiter task above on wait() completion.
-    // Force a `Killed` status NOW so the UI reads "Killed" instead of
-    // racing with the eventual Exited write.
+    #[cfg(windows)]
+    {
+        /* Windows has no process groups in the Unix sense. Best-effort:
+         *  fall back to tokio's start_kill on the stored Child. We avoid
+         *  the deadlock by using try_lock — if the waiter holds it,
+         *  TerminateProcess via PID-less path isn't available, but the
+         *  waiter's wait() will return ERROR_INVALID_HANDLE once we
+         *  TerminateProcess from another path. For now: skip on Windows
+         *  if we can't get the lock; status flip below still happens. */
+        if let Some(child_arc) = state.read().child.clone() {
+            if let Ok(mut guard) = child_arc.try_lock() {
+                let _ = guard.start_kill();
+            }
+        }
+    }
+    // Flip status immediately so the UI reflects the user's intent. The
+    // waiter task will overwrite this with Exited on wait() return, but
+    // our `matches!(_, Running)` guard there prevents that — once we
+    // write Killed, the Exited path becomes a no-op.
     {
         let mut s = state.write();
         s.task.status = BgStatus::Killed {
@@ -609,7 +664,6 @@ pub async fn kill(app: AppHandle, registry: &BgRegistry, id: &str) -> Result<(),
     let snapshot = state.read().task.clone();
     let _ = app.emit(&format!("bg:status:{id}"), &snapshot);
     let _ = app.emit("bg:tasks-changed", id);
-    let _ = KILL_GRACE_MS; // suppress unused-warning until we add the SIGTERM-first variant
     Ok(())
 }
 

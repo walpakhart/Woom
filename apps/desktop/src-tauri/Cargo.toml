@@ -3,7 +3,7 @@ members = ["sidecars/woom-jira", "sidecars/woom-github", "sidecars/woom-memory",
 
 [package]
 name = "woom-desktop"
-version = "0.1.4"
+version = "0.1.5"
 description = "Woom — a focused, warm-lit workspace for software work"
 authors = ["Woom"]
 edition = "2021"
@@ -63,4 +63,11 @@ panic = "abort"
 codegen-units = 1
 lto = true
 opt-level = "s"
-strip = true
+# Keep symbols + line tables in the release binary so the in-process
+# panic hook (`install_panic_hook` in `lib.rs`) can emit a backtrace
+# with resolvable function names + file:line into `~/Library/Logs/Woom/
+# panic.log`. Without this, the only post-mortem signal is the macOS
+# crash report's raw offsets, which `atos` can't decode for a stripped
+# binary. Cost: +5-15 MB to the bundle, no runtime overhead.
+strip = "none"
+debug = "line-tables-only"

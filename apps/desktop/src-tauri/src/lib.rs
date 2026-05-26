@@ -251,8 +251,97 @@ fn kill_stale_sidecars() {
     }
 }
 
+/// Install a global panic hook that writes the panic location + a
+/// backtrace to `~/Library/Logs/Woom/panic.log` (macOS) or the
+/// platform-equivalent. Critical for diagnosing prod crashes —
+/// release builds ship with `panic = "abort"` + `strip = true`, so the
+/// only signal a user can hand us back is the macOS crash report,
+/// which has no resolvable Rust symbols. This hook runs BEFORE abort,
+/// so the file capture is the last useful artefact written.
+///
+/// Format: timestamp · panic message · location · captured backtrace.
+/// Forces `RUST_BACKTRACE=1` if not already set so the default
+/// formatter emits a frame list. Idempotent — guarded by an Once so
+/// double-init (e.g. tests) is a no-op.
+fn install_panic_hook() {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        // Force backtrace capture for the default hook path AND any
+        // custom formatter that reads the env. No-op if user set their own.
+        if std::env::var_os("RUST_BACKTRACE").is_none() {
+            // SAFETY: set_var is unsafe in Rust 2024 / future editions
+            // because it mutates process-global env from a thread that
+            // could race with getenv readers. We run this before the
+            // Tauri event loop (single-threaded init), so no readers
+            // can race here.
+            unsafe { std::env::set_var("RUST_BACKTRACE", "1") };
+        }
+        // Resolve the panic log path lazily — `dirs` would be cleaner
+        // but we already depend on `std`, and on macOS the path is
+        // deterministic relative to $HOME. Falls back to /tmp if HOME
+        // isn't set (shouldn't happen on a real macOS install).
+        let log_path = {
+            let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+            #[cfg(target_os = "macos")]
+            let p = home
+                .map(|h| h.join("Library/Logs/Woom"))
+                .unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
+            #[cfg(not(target_os = "macos"))]
+            let p = home
+                .map(|h| h.join(".cache/woom"))
+                .unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
+            let _ = std::fs::create_dir_all(&p);
+            p.join("panic.log")
+        };
+        // Keep the default hook for stderr — devs running `pnpm tauri
+        // dev` still see the pretty backtrace in the terminal. We only
+        // ADD a file sink.
+        let default_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            use std::io::Write;
+            let location = info
+                .location()
+                .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+                .unwrap_or_else(|| "<no location>".to_string());
+            let msg = if let Some(s) = info.payload().downcast_ref::<&str>() {
+                (*s).to_string()
+            } else if let Some(s) = info.payload().downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "<non-string panic payload>".to_string()
+            };
+            let bt = std::backtrace::Backtrace::force_capture();
+            let ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let entry = format!(
+                "\n===== panic @ unix_ts={ts} =====\n\
+                 location: {location}\n\
+                 thread:   {thread}\n\
+                 message:  {msg}\n\
+                 backtrace:\n{bt}\n\
+                 ===== end =====\n",
+                thread = std::thread::current().name().unwrap_or("<unnamed>"),
+            );
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&log_path)
+            {
+                let _ = f.write_all(entry.as_bytes());
+                let _ = f.flush();
+            }
+            // Also delegate to default hook so dev terminal sees it.
+            default_hook(info);
+        }));
+    });
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    install_panic_hook();
     hydrate_path_from_login_shell();
     /* Crash reporting (`docs/ROADMAP_1.0.md §1.3`). Opt-out file lives
      * under app-support — checked here before any potentially-
