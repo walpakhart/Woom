@@ -314,19 +314,34 @@
    *  fix-attempt prompt. Drops back to null on the first `phase_done`
    *  flip (counter cleared in `upsertWorkspace`). */
   const fixingAttempt = $derived.by((): number | null => {
+    /* Two qualifying states:
+     *   1. Running substep (plan / implement / verify / generic
+     *      running) — agent is mid-iteration on the fix.
+     *   2. Failed stage + sessionSending — Rust hasn't flipped the
+     *      phase status off `failed` yet (in the gap between the
+     *      auto-fire dispatcher firing and the agent's first
+     *      `sdd_save_phase_plan` call), but the session IS sending
+     *      so the chat composer is in flight. Without this branch
+     *      the header would show plain "Failed" even though the fix
+     *      iteration has already started — the user reported this
+     *      as "пишет failed а не fixing for phase x". */
     const running =
       stage.kind === 'phase_planning' ||
       stage.kind === 'phase_implementing' ||
       stage.kind === 'phase_verifying' ||
       stage.kind === 'phase_running';
-    if (!running) return null;
+    const failedWhileSending =
+      stage.kind === 'failed' && sessionSending && stage.failed_phase != null;
+    if (!running && !failedWhileSending) return null;
     const phaseNumber =
       stage.kind === 'phase_planning' ||
       stage.kind === 'phase_implementing' ||
       stage.kind === 'phase_verifying' ||
       stage.kind === 'phase_running'
         ? (stage as { phase: number }).phase
-        : null;
+        : stage.kind === 'failed'
+          ? stage.failed_phase ?? null
+          : null;
     if (phaseNumber == null) return null;
     const n = sddState.fixAttempts[p.workspace.id]?.[phaseNumber] ?? 0;
     return n > 0 ? n : null;
@@ -344,35 +359,38 @@
      *  clicks until the stage changes. */
     if (advanceClicked) return;
     advanceClicked = true;
-    /* Flip the appropriate approve gate. After flipping, we re-build
-     *  the prompt against the FRESH workspace state — the awaited
-     *  approve call returns the new workspace, so we use it. */
-    let fresh = p.workspace;
-    if (stage.kind === 'spec_ready') {
-      const w = await approveSdd(p.workspace.id, 'spec');
-      if (w) fresh = w;
-    } else if (stage.kind === 'plan_ready' || stage.kind === 'phase_done') {
-      // Plan_ready may need an approve flip; phase_done doesn't.
-      if (stage.kind === 'plan_ready') {
-        const w = await approveSdd(p.workspace.id, 'plan');
+    try {
+      /* Flip the appropriate approve gate. After flipping, we re-build
+       *  the prompt against the FRESH workspace state — the awaited
+       *  approve call returns the new workspace, so we use it. */
+      let fresh = p.workspace;
+      if (stage.kind === 'spec_ready') {
+        const w = await approveSdd(p.workspace.id, 'spec');
+        if (w) fresh = w;
+      } else if (stage.kind === 'plan_ready' || stage.kind === 'phase_done') {
+        // Plan_ready may need an approve flip; phase_done doesn't.
+        if (stage.kind === 'plan_ready') {
+          const w = await approveSdd(p.workspace.id, 'plan');
+          if (w) fresh = w;
+        }
+      } else if (stage.kind === 'phase_pending_approval') {
+        const w = await approveSddPhase(p.workspace.id, stage.phase);
+        if (w) fresh = w;
+      } else if (stage.kind === 'phase_plan_review') {
+        // Three-call mode plan-review gate. Clear the marker, advance
+        // substep-state to Implement, then fire the implement-pass
+        // prompt via the standard pipeline.
+        const w = await approveSddPhasePlan(p.workspace.id, stage.phase);
         if (w) fresh = w;
       }
-    } else if (stage.kind === 'phase_pending_approval') {
-      const w = await approveSddPhase(p.workspace.id, stage.phase);
-      if (w) fresh = w;
-    } else if (stage.kind === 'phase_plan_review') {
-      // Three-call mode plan-review gate. Clear the marker, advance
-      // substep-state to Implement, then fire the implement-pass
-      // prompt via the standard pipeline.
-      const w = await approveSddPhasePlan(p.workspace.id, stage.phase);
-      if (w) fresh = w;
-    }
-    const prompt = await buildPromptForStage(fresh);
-    if (prompt) {
-      void p.onAdvance(prompt);
-    } else {
-      /* No prompt to send (e.g. all phases done already) — release
-       *  the gate so the button is usable for the next stage. */
+      const prompt = await buildPromptForStage(fresh);
+      if (prompt) void p.onAdvance(prompt);
+    } finally {
+      /* ALWAYS release the gate — same rationale as `onRetry`.
+       *  The previous code only released on the "no prompt" branch
+       *  and relied on the stage-change effect for the success path,
+       *  which deadlocked the failure-card buttons when the stage
+       *  didn't actually transition. */
       advanceClicked = false;
     }
   }
@@ -606,17 +624,24 @@
      *  reset its status — derive_stage flips us back to PhaseDone
      *  for the prior phase, so the next advance re-issues this one. */
     const failedNumber = resolveFailedPhaseNumber();
-    if (failedNumber != null) {
+    try {
+      if (failedNumber == null) return;
       const fresh = await retrySddPhase(p.workspace.id, failedNumber);
-      if (fresh) {
-        const prompt = await buildPromptForStage(fresh);
-        if (prompt) {
-          void p.onAdvance(prompt);
-          return;
-        }
-      }
+      if (!fresh) return;
+      const prompt = await buildPromptForStage(fresh);
+      if (prompt) void p.onAdvance(prompt);
+    } finally {
+      /* ALWAYS release the gate. The previous shape did an early
+       *  `return` on the success path and relied on the stage-change
+       *  effect to clear `advanceClicked`. If the stage didn't move
+       *  (rebuild lag, snapshot equality, Rust rejection mid-flight)
+       *  the flag stayed `true` forever and EVERY failure-card
+       *  button — Fix deviations / Next phase / Retry / Edit — went
+       *  `disabled`. Result: user clicks the buttons after a fix
+       *  attempt and nothing happens, no toast, no log. The finally
+       *  block closes that hole. */
+      advanceClicked = false;
     }
-    advanceClicked = false;
   }
 
   /* Edit-then-retry: open editMode against the failed phase body so
@@ -742,6 +767,30 @@
     }
     quickAcceptClicked = true;
     try {
+      /* Refresh the workspace BEFORE we attempt the Accept invoke.
+       *  Stage in the frontend can lag behind disk by a tick — agent
+       *  just landed a clean verify on the fix-attempt, Rust already
+       *  flipped phase status to `done`, but the in-memory snapshot
+       *  this component is bound to still has the OLD failed state
+       *  (the `sdd:changed` event might be in flight but not yet
+       *  applied). Without the refresh we'd call `acceptSddPhaseFailed`
+       *  against a `done` phase and Rust rejects with "phase X is
+       *  `done` — Accept only applies to failed phases". Refresh
+       *  picks up the live state; if the phase actually IS done now,
+       *  we fall through to `advance()` so the next phase fires. */
+      const refreshed = await invoke<SddWorkspace>('sdd_get', { id: p.workspace.id });
+      const { upsertWorkspace } = await import('$lib/state/sdd.svelte');
+      upsertWorkspace(refreshed);
+      const refreshedPhase = refreshed.phases.find((ph) => ph.number === failedNumber);
+      if (refreshedPhase && refreshedPhase.status === 'done') {
+        /* Phase already advanced server-side. Skip the Accept call,
+         *  fire the next-phase prompt directly so user lands on the
+         *  next stage instead of seeing a confusing "phase already
+         *  done" error. */
+        const prompt = await buildPromptForStage(refreshed);
+        if (prompt) void p.onAdvance(prompt);
+        return;
+      }
       /* Direct invoke instead of the wrapper. The wrapper swallows
        *  Rust errors into `console.warn` + returns null, which makes
        *  the failure mode invisible — server-side rejection ("phase X
@@ -754,8 +803,13 @@
         reason:
           'Accepted from the failure-card quick action — user reviewed and chose to advance without an explicit reason.',
       });
-      const { upsertWorkspace } = await import('$lib/state/sdd.svelte');
       upsertWorkspace(fresh);
+      /* After flipping the phase to `done`, fire the next-phase
+       *  prompt so the agent actually starts the next phase. Without
+       *  this the user lands on a PhaseDone stage with the [Start
+       *  phase N+1] button visible — extra click for no reason. */
+      const prompt = await buildPromptForStage(fresh);
+      if (prompt) void p.onAdvance(prompt);
     } catch (e) {
       notify({
         kind: 'error',
