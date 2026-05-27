@@ -64,6 +64,7 @@
   } from './sddCardStage';
   import { notify } from '$lib/state/toaster.svelte';
   import { invoke } from '@tauri-apps/api/core';
+  import { dispatchPhaseAction } from '$lib/state/sddPhaseFlow';
   import SddAuditOverlay from './SddAuditOverlay.svelte';
   import SddFailureCard from './SddFailureCard.svelte';
   import SddAmendPanel from './SddAmendPanel.svelte';
@@ -644,27 +645,14 @@
   async function onRetry() {
     if (advanceClicked) return;
     advanceClicked = true;
-    /* Retry button shows on Failed stage. Pick the phase that's
-     *  marked failed (there's at most one in sequential mode) and
-     *  reset its status — derive_stage flips us back to PhaseDone
-     *  for the prior phase, so the next advance re-issues this one. */
     const failedNumber = resolveFailedPhaseNumber();
     try {
       if (failedNumber == null) return;
-      const fresh = await retrySddPhase(p.workspace.id, failedNumber);
-      if (!fresh) return;
-      const prompt = await buildPromptForStage(fresh);
-      if (prompt) void p.onAdvance(prompt);
+      await dispatchPhaseAction(p.workspace.id, failedNumber, { type: 'retry' }, {
+        onAdvance: (prompt) => p.onAdvance(prompt),
+        buildPromptForStage,
+      });
     } finally {
-      /* ALWAYS release the gate. The previous shape did an early
-       *  `return` on the success path and relied on the stage-change
-       *  effect to clear `advanceClicked`. If the stage didn't move
-       *  (rebuild lag, snapshot equality, Rust rejection mid-flight)
-       *  the flag stayed `true` forever and EVERY failure-card
-       *  button — Fix deviations / Next phase / Retry / Edit — went
-       *  `disabled`. Result: user clicks the buttons after a fix
-       *  attempt and nothing happens, no toast, no log. The finally
-       *  block closes that hole. */
       advanceClicked = false;
     }
   }
@@ -706,7 +694,12 @@
     if (reason.length < 5) return;
     const failedNumber = resolveFailedPhaseNumber();
     if (failedNumber == null) return;
-    await skipSddPhaseWithReason(p.workspace.id, failedNumber, reason);
+    await dispatchPhaseAction(
+      p.workspace.id,
+      failedNumber,
+      { type: 'skip_with_reason', reason },
+      { onAdvance: (prompt) => p.onAdvance(prompt), buildPromptForStage }
+    );
     skipMode = false;
     skipDraft = '';
   }
@@ -714,7 +707,10 @@
   async function onRollbackFailed() {
     const failedNumber = resolveFailedPhaseNumber();
     if (failedNumber == null) return;
-    await rollbackSddPhase(p.workspace.id, failedNumber);
+    await dispatchPhaseAction(p.workspace.id, failedNumber, { type: 'rollback' }, {
+      onAdvance: (prompt) => p.onAdvance(prompt),
+      buildPromptForStage,
+    });
   }
 
   /** Fix-and-retry shortcut for verify deviations: re-fires the failed
@@ -744,8 +740,6 @@
       return;
     }
     fixClicked = true;
-    /* Watchdog — release the gate if anything below stalls so the
-     * user can re-click instead of staring at a dead UI. */
     const watchdog = setTimeout(() => {
       if (fixClicked) {
         fixClicked = false;
@@ -758,33 +752,13 @@
       }
     }, 15_000);
     try {
-      /* Refresh first — same reason as onQuickAccept. After a chain
-       * of fix-attempts the failure-card state on screen can be
-       * one revision behind disk; trying to fix a phase that's
-       * already advanced (or already running a fresh fix-attempt
-       * dispatched from autofire) wastes a turn. */
-      const refreshed = await invoke<SddWorkspace>('sdd_get', { id: p.workspace.id });
-      const { upsertWorkspace } = await import('$lib/state/sdd.svelte');
-      upsertWorkspace(refreshed);
-      const refreshedPhase = refreshed.phases.find((ph) => ph.number === failedNumber);
-      if (!refreshedPhase || refreshedPhase.status !== 'failed') {
-        notify({
-          kind: 'info',
-          title: `Phase ${failedNumber} no longer failed`,
-          body: refreshedPhase
-            ? `Status is now "${refreshedPhase.status}" — nothing to fix. Open the card to see the live state.`
-            : 'Phase removed from workspace.',
-          ttlMs: 7000,
-        });
-        return;
-      }
-      await fixDeviationsAndRetry(p.workspace.id, failedNumber);
-    } catch (e) {
-      notify({
-        kind: 'error',
-        title: `Couldn't start fix for phase ${failedNumber}`,
-        body: String(e),
-        ttlMs: 8000,
+      /* Route through the centralized dispatcher — refreshes ws +
+       * validates state + routes to the right command + raises
+       * the right toast on every failure mode. See
+       * `sddPhaseFlow.ts` for the state machine. */
+      await dispatchPhaseAction(p.workspace.id, failedNumber, { type: 'fix' }, {
+        onAdvance: (prompt) => p.onAdvance(prompt),
+        buildPromptForStage,
       });
     } finally {
       clearTimeout(watchdog);
@@ -803,7 +777,10 @@
     if (failedNumber == null) return;
     quickSkipClicked = true;
     try {
-      await quickSkipFailedPhase(p.workspace.id, failedNumber);
+      await dispatchPhaseAction(p.workspace.id, failedNumber, { type: 'skip' }, {
+        onAdvance: (prompt) => p.onAdvance(prompt),
+        buildPromptForStage,
+      });
     } finally {
       quickSkipClicked = false;
     }
@@ -817,9 +794,6 @@
   let quickAcceptClicked = $state(false);
   async function onQuickAccept() {
     if (quickAcceptClicked) {
-      /* Surface the "click ignored — busy" state explicitly. Users
-       * have reported the button doing nothing with no error — this
-       * was the silent return path. Now they see why. */
       notify({
         kind: 'info',
         title: 'Next phase already in flight',
@@ -844,11 +818,6 @@
       return;
     }
     quickAcceptClicked = true;
-    /* Watchdog — if anything below stalls (network race, Tauri IPC
-     * loss, infinite Rust loop), unstick the button after 15s so
-     * the user can retry instead of staring at a dead UI with no
-     * error. Cleared in the finally block when the happy path
-     * completes faster than the timeout. */
     const watchdog = setTimeout(() => {
       if (quickAcceptClicked) {
         quickAcceptClicked = false;
@@ -861,84 +830,16 @@
       }
     }, 15_000);
     try {
-      /* Refresh the workspace BEFORE we attempt the Accept invoke.
-       *  Stage in the frontend can lag behind disk by a tick — agent
-       *  just landed a clean verify on the fix-attempt, Rust already
-       *  flipped phase status to `done`, but the in-memory snapshot
-       *  this component is bound to still has the OLD failed state
-       *  (the `sdd:changed` event might be in flight but not yet
-       *  applied). Without the refresh we'd call `acceptSddPhaseFailed`
-       *  against a `done` phase and Rust rejects with "phase X is
-       *  `done` — Accept only applies to failed phases". Refresh
-       *  picks up the live state; if the phase actually IS done now,
-       *  we fall through to `advance()` so the next phase fires. */
-      const refreshed = await invoke<SddWorkspace>('sdd_get', { id: p.workspace.id });
-      const { upsertWorkspace } = await import('$lib/state/sdd.svelte');
-      upsertWorkspace(refreshed);
-      const refreshedPhase = refreshed.phases.find((ph) => ph.number === failedNumber);
-      /* Stage in the frontend can lag behind disk by a tick. If the
-       *  refreshed phase is anything OTHER than `failed`, the
-       *  failure-card UI is stale — Rust already moved past the
-       *  failure (clean fix-attempt verify → `done`, retry click →
-       *  `pending`, agent picked up a substep → `running`). Skip the
-       *  Accept call (Rust would reject with "phase X is `<status>`
-       *  — Accept only applies to failed phases") and instead fire
-       *  the next prompt for whatever the current stage is. The
-       *  user's intent was "move forward"; we honour it without
-       *  forcing them to discover that the workspace already moved. */
-      if (refreshedPhase && refreshedPhase.status !== 'failed') {
-        const prompt = await buildPromptForStage(refreshed);
-        if (prompt) {
-          void p.onAdvance(prompt);
-        } else {
-          /* Refreshed stage doesn't have a sendable prompt — likely
-           * sitting on a manual approve gate (phase_pending_approval
-           * / phase_plan_review). Tell the user instead of silently
-           * doing nothing; they can click the appropriate gate
-           * action themselves. */
-          notify({
-            kind: 'info',
-            title: `Phase ${failedNumber} status is "${refreshedPhase.status}"`,
-            body: 'Workspace moved past the failure — open the SddCard to take the next action manually.',
-            ttlMs: 7000,
-          });
-        }
-        return;
-      }
-      /* Direct invoke instead of the wrapper. The wrapper swallows
-       *  Rust errors into `console.warn` + returns null, which makes
-       *  the failure mode invisible — server-side rejection ("phase X
-       *  is `running` — Accept only applies to failed phases") simply
-       *  disappeared. Surface it via notify so we always see why a
-       *  click didn't advance. */
-      const fresh = await invoke<SddWorkspace>('sdd_accept_phase_failed', {
-        id: p.workspace.id,
-        phase: failedNumber,
-        reason:
-          'Accepted from the failure-card quick action — user reviewed and chose to advance without an explicit reason.',
-      });
-      upsertWorkspace(fresh);
-      /* After flipping the phase to `done`, fire the next-phase
-       *  prompt so the agent actually starts the next phase. Without
-       *  this the user lands on a PhaseDone stage with the [Start
-       *  phase N+1] button visible — extra click for no reason. */
-      const prompt = await buildPromptForStage(fresh);
-      if (prompt) {
-        void p.onAdvance(prompt);
-      } else {
-        notify({
-          kind: 'success',
-          title: `Phase ${failedNumber} accepted`,
-          body: 'Workspace advanced but next stage needs a manual approve. Open the card.',
-          ttlMs: 6000,
-        });
-      }
-    } catch (e) {
-      notify({
-        kind: 'error',
-        title: `Couldn't advance phase ${failedNumber}`,
-        body: String(e),
-        ttlMs: 8000,
+      /* The dispatcher handles every state-mismatch case: if the
+       * refreshed phase status is `done`/`pending`/`running`, the
+       * `next_phase` action falls through to a plain advance
+       * (fires the next-stage prompt) instead of trying Accept and
+       * getting rejected. The card is no longer responsible for
+       * deciding which command to run — that lives in
+       * `sddPhaseFlow.ts` next to the state machine. */
+      await dispatchPhaseAction(p.workspace.id, failedNumber, { type: 'next_phase' }, {
+        onAdvance: (prompt) => p.onAdvance(prompt),
+        buildPromptForStage,
       });
     } finally {
       clearTimeout(watchdog);
@@ -964,7 +865,12 @@
     if (reason.length < 5) return;
     const failedNumber = resolveFailedPhaseNumber();
     if (failedNumber == null) return;
-    await acceptSddPhaseFailed(p.workspace.id, failedNumber, reason);
+    await dispatchPhaseAction(
+      p.workspace.id,
+      failedNumber,
+      { type: 'accept_with_reason', reason },
+      { onAdvance: (prompt) => p.onAdvance(prompt), buildPromptForStage }
+    );
     acceptMode = false;
     acceptDraft = '';
   }

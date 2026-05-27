@@ -654,6 +654,22 @@ pub async fn sdd_get(
         .get(&id)
         .cloned()
         .ok_or_else(|| format!("unknown workspace {id}"))?;
+    /* Re-derive from disk before returning. The in-memory cell can
+     * drift between commands — e.g. a write through one path bumps a
+     * phase status but doesn't re-run `derive_stage`, so the cached
+     * `stage` field references a phase that's no longer failed. The
+     * frontend's failure-card auto-sync depends on `sdd_get` being
+     * the source of truth; without this rebuild the card kept
+     * rendering "Phase 3 failed" after Rust had already flipped
+     * phase 3 to `running` (toast surfaced this as "phase 3 no
+     * longer failed" but the UI didn't follow because the returned
+     * snapshot's stage was still `Failed { failed_phase: Some(3) }`).
+     * `rebuild_from_disk` is cheap — it walks the per-phase
+     * frontmatter, no IPC. */
+    {
+        let mut w = cell.write();
+        crate::sdd_hydrate::rebuild_from_disk(&mut w)?;
+    }
     let snapshot = cell.read().clone();
     Ok(snapshot)
 }
