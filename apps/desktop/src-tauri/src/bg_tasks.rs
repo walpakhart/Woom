@@ -719,8 +719,36 @@ pub async fn wait_line(
         .get(id)
         .cloned()
         .ok_or_else(|| format!("no such task: {id}"))?;
+    /* CRITICAL ORDER: subscribe to the broadcast BEFORE we scan
+     *  history. The opposite order has a race where a line that
+     *  landed between "scan history" and "subscribe" disappears
+     *  forever — and broadcast's `Receiver` has no replay buffer
+     *  for past sends. Subscribing first guarantees any line
+     *  emitted from this moment on is queued for us; then we walk
+     *  `recent_lines` so we also catch matches that already fired
+     *  before the call. Without this combination, a bg task that
+     *  printed `Ready\n` then exited (e.g. a `until curl ...; done;
+     *  echo CLICKHOUSE_READY` poll) would hang every consumer that
+     *  called `wait_line` after the echo — exactly the symptom the
+     *  agent hit on the trawl-clickhouse smoke test. */
     let mut rx = state.read().line_tx.subscribe();
     let needle = contains.map(|s| s.to_ascii_lowercase());
+    /* History sweep — only when caller specified a needle. With
+     *  `contains=None` callers explicitly want the NEXT line (e.g.
+     *  "drain until the next stdout event"), so returning a stale
+     *  recent_lines entry would break that contract. With a needle,
+     *  callers are looking for a specific marker — they DON'T care
+     *  whether it's already arrived or arrives next, just that it's
+     *  there. recent_lines is capped at RECENT_LINES_CAP (30) so the
+     *  walk is cheap. */
+    if let Some(n) = &needle {
+        let s = state.read();
+        for line in s.task.recent_lines.iter() {
+            if line.line.to_ascii_lowercase().contains(n) {
+                return Ok(Some(line.clone()));
+            }
+        }
+    }
     let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
     loop {
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
