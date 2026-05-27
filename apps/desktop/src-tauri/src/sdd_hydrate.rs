@@ -130,8 +130,23 @@ pub(crate) fn derive_stage(
     if matches!(w.stage, SddStage::Paused | SddStage::Stopped) {
         return w.stage.clone();
     }
+    /* Sticky `Failed` — but only when the failure still exists on
+     * disk. The previous unconditional return masked the case where
+     * a retry / fix-reset had already flipped the failed phase off
+     * `failed` (status now `pending` / `running` / `done`), but the
+     * cached stage held us hostage to the old Failed view. With the
+     * disk check the cached stage is honoured only when at least one
+     * phase is genuinely failed; otherwise we fall through and let
+     * the rest of derive_stage compute the actual current stage. */
     if let SddStage::Failed { .. } = &w.stage {
-        return w.stage.clone();
+        let still_failed = w.phases.iter().any(|p| p.status == "failed");
+        if still_failed {
+            return w.stage.clone();
+        }
+        /* Stale Failed in cached stage. Drop through. The matching
+         * block lower in this function will pick up any phase that
+         * still actually IS failed, or compute the appropriate
+         * non-failed stage from the live phases array. */
     }
     // No spec yet -> Drafting.
     if w.spec_body.is_none() {
