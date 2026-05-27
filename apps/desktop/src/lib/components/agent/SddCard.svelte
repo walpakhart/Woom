@@ -749,7 +749,18 @@
    *  phase in one click. */
   let quickAcceptClicked = $state(false);
   async function onQuickAccept() {
-    if (quickAcceptClicked) return;
+    if (quickAcceptClicked) {
+      /* Surface the "click ignored — busy" state explicitly. Users
+       * have reported the button doing nothing with no error — this
+       * was the silent return path. Now they see why. */
+      notify({
+        kind: 'info',
+        title: 'Next phase already in flight',
+        body: 'A prior click is still processing — wait a moment.',
+        ttlMs: 3500,
+      });
+      return;
+    }
     const failedNumber = resolveFailedPhaseNumber();
     if (failedNumber == null) {
       /* Surface the no-op explicitly — earlier this branch was a
@@ -766,6 +777,22 @@
       return;
     }
     quickAcceptClicked = true;
+    /* Watchdog — if anything below stalls (network race, Tauri IPC
+     * loss, infinite Rust loop), unstick the button after 15s so
+     * the user can retry instead of staring at a dead UI with no
+     * error. Cleared in the finally block when the happy path
+     * completes faster than the timeout. */
+    const watchdog = setTimeout(() => {
+      if (quickAcceptClicked) {
+        quickAcceptClicked = false;
+        notify({
+          kind: 'error',
+          title: 'Next phase timed out',
+          body: 'The advance call stalled — click again to retry.',
+          ttlMs: 8000,
+        });
+      }
+    }, 15_000);
     try {
       /* Refresh the workspace BEFORE we attempt the Accept invoke.
        *  Stage in the frontend can lag behind disk by a tick — agent
@@ -794,7 +821,21 @@
        *  forcing them to discover that the workspace already moved. */
       if (refreshedPhase && refreshedPhase.status !== 'failed') {
         const prompt = await buildPromptForStage(refreshed);
-        if (prompt) void p.onAdvance(prompt);
+        if (prompt) {
+          void p.onAdvance(prompt);
+        } else {
+          /* Refreshed stage doesn't have a sendable prompt — likely
+           * sitting on a manual approve gate (phase_pending_approval
+           * / phase_plan_review). Tell the user instead of silently
+           * doing nothing; they can click the appropriate gate
+           * action themselves. */
+          notify({
+            kind: 'info',
+            title: `Phase ${failedNumber} status is "${refreshedPhase.status}"`,
+            body: 'Workspace moved past the failure — open the SddCard to take the next action manually.',
+            ttlMs: 7000,
+          });
+        }
         return;
       }
       /* Direct invoke instead of the wrapper. The wrapper swallows
@@ -815,7 +856,16 @@
        *  this the user lands on a PhaseDone stage with the [Start
        *  phase N+1] button visible — extra click for no reason. */
       const prompt = await buildPromptForStage(fresh);
-      if (prompt) void p.onAdvance(prompt);
+      if (prompt) {
+        void p.onAdvance(prompt);
+      } else {
+        notify({
+          kind: 'success',
+          title: `Phase ${failedNumber} accepted`,
+          body: 'Workspace advanced but next stage needs a manual approve. Open the card.',
+          ttlMs: 6000,
+        });
+      }
     } catch (e) {
       notify({
         kind: 'error',
@@ -824,6 +874,7 @@
         ttlMs: 8000,
       });
     } finally {
+      clearTimeout(watchdog);
       quickAcceptClicked = false;
     }
   }
