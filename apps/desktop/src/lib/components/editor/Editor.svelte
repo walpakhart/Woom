@@ -7,6 +7,7 @@
   import { languageFor } from '$lib/components/editor/codemirrorLang';
   import { editorThemeExtension } from '$lib/components/editor/editorTheme';
   import { themeState } from '$lib/state/theme.svelte';
+  import { editorPrefs } from '$lib/state/editorPrefs.svelte';
   import { recordCursor, readCursor } from '$lib/state/editorCursors.svelte';
   import {
     changeBarExtension,
@@ -344,8 +345,12 @@
 
   /** Restart the autosave countdown. Fires from the updateListener on
    *  every doc change when the buffer is dirty; the most recent timer
-   *  wins, so steady typing never triggers a save mid-keystroke. */
+   *  wins, so steady typing never triggers a save mid-keystroke.
+   *  Skipped entirely when the user has flipped `editorPrefs.autosave`
+   *  off — Mod-S keymap (and the `saveNow` exported action) still
+   *  work, so manual saves remain available. */
   function scheduleAutosave() {
+    if (!editorPrefs.autosave) return;
     if (autosaveTimer) clearTimeout(autosaveTimer);
     autosaveTimer = setTimeout(() => {
       autosaveTimer = null;

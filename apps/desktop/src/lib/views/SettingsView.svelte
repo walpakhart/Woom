@@ -9,6 +9,7 @@
   import './settings/chrome.css';
   import SettingsStorage from './settings/SettingsStorage.svelte';
   import SettingsAppearance from './settings/SettingsAppearance.svelte';
+  import SettingsEditor from './settings/SettingsEditor.svelte';
   import SettingsMemory from './settings/SettingsMemory.svelte';
   import SettingsUpdates from './settings/SettingsUpdates.svelte';
   import SettingsSdd from './settings/SettingsSdd.svelte';
@@ -26,6 +27,7 @@
   <div class="settings-body">
     <SettingsStorage />
     <SettingsAppearance />
+    <SettingsEditor />
     <SettingsMemory />
     <SettingsUpdates />
     <SettingsSdd />

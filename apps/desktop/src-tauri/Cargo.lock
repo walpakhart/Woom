@@ -6436,7 +6436,7 @@ dependencies = [
 
 [[package]]
 name = "woom-desktop"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "axum",
  "base64 0.22.1",
