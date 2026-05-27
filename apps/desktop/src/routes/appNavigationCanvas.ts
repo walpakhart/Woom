@@ -382,6 +382,34 @@ export function handleCanvasOrSddMcp(
       void completeSddPhaseImplement(id, phase, summary, fc);
       return true;
     }
+    case 'mcp__app__sdd_log_phase_done': {
+      /* Single-call mode close-out. The woom-app sidecar stub
+       * returns a success message but doesn't actually flip phase
+       * status — bug surfaced as "agent says 'Phase 4 done.' in
+       * chat but UI still shows phase 3 done". Route to the
+       * existing verify-save command with an auto-built JSON that
+       * carries the agent's summary + files_changed and an empty
+       * deviations array (single-call agents don't run a verify
+       * pass — their "done" claim IS the assertion that the phase
+       * is clean). Flipping through verify-save means the same
+       * derive_stage / audit path runs and the chips advance. */
+      const id = str('id');
+      const phase = num('phase');
+      const summary = str('summary');
+      if (!id || !Number.isFinite(phase) || !summary) return true;
+      const filesChanged = Array.isArray(input.files_changed)
+        ? (input.files_changed as unknown[]).filter((v): v is string => typeof v === 'string')
+        : [];
+      const rawJson = JSON.stringify({
+        summary,
+        files_changed: filesChanged,
+        task_compliance: [],
+        deviations: [],
+        notes: '',
+      });
+      void saveSddPhaseVerify(id, phase, rawJson);
+      return true;
+    }
     case 'mcp__app__sdd_save_phase_verify': {
       const id = str('id');
       const phase = num('phase');
