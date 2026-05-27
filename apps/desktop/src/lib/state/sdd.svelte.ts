@@ -210,6 +210,14 @@ export interface SddPhase {
   /** Three-call mode artifact — `phases/<slug>/verify.json` parsed.
    *  Null when missing. See `spec-1` FR-4. */
   verify?: import('./sdd_commands.svelte').VerifyOutput | null;
+  /** Per-phase iteration counter. Mirrors Rust's
+   *  `SddPhaseMeta::retry_count` — bumped every time
+   *  `sdd_retry_phase` runs (and via `fixDeviationsAndRetry`), so a
+   *  non-zero value means "this phase has been re-run at least
+   *  once". Source of truth for the fix-attempt UI; survives reload
+   *  because it's persisted on disk. Defaults to 0 for fresh
+   *  phases. */
+  retry_count?: number;
 }
 
 export interface SddWorkspace {

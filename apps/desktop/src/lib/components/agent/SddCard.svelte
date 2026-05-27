@@ -369,7 +369,11 @@
           ? stage.failed_phase ?? null
           : null;
     if (phaseNumber == null) return null;
-    const n = sddState.fixAttempts[p.workspace.id]?.[phaseNumber] ?? 0;
+    /* Persisted retry_count is the source of truth — see
+     * `SddPhase.retry_count` on the Rust side. Falls back to the
+     * transient in-memory counter for legacy snapshots. */
+    const phase = p.workspace.phases.find((ph) => ph.number === phaseNumber);
+    const n = phase?.retry_count ?? sddState.fixAttempts[p.workspace.id]?.[phaseNumber] ?? 0;
     return n > 0 ? n : null;
   });
   function stageTone(): 'live' | 'ok' | 'warn' | 'dim' {

@@ -196,6 +196,14 @@ pub struct SddPhase {
     /// Surfaces in the SddCard Verify tab.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verify: Option<VerifyOutput>,
+    /// Per-phase iteration counter — bumped by `sdd_retry_phase`
+    /// every time the user (or `fixDeviationsAndRetry`) restarts
+    /// the phase. Mirrors `SddPhaseMeta::retry_count` so the
+    /// frontend has a stable, persisted source of truth for
+    /// "fix attempt N" without holding the count in transient
+    /// in-memory state. 0 = original run, 1+ = nth retry/fix.
+    #[serde(default)]
+    pub retry_count: u32,
 }
 
 /// One workspace = one SDD session. Everything orchestrator-side hangs
@@ -887,6 +895,7 @@ mod tests {
             summary: None,
             plan_body: None,
             verify: None,
+            retry_count: 0,
         }
     }
 
@@ -1343,6 +1352,7 @@ mod tests {
             summary: None,
             plan_body: None,
             verify: None,
+            retry_count: 0,
         };
         let ws = sample_ws(&dir, vec![phase], /* is_v2 */ true);
         let stage = derive_stage(&ws, Some("approved".into()), Some("approved".into()));
@@ -1422,6 +1432,7 @@ mod tests {
             summary: None,
             plan_body: None,
             verify: None,
+            retry_count: 0,
         };
         let ws = sample_ws(&dir, vec![phase], /* is_v2 */ true);
         let stage = derive_stage(&ws, Some("approved".into()), Some("approved".into()));
@@ -1463,6 +1474,7 @@ mod tests {
             summary: None,
             plan_body: None,
             verify: None,
+            retry_count: 0,
         };
         let mut ws = sample_ws_three_call(&dir, vec![phase]);
         ws.phase_execution.plan_gate = true;

@@ -370,6 +370,14 @@ pub(crate) fn rebuild_from_disk(workspace: &mut SddWorkspace) -> Result<(), Stri
             // both as None (no per-phase dir gets written).
             let plan_body = read_phase_plan_md(&root, &slug);
             let verify = read_verify_json(&root, &slug);
+            /* Per-phase iteration counter — sourced from the
+             * persisted PhaseMeta side-car. `sdd_retry_phase` and
+             * `fixDeviationsAndRetry` bump it on every restart, so
+             * a non-zero value means "this phase has been re-run at
+             * least once". The frontend renders this directly as
+             * "fix attempt N" without needing transient in-memory
+             * state. */
+            let retry_count = crate::sdd_meta::read_phase_meta(&root, number).retry_count;
             workspace.phases.push(SddPhase {
                 number,
                 slug,
@@ -383,6 +391,7 @@ pub(crate) fn rebuild_from_disk(workspace: &mut SddWorkspace) -> Result<(), Stri
                 summary,
                 plan_body,
                 verify,
+                retry_count,
             });
         }
         workspace.phases.sort_by_key(|p| p.number);

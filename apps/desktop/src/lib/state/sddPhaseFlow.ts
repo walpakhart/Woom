@@ -87,7 +87,12 @@ export function derivePhaseFlow(ws: SddWorkspace, phaseNumber: number): PhaseFlo
       return { kind: 'skipped' };
     case 'failed': {
       const deviations = phase.verify?.deviations ?? [];
-      const fixAttempt = sddState.fixAttempts[ws.id]?.[phaseNumber] ?? 0;
+      /* Iteration counter from Rust's persisted PhaseMeta side-car
+       * (mirrors the on-disk retry_count). Falls back to the
+       * frontend's transient `fixAttempts` map for older workspaces
+       * whose PhaseMeta predates the retry_count field. */
+      const fixAttempt =
+        phase.retry_count ?? sddState.fixAttempts[ws.id]?.[phaseNumber] ?? 0;
       return {
         kind: 'failed',
         deviations,
@@ -233,7 +238,8 @@ async function handleFix(
    */
   const phase = ws.phases.find((p) => p.number === phaseN);
   const hasDeviationsOnDisk = (phase?.verify?.deviations?.length ?? 0) > 0;
-  const fixAttempt = sddState.fixAttempts[ws.id]?.[phaseN] ?? 0;
+  const fixAttempt =
+    phase?.retry_count ?? sddState.fixAttempts[ws.id]?.[phaseN] ?? 0;
   const recoverableMidFix =
     (flow.kind === 'not_started' || flow.kind === 'running') &&
     fixAttempt > 0 &&

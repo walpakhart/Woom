@@ -54,7 +54,15 @@
    *  iteration apart from the original failure. */
   const fixAttemptCount = $derived.by((): number => {
     if (!workspaceId || stage.failed_phase == null) return 0;
-    return sddState.fixAttempts[workspaceId]?.[stage.failed_phase] ?? 0;
+    /* Prefer the persisted retry_count on the SddPhase struct
+     * (sourced from Rust's PhaseMeta side-car) over the transient
+     * fixAttempts map. The persisted value survives reloads and
+     * stays consistent across the frontend / backend boundary.
+     * Fallback kept for older workspaces whose PhaseMeta hasn't
+     * been touched since the retry_count field was added. */
+    const ws = sddState.workspaces.find((w) => w.id === workspaceId);
+    const phase = ws?.phases.find((p) => p.number === stage.failed_phase);
+    return phase?.retry_count ?? sddState.fixAttempts[workspaceId]?.[stage.failed_phase] ?? 0;
   });
 </script>
 
