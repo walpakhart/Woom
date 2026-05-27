@@ -2,8 +2,10 @@
 
 Plan at `{{workspace_root}}/plan.md` is `status: approved`. You are
 running in **three-call execution mode**, **plan pass**: produce a
-detailed implementation plan for **phase {{phase_number}}** as your
-final assistant message. **You do not edit any files in this pass.**
+detailed implementation plan for **phase {{phase_number}}** and
+persist it via `sdd_save_phase_plan` — the plan body lands on disk
+through that tool call only, NOT as a chat message. **You do not
+edit any files in this pass.**
 
 ## Context bundle
 
@@ -29,8 +31,12 @@ final assistant message. **You do not edit any files in this pass.**
    adjacent test. Quote function names + line numbers in your plan
    so the implement-pass agent can jump directly to them.
 
-4. **Write your plan as the FINAL assistant message.** Keep it to
-   ≤80 lines of markdown. Structure:
+4. **Compose your plan internally.** Keep it ≤80 lines of markdown.
+   **DO NOT print the plan body as chat text** — the user already
+   sees it in the inline SddCard once you save it, and a chat-side
+   copy duplicates the content for no reason. Hold the plan in
+   your context until step 5; that's where it actually lands. Use
+   this structure when you write it:
 
    ```markdown
    ## Plan for phase {{phase_number}}
@@ -53,7 +59,7 @@ final assistant message. **You do not edit any files in this pass.**
    - Risk → mitigation.
    ```
 
-5. **Close the plan pass** with:
+5. **Persist the plan** with:
 
    ```
    mcp__app__sdd_save_phase_plan(
@@ -63,15 +69,19 @@ final assistant message. **You do not edit any files in this pass.**
    )
    ```
 
-   This persists your plan to `phases/{{phase_slug}}/plan.md` and
-   advances `substep-state.json` to `Implement` (or `PlanReview`
-   when `plan_gate=true`). Without this call the orchestrator
-   leaves the workspace in `phase_planning` forever — the plan you
-   wrote in the chat is lost on next refresh.
+   This is the ONLY place the plan body should appear. It persists
+   to `phases/{{phase_slug}}/plan.md` and advances
+   `substep-state.json` to `Implement` (or `PlanReview` when
+   `plan_gate=true`). Without this call the orchestrator leaves
+   the workspace in `phase_planning` forever; with it, the SddCard
+   renders the plan automatically — no chat-side copy needed.
 
-6. Reply with ONE sentence: "Phase {{phase_number}} plan recorded."
-   Do NOT call any other mutating MCP tool — implement pass fires
-   on its own once the substep transitions.
+6. Reply with EXACTLY ONE sentence and nothing else: "Phase
+   {{phase_number}} plan recorded." No preamble, no recap of what
+   the plan contains, no bullet summary. The user sees the plan in
+   the SddCard; the chat line is a confirmation marker, not a
+   second rendering. Do NOT call any other mutating MCP tool —
+   implement pass fires on its own once the substep transitions.
 
 ## Rules
 
