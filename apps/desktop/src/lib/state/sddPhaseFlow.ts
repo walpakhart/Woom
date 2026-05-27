@@ -220,11 +220,32 @@ async function handleFix(
   phaseN: number,
   flow: PhaseFlowState
 ): Promise<DispatchResult> {
-  if (flow.kind !== 'failed') {
+  /* Two valid entry points:
+   *   1. `failed` — natural fix request after verify flagged
+   *      deviations.
+   *   2. `not_started` / `running` WITH a non-zero fixAttempt
+   *      counter AND a verify.json with deviations on disk. This
+   *      is the "Cursor agent crashed mid-fix and reset the phase
+   *      to pending" path the user reported — the fix iteration
+   *      already started, the disk still has the deviation list,
+   *      we should let them re-fire the fix prompt without forcing
+   *      a manual Retry → wait → click Fix dance.
+   */
+  const phase = ws.phases.find((p) => p.number === phaseN);
+  const hasDeviationsOnDisk = (phase?.verify?.deviations?.length ?? 0) > 0;
+  const fixAttempt = sddState.fixAttempts[ws.id]?.[phaseN] ?? 0;
+  const recoverableMidFix =
+    (flow.kind === 'not_started' || flow.kind === 'running') &&
+    fixAttempt > 0 &&
+    hasDeviationsOnDisk;
+  if (flow.kind !== 'failed' && !recoverableMidFix) {
     notify({
       kind: 'info',
       title: `Phase ${phaseN} is "${flow.kind}"`,
-      body: 'Fix only applies to a failed phase. The workspace already moved past the failure.',
+      body:
+        fixAttempt > 0
+          ? 'No deviation list on disk to fix against — Retry the phase instead.'
+          : 'Fix only applies to a failed phase. The workspace already moved past the failure.',
       ttlMs: 6000,
     });
     return { ok: false, reason: 'wrong-state' };
