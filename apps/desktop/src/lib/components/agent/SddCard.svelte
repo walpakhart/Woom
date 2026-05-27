@@ -1854,6 +1854,20 @@
     border-color: color-mix(in srgb, #e0b16c 40%, var(--border-neutral));
     background: color-mix(in srgb, #e0b16c 8%, var(--bg-2));
   }
+  .sdd-phase-pill[data-status="skipped"] {
+    /* Skipped chips were rendering with the default neutral
+     * background — identical to `pending`, so the user couldn't
+     * tell at a glance whether phase N had been deliberately
+     * dropped or just hadn't started yet. Use a muted slate tone
+     * + strikethrough on the title to read as "intentionally
+     * dropped" without screaming for attention like `failed`. */
+    color: var(--text-mute);
+    border-color: color-mix(in srgb, var(--text-mute) 30%, var(--border-neutral));
+    background: color-mix(in srgb, var(--text-mute) 6%, var(--bg-2));
+    text-decoration: line-through;
+    text-decoration-color: color-mix(in srgb, var(--text-mute) 60%, transparent);
+    text-decoration-thickness: 1px;
+  }
   .sdd-phase-num {
     font-size: 10px;
     color: var(--text-mute);
