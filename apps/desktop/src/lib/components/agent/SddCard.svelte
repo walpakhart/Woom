@@ -188,6 +188,31 @@
     return () => clearInterval(t);
   });
 
+  /* Auto-sync watchdog. When the workspace is sitting in `failed`
+   * AND the linked session is sending, we're in the gap where the
+   * agent has just dispatched a fix/retry but Rust hasn't emitted
+   * the matching `sdd:changed` yet (or we missed it across a tab
+   * focus / Tauri IPC hiccup). Poll `sdd_get` every 3 s during
+   * this state so the failure-card stops showing stale deviations
+   * after the fix-attempt's `sdd_save_phase_verify` lands. Cheap —
+   * Rust just walks the in-memory HashMap, no disk I/O. Stops on
+   * its own once the stage transitions off `failed` (the effect
+   * cleanup tears down the interval). */
+  $effect(() => {
+    if (stage.kind !== 'failed' || !sessionSending) return;
+    const wsId = p.workspace.id;
+    const interval = setInterval(async () => {
+      try {
+        const refreshed = await invoke<SddWorkspace>('sdd_get', { id: wsId });
+        const { upsertWorkspace } = await import('$lib/state/sdd.svelte');
+        upsertWorkspace(refreshed);
+      } catch {
+        /* Workspace gone (discarded) — listener cleanup handles it. */
+      }
+    }, 3_000);
+    return () => clearInterval(interval);
+  });
+
   /* Undo affordance state — derived from the store slot for the
    *  CURRENT stage's target. Only one undo per file is tracked at a
    *  time; switching stages picks the right slot via `targetKey`.
@@ -699,7 +724,15 @@
    *  automatically. */
   let fixClicked = $state(false);
   async function onFixDeviations() {
-    if (fixClicked) return;
+    if (fixClicked) {
+      notify({
+        kind: 'info',
+        title: 'Fix already in flight',
+        body: 'A prior click is still processing — wait a moment.',
+        ttlMs: 3500,
+      });
+      return;
+    }
     const failedNumber = resolveFailedPhaseNumber();
     if (failedNumber == null) {
       notify({
@@ -711,7 +744,40 @@
       return;
     }
     fixClicked = true;
+    /* Watchdog — release the gate if anything below stalls so the
+     * user can re-click instead of staring at a dead UI. */
+    const watchdog = setTimeout(() => {
+      if (fixClicked) {
+        fixClicked = false;
+        notify({
+          kind: 'error',
+          title: 'Fix dispatch timed out',
+          body: 'Click again to retry.',
+          ttlMs: 8000,
+        });
+      }
+    }, 15_000);
     try {
+      /* Refresh first — same reason as onQuickAccept. After a chain
+       * of fix-attempts the failure-card state on screen can be
+       * one revision behind disk; trying to fix a phase that's
+       * already advanced (or already running a fresh fix-attempt
+       * dispatched from autofire) wastes a turn. */
+      const refreshed = await invoke<SddWorkspace>('sdd_get', { id: p.workspace.id });
+      const { upsertWorkspace } = await import('$lib/state/sdd.svelte');
+      upsertWorkspace(refreshed);
+      const refreshedPhase = refreshed.phases.find((ph) => ph.number === failedNumber);
+      if (!refreshedPhase || refreshedPhase.status !== 'failed') {
+        notify({
+          kind: 'info',
+          title: `Phase ${failedNumber} no longer failed`,
+          body: refreshedPhase
+            ? `Status is now "${refreshedPhase.status}" — nothing to fix. Open the card to see the live state.`
+            : 'Phase removed from workspace.',
+          ttlMs: 7000,
+        });
+        return;
+      }
       await fixDeviationsAndRetry(p.workspace.id, failedNumber);
     } catch (e) {
       notify({
@@ -721,6 +787,7 @@
         ttlMs: 8000,
       });
     } finally {
+      clearTimeout(watchdog);
       fixClicked = false;
     }
   }
