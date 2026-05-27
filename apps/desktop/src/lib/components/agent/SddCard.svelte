@@ -339,18 +339,22 @@
    *  phase running" without having to scroll the chat for the
    *  fix-attempt prompt. Drops back to null on the first `phase_done`
    *  flip (counter cleared in `upsertWorkspace`). */
-  const fixingAttempt = $derived.by((): number | null => {
-    /* Two qualifying states:
+  const fixingAttempt = $derived.by((): { phase: number; n: number } | null => {
+    /* Three qualifying states for the "fixing" header chip:
      *   1. Running substep (plan / implement / verify / generic
-     *      running) — agent is mid-iteration on the fix.
+     *      running) — agent is mid-iteration on the named phase.
      *   2. Failed stage + sessionSending — Rust hasn't flipped the
-     *      phase status off `failed` yet (in the gap between the
-     *      auto-fire dispatcher firing and the agent's first
-     *      `sdd_save_phase_plan` call), but the session IS sending
-     *      so the chat composer is in flight. Without this branch
-     *      the header would show plain "Failed" even though the fix
-     *      iteration has already started — the user reported this
-     *      as "пишет failed а не fixing for phase x". */
+     *      phase status off `failed` yet (gap between auto-fire
+     *      dispatch and the agent's first `sdd_save_phase_plan`).
+     *   3. ANY sessionSending state where the live phase (the
+     *      first non-done, non-skipped phase in the array) has
+     *      retry_count > 0. Catches the
+     *      `stage = phase_done(N) but agent is mid-fix on N+1`
+     *      gap reported as "пропад fixing отображение просто phase
+     *      4 done хотя фиксы по 5й фазе" — derive_stage hadn't
+     *      moved off PhaseDone(4) yet because phase 5's status was
+     *      still pending while the agent kicked off the fix turn.
+     */
     const running =
       stage.kind === 'phase_planning' ||
       stage.kind === 'phase_implementing' ||
@@ -358,23 +362,28 @@
       stage.kind === 'phase_running';
     const failedWhileSending =
       stage.kind === 'failed' && sessionSending && stage.failed_phase != null;
-    if (!running && !failedWhileSending) return null;
-    const phaseNumber =
-      stage.kind === 'phase_planning' ||
-      stage.kind === 'phase_implementing' ||
-      stage.kind === 'phase_verifying' ||
-      stage.kind === 'phase_running'
-        ? (stage as { phase: number }).phase
-        : stage.kind === 'failed'
-          ? stage.failed_phase ?? null
-          : null;
+    let phaseNumber: number | null = null;
+    if (running) {
+      phaseNumber = (stage as { phase: number }).phase;
+    } else if (failedWhileSending && stage.kind === 'failed') {
+      phaseNumber = stage.failed_phase ?? null;
+    } else if (sessionSending) {
+      /* Stage hasn't transitioned off `phase_done` / `phase_pending_approval`
+       * yet — find the first phase that isn't terminal (done /
+       * skipped). That's the one the agent is currently working
+       * on, even if Rust hasn't reflected it in `stage` yet. */
+      const live = p.workspace.phases.find(
+        (ph) => ph.status !== 'done' && ph.status !== 'skipped'
+      );
+      if (live) phaseNumber = live.number;
+    }
     if (phaseNumber == null) return null;
-    /* Persisted retry_count is the source of truth — see
-     * `SddPhase.retry_count` on the Rust side. Falls back to the
-     * transient in-memory counter for legacy snapshots. */
+    /* Persisted retry_count from disk (Rust's PhaseMeta) is the
+     * source of truth. Falls back to the transient in-memory
+     * counter for legacy snapshots that pre-date the field. */
     const phase = p.workspace.phases.find((ph) => ph.number === phaseNumber);
     const n = phase?.retry_count ?? sddState.fixAttempts[p.workspace.id]?.[phaseNumber] ?? 0;
-    return n > 0 ? n : null;
+    return n > 0 ? { phase: phaseNumber, n } : null;
   });
   function stageTone(): 'live' | 'ok' | 'warn' | 'dim' {
     return _stageTone(stage, isInFlight);
@@ -992,7 +1001,7 @@
     <span class="sdd-stage">{stageLabel()}</span>
     {#if fixingAttempt != null}
       <span class="sdd-fixing" title="Agent is iterating on a previously-failed phase. Counter resets when the phase eventually flips to done.">
-        · fixing #{fixingAttempt}
+        · fixing phase {fixingAttempt.phase} #{fixingAttempt.n}
       </span>
     {/if}
     {#if isInFlight}
