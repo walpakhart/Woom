@@ -780,7 +780,16 @@ impl StreamNormalizer {
             .map(|s| s.to_string());
 
         let Some(text) = text_opt else {
-            return vec![v];
+            /* Assistant event with no text payload — usually a tool_use
+             *  envelope that cursor-agent ships ALONGSIDE the dedicated
+             *  `tool_call` event. We synthesize tool_use ourselves from
+             *  the `tool_call:started` branch, so forwarding this
+             *  duplicates the trace pill in the chat (`bash ls …`
+             *  appears twice, `read overview/page.tsx` appears twice,
+             *  etc — exactly the symptom in the user-reported bug
+             *  thread). Drop these — the synthesized tool_use from
+             *  `tool_call` is canonical. */
+            return Vec::new();
         };
 
         // Empty text — drop. cursor-agent occasionally sends a
@@ -889,6 +898,13 @@ impl StreamNormalizer {
                 .and_then(|m| m.get_mut("content"))
                 .and_then(|c| c.as_array_mut())
             {
+                /* Same non-text strip as the incremental branch below —
+                 * see the head of `handle_assistant` for the rationale.
+                 * Without this, cumulative chunks carrying an inline
+                 * tool_use re-emit the pill on every partial. */
+                content.retain(|block| {
+                    block.get("type").and_then(|t| t.as_str()) == Some("text")
+                });
                 for block in content.iter_mut() {
                     if block.get("type").and_then(|t| t.as_str()) == Some("text") {
                         if let Some(t) = block.get_mut("text") {
@@ -921,6 +937,17 @@ impl StreamNormalizer {
             .and_then(|m| m.get_mut("content"))
             .and_then(|c| c.as_array_mut())
         {
+            /* Strip any non-text blocks before forwarding. Cursor-agent
+             *  occasionally ships an `assistant` event whose content[]
+             *  carries the streaming text AND the next tool_use envelope
+             *  in the same payload. Since the matching `tool_call`
+             *  event is synthesized into its own tool_use elsewhere,
+             *  passing the inline copy through duplicates the trace
+             *  pill — same root cause as the all-tool_use case dropped
+             *  above. Keep only `text` blocks here. */
+            content.retain(|block| {
+                block.get("type").and_then(|t| t.as_str()) == Some("text")
+            });
             for block in content.iter_mut() {
                 if block.get("type").and_then(|t| t.as_str()) == Some("text") {
                     if let Some(t) = block.get_mut("text") {
