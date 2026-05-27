@@ -782,11 +782,17 @@
       const { upsertWorkspace } = await import('$lib/state/sdd.svelte');
       upsertWorkspace(refreshed);
       const refreshedPhase = refreshed.phases.find((ph) => ph.number === failedNumber);
-      if (refreshedPhase && refreshedPhase.status === 'done') {
-        /* Phase already advanced server-side. Skip the Accept call,
-         *  fire the next-phase prompt directly so user lands on the
-         *  next stage instead of seeing a confusing "phase already
-         *  done" error. */
+      /* Stage in the frontend can lag behind disk by a tick. If the
+       *  refreshed phase is anything OTHER than `failed`, the
+       *  failure-card UI is stale — Rust already moved past the
+       *  failure (clean fix-attempt verify → `done`, retry click →
+       *  `pending`, agent picked up a substep → `running`). Skip the
+       *  Accept call (Rust would reject with "phase X is `<status>`
+       *  — Accept only applies to failed phases") and instead fire
+       *  the next prompt for whatever the current stage is. The
+       *  user's intent was "move forward"; we honour it without
+       *  forcing them to discover that the workspace already moved. */
+      if (refreshedPhase && refreshedPhase.status !== 'failed') {
         const prompt = await buildPromptForStage(refreshed);
         if (prompt) void p.onAdvance(prompt);
         return;
