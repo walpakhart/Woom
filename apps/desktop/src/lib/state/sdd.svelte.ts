@@ -882,12 +882,20 @@ export async function startSdd(
    *  → workspace runs in degraded "no-git" mode (no rollback). */
   repoCwd?: string | null
 ): Promise<SddWorkspace | null> {
-  // Discard any existing workspace tied to this session.
-  const existing = sddState.workspaceBySession[sessionId];
-  if (existing) {
-    try { await invoke('sdd_discard', { id: existing }); } catch { /* noop */ }
-    removeWorkspace(existing);
-  }
+  /* Used to auto-discard any prior workspace tied to this session
+   * (`/sdd overwrites`). That was destructive — a chat with three
+   * /sdd's wiped the prior two from disk even when they were
+   * `complete` / `stopped` and the user might want to revisit
+   * them. Reported as "каждый следующий [sdd] удаляет предыдущие
+   * и истории".
+   *
+   * New behaviour: leave the prior workspace ALONE. `sdd_start`
+   * creates a fresh workspace with the same session_id tag; the
+   * binding in `workspaceBySession` rotates to the new one
+   * (latest /sdd is the inline SddCard target), and the older
+   * workspaces remain accessible via the SDD popover in the chat
+   * header. Manual discard still available from the popover row's
+   * trash icon. */
   try {
     const ws = await invoke<SddWorkspace>('sdd_start', {
       args: {
