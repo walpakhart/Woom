@@ -432,10 +432,23 @@ export function handleStreamEvent(
   // wiping the previous turn's stamp until we have real numbers.
   if (inner.usage && typeof inner.usage === 'object') {
     const u = inner.usage as Record<string, unknown>;
-    const inp = numField(u, 'input_tokens');
-    const cacheCreate = numField(u, 'cache_creation_input_tokens');
-    const cacheRead = numField(u, 'cache_read_input_tokens');
-    const out = numField(u, 'output_tokens');
+    /* Try BOTH naming conventions on every field — Claude CLI uses
+     * snake_case (`input_tokens`, `cache_creation_input_tokens`,
+     * `cache_read_input_tokens`, `output_tokens`) but cursor-agent
+     * uses camelCase (`inputTokens`, `cacheWriteTokens`,
+     * `cacheReadTokens`, `outputTokens`) on its per-step `assistant`
+     * envelopes. The result-event handler upstream already does this
+     * fallback; without doing it here too, cursor's per-step events
+     * fell through with `inp=0/out=0/cache=0`, the contextSize stamp
+     * never fired, and the context ring sat at 0% forever. */
+    const inp = numField(u, 'input_tokens') || numField(u, 'inputTokens');
+    const cacheCreate =
+      numField(u, 'cache_creation_input_tokens') ||
+      numField(u, 'cacheWriteTokens');
+    const cacheRead =
+      numField(u, 'cache_read_input_tokens') ||
+      numField(u, 'cacheReadTokens');
+    const out = numField(u, 'output_tokens') || numField(u, 'outputTokens');
     if (inp + out + cacheCreate + cacheRead > 0) {
       // Mark this turn as having received per-step usage. The result
       // event handler reads this to decide whether to fall back on

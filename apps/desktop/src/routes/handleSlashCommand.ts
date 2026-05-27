@@ -58,7 +58,12 @@ export async function handleSlashCommand(
    *  SKILL.md templates can interpolate it. Built-in slash names
    *  (KNOWN_SLASH_COMMANDS) are skipped here so they fall through
    *  to the strict-start parser below. */
-  const inlineSkillRe = /(^|\s)\/([A-Za-z][\w-]*)(?=\s|$)/g;
+  /* Allow `/skill` followed by punctuation (`.`, `,`, `!`, `?`, `;`,
+   * `:`) — not just whitespace or end-of-string. Without this a
+   * sentence-final invocation like "сделай страницу /frontend-design."
+   * silently fell through to plain text because the trailing period
+   * broke the lookahead and the user thought the skill was broken. */
+  const inlineSkillRe = /(^|\s)\/([A-Za-z][\w-]*)(?=[\s.,!?;:]|$)/g;
   let inlineSkill: { name: string; idx: number; full: string } | null = null;
   {
     const raw = text;
@@ -107,6 +112,60 @@ export async function handleSlashCommand(
       updateSession(session.id, { input: rendered.rendered });
       await Promise.resolve();
       await deps.sendClaudeMessage({ silent: true });
+      return true;
+    }
+  }
+  /* Inline `/sdd` scanner — same shape as the inline-skill detector
+   * above. Matches `/sdd` anywhere in the input followed by either
+   * whitespace+args, end-of-string, or punctuation. The remainder of
+   * the input (text before AND after the token, minus the token
+   * itself) becomes the SDD ask, so a user can type:
+   *
+   *   "implement an inbox redesign /sdd"
+   *   "/sdd, attached mock for reference"
+   *   "build /sdd this thing"
+   *
+   * — and the workspace prompt picks up the prose around it. Without
+   * this, /sdd only worked when typed at the start of an otherwise-
+   * empty composer, which made it impossible to combine with attached
+   * photos / @-mentions the user typed first. */
+  const inlineSddRe = /(^|\s)\/sdd(?=[\s.,!?;:]|$)/i;
+  const sddMatch = inlineSddRe.exec(text);
+  if (sddMatch) {
+    const tokenStart = sddMatch.index + (sddMatch[1] ? sddMatch[1].length : 0);
+    const tokenEnd = tokenStart + 4; // '/sdd'
+    const beforeToken = text.slice(0, tokenStart).replace(/\s+$/, '');
+    const afterToken = text.slice(tokenEnd).replace(/^[\s.,!?;:]+/, '').replace(/\s+$/, '');
+    const ask = [beforeToken, afterToken].filter((s) => s.length > 0).join(' ').trim();
+    if (ask.length > 0 || (session.mentions?.length ?? 0) > 0) {
+      setSessionInput(session.id, '');
+      /* Visible user bubble — original full text so the chat reads
+       * naturally. The agent receives the kickoff via the silent
+       * sendClaudeMessage call below. */
+      appendSessionMessage(session.id, {
+        role: 'user',
+        content: text,
+        at: new Date().toISOString(),
+      });
+      const { startSddFromSlash } = await import('$lib/services/slashCommands');
+      /* Pass attached image mentions into the kickoff ask so the
+       * agent's first turn (spec writing) has the visual reference.
+       * Image paths get appended as `@<path>` tokens so the existing
+       * mention-extraction pipeline picks them up as multimodal
+       * attachments. Non-image mentions (@PR, @ticket, …) are left
+       * to the regular sendClaudeMessage path. */
+      const imageRefs = (session.mentions ?? [])
+        .filter((m) => m.source === 'file' && !!m.body && /\.(png|jpg|jpeg|gif|webp|bmp)$/i.test(m.body))
+        .map((m) => `@${m.body}`)
+        .join(' ');
+      const askWithImages = imageRefs ? `${ask}\n\n${imageRefs}`.trim() : ask;
+      const rendered = await startSddFromSlash(session, askWithImages);
+      if (rendered) {
+        updateSession(session.id, { input: rendered });
+        await Promise.resolve();
+        await deps.sendClaudeMessage({ silent: true });
+      }
+      void deps.scrollChatBottom();
       return true;
     }
   }
