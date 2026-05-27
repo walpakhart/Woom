@@ -14,24 +14,38 @@ type EditTarget =
 
 /** Header label for the workspace's current stage. Covers every
  *  variant of the SddStage union so adding a new stage on the Rust
- *  side surfaces here as a compile-time exhaustiveness miss. */
-export function stageLabel(stage: Stage): string {
+ *  side surfaces here as a compile-time exhaustiveness miss.
+ *
+ *  `fixIteration` is the retry_count for the phase the stage refers
+ *  to (when applicable). When > 0 the substep labels rewrite to
+ *  `Phase N — fix #M planning|implementing|verifying` so the user
+ *  can tell at a glance that a running pass is a fix iteration
+ *  rather than the initial run. Without this rewrite the header
+ *  said exactly the same "Phase N implementing" string on both the
+ *  original pass AND every fix attempt — the "· fixing #N" badge
+ *  shown by SddCard separately was easy to miss next to the stage
+ *  label. */
+export function stageLabel(stage: Stage, fixIteration: number = 0): string {
+  const fixPrefix = fixIteration > 0 ? `fix #${fixIteration} ` : '';
   switch (stage.kind) {
     case 'drafting': return 'Drafting spec';
     case 'spec_ready': return 'Spec ready';
     case 'planning': return 'Drafting plan';
     case 'plan_ready': return 'Plan ready';
     case 'phase_pending_approval': return `Phase ${stage.phase} — review`;
-    case 'phase_running': return `Phase ${stage.phase} running`;
-    case 'phase_planning': return `Phase ${stage.phase} — planning`;
+    case 'phase_running': return `Phase ${stage.phase} — ${fixPrefix}running`;
+    case 'phase_planning': return `Phase ${stage.phase} — ${fixPrefix}planning`;
     case 'phase_plan_review': return `Phase ${stage.phase} — plan review`;
-    case 'phase_implementing': return `Phase ${stage.phase} — implementing`;
-    case 'phase_verifying': return `Phase ${stage.phase} verifying`;
+    case 'phase_implementing': return `Phase ${stage.phase} — ${fixPrefix}implementing`;
+    case 'phase_verifying': return `Phase ${stage.phase} — ${fixPrefix}verifying`;
     case 'phase_done': return `Phase ${stage.phase} done`;
     case 'complete': return 'All phases done';
     case 'paused': return 'Paused';
     case 'stopped': return 'Stopped';
-    case 'failed': return 'Failed';
+    case 'failed':
+      return fixIteration > 0
+        ? `Phase ${stage.failed_phase ?? '?'} — fix #${fixIteration} failed`
+        : 'Failed';
   }
 }
 

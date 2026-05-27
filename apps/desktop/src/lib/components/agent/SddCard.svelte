@@ -330,7 +330,14 @@
   });
 
   /* stageLabel / stageTone moved to ./sddCardStage.ts (wave-1 phase-8). */
-  function stageLabel(): string { return _stageLabel(stage); }
+  function stageLabel(): string {
+    /* Pass the live phase's retry_count so the label rewrites to
+     * "Phase N — fix #M implementing" instead of plain "Phase N —
+     * implementing" during a fix iteration. Mirrors the
+     * `fixingAttempt` derive below — see comment there for the
+     * phase-resolution rules. */
+    return _stageLabel(stage, fixingAttempt?.n ?? 0);
+  }
 
   /** "Fixing" badge — visible when the stage is one of the running
    *  three-call substeps (plan / implement / verify) AND the user has
