@@ -696,12 +696,20 @@ export async function fixDeviationsAndRetry(id: string, phaseNumber: number): Pr
     `IMPORTANT: After \`sdd_save_phase_verify\`, reply with EXACTLY this one line: "Phase ${phaseNumber} fix-attempt ${attemptNumber} verify recorded."`,
   ].filter(Boolean).join('\n');
   lastAutoFireKey[ws.session_id] = `fix_deviations:${phaseNumber}:${attemptNumber}`;
-  try {
-    await autoFireDispatcher(ws.session_id, prompt);
-  } catch (e) {
+  /* Fire-and-forget. `autoFireDispatcher` calls into `sendClaudeMessage`,
+   * which awaits the full agent reply — that's seconds to minutes for
+   * a fix-attempt turn. If the caller `await`s us, the failure-card
+   * button stays disabled for the entire turn and the v0.1.16+
+   * 15-second watchdog erroneously fires "Fix dispatch timed out"
+   * even though the dispatch landed correctly and the agent is just
+   * doing the work. Detach: kick off the dispatch, return immediately
+   * so the UI re-enables and the agent's reply streams in normally
+   * via the regular chat pipeline. */
+  const sessionId = ws.session_id;
+  void Promise.resolve(autoFireDispatcher(sessionId, prompt)).catch((e: unknown) => {
     console.warn('sdd fixDeviationsAndRetry dispatch failed', e);
-    delete lastAutoFireKey[ws.session_id];
-  }
+    delete lastAutoFireKey[sessionId];
+  });
 }
 
 /** Reset the fix-attempt counter for a workspace's phase. Called when

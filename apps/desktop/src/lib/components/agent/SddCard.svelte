@@ -753,28 +753,23 @@
       return;
     }
     fixClicked = true;
-    const watchdog = setTimeout(() => {
-      if (fixClicked) {
-        fixClicked = false;
-        notify({
-          kind: 'error',
-          title: 'Fix dispatch timed out',
-          body: 'Click again to retry.',
-          ttlMs: 8000,
-        });
-      }
-    }, 15_000);
     try {
       /* Route through the centralized dispatcher — refreshes ws +
        * validates state + routes to the right command + raises
        * the right toast on every failure mode. See
-       * `sddPhaseFlow.ts` for the state machine. */
+       * `sddPhaseFlow.ts` for the state machine.
+       *
+       * `fixDeviationsAndRetry` (called via the dispatcher) now
+       * fires the autoFire prompt without awaiting the agent's
+       * reply, so this call returns within a tick — no need for
+       * a watchdog timeout. The agent's reply streams in via the
+       * regular chat pipeline and `sdd:changed` events drive
+       * the UI updates. */
       await dispatchPhaseAction(p.workspace.id, failedNumber, { type: 'fix' }, {
         onAdvance: (prompt) => p.onAdvance(prompt),
         buildPromptForStage,
       });
     } finally {
-      clearTimeout(watchdog);
       fixClicked = false;
     }
   }
@@ -831,31 +826,18 @@
       return;
     }
     quickAcceptClicked = true;
-    const watchdog = setTimeout(() => {
-      if (quickAcceptClicked) {
-        quickAcceptClicked = false;
-        notify({
-          kind: 'error',
-          title: 'Next phase timed out',
-          body: 'The advance call stalled — click again to retry.',
-          ttlMs: 8000,
-        });
-      }
-    }, 15_000);
     try {
-      /* The dispatcher handles every state-mismatch case: if the
-       * refreshed phase status is `done`/`pending`/`running`, the
-       * `next_phase` action falls through to a plain advance
-       * (fires the next-stage prompt) instead of trying Accept and
-       * getting rejected. The card is no longer responsible for
-       * deciding which command to run — that lives in
-       * `sddPhaseFlow.ts` next to the state machine. */
+      /* Dispatcher handles state-mismatch transparently — see
+       * sddPhaseFlow.ts. Returns within a tick (Rust accept is
+       * fast, next-prompt fire is fire-and-forget through the
+       * autoFireDispatcher), so no watchdog needed. The agent's
+       * reply streams in normally; `sdd:changed` events update
+       * the card. */
       await dispatchPhaseAction(p.workspace.id, failedNumber, { type: 'next_phase' }, {
         onAdvance: (prompt) => p.onAdvance(prompt),
         buildPromptForStage,
       });
     } finally {
-      clearTimeout(watchdog);
       quickAcceptClicked = false;
     }
   }
