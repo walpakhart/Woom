@@ -12,6 +12,7 @@
      SessionsSidebar would render an empty row). */
   import { sessionsState, updateSession, dismissInterrupted } from '$lib/state/sessions.svelte';
   import { invoke } from '@tauri-apps/api/core';
+  import { sessionUsageTotals, formatTokens, formatCostUsd } from '$lib/usage';
   import { notify } from '$lib/state/toaster.svelte';
   import { tick, untrack } from 'svelte';
   import {
@@ -39,6 +40,12 @@
   const sess = $derived(
     sessionsState.list.find((s) => s.id === sessionsState.activeIds[p.kind]) ?? null
   );
+
+  /** Live token + USD totals across every assistant-message usage
+   *  snapshot in the current session. Updates once per turn (usage is
+   *  stamped at end-of-turn, not on every delta), so the chip doesn't
+   *  stutter mid-stream — matches the existing streaming-batch pattern. */
+  const budget = $derived(sessionUsageTotals(sess));
 
   const elapsed = $derived.by(() => {
     const startedAt = sess ? p.thinkingStartedAt[sess.id] ?? null : null;
@@ -362,6 +369,23 @@
     {/if}
   </div>
 
+  {#if sess && budget.turns > 0}
+    <button
+      class="ch-budget"
+      class:ch-budget--high={budget.costUsd >= 1}
+      title={`Session token budget — ${budget.turns} turn${budget.turns === 1 ? '' : 's'}\n`
+        + `Input: ${formatTokens(budget.input)}  ·  Output: ${formatTokens(budget.output)}\n`
+        + `Cache read: ${formatTokens(budget.cacheRead)}  ·  Cache write: ${formatTokens(budget.cacheCreation)}\n`
+        + `Estimated cost: ${formatCostUsd(budget.costUsd)}`}
+      aria-label="Session token budget"
+    >
+      <span class="ch-budget-tokens mono">{formatTokens(budget.input + budget.output)}</span>
+      {#if budget.costUsd > 0}
+        <span class="ch-budget-cost mono">{formatCostUsd(budget.costUsd)}</span>
+      {/if}
+    </button>
+  {/if}
+
   {#if memHits.length > 0}
     <div class="ch-mem-wrap">
       <button
@@ -664,6 +688,46 @@
   }
   .ch-stop:hover { background: rgba(232, 130, 100, 0.18); }
   .ch-stop svg { width: 12px; height: 12px; }
+
+  /* Token / USD budget chip. Sits left of the memory chip, same
+     height + radius so they read as siblings. Renders only after
+     the first assistant turn (gated on `budget.turns > 0`). Tooltip
+     carries the per-bucket breakdown so the user can grok cache vs
+     output without us building a popover yet. */
+  .ch-budget {
+    display: inline-flex; align-items: center; gap: 6px;
+    height: 24px; padding: 0 10px;
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    color: var(--text-mute);
+    font-size: 11px;
+    line-height: 1;
+    cursor: default;
+    transition: color 140ms, background 140ms, border-color 140ms;
+  }
+  .ch-budget:hover {
+    color: var(--text-1);
+    border-color: var(--border-hi);
+  }
+  .ch-budget-tokens {
+    color: var(--text-1);
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+  .ch-budget-cost {
+    color: var(--text-mute);
+    font-weight: 500;
+  }
+  /* High-cost session crosses $1 — gentle warning tint so the user
+     notices without panic colours. */
+  .ch-budget--high {
+    background: color-mix(in srgb, var(--accent) 8%, var(--bg-2));
+    border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+  }
+  .ch-budget--high .ch-budget-cost {
+    color: var(--accent-bright, var(--accent));
+  }
 
   /* Workspace memory chip — small subtle pill on the right edge of
      the header. Surfaces "the agent has prior context on this

@@ -2,7 +2,7 @@
 // functions only — the chat column and header chip both need the same
 // math so we centralise it here.
 
-import type { ClaudeUsage } from '$lib/types';
+import type { ClaudeSession, ClaudeUsage } from '$lib/types';
 
 /** USD per million tokens, by model id. Keys are the exact `model` strings
  *  Claude CLI returns in stream-json (e.g. `claude-sonnet-4-6`).
@@ -105,6 +105,47 @@ export function contextPct(
   const cap = contextWindowFor(usage.model, agentKind);
   if (cap <= 0) return 0;
   return Math.min(1, Math.max(0, usage.contextSize / cap));
+}
+
+/** Aggregate token + USD totals across every assistant-message
+ *  `usage` snapshot in a session. Each `ClaudeUsage` lives on the
+ *  message it was stamped onto (see `ClaudeMessage.usage` in
+ *  `types.ts`) — we sum the buckets directly and dollar-cost each
+ *  snapshot individually so per-message model swaps cost correctly
+ *  (e.g. user jumped from Sonnet to Opus mid-chat).
+ *
+ *  Returns a fully-defaulted shape so the ChatHeader chip never has
+ *  to guard against partial data; new sessions with zero turns just
+ *  render as "0 tok · $0". */
+export function sessionUsageTotals(sess: ClaudeSession | null): {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheCreation: number;
+  costUsd: number;
+  turns: number;
+} {
+  const acc = {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheCreation: 0,
+    costUsd: 0,
+    turns: 0,
+  };
+  if (!sess) return acc;
+  for (const m of sess.messages) {
+    if (m.role !== 'assistant') continue;
+    const u = m.usage;
+    if (!u) continue;
+    acc.input += u.inputTokens || 0;
+    acc.output += u.outputTokens || 0;
+    acc.cacheRead += u.cacheReadTokens || 0;
+    acc.cacheCreation += u.cacheCreationTokens || 0;
+    acc.costUsd += costForUsage(u);
+    acc.turns += 1;
+  }
+  return acc;
 }
 
 /** Cache hit-rate for one snapshot — `cache_read / (input + cache_read +

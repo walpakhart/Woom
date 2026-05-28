@@ -566,7 +566,14 @@ export function newClaudeSession(
       cwdUuids: {},
       awaitingApproval: false,
       pendingActionResults: [],
-      pendingTurn: null
+      pendingTurn: null,
+      // RTK output-compression is on by default for every new
+      // Claude session. The composer pill (Phase 4) toggles this
+      // flag; `sendClaudeMessage` forwards `!rtkEnabled` to the
+      // backend as `rtkDisabled` so the spawned `claude` env gets
+      // `WOOM_RTK_SESSION_DISABLED=1` and the wrapper passes Bash
+      // output through unchanged.
+      rtkEnabled: true
     },
     ...sessionsState.list
   ];

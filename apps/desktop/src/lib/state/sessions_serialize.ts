@@ -98,5 +98,10 @@ export function serializeSession(s: ClaudeSession): object {
     awaitingApproval: s.awaitingApproval,
     pendingActionResults: s.pendingActionResults,
     pendingTurn: s.pendingTurn ?? null,
+    // Persist RTK toggle so a "RTK off for diagnostics" decision
+    // survives a window close. Default-on semantics live in the
+    // `newClaudeSession` factory + Composer pill render path —
+    // serialising the explicit boolean keeps hydration deterministic.
+    rtkEnabled: s.rtkEnabled ?? true,
   };
 }

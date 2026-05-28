@@ -319,6 +319,12 @@ pub struct AskArgs<'a> {
     /// approval). None when IPC is unavailable; sidecars then fall
     /// back to fire-and-forget card creation.
     pub action_ipc_socket: Option<&'a Path>,
+    /// When true, sets `WOOM_RTK_SESSION_DISABLED=1` in the spawned
+    /// `claude` CLI's environment so the woom-managed PreToolUse hook
+    /// (see `rtk::install_hook`) passes Bash output through unchanged.
+    /// Sourced from the per-session `rtkEnabled` flag — Phase 3 wires
+    /// the TS side.
+    pub rtk_disabled: bool,
 }
 
 fn build_spawn_sig(args: &AskArgs<'_>) -> SpawnSig {
@@ -577,6 +583,14 @@ async fn spawn_claude_armed(args: &AskArgs<'_>) -> Result<ArmedCli, ClaudeRunErr
         }
         cmd.env("PATH", parts.join(":"));
     }
+    // Per-session RTK opt-out — Phase 3 wires `sess.rtkEnabled` from
+    // the composer pill into this flag. The woom-managed wrapper
+    // script at `<data_local>/woom/hooks/rtk-rewrite-woom.sh` reads
+    // this var and exits 0 without rewriting when set, which tells
+    // Claude Code to run the original Bash command unchanged.
+    if args.rtk_disabled {
+        cmd.env("WOOM_RTK_SESSION_DISABLED", "1");
+    }
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
     cmd.stdin(std::process::Stdio::piped());
@@ -681,10 +695,12 @@ pub async fn ask(
     app_context: Option<&str>,
     action_ipc_socket: Option<&Path>,
     image_paths: &[String],
+    rtk_disabled: bool,
 ) -> Result<String, ClaudeRunError> {
     let args = AskArgs {
         session_id, cwd, claude_uuid, resume, rules, model, app_context,
         action_ipc_socket,
+        rtk_disabled,
     };
     let target_sig = build_spawn_sig(&args);
 
@@ -982,6 +998,7 @@ pub async fn prewarm(
     model: Option<&str>,
     app_context: Option<&str>,
     action_ipc_socket: Option<&Path>,
+    rtk_disabled: bool,
 ) -> Result<(), ClaudeRunError> {
     // Race-free single-prewarm-per-session guard. If another prewarm
     // for this same session is still in flight, this call is a
@@ -1004,6 +1021,7 @@ pub async fn prewarm(
     let args = AskArgs {
         session_id, cwd, claude_uuid, resume, rules, model, app_context,
         action_ipc_socket,
+        rtk_disabled,
     };
     let target_sig = build_spawn_sig(&args);
 

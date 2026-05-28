@@ -154,6 +154,10 @@ export async function continueAgentTurn(sessionId: string, deps: AgentTurnDeps):
       cursorModel,
       claudeModel,
       appContext,
+      // See `sendClaudeMessage.ts` for the RTK wiring rationale.
+      // The auto-follow-up turn must honour the same per-session
+      // toggle as the user-initiated turn.
+      rtkDisabled: sess.rtkEnabled === false,
       onAssistantDelta: deps.appendAssistantDelta,
       onAppNavigation: deps.handleAppNavigation,
     });

@@ -100,6 +100,7 @@ pub async fn ask(
     app_context: Option<&str>,
     action_ipc_socket: Option<&Path>,
     image_paths: &[String],
+    rtk_disabled: bool,
 ) -> Result<AgentAskResult, AgentError> {
     match kind {
         AgentKind::Claude => {
@@ -117,6 +118,7 @@ pub async fn ask(
                 app_context,
                 action_ipc_socket,
                 image_paths,
+                rtk_disabled,
             )
             .await?;
             // Claude reuses whatever UUID we handed it, so no change.

@@ -23,6 +23,7 @@
   } from '$lib/services/slashCommands';
   import { skillsState, refreshSkills, type Skill } from '$lib/state/skills.svelte';
   import { statuslineState } from '$lib/state/statusline.svelte';
+  import { getRtkStatus, type RtkStatus } from '$lib/services/rtk';
   import {
     claudeEffort,
     claudeModels,
@@ -113,21 +114,6 @@
         if (e.key === 'Enter') e.preventDefault();
         return;
       }
-    }
-    /* Shift+Tab cycles permission mode (default ↔ plan). Matches the
-       Claude Code keybinding so muscle memory transfers. Only fires
-       when the picker isn't open (Tab is reserved for picker confirm)
-       and no IME composition is active. */
-    if (
-      e.key === 'Tab' &&
-      e.shiftKey &&
-      !e.metaKey && !e.ctrlKey && !e.altKey &&
-      !slashOpen && !mentionOpen && sess
-    ) {
-      e.preventDefault();
-      const next = (sess.permissionMode ?? 'default') === 'plan' ? 'default' : 'plan';
-      updateSession(sess.id, { permissionMode: next });
-      return;
     }
     /* Slash picker — caret-aware, mirrors @-mention key handling.
        ↑/↓ navigate, Enter/Tab confirm the selection (splice into the
@@ -428,9 +414,6 @@
     const lower = slashQuery.toLowerCase();
     return KNOWN_SLASH_COMMANDS.filter((c) => c.startsWith(lower));
   });
-  /** Live `permissionMode === 'plan'` flag for the toggle pill. */
-  const planActive = $derived((sess?.permissionMode ?? 'default') === 'plan');
-
   /** Skill names that prefix-match the trigger query. Project-scoped
    *  skills sort first (they're already at the head of
    *  `skillsState.list` because discovery walks cwd before user home). */
@@ -652,6 +635,33 @@
 
   onMount(() => {
     if (p.kind === 'claude') void refreshPlanUsage();
+    // RTK pill state — fetch once per mount. Probe shells out for
+    // `--version` + `hook claude --help` with a 2s deadline, so the
+    // result is stable for the lifetime of the composer.
+    if (p.kind === 'claude') {
+      void getRtkStatus().then((s) => { rtkStatus = s; });
+    }
+  });
+
+  /** Snapshot of bundled / system RTK availability. Null until the
+   *  initial `getRtkStatus()` resolves; the derive below treats null
+   *  as "still probing" and renders the pill conservatively (on). */
+  let rtkStatus = $state<RtkStatus | null>(null);
+  /** `true` when the user hasn't explicitly disabled RTK for this
+   *  session. Default-on lives here (rather than on the field) so a
+   *  legacy persisted session without the field still reads as on. */
+  const rtkEnabled = $derived(sess?.rtkEnabled !== false);
+  /** Tri-state for the pill render path. */
+  const rtkUiState = $derived.by<'on' | 'off' | 'unavailable' | 'error'>(() => {
+    if (p.kind !== 'claude') return 'unavailable';
+    if (!rtkStatus) {
+      // Still probing — assume the bundled sidecar is fine so the
+      // pill reflects the user's toggle. The probe rarely fails.
+      return rtkEnabled ? 'on' : 'off';
+    }
+    if (!rtkStatus.platformSupported) return 'unavailable';
+    if (!rtkStatus.bundledAvailable && !rtkStatus.systemVersion) return 'error';
+    return rtkEnabled ? 'on' : 'off';
   });
 
   /* Per-model context window. Anthropic ships different ceilings per
@@ -985,28 +995,37 @@
                header so it opens a menu". -->
 
 
-          <!-- Permission mode toggle. Single button, two states. When
-               `default`, renders a quiet dot — barely visible at rest
-               so the composer footer doesn't shout. When `plan`, the
-               dot fills + amber-glows + the word "plan" appears next
-               to it. Click toggles; ⇧⇥ in the textarea also cycles
-               (handled in onKey). Tooltip carries the kbd hint so the
-               affordance stays discoverable without crowding the UI. -->
-          <button
-            class="cmp-mode-dot"
-            class:cmp-mode-dot--plan={planActive}
-            onclick={() => updateSession(sess.id, { permissionMode: planActive ? 'default' : 'plan' })}
-            aria-pressed={planActive}
-            aria-label={planActive ? 'Plan mode active — click to switch back to default' : 'Default mode — click to enter plan mode'}
-            title={planActive
-              ? 'Plan mode — agent reads only (no edits, no mutating bash). ⇧⇥ to toggle.'
-              : '⇧⇥ for plan mode — flips the agent into read-only investigation.'}
-          >
-            <span class="cmp-mode-dot-pip" aria-hidden="true"></span>
-            {#if planActive}
-              <span class="cmp-mode-dot-label">plan</span>
-            {/if}
-          </button>
+          <!-- RTK output-compression pill. On by default for every new
+               Claude session (`newClaudeSession` sets `rtkEnabled: true`).
+               One click toggles; the change applies to the NEXT spawn
+               of `claude` (mid-stream turn isn't affected). Hidden when
+               the bundled rtk binary isn't usable on this platform
+               (native Windows — see Phase 1's `platformSupported`). -->
+          {#if p.kind === 'claude' && rtkUiState !== 'unavailable'}
+            <button
+              class="cmp-rtk-pill"
+              class:cmp-rtk-pill--off={rtkUiState === 'off'}
+              class:cmp-rtk-pill--error={rtkUiState === 'error'}
+              disabled={rtkUiState === 'error'}
+              onclick={() => updateSession(sess.id, { rtkEnabled: !(rtkEnabled) })}
+              aria-pressed={rtkUiState === 'on'}
+              aria-label={rtkUiState === 'on'
+                ? 'RTK output compression active — click to disable for this session'
+                : rtkUiState === 'off'
+                  ? 'RTK output compression disabled — click to re-enable for this session'
+                  : 'RTK binary missing — reinstall Woom'}
+              title={rtkUiState === 'error'
+                ? 'RTK binary missing — reinstall Woom'
+                : rtkUiState === 'on'
+                  ? 'RTK rewrites bash commands to compact output. ~80% token savings on git/test/ls. Click to disable for this session.'
+                  : 'RTK disabled for this session — bash output passes through raw. Click to re-enable. (Applies to next spawn.)'}
+            >
+              <span class="cmp-rtk-pill-glyph" aria-hidden="true">RTK</span>
+              {#if rtkUiState === 'off'}
+                <span class="cmp-rtk-pill-label">off</span>
+              {/if}
+            </button>
+          {/if}
 
           <span class="cmp-model">
             {#if p.kind === 'claude'}
@@ -1668,14 +1687,8 @@
     display: inline-flex; align-items: center; gap: 4px;
   }
 
-  /* Permission-mode toggle — sits left of the model picker. Quiet
-     dot at rest, amber "plan" pill when active. Designed to fade
-     into the composer footer so the eye lands on the model/Send
-     row first; the dot only commands attention when the session
-     is actually in plan mode. */
-  /* SDD button — same visual register as `.cmp-mode-dot`'s quiet
-   *  rest state, but always shows the "SDD" glyph since it's a one-
-   *  shot launcher (no toggle states). Hover lifts to the accent
+  /* SDD button — quiet rest state with the "SDD" glyph since it's a
+   *  one-shot launcher (no toggle states). Hover lifts to the accent
    *  tint so users discover what it does without the button itself
    *  shouting. */
   .cmp-sdd-btn {
@@ -1706,65 +1719,68 @@
     letter-spacing: 0.14em;
   }
 
-  .cmp-mode-dot {
+  /* RTK output-compression toggle. Three visual states — on
+     (default), off (muted), error (disabled). Sits in the composer
+     footer where the Plan-mode dot used to live; tooltip explains
+     the toggle applies to the NEXT claude spawn (matches the
+     spawn-level env-var semantics in `claude.rs::spawn_claude_armed`). */
+  .cmp-rtk-pill {
     display: inline-flex; align-items: center;
     gap: 5px;
-    padding: 3px 5px;
+    padding: 3px 7px;
     border-radius: 5px;
-    border: 1px solid transparent;
-    background: transparent;
-    color: var(--text-mute);
-    font-size: 10px;
-    font-weight: 600;
-    letter-spacing: 0.03em;
+    border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    color: var(--accent-bright, var(--accent));
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
     cursor: pointer;
     flex-shrink: 0;
     transition: background 120ms, border-color 120ms, color 120ms;
   }
-  .cmp-mode-dot:hover {
-    background: var(--bg-3);
+  .cmp-rtk-pill:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--accent) 20%, transparent);
+    border-color: color-mix(in srgb, var(--accent) 55%, var(--border-hi));
+  }
+  /* Off state — muted hollow outline. The user wants raw output and
+     the pill recedes to a quiet "this is off" reminder. */
+  .cmp-rtk-pill--off {
+    background: transparent;
     border-color: var(--border);
+    color: var(--text-mute);
+  }
+  .cmp-rtk-pill--off:hover:not(:disabled) {
+    background: var(--bg-3);
+    border-color: var(--border-hi);
     color: var(--text-1);
   }
-  .cmp-mode-dot-pip {
-    /* Default state — small hollow ring. Reads as "off but available". */
-    width: 8px; height: 8px;
-    border-radius: 50%;
-    border: 1.5px solid var(--text-mute);
-    background: transparent;
-    transition: border-color 150ms, background 150ms, box-shadow 150ms;
-    flex-shrink: 0;
+  /* Error state — bundled rtk binary missing / corrupt. Disabled
+     button so the user can't toggle into a broken state; tooltip
+     surfaces the recovery hint. */
+  .cmp-rtk-pill--error {
+    background: color-mix(in srgb, var(--error, #e88264) 10%, transparent);
+    border-color: color-mix(in srgb, var(--error, #e88264) 35%, var(--border));
+    color: var(--error, #e88264);
+    cursor: not-allowed;
   }
-  .cmp-mode-dot:hover .cmp-mode-dot-pip {
-    border-color: var(--text-1);
-  }
-  /* Plan state — pill fills with amber tone + soft glow so the user
-     can't miss they're in read-only mode. The dot becomes solid. */
-  .cmp-mode-dot--plan {
-    background: color-mix(in srgb, #e0b16c 14%, transparent);
-    border-color: color-mix(in srgb, #e0b16c 40%, var(--border));
-    color: #e0b16c;
-    padding: 3px 8px 3px 6px;
-  }
-  .cmp-mode-dot--plan:hover {
-    background: color-mix(in srgb, #e0b16c 22%, transparent);
-    border-color: color-mix(in srgb, #e0b16c 55%, var(--border-hi));
-    color: #f0c084;
-  }
-  .cmp-mode-dot--plan .cmp-mode-dot-pip {
-    border-color: #e0b16c;
-    background: #e0b16c;
-    box-shadow: 0 0 0 3px color-mix(in srgb, #e0b16c 22%, transparent);
-  }
-  .cmp-mode-dot-label {
-    font-size: 10px;
+  .cmp-rtk-pill-glyph {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9.5px;
     font-weight: 700;
-    letter-spacing: 0.06em;
+    letter-spacing: 0.14em;
+  }
+  .cmp-rtk-pill-label {
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
     text-transform: lowercase;
+    opacity: 0.85;
   }
   @media (prefers-reduced-motion: reduce) {
-    .cmp-mode-dot,
-    .cmp-mode-dot-pip { transition: none; }
+    .cmp-rtk-pill { transition: none; }
   }
 
   .cmp-send {

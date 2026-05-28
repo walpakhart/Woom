@@ -330,6 +330,13 @@ export type ClaudeSession = {
    *  to enforce hard. Persisted per-session so a "plan mode" session
    *  stays in plan after a window close. */
   permissionMode?: 'default' | 'plan';
+  /** Whether the RTK output-compression hook is active for this
+   *  session. When false, the spawned `claude` CLI gets
+   *  `WOOM_RTK_SESSION_DISABLED=1` in its environment so the
+   *  woom-managed PreToolUse wrapper script passes Bash output
+   *  through unchanged. Default `true` — RTK is opt-out, not opt-in.
+   *  Persisted (see `sessions_serialize.ts`). */
+  rtkEnabled?: boolean;
   /** Manual pin from the agent-view dashboard. Pinned sessions sort to
    *  the top of their group + survive in the dashboard's "Pinned"
    *  bucket regardless of their working status. */

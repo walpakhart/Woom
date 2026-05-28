@@ -111,6 +111,18 @@ jobs:
       - name: Install JS deps
         run: pnpm install --frozen-lockfile
 
+      - name: Fetch RTK sidecar binaries
+        # RTK ships pre-built binaries at github.com/rtk-ai/rtk/releases.
+        # We pull both macOS arches so the universal Tauri bundle can
+        # embed them as externalBins (see `apps/desktop/src-tauri/
+        # tauri.conf.json#bundle.externalBin`). The script is idempotent
+        # and signs the macOS binaries ad-hoc on download so Gatekeeper
+        # accepts them inside the .app.
+        run: |
+          bash apps/desktop/src-tauri/scripts/fetch-rtk.sh --target aarch64-apple-darwin
+          bash apps/desktop/src-tauri/scripts/fetch-rtk.sh --target x86_64-apple-darwin
+          ls -la apps/desktop/src-tauri/binaries/rtk-*
+
       - name: Build SvelteKit frontend
         # Build the frontend EXPLICITLY before `tauri build` even though
         # `tauri.conf.json#build.beforeBuildCommand` would also run it.

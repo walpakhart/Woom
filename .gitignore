@@ -11,6 +11,10 @@ dist/
 **/src-tauri/target/
 **/src-tauri/gen/schemas/
 apps/desktop/src-tauri/binaries/woom-*
+# RTK binary is fetched at build-time by `scripts/fetch-rtk.sh` from the
+# upstream rtk-ai/rtk GitHub releases. Pinning the version in the script
+# (not via git) keeps the repo small (~7MB per arch × 4 arches).
+apps/desktop/src-tauri/binaries/rtk-*
 
 # Env + secrets
 .env

@@ -20,6 +20,7 @@ mod jira_commands;
 mod keychain;
 mod library;
 mod memory_local;
+mod rtk;
 mod sdd;
 mod sdd_action_log;
 mod sdd_action_log_commands;
@@ -475,6 +476,10 @@ pub fn run() {
             claude_ask,
             claude_prewarm,
             claude_drop_prewarm,
+            rtk::rtk_status,
+            rtk::rtk_install_hook,
+            rtk::rtk_uninstall_hook,
+            rtk::rtk_hook_state,
             agent_compact_session,
             claude_plan_usage,
             claude_stop,
@@ -731,6 +736,20 @@ pub fn run() {
                     claude::evict_stale_warm(warm_pool_handle.clone()).await;
                 }
             });
+            // RTK bootstrap (`sdd-e1817d13c6` Phase 2). Resolves the
+            // bundled `rtk` sidecar, copies the woom-managed wrapper
+            // script into the user's data dir with the rtk path
+            // substituted, and idempotently patches
+            // `~/.claude/settings.json` to register the PreToolUse hook.
+            // Non-fatal: any failure logs to stderr and degrades the
+            // composer pill to its "unavailable" state — Woom still
+            // works without RTK compression.
+            let rtk_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = rtk::bootstrap(&rtk_handle).await {
+                    eprintln!("[woom-rtk] bootstrap failed: {e}");
+                }
+            });
             // Auto-updater poll task — fires an immediate startup
             // check, then loops every 6 hours respecting the persisted
             // `auto_check_enabled` toggle. Emits `update:state` events
@@ -894,10 +913,16 @@ async fn claude_ask(
     // its CLI has no equivalent input format, so the frontend falls back
     // to the path-mention flow there.
     #[allow(non_snake_case)] imagePaths: Option<Vec<String>>,
+    // Per-session opt-out for the woom-managed RTK PreToolUse hook
+    // (Phase 3 wiring). Threaded into `spawn_claude_armed` so the
+    // spawned `claude` env gets `WOOM_RTK_SESSION_DISABLED=1` when
+    // the user has clicked the composer's "RTK off" pill.
+    #[allow(non_snake_case)] rtkDisabled: Option<bool>,
 ) -> Result<AgentAskResult, String> {
     let cwd_path = cwd.as_deref().map(std::path::Path::new);
     let kind = agentKind.unwrap_or_default();
     let images = imagePaths.unwrap_or_default();
+    let rtk_disabled = rtkDisabled.unwrap_or(false);
     let ipc_socket = ipc.inner().socket_path().to_path_buf();
     let result = agent::ask(
         kind,
@@ -915,6 +940,7 @@ async fn claude_ask(
         appContext.as_deref(),
         Some(ipc_socket.as_path()),
         &images,
+        rtk_disabled,
     )
     .await;
     // Tag resume-orphan with a stable prefix on the wire so the frontend
@@ -945,6 +971,7 @@ async fn claude_prewarm(
     #[allow(non_snake_case)] agentKind: Option<AgentKind>,
     #[allow(non_snake_case)] claudeModel: Option<String>,
     #[allow(non_snake_case)] appContext: Option<String>,
+    #[allow(non_snake_case)] rtkDisabled: Option<bool>,
 ) -> Result<(), String> {
     // Cursor CLI takes its prompt as a positional arg, so we have to
     // know the prompt at spawn time — pre-warming cursor-agent would
@@ -965,6 +992,7 @@ async fn claude_prewarm(
         claudeModel.as_deref(),
         appContext.as_deref(),
         Some(ipc_socket.as_path()),
+        rtkDisabled.unwrap_or(false),
     )
     .await
     .map_err(|e| e.to_string())

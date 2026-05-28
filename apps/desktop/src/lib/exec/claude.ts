@@ -41,6 +41,11 @@ export interface AgentRunRequest {
    *  for Cursor (no equivalent flag) the backend ignores this and the
    *  caller should fall back to the path-mention flow. */
   imagePaths?: string[];
+  /** When true, the backend sets `WOOM_RTK_SESSION_DISABLED=1` in the
+   *  spawned `claude` CLI's environment so the woom-managed PreToolUse
+   *  wrapper passes Bash output through unchanged. Sourced from
+   *  `!sess.rtkEnabled` at the call site. */
+  rtkDisabled?: boolean;
   /** Called with every assistant-text delta as it streams in. */
   onAssistantDelta: (sessionId: string, delta: string) => void;
   /** Called with `thinking` deltas from reasoning models. Optional —
@@ -116,7 +121,8 @@ export async function runAgentRequest(req: AgentRunRequest): Promise<AgentRunRes
       cursorModel: req.cursorModel,
       claudeModel: req.claudeModel,
       appContext: req.appContext,
-      imagePaths: req.imagePaths ?? []
+      imagePaths: req.imagePaths ?? [],
+      rtkDisabled: req.rtkDisabled ?? false
     });
     return { reply: result.reply, sessionUuid: result.session_uuid };
   } finally {
@@ -150,6 +156,10 @@ export interface PrewarmRequest {
   agentKind: 'claude' | 'cursor';
   claudeModel: string | null;
   appContext: string | null;
+  /** Must mirror the eventual `runAgentRequest`'s `rtkDisabled` —
+   *  prewarm signatures are pool-matched and a mismatch evicts the
+   *  parked process. */
+  rtkDisabled?: boolean;
 }
 
 /** Pre-spawn a Claude CLI for `sessionId` so the cold-start cost
@@ -168,7 +178,8 @@ export async function prewarmAgent(req: PrewarmRequest): Promise<void> {
       rules: req.rules,
       agentKind: req.agentKind,
       claudeModel: req.claudeModel,
-      appContext: req.appContext
+      appContext: req.appContext,
+      rtkDisabled: req.rtkDisabled ?? false
     });
   } catch {
     // Prewarm is purely an optimization — failing to spawn (binary

@@ -269,6 +269,13 @@ export function createSendClaudeMessage(deps: SendClaudeMessageDeps) {
           claudeModel,
           appContext,
           imagePaths,
+          // RTK toggle — `sess.rtkEnabled` is true by default
+          // (`newClaudeSession` sets it). When the user flips the
+          // composer pill to off, we pass `rtkDisabled: true` so the
+          // backend stamps `WOOM_RTK_SESSION_DISABLED=1` on the
+          // spawned `claude`. Takes effect on the next spawn (not
+          // in-flight turns).
+          rtkDisabled: sess?.rtkEnabled === false,
           onAssistantDelta: deps.appendAssistantDelta,
           onAppNavigation: deps.handleAppNavigation,
         });
