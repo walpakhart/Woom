@@ -17,6 +17,7 @@ import type {
 import { notify } from '$lib/state/toaster.svelte';
 import { isImagePath } from '$lib/format';
 import { contextWindowFor } from '$lib/usage';
+import { quotaState } from '$lib/state/quota.svelte';
 import { buildContinuationRecap } from '$lib/services/sessionCwd';
 import {
   applyOpsToSession,
@@ -1436,7 +1437,16 @@ export function updateLastAssistantUsage(sessionId: string, usage: ClaudeUsage) 
        * RATE_TABLE row (`<model>:fast` vs `<model>`) without having
        * to look up the parent session at cost-calc time. Mid-session
        * Fast toggles therefore cost-stamp PER turn, not retroactively. */
-      const stamped: ClaudeUsage = { ...usage, fastMode: s.fastMode === true };
+      /* Also stamp the account-wide quota utilization (5H / 7D %) live
+       * at turn-end. The budget popover diffs these across turns to
+       * approximate per-session limit consumption (the API gives no
+       * absolute cap). Null when no snapshot has been fetched yet. */
+      const stamped: ClaudeUsage = {
+        ...usage,
+        fastMode: s.fastMode === true,
+        quota5h: quotaState.usage?.five_hour?.utilization ?? null,
+        quota7d: quotaState.usage?.seven_day?.utilization ?? null,
+      };
       msgs[msgs.length - 1] = { ...last, usage: stamped };
     }
     return { ...s, messages: msgs, lastContextSize: usage.contextSize };

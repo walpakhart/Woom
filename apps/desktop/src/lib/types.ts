@@ -109,6 +109,15 @@ export type ClaudeUsage = {
    *  session's `fastMode` flag onto each snapshot at stamp time so
    *  `costForUsage` can pick the right RATE_TABLE row. */
   fastMode?: boolean;
+  /** Account-wide quota utilization (%) for the 5H / 7D rolling buckets
+   *  at the moment this snapshot was stamped. Copied from `quotaState`
+   *  in `updateLastAssistantUsage`. The budget popover diffs these
+   *  across turns to APPROXIMATE how much of each limit a session ate —
+   *  the API exposes no absolute cap, and the bucket is shared with
+   *  other sessions / clients, so this is a proxy, not an exact share.
+   *  Null when no quota snapshot was available at stamp time. */
+  quota5h?: number | null;
+  quota7d?: number | null;
 };
 
 export type ClaudeMessage = {

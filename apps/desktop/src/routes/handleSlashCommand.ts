@@ -26,6 +26,7 @@ import {
 } from '$lib/services/slashCommands';
 import {
   appendSessionMessage,
+  sessionsState,
   setSessionInput,
   updateSession,
 } from '$lib/state/sessions.svelte';
@@ -262,11 +263,30 @@ async function runDwFromSlash(session: ClaudeSession, userPrompt: string): Promi
     content: `/dw ${userPrompt}`,
     at: new Date().toISOString(),
   });
+  /* In-flight feedback. `dw_plan` shells out to a planner oneshot that
+   * can take a while; without a visible marker the composer just looks
+   * frozen (no `sending` flag is set for the planning phase). Append a
+   * placeholder bubble and drop it once the plan resolves / fails. */
+  const PLANNING_MARKER = '_Planning workflow…_';
+  appendSessionMessage(session.id, {
+    role: 'assistant',
+    content: PLANNING_MARKER,
+    at: new Date().toISOString(),
+  });
+  const dropPlanningPlaceholder = () => {
+    const s = sessionsState.list.find((x) => x.id === session.id);
+    if (!s) return;
+    const last = s.messages[s.messages.length - 1];
+    if (last?.role === 'assistant' && last.content === PLANNING_MARKER) {
+      updateSession(session.id, { messages: s.messages.slice(0, -1) });
+    }
+  };
   let planResult: { workflowId: string; plan: { rationale: string; subagents: { id: string; prompt: string }[]; verifierPrompt: string }; estimateUsd: number };
   const cwd = session.worktreePath ?? session.cwd ?? null;
   try {
     planResult = await invoke('dw_plan', { userPrompt, sessionId: session.id, cwd });
   } catch (e) {
+    dropPlanningPlaceholder();
     appendSessionMessage(session.id, {
       role: 'assistant',
       content: `_DW planner failed: ${String(e)}_`,
@@ -274,6 +294,7 @@ async function runDwFromSlash(session: ClaudeSession, userPrompt: string): Promi
     });
     return;
   }
+  dropPlanningPlaceholder();
   const wf: DynamicWorkflow = {
     id: planResult.workflowId,
     sessionId: session.id,

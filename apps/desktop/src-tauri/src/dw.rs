@@ -47,6 +47,10 @@ pub const MAX_SUBAGENTS: usize = 20;
 /// user to raise (or cancel).
 pub const DEFAULT_BUDGET_CAP_USD: f64 = 5.0;
 
+/// Hard ceiling for a single planner/verifier/subagent oneshot turn.
+/// Without it a stalled `claude` subprocess hangs the whole `/dw` flow.
+const ONESHOT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
 // ---- Serde types (mirror the TS shapes in `lib/types.ts`) -----------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -491,9 +495,20 @@ async fn call_oneshot(
         return Err("claude CLI not authenticated".into());
     }
     let bin = status.path.as_deref().unwrap_or("claude");
-    let resp = crate::claude::run_claude_oneshot(bin, prompt, None, None, cwd, Some(model))
-        .await
-        .map_err(|e| format!("claude oneshot: {}", e))?;
+    // Hard timeout — the oneshot subprocess can stall (MCP init, network,
+    // a wedged CLI) and there is no other ceiling on this await, so a
+    // planner/verifier turn would hang the whole `/dw` flow with no UI
+    // feedback. Bound it so the caller surfaces a real error instead.
+    let fut = crate::claude::run_claude_oneshot(bin, prompt, None, None, cwd, Some(model));
+    let resp = match tokio::time::timeout(ONESHOT_TIMEOUT, fut).await {
+        Ok(r) => r.map_err(|e| format!("claude oneshot: {}", e))?,
+        Err(_) => {
+            return Err(format!(
+                "claude oneshot timed out after {}s",
+                ONESHOT_TIMEOUT.as_secs()
+            ))
+        }
+    };
     Ok((resp.text, resp.usage))
 }
 

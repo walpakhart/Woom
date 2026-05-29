@@ -51,6 +51,33 @@
     return sum;
   }
 
+  /* Per-session limit consumption (APPROX). The quota API exposes no
+   * absolute cap, and the 5H / 7D buckets are account-wide (shared with
+   * other sessions / clients), so we can't compute an exact share. We
+   * stamp each turn's account-wide utilization% onto its usage snapshot
+   * (`quota5h` / `quota7d`) and sum the POSITIVE deltas between
+   * consecutive turns — i.e. how much this session's turns pushed each
+   * bucket up. Negative deltas (window reset, or another client's load
+   * dropping off) are skipped. The first turn has no prior baseline so
+   * its own contribution is uncounted — this under-reports slightly,
+   * which is why the UI labels it "~". */
+  const limitDelta = $derived.by(() => {
+    let d5 = 0;
+    let d7 = 0;
+    let prev5: number | null = null;
+    let prev7: number | null = null;
+    for (const m of session.messages) {
+      if (m.role !== 'assistant' || !m.usage) continue;
+      const c5 = m.usage.quota5h ?? null;
+      const c7 = m.usage.quota7d ?? null;
+      if (prev5 !== null && c5 !== null && c5 > prev5) d5 += c5 - prev5;
+      if (prev7 !== null && c7 !== null && c7 > prev7) d7 += c7 - prev7;
+      if (c5 !== null) prev5 = c5;
+      if (c7 !== null) prev7 = c7;
+    }
+    return { d5, d7, has: d5 > 0 || d7 > 0 };
+  });
+
   /* Per-turn cost series for the sparkline. Walks assistant messages
    * in chronological order; each `usage` snapshot is one turn. */
   const series = $derived.by(() => {
@@ -90,6 +117,10 @@
     lines.push(`totals,total,${totals.input + totals.output},${totals.costUsd.toFixed(6)}`);
     if (rtkSavings.bashCalls >= 3) {
       lines.push(`rtk,saved,${rtkSavings.tokensSaved},${rtkSavings.usdSaved.toFixed(6)}`);
+    }
+    if (limitDelta.has) {
+      lines.push(`limits,5h_pct_approx,,${limitDelta.d5.toFixed(2)}`);
+      lines.push(`limits,7d_pct_approx,,${limitDelta.d7.toFixed(2)}`);
     }
     let turnIdx = 0;
     for (const m of session.messages) {
@@ -148,6 +179,15 @@
       <span class="bp-bucket-vals mono">{formatTokens(totals.cacheCreation)} · {formatCostUsd(bucketCost('cacheCreation'))}</span>
     </li>
   </ul>
+
+  {#if limitDelta.has}
+    <div class="bp-limits" title="Approximate. Quota buckets are account-wide (shared with other sessions / clients) and the API exposes no absolute cap — this sums how much this session's turns pushed each rolling limit up. First turn has no baseline, so it under-reports.">
+      <span class="bp-limits-label">Limits used ≈</span>
+      <span class="bp-limits-vals mono">
+        5H ~+{limitDelta.d5.toFixed(1)}% · 7D ~+{limitDelta.d7.toFixed(1)}%
+      </span>
+    </div>
+  {/if}
 
   {#if rtkSavings.bashCalls >= 3}
     <div class="bp-rtk">
@@ -231,6 +271,18 @@
   }
   .bp-bucket-label { color: var(--text-mute); }
   .bp-bucket-vals { color: var(--text-1); font-size: 11.5px; }
+  .bp-limits {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 8px;
+    cursor: help;
+  }
+  .bp-limits-label { color: var(--text-mute); font-size: 12px; }
+  .bp-limits-vals { color: var(--text-1); font-size: 11.5px; }
   .bp-rtk {
     margin-top: 10px;
     padding: 7px 9px;
