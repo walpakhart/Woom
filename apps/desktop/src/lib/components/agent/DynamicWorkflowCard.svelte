@@ -13,6 +13,7 @@
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import { dwState, getWorkflow, loadWorkflow, updateSubagent, updateWorkflow } from '$lib/state/dw.svelte';
   import { formatCostUsd, formatTokens } from '$lib/usage';
+  import Markdown from '$lib/components/ui/Markdown.svelte';
 
   interface Props {
     workflowId: string;
@@ -24,6 +25,10 @@
   );
 
   let expandedId = $state<string | null>(null);
+  /* Subagent results are markdown — render them by default, with a
+   * per-card raw toggle (the result is also a verbatim transcript some
+   * users want to copy unrendered). */
+  let rawView = $state(false);
 
   /* Lazy-load full workflow JSON when the card mounts on a shell
    * entry (Phase 5 hydration — `loadPersistedWorkflows` populates
@@ -204,8 +209,19 @@
               </div>
               {#if sub.result}
                 <div class="dw-cell-section">
-                  <div class="dw-cell-label">Result</div>
-                  <pre class="dw-cell-text">{sub.result}</pre>
+                  <div class="dw-cell-label">
+                    Result
+                    <button
+                      class="dw-raw-toggle"
+                      onclick={() => (rawView = !rawView)}
+                      title="Toggle markdown / raw"
+                    >{rawView ? 'rendered' : 'raw'}</button>
+                  </div>
+                  {#if rawView}
+                    <pre class="dw-cell-text">{sub.result}</pre>
+                  {:else}
+                    <div class="dw-cell-md"><Markdown source={sub.result} /></div>
+                  {/if}
                 </div>
               {/if}
               {#if sub.error}
@@ -386,6 +402,26 @@
     text-transform: uppercase;
     letter-spacing: 0.06em;
     margin-bottom: 3px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .dw-raw-toggle {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-mute);
+    border-radius: 3px;
+    padding: 0 5px;
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    cursor: pointer;
+  }
+  .dw-raw-toggle:hover { color: var(--text-1); border-color: var(--border-hi); }
+  .dw-cell-md {
+    font-size: 12px;
+    color: var(--text-1);
+    line-height: 1.5;
   }
   .dw-cell-text {
     margin: 0;
