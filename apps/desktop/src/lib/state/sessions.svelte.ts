@@ -1417,10 +1417,17 @@ export function updateLastAssistantUsage(sessionId: string, usage: ClaudeUsage) 
   flushStreamQueueNow();
   sessionsState.list = sessionsState.list.map((s) => {
     if (s.id !== sessionId) return s;
-    const cap = contextWindowFor(
-      usage.model ?? (s.agentKind === 'claude' ? s.claudeModel : s.cursorModel),
-      s.agentKind
-    );
+    /* The session's configured model is authoritative for BOTH the
+     * context window and the cost tier. The CLI's per-step `usage.model`
+     * reports the BASE id (e.g. `claude-opus-4-8`) and drops Woom's
+     * `[1m]` context-tier suffix — trusting it collapsed the cap to 200k
+     * on a 1M-tier session, so every turn whose context grew past 200k
+     * tripped `looksCumulative` and had its usage DROPPED, freezing the
+     * turn counter + cost total. Prefer the session model; fall back to
+     * the CLI id only when the session has none. */
+    const sessionModel = s.agentKind === 'claude' ? s.claudeModel : s.cursorModel;
+    const effectiveModel = sessionModel ?? usage.model;
+    const cap = contextWindowFor(effectiveModel, s.agentKind);
     const looksCumulative = usage.contextSize > cap + 8_192;
     if (looksCumulative) {
       // Drop the inflated usage entirely — keep whatever the last
@@ -1443,6 +1450,9 @@ export function updateLastAssistantUsage(sessionId: string, usage: ClaudeUsage) 
        * absolute cap). Null when no snapshot has been fetched yet. */
       const stamped: ClaudeUsage = {
         ...usage,
+        // Authoritative model (carries the [1m] / tier suffix the CLI
+        // drops) so costForUsage picks the right RATE_TABLE row.
+        model: effectiveModel,
         fastMode: s.fastMode === true,
         quota5h: quotaState.usage?.five_hour?.utilization ?? null,
         quota7d: quotaState.usage?.seven_day?.utilization ?? null,
