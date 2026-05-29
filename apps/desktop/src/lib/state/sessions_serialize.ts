@@ -103,5 +103,16 @@ export function serializeSession(s: ClaudeSession): object {
     // `newClaudeSession` factory + Composer pill render path —
     // serialising the explicit boolean keeps hydration deterministic.
     rtkEnabled: s.rtkEnabled ?? true,
+    /* Fast mode default-off — RATE_TABLE keeps standard rates for
+     * any persisted session without the field. Explicit boolean
+     * keeps hydration deterministic. */
+    fastMode: s.fastMode ?? false,
+    /* Quota-pause state — survives reload so a paused chat doesn't
+     * silently lose its countdown badge across app restarts. The
+     * `resumeAt` unix-ms remains valid (or already-past, which
+     * ResumePill treats as «click to resume»). */
+    awaitingResume: s.awaitingResume ?? false,
+    resumeAt: s.resumeAt ?? null,
+    interruptedReason: s.interruptedReason ?? null,
   };
 }

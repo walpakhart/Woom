@@ -643,6 +643,40 @@
     }
   });
 
+  /* Force-refresh state for the 5H/7D quota pills (SDD Phase 3).
+   * Each pill keeps its own spin flag so a click on one doesn't
+   * spin the other. `forceRefreshQuota` ensures the animation is
+   * visible at least 800ms even on a fast-network response. */
+  let refreshSpin5h = $state(false);
+  let refreshSpin7d = $state(false);
+  async function forceRefreshQuota(bucket: '5h' | '7d') {
+    if (bucket === '5h') refreshSpin5h = true;
+    else refreshSpin7d = true;
+    const minVisibleMs = 800;
+    const t0 = Date.now();
+    try {
+      await refreshPlanUsage({ force: true });
+    } catch {
+      notify({
+        kind: 'error',
+        title: 'Quota refresh failed',
+        body: 'Try again in a minute — the endpoint may be rate-limiting.',
+      });
+    }
+    const elapsed = Date.now() - t0;
+    if (elapsed < minVisibleMs) {
+      await new Promise((r) => setTimeout(r, minVisibleMs - elapsed));
+    }
+    /* Hold the spin flag 200ms past the min-visible window so the
+     * CSS fade-out (when we add transition: opacity) has time to
+     * run. Direct flip is fine today since the animation is keyed
+     * on the class itself, not opacity. */
+    setTimeout(() => {
+      if (bucket === '5h') refreshSpin5h = false;
+      else refreshSpin7d = false;
+    }, 200);
+  }
+
   /** Snapshot of bundled / system RTK availability. Null until the
    *  initial `getRtkStatus()` resolves; the derive below treats null
    *  as "still probing" and renders the pill conservatively (on). */
@@ -950,16 +984,30 @@
           {#if p.kind === 'claude' && (fiveHour || sevenDay)}
             <span class="cmp-quotas">
               {#if fiveHour}
-                <span class="cmp-q {pctClass(fiveHour)}" title="5-hour rolling usage">
+                <button
+                  type="button"
+                  class="cmp-q {pctClass(fiveHour)}"
+                  class:cmp-q--refreshing={refreshSpin5h}
+                  title="5-hour rolling usage — click to force-refresh"
+                  onclick={() => forceRefreshQuota('5h')}
+                  aria-label="Refresh 5-hour quota"
+                >
                   <span class="cmp-q-tag mono">5h</span>
                   <span class="cmp-q-val mono">{fmtPct(fiveHour)}</span>
-                </span>
+                </button>
               {/if}
               {#if sevenDay}
-                <span class="cmp-q {pctClass(sevenDay)}" title="7-day weekly usage">
+                <button
+                  type="button"
+                  class="cmp-q {pctClass(sevenDay)}"
+                  class:cmp-q--refreshing={refreshSpin7d}
+                  title="7-day weekly usage — click to force-refresh"
+                  onclick={() => forceRefreshQuota('7d')}
+                  aria-label="Refresh 7-day quota"
+                >
                   <span class="cmp-q-tag mono">7d</span>
                   <span class="cmp-q-val mono">{fmtPct(sevenDay)}</span>
-                </span>
+                </button>
               {/if}
             </span>
           {/if}
@@ -1024,6 +1072,30 @@
               {#if rtkUiState === 'off'}
                 <span class="cmp-rtk-pill-label">off</span>
               {/if}
+            </button>
+          {/if}
+
+          <!-- Fast-mode toggle. Visible only when the active Claude
+               model belongs to the Opus 4.8 family — Anthropic's only
+               Fast-capable SKU at launch. Default off. Toggling on
+               costs 2× per token but the endpoint streams 2.5× faster
+               (same model, dedicated infra). Effect applies to the
+               NEXT spawn — current turn stays on whatever endpoint it
+               started on. -->
+          {#if p.kind === 'claude' && (sess.claudeModel ?? '').startsWith('claude-opus-4-8')}
+            <button
+              class="cmp-fast-chip"
+              class:cmp-fast-chip--on={sess.fastMode === true}
+              onclick={() => updateSession(sess.id, { fastMode: !(sess.fastMode === true) })}
+              aria-pressed={sess.fastMode === true}
+              aria-label={sess.fastMode === true
+                ? 'Fast mode active — click to disable for this session'
+                : 'Fast mode disabled — click to enable for this session'}
+              title={sess.fastMode === true
+                ? 'Fast mode ON — Opus 4.8 streams 2.5× faster at 2× cost. Click to disable. (Applies to next spawn.)'
+                : 'Fast mode OFF — click to enable. Opus 4.8 will stream 2.5× faster at 2× cost. Same model, dedicated endpoint.'}
+            >
+              <span class="cmp-fast-chip-glyph" aria-hidden="true">FAST</span>
             </button>
           {/if}
 
@@ -1661,6 +1733,36 @@
     border: 1px solid var(--border);
     font-size: 10px;
     color: var(--text-1);
+    /* Button-element reset — the click-to-refresh wiring (SDD Phase 3)
+       changes the tag from <span> to <button>; explicit overrides keep
+       the visual identical while making the affordance clickable. */
+    font-family: inherit;
+    cursor: pointer;
+    transition: background 120ms, border-color 120ms;
+  }
+  .cmp-q:hover {
+    background: var(--bg-2);
+    border-color: var(--border-hi);
+  }
+  /* Spin indicator — small ring rotated 360° while the force-refresh
+     request is in flight. Min-visible 800ms enforced by the JS-side
+     timer so even a fast network shows the affordance. */
+  @keyframes cmp-q-spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
+  .cmp-q--refreshing::after {
+    content: '';
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    border: 1.2px solid currentColor;
+    border-right-color: transparent;
+    animation: cmp-q-spin 800ms linear infinite;
+    margin-left: 4px;
+    flex-shrink: 0;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .cmp-q--refreshing::after { animation: none; opacity: 0.5; }
   }
   .cmp-q-tag {
     color: var(--text-mute);
@@ -1781,6 +1883,52 @@
   }
   @media (prefers-reduced-motion: reduce) {
     .cmp-rtk-pill { transition: none; }
+  }
+
+  /* Fast-mode chip. Same chassis as the RTK pill but in an amber
+     palette so the user reads it as «speed/cost dial», not «output
+     compression». Visible only when an Opus 4.8 model is active. */
+  .cmp-fast-chip {
+    display: inline-flex; align-items: center;
+    padding: 3px 7px;
+    border-radius: 5px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-mute);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: background 120ms, border-color 120ms, color 120ms;
+  }
+  .cmp-fast-chip:hover {
+    background: var(--bg-3);
+    border-color: var(--border-hi);
+    color: var(--text-1);
+  }
+  /* ON state — amber accent so the user can't miss they're paying 2×
+     per token. Same hue family the deleted Plan-mode pill used. */
+  .cmp-fast-chip--on {
+    background: color-mix(in srgb, #e0b16c 14%, transparent);
+    border-color: color-mix(in srgb, #e0b16c 40%, var(--border));
+    color: #e0b16c;
+  }
+  .cmp-fast-chip--on:hover {
+    background: color-mix(in srgb, #e0b16c 22%, transparent);
+    border-color: color-mix(in srgb, #e0b16c 55%, var(--border-hi));
+    color: #f0c084;
+  }
+  .cmp-fast-chip-glyph {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .cmp-fast-chip { transition: none; }
   }
 
   .cmp-send {

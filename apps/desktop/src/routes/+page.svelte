@@ -127,7 +127,7 @@
     KNOWN_SLASH_COMMANDS
   } from '$lib/services/slashCommands';
   import { openFileInEditor } from '$lib/services/editorNavigation';
-  import { refreshPlanUsage } from '$lib/state/quota.svelte';
+  import { quotaState, refreshPlanUsage, nextResetAt } from '$lib/state/quota.svelte';
   import {
     layoutState,
     persistPanelState,
@@ -164,7 +164,9 @@
     setActiveSessionInInstance,
     orphanSessionsForInstance,
     genId,
-    genUuid
+    genUuid,
+    setAwaitingResume,
+    clearResumeState
   } from '$lib/state/sessions.svelte';
   import {
     connectionsState,
@@ -235,6 +237,8 @@
     discardSddPhasePlan,
     setSddAutoFireDispatcher
   } from '$lib/state/sdd.svelte';
+  import { dwState, updateWorkflow, loadPersistedWorkflows } from '$lib/state/dw.svelte';
+  import type { DynamicWorkflow } from '$lib/types';
   import SddCard from '$lib/components/agent/SddCard.svelte';
   import {
     initUpdatesStore,
@@ -761,6 +765,8 @@
   /* Window-close lifecycle handles. Both are unlisten-style — see
      the close-flush hook inside onMount for what they catch. */
   let tauriCloseUnlisten: UnlistenFn | null = null;
+  let dwDoneUnlistenRef: UnlistenFn | null = null;
+  let dwRecoverUnlistenRef: UnlistenFn | null = null;
   let beforeUnloadHandler: (() => void) | null = null;
   let closeFlushInProgress = false;
 
@@ -931,6 +937,115 @@
       ],
     });
   });
+
+  /* Quota guard watchdog (SDD `sdd-98a42f3bdb` Phase 2). 30s polling
+   * gated on "any session is sending OR awaiting resume". On tick:
+   * (a) refresh quota snapshot, (b) for each session, trip the SIGTERM
+   * path if utilization crossed 95% mid-stream, or clear the resume
+   * state + auto-fire the queued prompt if it dropped back under 95%.
+   * Cleanup on app unmount. */
+  let quotaWatchdog: ReturnType<typeof setInterval> | null = null;
+  $effect(() => {
+    const anyActive = sessionsState.list.some(
+      (s) => s.sending || s.awaitingResume
+    );
+    if (anyActive) {
+      if (!quotaWatchdog) {
+        quotaWatchdog = setInterval(() => {
+          void refreshPlanUsage().then(() => checkQuotaWatchdog());
+        }, 30_000);
+      }
+    } else if (quotaWatchdog) {
+      clearInterval(quotaWatchdog);
+      quotaWatchdog = null;
+    }
+    return () => {
+      if (quotaWatchdog) {
+        clearInterval(quotaWatchdog);
+        quotaWatchdog = null;
+      }
+    };
+  });
+
+  async function checkQuotaWatchdog() {
+    const pct5h = quotaState.usage?.five_hour?.utilization ?? 0;
+    const pct7d = quotaState.usage?.seven_day?.utilization ?? 0;
+    const hot = pct5h >= 95 || pct7d >= 95;
+    /* Snapshot ids first — auto-fire mutates sessionsState.list under
+     * us during the loop. Iterate by id, not by index. */
+    const snapshot = sessionsState.list.map((s) => s.id);
+    for (const id of snapshot) {
+      const s = sessionsState.list.find((x) => x.id === id);
+      if (!s || s.agentKind !== 'claude') continue;
+      if (s.sending && hot && !s.awaitingResume) {
+        const fallback = Date.now() + 30 * 60_000;
+        const resumeAt = nextResetAt(quotaState.usage) ?? fallback;
+        /* Trip: SIGTERM the claude CLI, mark the last assistant
+         * message as interrupted-by-quota, flip session to
+         * awaitingResume. The next message's `interrupted` field
+         * is what ChatThread reads to render ResumePill. */
+        try {
+          await invoke('claude_stop', { sessionId: s.id });
+        } catch {
+          /* claude_stop returns false if no runner — no-op */
+        }
+        const last = s.messages[s.messages.length - 1];
+        if (last && last.role === 'assistant') {
+          const msgs = [...s.messages];
+          msgs[msgs.length - 1] = { ...last, interrupted: 'quota' as const };
+          updateSession(s.id, { messages: msgs });
+        }
+        setAwaitingResume(s.id, resumeAt, 'quota');
+        continue;
+      }
+      if (s.awaitingResume && !hot) {
+        /* Quota recovered. Clear resume state; if a prompt is queued,
+         * auto-fire it as a Claude-kind send. The send pipeline takes
+         * `pendingQueue[0]` automatically on its next `s.sending` flip
+         * — clearing `sending: false` plus the queued entry triggers
+         * the existing queue-while-sending drain in `sendClaudeMessage`'s
+         * finally block. */
+        clearResumeState(s.id);
+        if ((s.pendingQueue ?? []).length > 0) {
+          /* Pop queue head into composer input + fire send. Same
+           * shape as the ResumePill click path. */
+          const entry = s.pendingQueue![0];
+          const rest = s.pendingQueue!.slice(1);
+          updateSession(s.id, {
+            input: entry.text,
+            mentions: entry.mentions ?? [],
+            pendingQueue: rest
+          });
+          /* Sequential await — multiple sessions auto-resuming on the
+           * same tick fan out one at a time so we don't thrash the
+           * spawn pool. */
+          try {
+            await sendClaudeMessage({ kind: 'claude' });
+          } catch (e) {
+            console.warn('quota auto-resume send failed', e);
+          }
+        }
+      }
+    }
+  }
+
+  /** ResumePill click handler — same drain semantics as the auto-fire
+   *  branch in `checkQuotaWatchdog`, manually triggered. */
+  function onResumeAfterQuota(sessionId: string) {
+    const s = sessionsState.list.find((x) => x.id === sessionId);
+    if (!s) return;
+    clearResumeState(s.id);
+    if ((s.pendingQueue ?? []).length > 0) {
+      const entry = s.pendingQueue![0];
+      const rest = s.pendingQueue!.slice(1);
+      updateSession(s.id, {
+        input: entry.text,
+        mentions: entry.mentions ?? [],
+        pendingQueue: rest
+      });
+      void sendClaudeMessage({ kind: 'claude' });
+    }
+  }
 
   onMount(async () => {
     /* Re-apply the persisted theme on boot — the SSR shell rendered
@@ -1107,6 +1222,50 @@
         if (closeFlushInProgress) return;
         closeFlushInProgress = true;
         event.preventDefault();
+        /* DW running-workflow guard (Phase 5). Probe the registry
+           BEFORE flushing — if a /dw workflow is in flight, surface
+           the styled ConfirmModal. Cancel keeps the window open
+           (reset the flush flag so a second close-request can
+           re-enter); Confirm SIGTERMs every in-flight workflow then
+           proceeds with the normal flush + destroy inside onConfirm.
+           Probe failure is non-fatal — fall through to the flush as
+           if no workflows were running. */
+        let probe: { count: number; ids: string[] } | null = null;
+        try {
+          probe = await invoke<{ count: number; ids: string[] }>('dw_has_running');
+        } catch (e) {
+          console.warn('dw_has_running probe failed', e);
+        }
+        if (probe && probe.count > 0) {
+          const flushDeadlineInner = () =>
+            new Promise<void>((resolve) => setTimeout(resolve, 2_500));
+          openModal('confirm', {
+            title: `${probe.count} Dynamic Workflow${probe.count === 1 ? '' : 's'} still running`,
+            body: 'Close anyway? Subagents will be cancelled and partial transcripts saved.',
+            confirmText: 'Close anyway',
+            danger: true,
+            busy: false,
+            onConfirm: async () => {
+              try {
+                await invoke<number>('dw_cancel_all');
+              } catch (e) {
+                console.warn('dw_cancel_all failed', e);
+              }
+              try {
+                await Promise.race([flushSessionsNow(), flushDeadlineInner()]);
+              } catch { /* best effort */ }
+              try {
+                await win.destroy();
+              } catch {
+                try { await win.close(); } catch { /* tearing down */ }
+              }
+            },
+            onCancel: () => {
+              closeFlushInProgress = false;
+            }
+          });
+          return;
+        }
         /* Hard cap on the flush so a stuck disk write can never
            strand the user in a "won't quit" window. 2.5s is
            generous — `flushToDisk` is parallel Promise.all over
@@ -1254,6 +1413,71 @@
         }
       }).catch(() => {/* silent — Settings has manual button */});
     }, 8000);
+
+    /* DW persistence (Phase 5) — hydrate workflows from disk before
+     * wiring the live event listeners so backend-emitted updates land
+     * on already-mounted entries instead of triggering a no-op. */
+    void loadPersistedWorkflows();
+    /* Recovery banner — backend emits once on startup with the count
+     * of workflows that died non-terminally on the previous shutdown. */
+    const dwRecoverUnlisten = await listen<{ count: number }>(
+      'dw:recovered_interrupted',
+      (e) => {
+        const n = e.payload?.count ?? 0;
+        if (n <= 0) return;
+        notify({
+          kind: 'info',
+          title: `${n} workflow${n === 1 ? '' : 's'} interrupted on last close`,
+          body: 'Reload the chat to inspect partial transcripts.'
+        });
+      }
+    );
+    dwRecoverUnlistenRef = dwRecoverUnlisten;
+
+    /* Dynamic Workflows — workflow-done listener. Folds the verifier
+     * synthesis back into the parent chat as a SEPARATE assistant
+     * ClaudeMessage (per Phase 4 spec — synthesis behaves like any
+     * normal claude reply: copy / drag / context-menu / quoted into
+     * the next turn). The DW card stays focused on per-subagent
+     * progress; this listener mirrors `final_answer` from the workflow
+     * payload into the chat transcript. */
+    const dwDoneUnlisten = await listen<DynamicWorkflow>('dw:workflow_done', (e) => {
+      const wf = e.payload as DynamicWorkflow | (Partial<DynamicWorkflow> & { workflowId?: string; error?: string });
+      if (!wf) return;
+      // Error path: backend emits `{ workflowId, error }` when fanout or
+      // verifier fails. Surface as a system message so the user sees
+      // why no synthesis arrived.
+      if ((wf as { error?: string }).error) {
+        const wfId = (wf as { workflowId?: string }).workflowId;
+        const target = wfId
+          ? dwState.workflows.find((w) => w.id === wfId)
+          : null;
+        if (target) {
+          appendSessionMessage(target.sessionId, {
+            role: 'system',
+            content: `_Dynamic Workflow failed: ${(wf as { error: string }).error}_`,
+            at: new Date().toISOString()
+          });
+        }
+        return;
+      }
+      const full = wf as DynamicWorkflow;
+      // Keep reactive state in lockstep with the backend snapshot.
+      updateWorkflow(full.id, {
+        status: full.status,
+        verifierResult: full.verifierResult,
+        finalAnswer: full.finalAnswer,
+        completedAt: full.completedAt
+      });
+      if (full.status === 'done' && full.finalAnswer && full.finalAnswer.trim().length > 0) {
+        appendSessionMessage(full.sessionId, {
+          role: 'assistant',
+          content: full.finalAnswer,
+          at: new Date().toISOString()
+        });
+      }
+    });
+    dwDoneUnlistenRef = dwDoneUnlisten;
   });
 
   /* formatBytesShort moved to ./page_helpers.ts */
@@ -1268,6 +1492,8 @@
     actionIpcUnlisten?.();
     claudeBgUnlisten?.();
     tauriCloseUnlisten?.();
+    dwDoneUnlistenRef?.();
+    dwRecoverUnlistenRef?.();
     if (beforeUnloadHandler && typeof window !== 'undefined') {
       window.removeEventListener('beforeunload', beforeUnloadHandler);
       beforeUnloadHandler = null;
@@ -2746,6 +2972,7 @@
           onDrop={(e) => onAgentDrop(APP_INSTANCE_IDS.claude, 'claude', e)}
           onDragLeave={() => onAgentDragLeave(APP_INSTANCE_IDS.claude)}
           onSddAdvance={onSddAdvance}
+          onResumeAfterQuota={onResumeAfterQuota}
         />
       {/if}
 
@@ -2801,6 +3028,7 @@
           onDrop={(e) => onAgentDrop(APP_INSTANCE_IDS.cursor, 'cursor', e)}
           onDragLeave={() => onAgentDragLeave(APP_INSTANCE_IDS.cursor)}
           onSddAdvance={onSddAdvance}
+          onResumeAfterQuota={onResumeAfterQuota}
         />
       {/if}
 

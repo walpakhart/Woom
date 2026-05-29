@@ -88,6 +88,7 @@
      *  in the linked editor (or the active editor instance). */
     onOpenFile?: (path: string) => void;
     onSddAdvance?: (sessionId: string, prompt: string) => void;
+    onResumeAfterQuota?: (sessionId: string) => void;
   }
   let p: Props = $props();
 
@@ -211,7 +212,8 @@
                 onResendMessage={p.onResendMessage}
                 onOpenFile={p.onOpenFile}
                 onSddAdvance={p.onSddAdvance}
-              />
+              onResumeAfterQuota={p.onResumeAfterQuota}
+  />
               <Composer
                 kind={p.kind}
                 onSend={p.onSend}
@@ -281,7 +283,8 @@
               onResendMessage={p.onResendMessage}
               onOpenFile={p.onOpenFile}
               onSddAdvance={p.onSddAdvance}
-            />
+              onResumeAfterQuota={p.onResumeAfterQuota}
+/>
             <Composer
               kind={p.kind}
               onSend={p.onSend}

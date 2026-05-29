@@ -550,12 +550,15 @@ export function newClaudeSession(
       claudeResumable: false,
       agentKind,
       cursorModel: null,
-      // Default new Claude sessions to Sonnet 4.6 — Opus 4.7 (the CLI
-      // default on Max plans) burns ~5x more 5h quota for output and
-      // most Forge tasks (UI edits, code reads, search, triage) don't
-      // need Opus reasoning. Users opt in to Opus per session via the
-      // model chip when they actually need it.
-      claudeModel: agentKind === 'claude' ? 'claude-sonnet-4-6' : null,
+      // Default new Claude sessions to Opus 4.8. Anthropic dropped
+      // Opus 4.8's standard rate to $5/$25 per 1M (was $15/$75 on
+      // 4.7) on 2026-05-28 — now within striking distance of Sonnet
+      // 4.6 ($3/$15) but with materially better reasoning. The user
+      // opts down to Sonnet/Haiku per session via the model chip
+      // when budget matters more than quality. NOTE: this only
+      // affects NEW sessions; persisted sessions on the old default
+      // keep their model — no auto-migration.
+      claudeModel: agentKind === 'claude' ? 'claude-opus-4-8' : null,
       lastContextSize: 0,
       linkedToEditor: !!opts.linkedToEditor,
       linkedToEditorInstanceId: opts.linkedToEditorInstanceId ?? null,
@@ -573,7 +576,11 @@ export function newClaudeSession(
       // backend as `rtkDisabled` so the spawned `claude` env gets
       // `WOOM_RTK_SESSION_DISABLED=1` and the wrapper passes Bash
       // output through unchanged.
-      rtkEnabled: true
+      rtkEnabled: true,
+      // Fast mode is opt-in per session. Default off; user toggles
+      // via the FAST chip in Composer footer when the active model
+      // is Opus 4.8-family. Persisted across reloads.
+      fastMode: false
     },
     ...sessionsState.list
   ];
@@ -730,6 +737,34 @@ export function updateSession(id: string, patch: Partial<ClaudeSession>) {
       return;
     }
   }
+}
+
+/** Quota guard (Phase 2): mark a session as paused with a countdown
+ *  to the relevant bucket's reset. Thin wrapper over `updateSession`
+ *  so call-sites stay readable + a future `quota:reset` event-emit
+ *  can hook here. */
+export function setAwaitingResume(
+  id: string,
+  resetAt: number,
+  reason: 'quota' | 'user' | 'crash'
+) {
+  updateSession(id, {
+    awaitingResume: true,
+    resumeAt: resetAt,
+    interruptedReason: reason,
+    sending: false
+  });
+}
+
+/** Clear quota-pause state — used by the watchdog when the bucket
+ *  drops under threshold and by the ResumePill after the user
+ *  manually resumes. */
+export function clearResumeState(id: string) {
+  updateSession(id, {
+    awaitingResume: false,
+    resumeAt: undefined,
+    interruptedReason: undefined
+  });
 }
 
 /** Stamp `pendingTurn` on the session as a crash-detection marker.
@@ -1394,7 +1429,15 @@ export function updateLastAssistantUsage(sessionId: string, usage: ClaudeUsage) 
     const msgs = [...s.messages];
     const last = msgs[msgs.length - 1];
     if (last && last.role === 'assistant') {
-      msgs[msgs.length - 1] = { ...last, usage };
+      /* Stamp `fastMode` from the session onto the usage snapshot.
+       * Claude CLI's per-step `usage` payload never carries Fast
+       * mode — it's a billing-side property, not a token-counter
+       * one. We copy it here so `costForUsage` reads the correct
+       * RATE_TABLE row (`<model>:fast` vs `<model>`) without having
+       * to look up the parent session at cost-calc time. Mid-session
+       * Fast toggles therefore cost-stamp PER turn, not retroactively. */
+      const stamped: ClaudeUsage = { ...usage, fastMode: s.fastMode === true };
+      msgs[msgs.length - 1] = { ...last, usage: stamped };
     }
     return { ...s, messages: msgs, lastContextSize: usage.contextSize };
   });

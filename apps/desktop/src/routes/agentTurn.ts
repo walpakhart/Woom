@@ -158,6 +158,10 @@ export async function continueAgentTurn(sessionId: string, deps: AgentTurnDeps):
       // The auto-follow-up turn must honour the same per-session
       // toggle as the user-initiated turn.
       rtkDisabled: sess.rtkEnabled === false,
+      // Auto-follow-up turn honours the same per-session Fast toggle
+      // as the user-initiated turn — see `sendClaudeMessage.ts` for
+      // rationale.
+      fastMode: sess.fastMode === true,
       onAssistantDelta: deps.appendAssistantDelta,
       onAppNavigation: deps.handleAppNavigation,
     });

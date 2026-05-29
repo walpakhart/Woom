@@ -17,6 +17,8 @@
   import ConfirmModal from './ConfirmModal.svelte';
   import JiraCreateModal from './JiraCreateModal.svelte';
   import GithubCreatePrModal from './GithubCreatePrModal.svelte';
+  import QuotaPauseModal from './QuotaPauseModal.svelte';
+  import DwPreflightModal from './DwPreflightModal.svelte';
   import type { JiraUserSummary } from '$lib/data';
 
   interface Props {
@@ -85,3 +87,5 @@
 <ConfirmModal />
 <JiraCreateModal onProjectChange={onJiraCreateProjectChange} onSubmit={submitJiraCreate} />
 <GithubCreatePrModal {now} onRepoChange={onGithubPrRepoChange} onBranchesChange={onGithubPrBranchesChange} onSubmit={submitGithubPr} />
+<QuotaPauseModal />
+<DwPreflightModal />

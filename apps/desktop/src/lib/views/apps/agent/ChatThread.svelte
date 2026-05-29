@@ -11,6 +11,8 @@
   import ClaudeActionCard from '$lib/components/agent/ClaudeActionCard.svelte';
   import QuestionCard from '$lib/components/agent/QuestionCard.svelte';
   import SddCard from '$lib/components/agent/SddCard.svelte';
+  import DynamicWorkflowCard from '$lib/components/agent/DynamicWorkflowCard.svelte';
+  import ResumePill from '$lib/components/agent/ResumePill.svelte';
   import { workspaceForSession, isSddCardHidden } from '$lib/state/sdd.svelte';
   import CardContextMenu, { type MenuItem } from '$lib/views/apps/_shared/CardContextMenu.svelte';
   import { notify } from '$lib/state/toaster.svelte';
@@ -41,6 +43,10 @@
      *  the same send pipeline a manual user message uses. Wired up from
      *  +page.svelte; null when the parent hasn't plumbed it (e.g. tests). */
     onSddAdvance?: (sessionId: string, prompt: string) => void;
+    /** Quota-resume click (SDD Phase 2). Drains the session's
+     *  pendingQueue[0] and fires `sendClaudeMessage`. Owned by the
+     *  parent so ResumePill stays decoupled from the send-pipeline. */
+    onResumeAfterQuota?: (sessionId: string) => void;
   }
   let p: Props = $props();
 
@@ -585,6 +591,9 @@
                 <pre class="thinking-body">{msg.thinking}</pre>
               </details>
             {/if}
+            {#if msg.dwWorkflowId}
+              <DynamicWorkflowCard workflowId={msg.dwWorkflowId} />
+            {/if}
             {#if !shouldRenderBody(i)}
               <!-- Off-viewport placeholder. Approximate height keeps the
                    scrollbar honest until the article scrolls within the
@@ -802,6 +811,9 @@
             {#if i === lastVisibleIndex}{@render inlineActions()}{/if}
           </div>
         </article>
+        {#if msg.interrupted === 'quota' && i === sess.messages.length - 1 && sess.awaitingResume && p.onResumeAfterQuota}
+          <ResumePill session={sess} onResume={p.onResumeAfterQuota} />
+        {/if}
       {:else}
         <article class="msg msg--system" use:observeArticle={i}>
           <div class="msg-system">{msg.content}</div>

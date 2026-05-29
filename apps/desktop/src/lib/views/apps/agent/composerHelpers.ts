@@ -9,8 +9,13 @@
  *  through to the 200K Sonnet/Haiku default for unknown ids. */
 export function modelContextLimit(model: string | null | undefined): number {
   if (!model) return 200_000;
-  /* Opus 4.x ships with a 1M-token window by default (the same
-     extended-context tier Sonnet 4.5 has). */
+  /* Opus 4.8 default tier dropped to 200K; the dedicated 1M variant
+     carries an explicit `[1m]` suffix. Check the 1M-variant first
+     because `startsWith('claude-opus-4-8')` matches both. */
+  if (model.startsWith('claude-opus-4-8[1m]')) return 1_000_000;
+  if (model.startsWith('claude-opus-4-8')) return 200_000;
+  /* Opus 4.7 + earlier ship with a 1M-token window by default (the
+     same extended-context tier Sonnet 4.5 has). */
   if (model.startsWith('claude-opus-4')) return 1_000_000;
   if (model.startsWith('claude-sonnet-4-6')) return 200_000;
   if (model.startsWith('claude-sonnet')) return 1_000_000;
@@ -39,6 +44,13 @@ export function pctClass(b: { utilization: number | null } | null): string {
 /* Real Claude model ids only — Claude CLI rejects the run with
    "model does not exist" if we pass anything it can't resolve. */
 export const claudeModels: { value: string; label: string }[] = [
+  /* Opus 4.8 launched 2026-05-28 at $5/$25 per 1M (was $15/$75 on
+     4.7). The 1M-context variant is a separate model id with the
+     `[1m]` suffix — exposed as its own dropdown entry. Fast mode
+     is handled separately via the FAST chip (it's a per-session
+     toggle, not a model id). */
+  { value: 'claude-opus-4-8', label: 'Opus 4.8' },
+  { value: 'claude-opus-4-8[1m]', label: 'Opus 4.8 · 1M' },
   { value: 'claude-opus-4-7', label: 'Opus 4.7' },
   { value: 'claude-sonnet-4-6', label: 'Sonnet 4.6' },
   { value: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5' },

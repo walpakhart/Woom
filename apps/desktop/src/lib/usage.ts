@@ -16,6 +16,17 @@ const RATE_TABLE: Record<
   string,
   { input: number; output: number; cacheWrite: number; cacheRead: number }
 > = {
+  /* Opus 4.8 (launched 2026-05-28). Cheaper than 4.7 — Anthropic's
+   * press release frames the headline number as "3× cheaper than 4.7";
+   * cache write/read follow the standard 1.25× / 0.1× of base.
+   * Fast mode = base × 2 across all four buckets (2.5× faster output,
+   * dedicated endpoint). 1M-context variant = base × 2 too. The four
+   * possible combinations are encoded flat (no derived multipliers at
+   * lookup) so debugging a wrong-rate diff in production is one grep. */
+  'claude-opus-4-8':            { input: 5,  output: 25,  cacheWrite: 6.25, cacheRead: 0.5 },
+  'claude-opus-4-8[1m]':        { input: 10, output: 50,  cacheWrite: 12.5, cacheRead: 1.0 },
+  'claude-opus-4-8:fast':       { input: 10, output: 50,  cacheWrite: 12.5, cacheRead: 1.0 },
+  'claude-opus-4-8[1m]:fast':   { input: 20, output: 100, cacheWrite: 25.0, cacheRead: 2.0 },
   'claude-opus-4-7': { input: 15, output: 75, cacheWrite: 18.75, cacheRead: 1.5 },
   'claude-sonnet-4-6': { input: 3, output: 15, cacheWrite: 3.75, cacheRead: 0.3 },
   'claude-haiku-4-5-20251001': { input: 0.8, output: 4, cacheWrite: 1, cacheRead: 0.08 }
@@ -45,6 +56,12 @@ export function contextWindowFor(
   if (agentKind === 'cursor') return 200_000;
   if (!model) return 200_000;
   if (model.startsWith('claude-opus-4-7')) return 1_000_000;
+  /* Opus 4.8 default tier dropped to 200K; the dedicated 1M variant
+   * carries an explicit `[1m]` suffix in the model id. Order matters —
+   * check the 1M variant first because `startsWith('claude-opus-4-8')`
+   * matches both. */
+  if (model.startsWith('claude-opus-4-8[1m]')) return 1_000_000;
+  if (model.startsWith('claude-opus-4-8')) return 200_000;
   return 200_000;
 }
 
@@ -57,7 +74,16 @@ export function contextWindowFor(
  *      typical for Cursor turns; Cursor uses subscription credits,
  *      not per-token billing, so a guessed USD number would mislead). */
 export function costForUsage(usage: ClaudeUsage): number {
-  const r = usage.model ? RATE_TABLE[usage.model] : undefined;
+  if (!usage.model) return 0;
+  /* Fast-mode keying: append `:fast` to the model id when the session
+   * stamped `fastMode: true`. The RATE_TABLE has explicit `:fast`
+   * entries for the variants where Fast is supported (Opus 4.8 +
+   * 4.8[1m] today). If the composite key misses, fall back to the
+   * base entry — defence against a future model getting fastMode-set
+   * but no `:fast` rate listed yet (cost reports under-bill rather
+   * than zero). */
+  const fastKey = usage.fastMode === true ? `${usage.model}:fast` : null;
+  const r = (fastKey && RATE_TABLE[fastKey]) || RATE_TABLE[usage.model];
   if (!r) return 0;
   return (
     (usage.inputTokens * r.input
@@ -146,6 +172,58 @@ export function sessionUsageTotals(sess: ClaudeSession | null): {
     acc.turns += 1;
   }
   return acc;
+}
+
+/** Heuristic estimate of tokens + USD saved by RTK output-compression
+ *  in this session. Source signal: bash tool-use traces (Claude CLI
+ *  emits each Bash invocation as a segment starting with `Bash(` in
+ *  the message's `trace` event). Each rewritten bash call saves
+ *  roughly 70% of an average 2K-token output, so:
+ *
+ *      tokensSaved ≈ bashCalls × 0.7 × 2000
+ *
+ *  USD cost is approximated via the session's output rate (worst-case;
+ *  bash output goes into the agent's input on the NEXT turn, but rate
+ *  parity makes the rough number reasonable). Below 3 bash calls we
+ *  return zeros — the heuristic is too noisy for tiny sessions and
+ *  the popover hides the line. See SDD `sdd-98a42f3bdb` Phase 3 plan
+ *  for the rationale + open question on instrumented telemetry. */
+export function estimateRtkSavings(sess: ClaudeSession | null): {
+  tokensSaved: number;
+  usdSaved: number;
+  bashCalls: number;
+} {
+  if (!sess) return { tokensSaved: 0, usdSaved: 0, bashCalls: 0 };
+  let bashCalls = 0;
+  for (const m of sess.messages) {
+    if (m.role !== 'assistant') continue;
+    if (!m.events) continue;
+    for (const ev of m.events) {
+      if (ev.kind !== 'trace') continue;
+      for (const seg of ev.segments) {
+        /* Claude CLI's trace segment for a Bash tool call looks like
+         * `Bash(git status)` / `bash(cargo test)`. Match the prefix
+         * tolerantly (case-insensitive, leading whitespace OK). */
+        if (/^\s*bash\s*\(/i.test(seg)) bashCalls += 1;
+      }
+    }
+  }
+  if (bashCalls < 3) return { tokensSaved: 0, usdSaved: 0, bashCalls };
+  const tokensSaved = bashCalls * 1400; // 0.7 × 2K rounded
+  /* Cost via output-rate of the session's current model. Use a fake
+   * usage envelope so `costForUsage` runs the same lookup path the
+   * budget chip uses (including Fast-mode keying). */
+  const probe: ClaudeUsage = {
+    inputTokens: 0,
+    cacheCreationTokens: 0,
+    cacheReadTokens: 0,
+    outputTokens: tokensSaved,
+    contextSize: 0,
+    model: sess.claudeModel ?? null,
+    fastMode: sess.fastMode === true
+  };
+  const usdSaved = costForUsage(probe);
+  return { tokensSaved, usdSaved, bashCalls };
 }
 
 /** Cache hit-rate for one snapshot — `cache_read / (input + cache_read +

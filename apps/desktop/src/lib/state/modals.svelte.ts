@@ -107,6 +107,11 @@ export interface ConfirmModalState {
   danger?: boolean;
   busy: boolean;
   onConfirm: () => Promise<void>;
+  /** Fires when the user dismisses the modal (Cancel button / ESC /
+   *  backdrop click). Lets callers re-arm state that gated the
+   *  modal's open path — e.g. the close-window guard resets its
+   *  re-entry flag here so a second close-request can fire. */
+  onCancel?: () => void | Promise<void>;
 }
 
 export interface JiraCreateModalState {
@@ -154,6 +159,33 @@ export interface GithubCreatePrModalState {
   error: string | null;
 }
 
+export interface DwPlanSummary {
+  workflowId: string;
+  rationale: string;
+  subagents: { id: string; prompt: string }[];
+}
+
+export interface DwPreflightModalState {
+  plan: DwPlanSummary;
+  estimateUsd: number;
+  budgetCap: number;
+  resolve: ((action: { kind: 'approve'; cap: number } | { kind: 'cancel' }) => void) | null;
+}
+
+export interface QuotaPauseModalState {
+  /** 0-100 percent — current utilization that tripped the guard. */
+  pct: number;
+  /** Which bucket pushed past the threshold. */
+  bucketLabel: '5H' | '7D';
+  /** Unix-ms of the bucket's next reset. Modal renders live countdown. */
+  resumeAt: number;
+  /** Deferred resolver — the modal calls `resolve('wait' | 'cancel')`
+   *  to close itself + signal the caller. The promise lives in
+   *  `openQuotaPauseModal`'s closure; the state-side ref is non-
+   *  serializable so a reload mid-pause just dismisses the modal. */
+  resolve: ((action: 'wait' | 'cancel') => void) | null;
+}
+
 // --- Aggregate registry ------------------------------------------------------
 
 export interface ModalsState {
@@ -170,6 +202,8 @@ export interface ModalsState {
   confirm: ConfirmModalState | null;
   jiraCreate: JiraCreateModalState | null;
   githubCreatePr: GithubCreatePrModalState | null;
+  quotaPause: QuotaPauseModalState | null;
+  dwPreflight: DwPreflightModalState | null;
 }
 
 export const modalsState = $state<ModalsState>({
@@ -185,7 +219,9 @@ export const modalsState = $state<ModalsState>({
   merge: null,
   confirm: null,
   jiraCreate: null,
-  githubCreatePr: null
+  githubCreatePr: null,
+  quotaPause: null,
+  dwPreflight: null
 });
 
 export type ModalKey = keyof ModalsState;
@@ -204,6 +240,45 @@ export function closeModal<K extends ModalKey>(key: K): void {
 /** Merge a partial update into an open modal. No-op when the modal is
  *  closed — useful inside async submit handlers that may race with a manual
  *  dismiss. */
+/** Open the quota-pause modal + await the user's choice. Returns
+ *  `'wait'` when the user asks to queue the send and resume on
+ *  reset, `'cancel'` when they bail (we drop the input). The modal
+ *  component is responsible for calling the resolver before
+ *  closing itself; this helper just sets the state + holds the
+ *  deferred. */
+export function openQuotaPauseModal(args: {
+  pct: number;
+  bucketLabel: '5H' | '7D';
+  resumeAt: number;
+}): Promise<'wait' | 'cancel'> {
+  return new Promise((resolve) => {
+    modalsState.quotaPause = {
+      pct: args.pct,
+      bucketLabel: args.bucketLabel,
+      resumeAt: args.resumeAt,
+      resolve
+    };
+  });
+}
+
+/** Open the DW preflight modal + await user's approve / cancel
+ *  decision (SDD `sdd-98a42f3bdb` Phase 4). On approve returns the
+ *  user-chosen budget cap (may be raised above the $5 default).
+ *  Cancel drops the workflow without firing fan-out. */
+export function openDwPreflightModal(args: {
+  plan: DwPlanSummary;
+  estimateUsd: number;
+}): Promise<{ kind: 'approve'; cap: number } | { kind: 'cancel' }> {
+  return new Promise((resolve) => {
+    modalsState.dwPreflight = {
+      plan: args.plan,
+      estimateUsd: args.estimateUsd,
+      budgetCap: 5,
+      resolve
+    };
+  });
+}
+
 export function patchModal<K extends ModalKey>(
   key: K,
   patch: Partial<NonNullable<ModalsState[K]>>

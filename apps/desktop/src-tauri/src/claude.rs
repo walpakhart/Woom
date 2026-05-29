@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::claude_mcp::{build_mcp_config, TempFile};
 
@@ -325,6 +325,13 @@ pub struct AskArgs<'a> {
     /// Sourced from the per-session `rtkEnabled` flag — Phase 3 wires
     /// the TS side.
     pub rtk_disabled: bool,
+    /// When true AND the model is Opus 4.8-family, signals Anthropic's
+    /// Fast mode (2.5× faster output at 2× cost via a dedicated
+    /// endpoint). Surfaced through `ANTHROPIC_USE_FAST_MODE=1` env —
+    /// CLI surface is uncertain at writing (see SDD workspace
+    /// `sdd-98a42f3bdb` Phase 1 open-question). Adjust the env-set in
+    /// `spawn_claude_armed` when Anthropic stabilises the flag.
+    pub fast_mode: bool,
 }
 
 fn build_spawn_sig(args: &AskArgs<'_>) -> SpawnSig {
@@ -591,6 +598,22 @@ async fn spawn_claude_armed(args: &AskArgs<'_>) -> Result<ArmedCli, ClaudeRunErr
     if args.rtk_disabled {
         cmd.env("WOOM_RTK_SESSION_DISABLED", "1");
     }
+    // Fast mode — set the Anthropic env var hint when the session
+    // toggled it AND the active model is in the Opus 4.8 family
+    // (Anthropic restricts Fast to those SKUs at launch). The CLI
+    // surface for Fast is uncertain at first-release: Anthropic's
+    // press materials say "Fast Mode keeps you on the full Opus
+    // model" but don't publish the CLI flag. Default to
+    // `ANTHROPIC_USE_FAST_MODE=1` (env-var convention matches our
+    // RTK toggle); when a stable CLI flag ships, swap this single
+    // env-set for `cmd.arg("--fast")` (or equivalent).
+    if args.fast_mode {
+        if let Some(m) = args.model {
+            if m.starts_with("claude-opus-4-8") {
+                cmd.env("ANTHROPIC_USE_FAST_MODE", "1");
+            }
+        }
+    }
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
     cmd.stdin(std::process::Stdio::piped());
@@ -696,11 +719,13 @@ pub async fn ask(
     action_ipc_socket: Option<&Path>,
     image_paths: &[String],
     rtk_disabled: bool,
+    fast_mode: bool,
 ) -> Result<String, ClaudeRunError> {
     let args = AskArgs {
         session_id, cwd, claude_uuid, resume, rules, model, app_context,
         action_ipc_socket,
         rtk_disabled,
+        fast_mode,
     };
     let target_sig = build_spawn_sig(&args);
 
@@ -999,6 +1024,7 @@ pub async fn prewarm(
     app_context: Option<&str>,
     action_ipc_socket: Option<&Path>,
     rtk_disabled: bool,
+    fast_mode: bool,
 ) -> Result<(), ClaudeRunError> {
     // Race-free single-prewarm-per-session guard. If another prewarm
     // for this same session is still in flight, this call is a
@@ -1022,6 +1048,7 @@ pub async fn prewarm(
         session_id, cwd, claude_uuid, resume, rules, model, app_context,
         action_ipc_socket,
         rtk_disabled,
+        fast_mode,
     };
     let target_sig = build_spawn_sig(&args);
 
@@ -1316,8 +1343,8 @@ pub async fn compact_session(
         so far — what was asked, what was decided, what was done, what's still in flight, \
         and any code/config decisions worth remembering. No preamble, no sign-off, no \
         meta-commentary about \"summarising\" — just the summary content.";
-    let summary = run_claude_oneshot(bin, summary_prompt, Some(old_uuid), None, cwd, model).await?;
-    let summary = summary.trim();
+    let summary_resp = run_claude_oneshot(bin, summary_prompt, Some(old_uuid), None, cwd, model).await?;
+    let summary = summary_resp.text.trim();
     if summary.is_empty() {
         return Err(ClaudeRunError::Failed(
             "claude returned an empty summary — old session may not be resumable".into(),
@@ -1348,14 +1375,41 @@ pub async fn compact_session(
 /// both the summary call and the seed call. No MCP, no
 /// `--append-system-prompt`, no images — just the prompt text and
 /// (optionally) `--resume` / `--session-id` / `--model`.
-async fn run_claude_oneshot(
+/// Token usage from the `claude -p --output-format json` envelope.
+/// Best-effort parse — when the CLI omits any of these fields they
+/// stay zero and the caller falls back to a char-count estimate.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub(crate) struct OneshotUsage {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_input_tokens: u64,
+    pub cache_creation_input_tokens: u64,
+}
+
+/// Bundle for the `run_claude_oneshot` reply — adds optional usage
+/// info alongside the legacy `result` string. Old callers read
+/// `.text`; new ones read `.usage` when present.
+#[derive(Debug, Default, Clone)]
+pub(crate) struct OneshotResponse {
+    pub text: String,
+    pub usage: Option<OneshotUsage>,
+}
+
+/// One-shot non-interactive `claude -p --output-format json` invocation.
+/// Exposed `pub(crate)` so `dw.rs` can drive real planner / per-subagent
+/// / verifier turns through the same primitive `compact_session` uses.
+/// `Err` surfaces ClaudeRunError up to the caller; on success returns
+/// the JSON envelope's `result` text alongside whatever `usage` block
+/// the CLI emitted (may be `None`).
+pub(crate) async fn run_claude_oneshot(
     bin: &str,
     prompt: &str,
     resume_uuid: Option<&str>,
     new_session_uuid: Option<&str>,
     cwd: Option<&Path>,
     model: Option<&str>,
-) -> Result<String, ClaudeRunError> {
+) -> Result<OneshotResponse, ClaudeRunError> {
     let mut cmd = tokio::process::Command::new(bin);
     cmd.arg("-p").arg(prompt).arg("--output-format").arg("json");
     if let Some(u) = resume_uuid {
@@ -1402,17 +1456,22 @@ async fn run_claude_oneshot(
         )));
     }
     // `--output-format json` returns one envelope: `{"result": "...",
-    // "session_id": "...", "is_error": false, ...}`. Pull `result`,
-    // tolerate missing-field as an empty string so the caller surfaces
-    // a "claude returned empty" instead of a JSON-parse error.
+    // "session_id": "...", "is_error": false, "usage": {...}, ...}`.
+    // Pull `result` + best-effort `usage`. Missing fields tolerated —
+    // caller surfaces "claude returned empty" downstream and falls back
+    // to a char-count cost estimate when usage is absent.
     let parsed: serde_json::Value = serde_json::from_slice(&out.stdout)
         .map_err(|e| ClaudeRunError::Failed(format!("claude json parse failed: {e}")))?;
-    let result = parsed
+    let text = parsed
         .get("result")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-    Ok(result)
+    let usage = parsed
+        .get("usage")
+        .cloned()
+        .and_then(|v| serde_json::from_value::<OneshotUsage>(v).ok());
+    Ok(OneshotResponse { text, usage })
 }
 
 // MCP-config plumbing (build_mcp_config, per-server builders, sidecar

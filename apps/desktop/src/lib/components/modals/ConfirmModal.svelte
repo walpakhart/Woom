@@ -15,13 +15,29 @@
       notifyError(e, { title: m.title });
     }
   }
+
+  /** Run onCancel (if provided) then close the modal. Used by all
+   *  three dismiss paths so re-armable callers (close-window guard,
+   *  etc.) see the cancel signal. Synchronous fire-and-forget — the
+   *  modal closes immediately even if the callback returns a Promise
+   *  to avoid leaving the user staring at a hung dialog. */
+  function dismiss() {
+    if (!m || m.busy) return;
+    try {
+      const r = m.onCancel?.();
+      if (r && typeof (r as Promise<void>).then === 'function') {
+        void (r as Promise<void>).catch(() => { /* best effort */ });
+      }
+    } catch { /* swallow — modal still closes */ }
+    closeModal('confirm');
+  }
 </script>
 
 {#if m}
   <div
     class="modal-backdrop"
-    onclick={(e) => { if (e.target === e.currentTarget && !m.busy) closeModal('confirm'); }}
-    onkeydown={(e) => { if (e.key === 'Escape' && !m.busy) closeModal('confirm'); }}
+    onclick={(e) => { if (e.target === e.currentTarget) dismiss(); }}
+    onkeydown={(e) => { if (e.key === 'Escape') dismiss(); }}
     role="dialog"
     aria-modal="true"
     tabindex="-1"
@@ -39,12 +55,12 @@
           <div class="modal-title">{m.title}</div>
           <div class="modal-sub">{m.body}</div>
         </div>
-        <button class="modal-close" onclick={() => closeModal('confirm')} disabled={m.busy} aria-label="Close">
+        <button class="modal-close" onclick={dismiss} disabled={m.busy} aria-label="Close">
           <svg class="i" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12" /></svg>
         </button>
       </header>
       <footer class="modal-foot">
-        <button class="btn btn--ghost" onclick={() => closeModal('confirm')} disabled={m.busy}>Cancel</button>
+        <button class="btn btn--ghost" onclick={dismiss} disabled={m.busy}>Cancel</button>
         <button class="btn {m.danger ? 'btn--danger' : 'btn--primary'}" onclick={run} disabled={m.busy}>
           {m.busy ? 'Working…' : m.confirmText}
         </button>

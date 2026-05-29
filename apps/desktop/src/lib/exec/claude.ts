@@ -46,6 +46,11 @@ export interface AgentRunRequest {
    *  wrapper passes Bash output through unchanged. Sourced from
    *  `!sess.rtkEnabled` at the call site. */
   rtkDisabled?: boolean;
+  /** When true AND the active model is in the Opus 4.8 family, the
+   *  backend sets `ANTHROPIC_USE_FAST_MODE=1` on the spawned `claude`
+   *  CLI's env so Anthropic routes the turn through their Fast endpoint
+   *  (2.5× output speed, 2× cost). Sourced from `sess.fastMode`. */
+  fastMode?: boolean;
   /** Called with every assistant-text delta as it streams in. */
   onAssistantDelta: (sessionId: string, delta: string) => void;
   /** Called with `thinking` deltas from reasoning models. Optional —
@@ -122,7 +127,8 @@ export async function runAgentRequest(req: AgentRunRequest): Promise<AgentRunRes
       claudeModel: req.claudeModel,
       appContext: req.appContext,
       imagePaths: req.imagePaths ?? [],
-      rtkDisabled: req.rtkDisabled ?? false
+      rtkDisabled: req.rtkDisabled ?? false,
+      fastMode: req.fastMode ?? false
     });
     return { reply: result.reply, sessionUuid: result.session_uuid };
   } finally {
@@ -160,6 +166,9 @@ export interface PrewarmRequest {
    *  prewarm signatures are pool-matched and a mismatch evicts the
    *  parked process. */
   rtkDisabled?: boolean;
+  /** Pool-match field — same reasoning as `rtkDisabled`. A prewarmed
+   *  non-Fast CLI can't satisfy a Fast `ask` (different env).  */
+  fastMode?: boolean;
 }
 
 /** Pre-spawn a Claude CLI for `sessionId` so the cold-start cost
@@ -179,7 +188,8 @@ export async function prewarmAgent(req: PrewarmRequest): Promise<void> {
       agentKind: req.agentKind,
       claudeModel: req.claudeModel,
       appContext: req.appContext,
-      rtkDisabled: req.rtkDisabled ?? false
+      rtkDisabled: req.rtkDisabled ?? false,
+      fastMode: req.fastMode ?? false
     });
   } catch {
     // Prewarm is purely an optimization — failing to spawn (binary

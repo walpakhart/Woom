@@ -408,6 +408,99 @@ fn walk_size(p: &Path) -> u64 {
     total
 }
 
+/// Dynamic Workflow per-subagent worktree (SDD `sdd-98a42f3bdb`
+/// Phase 4). Each DW subagent runs in an isolated branch off HEAD so
+/// concurrent claude spawns don't trample shared working-tree state.
+/// Branch name: `woom/dw-<wf>-<sub>`. Path: `<storage_root>/dw/<wf>/<sub>/`.
+/// Sequential creation only — `git worktree add` takes a repo-level
+/// lock; running 20 in parallel deadlocks.
+pub fn create_for_subagent(
+    repo_path: &str,
+    workflow_id: &str,
+    subagent_id: &str,
+) -> Result<Worktree, String> {
+    let root = storage_root().ok_or_else(|| "could not resolve $HOME".to_string())?;
+    let safe_wf = sanitize_ref(workflow_id);
+    let safe_sub = sanitize_ref(subagent_id);
+    let path = root.join("dw").join(&safe_wf).join(&safe_sub);
+    let branch = format!("woom/dw-{}-{}", safe_wf, safe_sub);
+
+    if path.exists() {
+        return inspect(&path)
+            .ok_or_else(|| "subagent worktree dir exists but git doesn't know it".into());
+    }
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("create subagent worktree parent: {}", e))?;
+    }
+
+    let mut cmd = git(repo_path);
+    cmd.args([
+        "worktree",
+        "add",
+        "-b",
+        &branch,
+        path.to_string_lossy().as_ref(),
+        "HEAD",
+    ]);
+    run(cmd)?;
+
+    inspect(&path).ok_or_else(|| "git worktree add succeeded but inspect failed".into())
+}
+
+/// Remove every subagent worktree (+ branch) belonging to a workflow.
+/// Best-effort — keep going on per-subagent failures so a partially
+/// cleaned workflow doesn't strand half its dirs.
+pub fn cleanup_workflow_worktrees(repo_path: &str, workflow_id: &str) -> Result<(), String> {
+    let root = storage_root().ok_or_else(|| "could not resolve $HOME".to_string())?;
+    let safe_wf = sanitize_ref(workflow_id);
+    let wf_root = root.join("dw").join(&safe_wf);
+    if !wf_root.exists() {
+        return Ok(());
+    }
+    let entries = match std::fs::read_dir(&wf_root) {
+        Ok(e) => e,
+        Err(_) => return Ok(()),
+    };
+    for entry in entries.flatten() {
+        let p = entry.path();
+        if !p.is_dir() {
+            continue;
+        }
+        let sub_id = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
+        if sub_id.is_empty() {
+            continue;
+        }
+        let branch = format!("woom/dw-{}-{}", safe_wf, sub_id);
+        let mut cmd = git(repo_path);
+        cmd.args([
+            "worktree",
+            "remove",
+            "--force",
+            p.to_string_lossy().as_ref(),
+        ]);
+        let _ = run(cmd);
+        if p.exists() {
+            let _ = std::fs::remove_dir_all(&p);
+        }
+        let mut bcmd = git(repo_path);
+        bcmd.args(["branch", "-D", &branch]);
+        let _ = run(bcmd);
+    }
+    let _ = std::fs::remove_dir_all(&wf_root);
+    Ok(())
+}
+
+fn sanitize_ref(raw: &str) -> String {
+    raw.chars()
+        .map(|c| match c {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' | '.' => c,
+            _ => '-',
+        })
+        .collect()
+}
+
 fn woom_branch(session_id: &str) -> String {
     // Sanitize to a valid git ref. Git refs can't contain spaces, `..`, `~`,
     // `^`, `:`, `?`, `*`, `[`, `\`, or control chars.

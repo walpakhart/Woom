@@ -10,6 +10,7 @@
 // the regular send path. `false` falls through to a normal user-text
 // message.
 
+import { invoke } from '@tauri-apps/api/core';
 import {
   appendBgTaskList,
   appendSlashHelp,
@@ -29,7 +30,9 @@ import {
   updateSession,
 } from '$lib/state/sessions.svelte';
 import { skillsState, renderSkill } from '$lib/state/skills.svelte';
-import type { ClaudeSession } from '$lib/types';
+import { addWorkflow } from '$lib/state/dw.svelte';
+import { openDwPreflightModal, type DwPlanSummary } from '$lib/state/modals.svelte';
+import type { ClaudeSession, DynamicWorkflow } from '$lib/types';
 
 export interface SlashCommandDeps {
   sendClaudeMessage(opts?: { silent?: boolean; kind?: 'claude' | 'cursor' }): Promise<void>;
@@ -203,6 +206,9 @@ export async function handleSlashCommand(
         await deps.sendClaudeMessage({ silent: true });
       }
       void deps.scrollChatBottom();
+    } else if (withArgs.name === 'dw') {
+      await runDwFromSlash(session, withArgs.args);
+      void deps.scrollChatBottom();
     }
     return true;
   }
@@ -242,4 +248,83 @@ export async function handleSlashCommand(
     } catch { /* noop */ }
   }
   return true;
+}
+
+/** `/dw <ask>` runner. Calls backend planner, registers workflow in
+ *  reactive state, opens the preflight modal with the planner output
+ *  + cost estimate. On approve fires `dw_approve` (kicks off fan-out)
+ *  and appends an assistant message carrying `dwWorkflowId` — ChatThread
+ *  renders <DynamicWorkflowCard> after that message. On cancel drops
+ *  the workflow from state (server-side will GC the orphan entry). */
+async function runDwFromSlash(session: ClaudeSession, userPrompt: string): Promise<void> {
+  appendSessionMessage(session.id, {
+    role: 'user',
+    content: `/dw ${userPrompt}`,
+    at: new Date().toISOString(),
+  });
+  let planResult: { workflowId: string; plan: { rationale: string; subagents: { id: string; prompt: string }[]; verifierPrompt: string }; estimateUsd: number };
+  const cwd = session.worktreePath ?? session.cwd ?? null;
+  try {
+    planResult = await invoke('dw_plan', { userPrompt, sessionId: session.id, cwd });
+  } catch (e) {
+    appendSessionMessage(session.id, {
+      role: 'assistant',
+      content: `_DW planner failed: ${String(e)}_`,
+      at: new Date().toISOString(),
+    });
+    return;
+  }
+  const wf: DynamicWorkflow = {
+    id: planResult.workflowId,
+    sessionId: session.id,
+    userPrompt,
+    status: 'awaiting_approval',
+    planRationale: planResult.plan.rationale,
+    subagents: planResult.plan.subagents.map((s) => ({
+      id: s.id,
+      prompt: s.prompt,
+      cwdStrategy: 'inherit',
+      expectedArtifacts: [],
+      status: 'queued',
+      tokensIn: 0,
+      tokensOut: 0,
+      costUsd: 0
+    })),
+    verifierPrompt: planResult.plan.verifierPrompt,
+    budgetCapUsd: 5,
+    totalCostUsd: 0,
+    createdAt: Date.now()
+  };
+  addWorkflow(wf);
+  const summary: DwPlanSummary = {
+    workflowId: planResult.workflowId,
+    rationale: planResult.plan.rationale,
+    subagents: planResult.plan.subagents.map((s) => ({ id: s.id, prompt: s.prompt }))
+  };
+  const decision = await openDwPreflightModal({ plan: summary, estimateUsd: planResult.estimateUsd });
+  if (decision.kind === 'cancel') {
+    try { await invoke('dw_cancel', { workflowId: planResult.workflowId }); } catch { /* noop */ }
+    appendSessionMessage(session.id, {
+      role: 'assistant',
+      content: '_DW cancelled before fan-out._',
+      at: new Date().toISOString(),
+    });
+    return;
+  }
+  try {
+    await invoke('dw_approve', { workflowId: planResult.workflowId, budgetCapUsd: decision.cap });
+  } catch (e) {
+    appendSessionMessage(session.id, {
+      role: 'assistant',
+      content: `_DW approve failed: ${String(e)}_`,
+      at: new Date().toISOString(),
+    });
+    return;
+  }
+  appendSessionMessage(session.id, {
+    role: 'assistant',
+    content: '',
+    at: new Date().toISOString(),
+    dwWorkflowId: planResult.workflowId
+  });
 }

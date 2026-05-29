@@ -11,10 +11,11 @@ import {
   contextPct,
   contextWindowFor,
   costForUsage,
+  estimateRtkSavings,
   formatCostUsd,
   formatTokens
 } from './usage';
-import type { ClaudeUsage } from './types';
+import type { ClaudeMessage, ClaudeSession, ClaudeUsage } from './types';
 
 function usage(partial: Partial<ClaudeUsage>): ClaudeUsage {
   return {
@@ -24,6 +25,7 @@ function usage(partial: Partial<ClaudeUsage>): ClaudeUsage {
     outputTokens: 0,
     contextSize: 0,
     model: null,
+    fastMode: false,
     ...partial
   };
 }
@@ -101,6 +103,13 @@ describe('contextWindowFor', () => {
     // Future-proofing: a longer suffix on opus-4-7 (e.g. a thinking
     // variant id) should still get the 1M window.
     expect(contextWindowFor('claude-opus-4-7-some-suffix')).toBe(1_000_000);
+  });
+
+  it('returns 200k for opus-4-8 default, 1M for the [1m] variant', () => {
+    // Opus 4.8 dropped to 200K base; the 1M tier is an explicit
+    // `[1m]`-suffixed variant.
+    expect(contextWindowFor('claude-opus-4-8')).toBe(200_000);
+    expect(contextWindowFor('claude-opus-4-8[1m]')).toBe(1_000_000);
   });
 
   it('caps Cursor sessions at 200k regardless of model', () => {
@@ -192,5 +201,148 @@ describe('costForUsage', () => {
     // 1M output @ $4 vs Sonnet's $15
     const u = usage({ outputTokens: 1_000_000, model: 'claude-haiku-4-5-20251001' });
     expect(costForUsage(u)).toBeCloseTo(4);
+  });
+
+  it('charges Opus 4.8 at its launch rates ($5 input / $25 output)', () => {
+    // 1M input @ $5 + 1M output @ $25 = $30 — Opus 4.8 is 3× cheaper
+    // than 4.7 ($90 for the same workload).
+    const u = usage({
+      inputTokens: 1_000_000,
+      outputTokens: 1_000_000,
+      model: 'claude-opus-4-8'
+    });
+    expect(costForUsage(u)).toBeCloseTo(30);
+  });
+
+  it('charges Opus 4.8 Fast at 2× the standard rate ($10 / $50)', () => {
+    // Fast endpoint = 2× cost in exchange for 2.5× speed.
+    const u = usage({
+      inputTokens: 1_000_000,
+      outputTokens: 1_000_000,
+      model: 'claude-opus-4-8',
+      fastMode: true
+    });
+    expect(costForUsage(u)).toBeCloseTo(60);
+  });
+
+  it('charges Opus 4.8 [1m] at the 1M-context tier (2× base)', () => {
+    const u = usage({
+      inputTokens: 1_000_000,
+      outputTokens: 1_000_000,
+      model: 'claude-opus-4-8[1m]'
+    });
+    expect(costForUsage(u)).toBeCloseTo(60);
+  });
+
+  it('charges Opus 4.8 [1m] Fast at 4× the base rate ($20 / $100)', () => {
+    // Compounds 1M tier × Fast = 4× over base.
+    const u = usage({
+      inputTokens: 1_000_000,
+      outputTokens: 1_000_000,
+      model: 'claude-opus-4-8[1m]',
+      fastMode: true
+    });
+    expect(costForUsage(u)).toBeCloseTo(120);
+  });
+
+  it('falls back to base rate when fastMode set but no :fast row exists', () => {
+    // Defence: an unknown Sonnet variant with fastMode=true should
+    // still cost out at base rate, not zero.
+    const u = usage({
+      outputTokens: 1_000_000,
+      model: 'claude-sonnet-4-6',
+      fastMode: true
+    });
+    expect(costForUsage(u)).toBeCloseTo(15);
+  });
+});
+
+describe('estimateRtkSavings', () => {
+  function assistantWithBashCount(n: number): ClaudeMessage {
+    const segments: string[] = [];
+    for (let i = 0; i < n; i++) segments.push(`Bash(git status #${i})`);
+    return {
+      role: 'assistant',
+      content: '',
+      at: '2026-05-29T00:00:00Z',
+      events: [{ kind: 'trace', segments }]
+    };
+  }
+
+  function sessWithMessages(messages: ClaudeMessage[], model: string | null = 'claude-sonnet-4-6'): ClaudeSession {
+    return {
+      id: 'test-sess',
+      title: 'test',
+      mentions: [],
+      messages,
+      input: '',
+      sending: false,
+      cwd: null,
+      worktreePath: null,
+      worktreeBranch: null,
+      worktreeRepo: null,
+      actions: [],
+      claudeUuid: 'u',
+      claudeResumable: false,
+      agentKind: 'claude',
+      cursorModel: null,
+      claudeModel: model,
+      lastContextSize: 0,
+      linkedToEditor: false,
+      linkedToEditorInstanceId: null,
+      linkedCanvasId: null,
+      linkedTerminalInstanceId: null,
+      agentInstanceId: null,
+      cwdSwitchRecap: null,
+      cwdUuids: {},
+      awaitingApproval: false,
+      pendingActionResults: [],
+      pendingTurn: null
+    } as ClaudeSession;
+  }
+
+  it('returns zeros for null session', () => {
+    expect(estimateRtkSavings(null)).toEqual({
+      tokensSaved: 0, usdSaved: 0, bashCalls: 0
+    });
+  });
+
+  it('returns zeros when below the 3-bash threshold', () => {
+    const sess = sessWithMessages([assistantWithBashCount(2)]);
+    expect(estimateRtkSavings(sess)).toEqual({
+      tokensSaved: 0, usdSaved: 0, bashCalls: 2
+    });
+  });
+
+  it('estimates non-zero savings for ≥3 bash calls', () => {
+    const sess = sessWithMessages([assistantWithBashCount(5)]);
+    const r = estimateRtkSavings(sess);
+    expect(r.bashCalls).toBe(5);
+    expect(r.tokensSaved).toBe(5 * 1400);
+    // Sonnet 4.6 output rate is $15/M — 7000 tokens × $15 / 1M = $0.105
+    expect(r.usdSaved).toBeCloseTo(0.105);
+  });
+
+  it('aggregates bash counts across multiple assistant messages', () => {
+    const sess = sessWithMessages([
+      assistantWithBashCount(2),
+      assistantWithBashCount(2)
+    ]);
+    expect(estimateRtkSavings(sess).bashCalls).toBe(4);
+  });
+
+  it('ignores non-bash trace segments + non-trace events', () => {
+    const sess = sessWithMessages([
+      {
+        role: 'assistant',
+        content: '',
+        at: '2026-05-29T00:00:00Z',
+        events: [
+          { kind: 'text', body: 'Bash(in-text-should-not-count)' },
+          { kind: 'trace', segments: ['Read(foo.ts)', 'Grep(bar)'] }
+        ]
+      }
+    ]);
+    expect(estimateRtkSavings(sess).bashCalls).toBe(0);
   });
 });

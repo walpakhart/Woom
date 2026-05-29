@@ -33,7 +33,8 @@ export type SlashCommand =
   | 'ps'
   | 'loop'
   | 'unloop'
-  | 'sdd';
+  | 'sdd'
+  | 'dw';
 
 export const KNOWN_SLASH_COMMANDS: SlashCommand[] = [
   'compact',
@@ -45,13 +46,14 @@ export const KNOWN_SLASH_COMMANDS: SlashCommand[] = [
   'ps',
   'loop',
   'unloop',
-  'sdd'
+  'sdd',
+  'dw'
 ];
 
 /** Commands that accept inline arguments after the slash (`/preview pnpm dev`).
  *  Arg-less commands stay in the strict-exact-match path so they remain
  *  unambiguous. */
-const ARG_BEARING: Set<SlashCommand> = new Set(['preview', 'kill', 'loop', 'sdd']);
+const ARG_BEARING: Set<SlashCommand> = new Set(['preview', 'kill', 'loop', 'sdd', 'dw']);
 
 /** Display-shape for the inline slash-picker. Picker lives in
  *  Composer.svelte and filters this list by prefix as the user types
@@ -67,7 +69,8 @@ export const SLASH_COMMAND_DESCRIPTIONS: Record<SlashCommand, string> = {
   ps:      'List running background tasks inline',
   loop:    'Re-send a prompt on a fixed cadence: /loop 5m check the deploy',
   unloop:  'Stop the active loop on this chat',
-  sdd:     'Spec-Driven Development — agent writes spec/plan/phases into a temp workspace'
+  sdd:     'Spec-Driven Development — agent writes spec/plan/phases into a temp workspace',
+  dw:      'Dynamic Workflow — planner → parallel subagent fan-out → verifier synthesis'
 };
 
 /** Parse a composer message; returns the matched command or null.
@@ -186,6 +189,7 @@ export function appendSlashHelp(session: ClaudeSession): void {
     '- `/kill <id|label>` — kill a tracked background task',
     '- `/ps` — list running background tasks',
     '- `/sdd <ask>` — spec → plan → phases workflow in a temp workspace (no git pollution)',
+    '- `/dw <ask>` — Dynamic Workflow: planner fans out parallel subagents → verifier synthesises',
     '- `/loop <duration> <prompt>` / `/unloop` — re-send a prompt on a cadence',
     '- `/help` — show this list'
   ];

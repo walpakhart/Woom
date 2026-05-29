@@ -103,6 +103,12 @@ export type ClaudeUsage = {
    *  calculation (different rates per model) and to label the badge
    *  if the user mid-session swapped models. */
   model: string | null;
+  /** Whether the session was in Fast mode when this snapshot was
+   *  stamped. The CLI doesn't report Fast in its `usage` block —
+   *  `sessions.svelte.ts::updateLastAssistantUsage` copies the
+   *  session's `fastMode` flag onto each snapshot at stamp time so
+   *  `costForUsage` can pick the right RATE_TABLE row. */
+  fastMode?: boolean;
 };
 
 export type ClaudeMessage = {
@@ -114,6 +120,22 @@ export type ClaudeMessage = {
    *  has ended (we keep overwriting on each sub-step so the final
    *  value reflects the real cost of the full turn). */
   usage?: ClaudeUsage;
+  /** When set, this assistant turn ended prematurely — Woom interrupted
+   *  the CLI before it could finish. Sources:
+   *  - `'quota'` — quota guard tripped during streaming (Phase 2).
+   *  - `'user'` — user clicked Stop in the composer.
+   *  - `'crash'` — main app crashed mid-stream; restart-time recovery
+   *    flips a previously-running session into this state.
+   *  ResumePill renders for sessions with `interrupted === 'quota'`
+   *  on the LAST message; the field is per-message so multi-turn
+   *  histories with one paused turn don't all show pills. */
+  interrupted?: 'quota' | 'user' | 'crash';
+  /** When set, this assistant message hosts a Dynamic Workflow (Phase 4).
+   *  ChatThread renders `<DynamicWorkflowCard>` reading the workflow
+   *  from `dwState.workflows` by this id. The text content carries the
+   *  user's `/dw <prompt>` echo so the chat stays readable when the
+   *  card is collapsed / off-screen. */
+  dwWorkflowId?: string;
   /** Concatenated `thinking` content blocks the agent emitted before the
       final answer. Surfaced as a collapsed "Thinking ✓" pill in the UI
       that the user can expand to read. Only set on assistant messages
@@ -337,6 +359,27 @@ export type ClaudeSession = {
    *  through unchanged. Default `true` — RTK is opt-out, not opt-in.
    *  Persisted (see `sessions_serialize.ts`). */
   rtkEnabled?: boolean;
+  /** Whether Claude Opus Fast mode is on for this session. Applies
+   *  only when `claudeModel` is a Fast-capable variant
+   *  (`claude-opus-4-8*`). Fast = 2.5× faster output at 2× cost via
+   *  Anthropic's dedicated endpoint. Default `false` (standard
+   *  pricing + speed). Persisted across reloads. */
+  fastMode?: boolean;
+  /** Quota guard (Phase 2). When the 5H/7D quota tripped during an
+   *  in-flight turn OR the user explicitly chose «wait» in the
+   *  pre-send modal, this flag is set; `resumeAt` carries the unix-ms
+   *  of the relevant bucket's reset. ResumePill renders below the
+   *  interrupted assistant message with a live countdown until
+   *  `resumeAt`, then becomes an active Resume button. Cleared by
+   *  `clearResumeState` on reset detection or user-initiated send. */
+  awaitingResume?: boolean;
+  /** Unix-ms when the quota bucket that paused this session resets.
+   *  Drives the countdown shown on ResumePill + the modal. Null /
+   *  undefined when `awaitingResume` is false. */
+  resumeAt?: number;
+  /** Why we paused. Mirrors the per-message `ClaudeMessage.interrupted`
+   *  but lives on the session for quick guard-check reads. */
+  interruptedReason?: 'quota' | 'user' | 'crash';
   /** Manual pin from the agent-view dashboard. Pinned sessions sort to
    *  the top of their group + survive in the dashboard's "Pinned"
    *  bucket regardless of their working status. */
@@ -433,5 +476,51 @@ export interface RepoInfo {
   ahead: number;
   behind: number;
   missing: boolean;
+}
+
+/* Dynamic Workflows (SDD `sdd-98a42f3bdb` Phase 4) — Anthropic's
+ * research-preview feature replicated locally. Planner emits a JSON
+ * plan with up to 20 subagents; each runs in an isolated git worktree;
+ * verifier synthesises the final answer. State lives in
+ * `state/dw.svelte.ts`; the Rust side mirrors these shapes via serde. */
+
+export interface DwSubagent {
+  id: string;
+  prompt: string;
+  cwdStrategy: 'inherit' | 'subpath';
+  cwdSubpath?: string;
+  expectedArtifacts: string[];
+  status: 'queued' | 'streaming' | 'done' | 'failed' | 'cancelled';
+  claudeUuid?: string;
+  worktreePath?: string;
+  result?: string;
+  error?: string;
+  tokensIn: number;
+  tokensOut: number;
+  costUsd: number;
+}
+
+export interface DynamicWorkflow {
+  id: string;
+  sessionId: string;
+  userPrompt: string;
+  status:
+    | 'planning'
+    | 'awaiting_approval'
+    | 'running'
+    | 'verifying'
+    | 'done'
+    | 'failed'
+    | 'cancelled';
+  planRationale?: string;
+  subagents: DwSubagent[];
+  verifierPrompt?: string;
+  verifierResult?: string;
+  finalAnswer?: string;
+  budgetCapUsd: number;
+  totalCostUsd: number;
+  createdAt: number;
+  startedAt?: number;
+  completedAt?: number;
 }
 

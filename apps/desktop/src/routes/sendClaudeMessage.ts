@@ -27,6 +27,7 @@ import {
   genUuid,
   replaceLastAssistant,
   sessionsState,
+  setAwaitingResume,
   updateSession,
 } from '$lib/state/sessions.svelte';
 import { applySessionCwd, buildContinuationRecap } from '$lib/services/sessionCwd';
@@ -40,7 +41,8 @@ import {
 } from '$lib/exec/claude';
 import { ensureCanvasLoaded } from '$lib/state/canvas.svelte';
 import { loadClaudeMd } from '$lib/state/claudemd.svelte';
-import { refreshPlanUsage } from '$lib/state/quota.svelte';
+import { quotaState, refreshPlanUsage, nextResetAt } from '$lib/state/quota.svelte';
+import { openQuotaPauseModal } from '$lib/state/modals.svelte';
 import { runHook } from '$lib/state/hooks.svelte';
 import { runStatusLine, type StatusLinePayload } from '$lib/state/statusline.svelte';
 import { notify, notifyError } from '$lib/state/toaster.svelte';
@@ -106,6 +108,36 @@ export function createSendClaudeMessage(deps: SendClaudeMessageDeps) {
     if (!opts.silent && (await deps.handleSlashCommand(text, s))) return;
     const id = s.id;
     const kind = (s.agentKind ?? 'claude') as 'claude' | 'cursor';
+    /* Quota guard (SDD `sdd-98a42f3bdb` Phase 2). Cursor sessions use
+     * subscription credits, not Anthropic quota — skip the guard there.
+     * For Claude: if 5H or 7D utilization is at/above 95%, block the
+     * send + open the pause modal. On «wait» we queue the prompt into
+     * `pendingQueue` (same FIFO the composer's queue-while-sending UI
+     * uses) and mark `awaitingResume`; the watchdog auto-fires once
+     * quota drops back under 95%. On «cancel» we leave the user's
+     * input intact so they can edit + retry manually. */
+    if (kind === 'claude' && !opts.silent) {
+      const pct5h = quotaState.usage?.five_hour?.utilization ?? 0;
+      const pct7d = quotaState.usage?.seven_day?.utilization ?? 0;
+      if (pct5h >= 95 || pct7d >= 95) {
+        const tripped5h = pct5h >= 95;
+        const fallbackReset = Date.now() + 30 * 60_000;
+        const resumeAt = nextResetAt(quotaState.usage) ?? fallbackReset;
+        const action = await openQuotaPauseModal({
+          pct: tripped5h ? pct5h : pct7d,
+          bucketLabel: tripped5h ? '5H' : '7D',
+          resumeAt
+        });
+        if (action === 'wait') {
+          const entry = { text, mentions: [...s.mentions] };
+          const nextQueue = [...(s.pendingQueue ?? []), entry];
+          updateSession(s.id, { input: '', mentions: [], pendingQueue: nextQueue });
+          setAwaitingResume(s.id, resumeAt, 'quota');
+        }
+        /* «cancel» — leave s.input untouched so user can edit / retry. */
+        return;
+      }
+    }
     if (!opts.silent) {
       try {
         const hookOut = await runHook('UserPromptSubmit', {
@@ -276,6 +308,9 @@ export function createSendClaudeMessage(deps: SendClaudeMessageDeps) {
           // spawned `claude`. Takes effect on the next spawn (not
           // in-flight turns).
           rtkDisabled: sess?.rtkEnabled === false,
+          // Fast mode — Opus 4.8 only. Backend gates on model id, so
+          // sending fastMode=true on a non-Opus-4.8 model is a no-op.
+          fastMode: sess?.fastMode === true,
           onAssistantDelta: deps.appendAssistantDelta,
           onAppNavigation: deps.handleAppNavigation,
         });

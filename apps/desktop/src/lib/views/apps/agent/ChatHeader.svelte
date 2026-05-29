@@ -13,6 +13,7 @@
   import { sessionsState, updateSession, dismissInterrupted } from '$lib/state/sessions.svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { sessionUsageTotals, formatTokens, formatCostUsd } from '$lib/usage';
+  import BudgetPopover from '$lib/components/agent/BudgetPopover.svelte';
   import { notify } from '$lib/state/toaster.svelte';
   import { tick, untrack } from 'svelte';
   import {
@@ -208,6 +209,19 @@
     memExpandedId = null;
   }
 
+  /* Budget popover (SDD `sdd-98a42f3bdb` Phase 3). Same chassis as
+   * the memory popover — outside-click + ESC dismissal via a $effect
+   * bound only while open. */
+  let budgetPopoverOpen = $state(false);
+  let budgetPopoverEl = $state<HTMLDivElement | null>(null);
+
+  function toggleBudgetPopover() {
+    budgetPopoverOpen = !budgetPopoverOpen;
+  }
+  function closeBudgetPopover() {
+    budgetPopoverOpen = false;
+  }
+
   function toggleMemExpanded(id: number) {
     memExpandedId = memExpandedId === id ? null : id;
   }
@@ -332,6 +346,34 @@
       window.removeEventListener('keydown', onKey);
     };
   });
+
+  /* Outside-click + ESC for the budget popover. Mirrors the memory
+   * popover pattern — listeners bind only while the popover is open
+   * so idle rendering pays zero overhead. */
+  $effect(() => {
+    if (!budgetPopoverOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (!budgetPopoverEl) return;
+      if (budgetPopoverEl.contains(e.target as Node)) return;
+      const t = e.target as HTMLElement | null;
+      /* Clicks on the chip itself toggle via its onclick — skip
+         that to avoid an immediate re-open after this close. */
+      if (t?.closest?.('.ch-budget')) return;
+      closeBudgetPopover();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        closeBudgetPopover();
+      }
+    };
+    window.addEventListener('mousedown', onDown, true);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('mousedown', onDown, true);
+      window.removeEventListener('keydown', onKey);
+    };
+  });
 </script>
 
 <header class="ch">
@@ -370,20 +412,29 @@
   </div>
 
   {#if sess && budget.turns > 0}
-    <button
-      class="ch-budget"
-      class:ch-budget--high={budget.costUsd >= 1}
-      title={`Session token budget — ${budget.turns} turn${budget.turns === 1 ? '' : 's'}\n`
-        + `Input: ${formatTokens(budget.input)}  ·  Output: ${formatTokens(budget.output)}\n`
-        + `Cache read: ${formatTokens(budget.cacheRead)}  ·  Cache write: ${formatTokens(budget.cacheCreation)}\n`
-        + `Estimated cost: ${formatCostUsd(budget.costUsd)}`}
-      aria-label="Session token budget"
-    >
-      <span class="ch-budget-tokens mono">{formatTokens(budget.input + budget.output)}</span>
-      {#if budget.costUsd > 0}
-        <span class="ch-budget-cost mono">{formatCostUsd(budget.costUsd)}</span>
+    <div class="ch-budget-wrap">
+      <button
+        class="ch-budget"
+        class:ch-budget--high={budget.costUsd >= 1}
+        class:ch-budget--open={budgetPopoverOpen}
+        onclick={toggleBudgetPopover}
+        title={budgetPopoverOpen
+          ? 'Session token budget — click to close breakdown'
+          : 'Session token budget — click for per-bucket breakdown'}
+        aria-label="Session token budget"
+        aria-expanded={budgetPopoverOpen}
+      >
+        <span class="ch-budget-tokens mono">{formatTokens(budget.input + budget.output)}</span>
+        {#if budget.costUsd > 0}
+          <span class="ch-budget-cost mono">{formatCostUsd(budget.costUsd)}</span>
+        {/if}
+      </button>
+      {#if budgetPopoverOpen}
+        <div bind:this={budgetPopoverEl}>
+          <BudgetPopover session={sess} onClose={closeBudgetPopover} />
+        </div>
       {/if}
-    </button>
+    </div>
   {/if}
 
   {#if memHits.length > 0}
@@ -691,9 +742,10 @@
 
   /* Token / USD budget chip. Sits left of the memory chip, same
      height + radius so they read as siblings. Renders only after
-     the first assistant turn (gated on `budget.turns > 0`). Tooltip
-     carries the per-bucket breakdown so the user can grok cache vs
-     output without us building a popover yet. */
+     the first assistant turn (gated on `budget.turns > 0`). Click
+     opens the BudgetPopover with the per-bucket breakdown + RTK
+     savings + sparkline + CSV export. */
+  .ch-budget-wrap { position: relative; }
   .ch-budget {
     display: inline-flex; align-items: center; gap: 6px;
     height: 24px; padding: 0 10px;
@@ -703,12 +755,17 @@
     color: var(--text-mute);
     font-size: 11px;
     line-height: 1;
-    cursor: default;
+    cursor: pointer;
     transition: color 140ms, background 140ms, border-color 140ms;
   }
   .ch-budget:hover {
     color: var(--text-1);
     border-color: var(--border-hi);
+  }
+  .ch-budget--open {
+    color: var(--text-1);
+    border-color: var(--border-hi);
+    background: color-mix(in srgb, var(--accent) 6%, var(--bg-2));
   }
   .ch-budget-tokens {
     color: var(--text-1);

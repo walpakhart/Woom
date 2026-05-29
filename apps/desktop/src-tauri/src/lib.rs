@@ -7,6 +7,7 @@ mod claude_bg;
 mod claude_mcp;
 mod claude_quota;
 mod claudemd;
+mod dw;
 mod crash_reporting;
 mod cursor;
 mod cursor_mcp;
@@ -395,6 +396,7 @@ pub fn run() {
         .manage(bg_tasks::BgRegistry::new())
         .manage(claude_bg::ClaudeBgRegistry::new())
         .manage(sdd::SddRegistry::new())
+        .manage(dw::DwRegistry::new())
         .manage(std::sync::Arc::new(updater::UpdaterState::new()))
         .manage(action_ipc_state())
         .invoke_handler(tauri::generate_handler![
@@ -480,6 +482,14 @@ pub fn run() {
             rtk::rtk_install_hook,
             rtk::rtk_uninstall_hook,
             rtk::rtk_hook_state,
+            dw::dw_plan,
+            dw::dw_approve,
+            dw::dw_cancel,
+            dw::dw_status,
+            dw::dw_list,
+            dw::dw_get,
+            dw::dw_has_running,
+            dw::dw_cancel_all,
             agent_compact_session,
             claude_plan_usage,
             claude_stop,
@@ -736,6 +746,24 @@ pub fn run() {
                     claude::evict_stale_warm(warm_pool_handle.clone()).await;
                 }
             });
+            // DW persistence recovery (Phase 5). Hydrate workflows from
+            // disk, mark in-flight runs as failed-interrupted (the parent
+            // process died while they were mid-flight), then sweep stale
+            // terminal workflows older than the 7-day retain window. The
+            // 6h interval task takes over after this initial pass.
+            let dw_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                dw::recover_on_startup(dw_handle.clone()).await;
+                let mut ticker = tokio::time::interval(std::time::Duration::from_secs(6 * 60 * 60));
+                ticker.tick().await; // skip immediate first tick — startup pass already ran
+                loop {
+                    ticker.tick().await;
+                    let removed = dw::cleanup_stale_workflows(&dw_handle, 7);
+                    if removed > 0 {
+                        eprintln!("[dw] periodic sweep removed {} stale workflows", removed);
+                    }
+                }
+            });
             // RTK bootstrap (`sdd-e1817d13c6` Phase 2). Resolves the
             // bundled `rtk` sidecar, copies the woom-managed wrapper
             // script into the user's data dir with the rtk path
@@ -918,11 +946,16 @@ async fn claude_ask(
     // spawned `claude` env gets `WOOM_RTK_SESSION_DISABLED=1` when
     // the user has clicked the composer's "RTK off" pill.
     #[allow(non_snake_case)] rtkDisabled: Option<bool>,
+    // Fast mode (Opus 4.8 only — 2.5× speed / 2× cost). Sourced
+    // from `sess.fastMode`. Backend env-set inside spawn_claude_armed
+    // only fires when an Opus-4.8 family model is selected.
+    #[allow(non_snake_case)] fastMode: Option<bool>,
 ) -> Result<AgentAskResult, String> {
     let cwd_path = cwd.as_deref().map(std::path::Path::new);
     let kind = agentKind.unwrap_or_default();
     let images = imagePaths.unwrap_or_default();
     let rtk_disabled = rtkDisabled.unwrap_or(false);
+    let fast_mode = fastMode.unwrap_or(false);
     let ipc_socket = ipc.inner().socket_path().to_path_buf();
     let result = agent::ask(
         kind,
@@ -941,6 +974,7 @@ async fn claude_ask(
         Some(ipc_socket.as_path()),
         &images,
         rtk_disabled,
+        fast_mode,
     )
     .await;
     // Tag resume-orphan with a stable prefix on the wire so the frontend
@@ -972,6 +1006,10 @@ async fn claude_prewarm(
     #[allow(non_snake_case)] claudeModel: Option<String>,
     #[allow(non_snake_case)] appContext: Option<String>,
     #[allow(non_snake_case)] rtkDisabled: Option<bool>,
+    // Fast mode mirror — see `claude_ask` for rationale. Pool-match
+    // signature includes Fast so a non-Fast prewarm doesn't get
+    // re-used by a Fast `ask` (and vice versa).
+    #[allow(non_snake_case)] fastMode: Option<bool>,
 ) -> Result<(), String> {
     // Cursor CLI takes its prompt as a positional arg, so we have to
     // know the prompt at spawn time — pre-warming cursor-agent would
@@ -993,6 +1031,7 @@ async fn claude_prewarm(
         appContext.as_deref(),
         Some(ipc_socket.as_path()),
         rtkDisabled.unwrap_or(false),
+        fastMode.unwrap_or(false),
     )
     .await
     .map_err(|e| e.to_string())
