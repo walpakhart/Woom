@@ -14,8 +14,11 @@ import {
   removeAction,
   replaceLastAssistant,
   sessionsState,
+  setAwaitingResume,
   updateSession,
 } from '$lib/state/sessions.svelte';
+import { quotaState, nextResetAt } from '$lib/state/quota.svelte';
+import { openQuotaPauseModal } from '$lib/state/modals.svelte';
 import { buildAgentAppContext } from '$lib/services/agentContext';
 import { runAgentRequest } from '$lib/exec/claude';
 import { dispatchAction } from '$lib/exec/actions';
@@ -115,6 +118,38 @@ export async function continueAgentTurn(sessionId: string, deps: AgentTurnDeps):
   if (!sess || sess.sending) {
     continuationInFlight.delete(sessionId);
     return;
+  }
+  /* Quota guard for AUTO-CONTINUATIONS — same 95% threshold the
+   * pre-send guard in sendClaudeMessage uses. The pre-send guard only
+   * runs once at the initial user send; a multi-step turn (agent
+   * proposes action → runs → auto-continues) can push utilization past
+   * 95% mid-turn with no further gate, silently overshooting the cap.
+   * Stop HERE, BEFORE draining the pending action-results (so they
+   * survive for resume), surface the pause modal, and flip the session
+   * to awaitingResume — onResumeAfterQuota / the watchdog re-fire the
+   * continuation once quota recovers. */
+  const guardKind = (sess.agentKind ?? 'claude') as 'claude' | 'cursor';
+  if (guardKind === 'claude') {
+    const pct5h = quotaState.usage?.five_hour?.utilization ?? 0;
+    const pct7d = quotaState.usage?.seven_day?.utilization ?? 0;
+    if (pct5h >= 95 || pct7d >= 95) {
+      const tripped5h = pct5h >= 95;
+      const resumeAt = nextResetAt(quotaState.usage) ?? Date.now() + 30 * 60_000;
+      continuationInFlight.delete(sessionId);
+      const last = sess.messages[sess.messages.length - 1];
+      if (last && last.role === 'assistant') {
+        const msgs = [...sess.messages];
+        msgs[msgs.length - 1] = { ...last, interrupted: 'quota' as const };
+        updateSession(sessionId, { messages: msgs });
+      }
+      setAwaitingResume(sessionId, resumeAt, 'quota');
+      void openQuotaPauseModal({
+        pct: tripped5h ? pct5h : pct7d,
+        bucketLabel: tripped5h ? '5H' : '7D',
+        resumeAt,
+      });
+      return;
+    }
   }
   const drained = drainPendingActionResultsForAgent(sessionId);
   if (drained.length === 0) {

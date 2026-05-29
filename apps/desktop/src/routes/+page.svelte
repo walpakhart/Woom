@@ -1024,6 +1024,15 @@
           } catch (e) {
             console.warn('quota auto-resume send failed', e);
           }
+        } else if (s.pendingActionResults.length > 0) {
+          /* Paused mid-turn by the continuation quota-guard. No queued
+           * user prompt — re-fire the auto-continuation to drain the
+           * waiting action-results. */
+          try {
+            await continueAgentTurn(s.id);
+          } catch (e) {
+            console.warn('quota auto-resume continuation failed', e);
+          }
         }
       }
     }
@@ -1044,6 +1053,11 @@
         pendingQueue: rest
       });
       void sendClaudeMessage({ kind: 'claude' });
+    } else if (s.pendingActionResults.length > 0) {
+      /* Paused mid-turn by the continuation quota-guard — no queued
+       * user prompt, but undrained action-results are waiting. Re-fire
+       * the auto-continuation so the turn picks up where it stopped. */
+      void continueAgentTurn(s.id);
     }
   }
 
