@@ -68,6 +68,7 @@
         tokensIn: number;
         tokensOut: number;
         costUsd: number;
+        diff?: string | null;
       }>('dw:subagent_done', (e) => {
         if (e.payload.workflowId !== workflowId) return;
         updateSubagent(workflowId, e.payload.subagentId, {
@@ -75,7 +76,8 @@
           result: e.payload.result,
           tokensIn: e.payload.tokensIn,
           tokensOut: e.payload.tokensOut,
-          costUsd: e.payload.costUsd
+          costUsd: e.payload.costUsd,
+          diff: e.payload.diff ?? undefined
         });
         const w = getWorkflow(workflowId);
         if (w) {
@@ -157,6 +159,20 @@
     }
   }
 
+  /* Apply one subagent's diff to the parent repo. Per-subagent + manual
+   * so the user reviews each; overlapping parallel diffs surface as a
+   * git-apply conflict error here rather than corrupting the tree. */
+  let applyError = $state<Record<string, string>>({});
+  async function applySubagent(subId: string) {
+    applyError = { ...applyError, [subId]: '' };
+    try {
+      await invoke('dw_apply_subagent', { workflowId, subagentId: subId });
+      updateSubagent(workflowId, subId, { applied: true });
+    } catch (e) {
+      applyError = { ...applyError, [subId]: String(e) };
+    }
+  }
+
   function statusIcon(status: string): string {
     switch (status) {
       case 'queued': return '◌';
@@ -221,6 +237,22 @@
                     <pre class="dw-cell-text">{sub.result}</pre>
                   {:else}
                     <div class="dw-cell-md"><Markdown source={sub.result} /></div>
+                  {/if}
+                </div>
+              {/if}
+              {#if sub.diff}
+                <div class="dw-cell-section">
+                  <div class="dw-cell-label">
+                    Changes
+                    {#if sub.applied}
+                      <span class="dw-applied">applied ✓</span>
+                    {:else}
+                      <button class="dw-apply" onclick={() => applySubagent(sub.id)}>apply to repo</button>
+                    {/if}
+                  </div>
+                  <pre class="dw-cell-diff">{sub.diff}</pre>
+                  {#if applyError[sub.id]}
+                    <div class="dw-apply-err">{applyError[sub.id]}</div>
                   {/if}
                 </div>
               {/if}
@@ -422,6 +454,45 @@
     font-size: 12px;
     color: var(--text-1);
     line-height: 1.5;
+  }
+  .dw-cell-diff {
+    margin: 0;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    white-space: pre;
+    overflow-x: auto;
+    color: var(--text-1);
+    line-height: 1.4;
+    max-height: 320px;
+    overflow-y: auto;
+    background: var(--bg-1);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 8px 10px;
+  }
+  .dw-apply {
+    background: var(--accent);
+    color: var(--accent-fg);
+    border: 1px solid var(--accent);
+    border-radius: 3px;
+    padding: 0 6px;
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    cursor: pointer;
+  }
+  .dw-apply:hover { background: var(--accent-bright, var(--accent)); }
+  .dw-applied {
+    color: #6cb87a;
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  .dw-apply-err {
+    margin-top: 4px;
+    font-size: 11px;
+    color: var(--error, #e88264);
+    white-space: pre-wrap;
   }
   .dw-cell-text {
     margin: 0;

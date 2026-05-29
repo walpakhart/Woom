@@ -94,6 +94,13 @@ pub struct DwSubagentState {
     pub tokens_in: u64,
     pub tokens_out: u64,
     pub cost_usd: f64,
+    /// Unified diff this subagent produced in its worktree (staged vs the
+    /// parent HEAD it branched from). Empty / absent = research-only run.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diff: Option<String>,
+    /// Whether the user has applied this subagent's diff to the parent repo.
+    #[serde(default)]
+    pub applied: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -775,6 +782,18 @@ async fn run_subagents_subset(
                 + out_tokens as f64 * r_out)
                 / 1_000_000.0;
             let new_status = if error.is_some() { "failed" } else { "done" };
+            // Capture what the subagent changed in its worktree (staged vs
+            // the branch base) so the card can show a diff + offer Apply.
+            // Empty = research-only run. Best-effort; a capture failure just
+            // leaves `diff` None.
+            let diff = if error.is_none() {
+                match worktree::capture_diff(&worktree_buf.to_string_lossy()) {
+                    Ok(d) if !d.trim().is_empty() => Some(d),
+                    _ => None,
+                }
+            } else {
+                None
+            };
             let updated = reg_t.mutate_persist(&app_t, &wf_id_t, |w| {
                 for s in w.subagents.iter_mut() {
                     if s.id == sub_id_t {
@@ -788,6 +807,7 @@ async fn run_subagents_subset(
                         s.tokens_in = in_tokens;
                         s.tokens_out = out_tokens;
                         s.cost_usd = cost;
+                        s.diff = diff.clone();
                     }
                 }
                 w.total_cost_usd = w.subagents.iter().map(|s| s.cost_usd).sum();
@@ -802,6 +822,7 @@ async fn run_subagents_subset(
                     "tokensOut": out_tokens,
                     "costUsd": cost,
                     "error": error,
+                    "diff": diff,
                 }),
             );
             // Budget cap enforcement removed — it overshot wildly under
@@ -978,6 +999,8 @@ pub async fn dw_plan(
             tokens_in: 0,
             tokens_out: 0,
             cost_usd: 0.0,
+            diff: None,
+            applied: false,
         })
         .collect();
     let wf = DynamicWorkflow {
@@ -1140,6 +1163,43 @@ pub async fn dw_cancel(app: AppHandle, workflow_id: String) -> Result<(), String
         let _ = worktree::cleanup_workflow_worktrees(p, &workflow_id);
     }
     let _ = app.emit("dw:workflow_cancelled", &wf);
+    Ok(())
+}
+
+/// Apply one subagent's captured diff to the parent repo's working tree.
+/// User-gated (the card's per-subagent Apply button). Parallel subagent
+/// diffs can overlap, so this applies ONE at a time and surfaces a real
+/// conflict as an Err — the user resolves / skips. Marks the subagent
+/// `applied` on success so the card can show it's landed.
+#[tauri::command]
+pub async fn dw_apply_subagent(
+    app: AppHandle,
+    workflow_id: String,
+    subagent_id: String,
+) -> Result<(), String> {
+    let registry: tauri::State<'_, Arc<DwRegistry>> = app.state();
+    let wf = registry
+        .inner()
+        .get(&workflow_id)
+        .ok_or_else(|| format!("workflow not found: {}", workflow_id))?;
+    let parent = wf
+        .parent_cwd
+        .clone()
+        .ok_or_else(|| "workflow has no parent cwd".to_string())?;
+    let patch = wf
+        .subagents
+        .iter()
+        .find(|s| s.id == subagent_id)
+        .and_then(|s| s.diff.clone())
+        .ok_or_else(|| format!("subagent {} has no diff to apply", subagent_id))?;
+    worktree::apply_patch(&parent, &patch)?;
+    registry.inner().mutate_persist(&app, &workflow_id, |w| {
+        for s in w.subagents.iter_mut() {
+            if s.id == subagent_id {
+                s.applied = true;
+            }
+        }
+    });
     Ok(())
 }
 
@@ -1515,6 +1575,8 @@ mod persistence {
                 tokens_in: 100,
                 tokens_out: 200,
                 cost_usd: 0.005,
+                diff: None,
+                applied: false,
             }],
             verifier_prompt: Some("v".to_string()),
             verifier_result: None,

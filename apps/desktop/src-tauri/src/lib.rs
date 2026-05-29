@@ -551,6 +551,7 @@ pub fn run() {
             dw::dw_plan,
             dw::dw_approve,
             dw::dw_cancel,
+            dw::dw_apply_subagent,
             dw::dw_status,
             dw::dw_list,
             dw::dw_get,

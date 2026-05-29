@@ -507,6 +507,11 @@ export interface DwSubagent {
   tokensIn: number;
   tokensOut: number;
   costUsd: number;
+  /** Unified diff the subagent produced in its worktree. Absent/empty for
+   *  research-only runs. Surfaced in the card with a per-subagent Apply. */
+  diff?: string;
+  /** True once the user applied this subagent's diff to the parent repo. */
+  applied?: boolean;
 }
 
 export interface DynamicWorkflow {

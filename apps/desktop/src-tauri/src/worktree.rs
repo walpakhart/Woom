@@ -60,6 +60,55 @@ fn run(mut cmd: Command) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&out.stdout).to_string())
 }
 
+/// Full unified diff of a subagent worktree vs its base (the parent HEAD it
+/// branched from). Stages everything first so brand-new files are included,
+/// then diffs the index against HEAD. Empty string = the subagent changed
+/// nothing (research-only run).
+pub fn capture_diff(worktree_path: &str) -> Result<String, String> {
+    let mut add = git(worktree_path);
+    add.args(["add", "-A"]);
+    run(add)?;
+    let mut diff = git(worktree_path);
+    diff.args(["diff", "--cached", "HEAD"]);
+    run(diff)
+}
+
+/// Apply a unified-diff patch to `repo_path`'s working tree. `--3way` lets
+/// it still merge when the parent HEAD has advanced since the subagent
+/// branched; a genuine conflict (overlapping hunks from another applied
+/// subagent) surfaces as an Err the caller shows the user.
+pub fn apply_patch(repo_path: &str, patch: &str) -> Result<(), String> {
+    if patch.trim().is_empty() {
+        return Err("empty patch — subagent made no changes".into());
+    }
+    use std::io::Write;
+    use std::process::Stdio;
+    let mut cmd = git(repo_path);
+    cmd.args(["apply", "--3way", "--whitespace=nowarn"]);
+    cmd.stdin(Stdio::piped());
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+    let mut child = cmd.spawn().map_err(|e| format!("git apply spawn: {}", e))?;
+    child
+        .stdin
+        .as_mut()
+        .ok_or_else(|| "git apply: no stdin".to_string())?
+        .write_all(patch.as_bytes())
+        .map_err(|e| format!("git apply write: {}", e))?;
+    let out = child
+        .wait_with_output()
+        .map_err(|e| format!("git apply wait: {}", e))?;
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        return Err(if stderr.is_empty() {
+            "git apply failed".into()
+        } else {
+            stderr
+        });
+    }
+    Ok(())
+}
+
 /// Create a new worktree for a Claude session. The worktree branches off
 /// `base_ref` (defaults to HEAD of the repo) and checks out a new branch
 /// called `woom/<session_id>` inside a fresh directory under `storage_root`.
