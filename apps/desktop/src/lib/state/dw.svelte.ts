@@ -34,6 +34,36 @@ export function getWorkflow(id: string): DynamicWorkflow | null {
   return dwState.workflows.find((w) => w.id === id) ?? null;
 }
 
+/** Statuses where the workflow is still in-flight (not a terminal
+ *  record). The pinned, bottom-following card slot renders the active
+ *  workflow here so it stays visible like the SDD card, instead of
+ *  scrolling away at its origin message. */
+const ACTIVE_DW_STATUSES = new Set([
+  'awaiting_approval',
+  'running',
+  'verifying',
+  'paused_quota',
+]);
+
+/** The session's currently-active workflow, if any. Newest first —
+ *  `addWorkflow` prepends, so the first match is the latest. */
+export function activeWorkflowForSession(sessionId: string): DynamicWorkflow | null {
+  return (
+    dwState.workflows.find(
+      (w) => w.sessionId === sessionId && ACTIVE_DW_STATUSES.has(w.status)
+    ) ?? null
+  );
+}
+
+/** Is this workflow still in-flight? The pinned slot renders active
+ *  workflows (bottom-following); the per-message slot renders only
+ *  terminal ones (done/failed/cancelled) so a finished run stays as a
+ *  record at its origin without double-rendering the live card. */
+export function isWorkflowActive(id: string): boolean {
+  const w = dwState.workflows.find((x) => x.id === id);
+  return w ? ACTIVE_DW_STATUSES.has(w.status) : false;
+}
+
 export function updateWorkflow(id: string, patch: Partial<DynamicWorkflow>): void {
   const list = dwState.workflows;
   for (let i = 0; i < list.length; i++) {

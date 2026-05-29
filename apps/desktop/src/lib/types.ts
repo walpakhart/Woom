@@ -518,6 +518,7 @@ export interface DynamicWorkflow {
     | 'awaiting_approval'
     | 'running'
     | 'verifying'
+    | 'paused_quota'
     | 'done'
     | 'failed'
     | 'cancelled';

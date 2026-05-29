@@ -24,6 +24,15 @@
   );
 
   let expandedId = $state<string | null>(null);
+  /* Editable budget cap for the awaiting_approval state. Null until the
+   * user types — falls back to the workflow's stored cap. The planner's
+   * estimate often exceeds the $5 default, so without an editor here a
+   * card-approved workflow would hit `dw:budget_exceeded` after a couple
+   * of subagents. */
+  let capDraft = $state<number | null>(null);
+  /* Set when `dw:budget_exceeded` fires — surfaces a strip instead of
+   * the card silently stalling mid-run. */
+  let budgetHit = $state<{ total: number; cap: number } | null>(null);
 
   /* Lazy-load full workflow JSON when the card mounts on a shell
    * entry (Phase 5 hydration — `loadPersistedWorkflows` populates
@@ -102,6 +111,36 @@
         });
       })
     );
+    /* Lifecycle status events — without these the card was stuck on
+     * its last-known status while the backend moved on, so a paused or
+     * budget-halted run looked frozen. */
+    unlistens.push(
+      await listen<{ id: string }>('dw:workflow_started', (e) => {
+        if (e.payload?.id !== workflowId) return;
+        updateWorkflow(workflowId, { status: 'running' });
+      })
+    );
+    unlistens.push(
+      await listen<{ workflowId: string }>('dw:paused_quota', (e) => {
+        if (e.payload.workflowId !== workflowId) return;
+        updateWorkflow(workflowId, { status: 'paused_quota' });
+      })
+    );
+    unlistens.push(
+      await listen<{ workflowId: string }>('dw:resumed_quota', (e) => {
+        if (e.payload.workflowId !== workflowId) return;
+        updateWorkflow(workflowId, { status: 'running' });
+      })
+    );
+    unlistens.push(
+      await listen<{ workflowId: string; totalCostUsd: number; capUsd: number }>(
+        'dw:budget_exceeded',
+        (e) => {
+          if (e.payload.workflowId !== workflowId) return;
+          budgetHit = { total: e.payload.totalCostUsd, cap: e.payload.capUsd };
+        }
+      )
+    );
   });
   onDestroy(() => {
     for (const u of unlistens) u();
@@ -112,6 +151,23 @@
       await invoke('dw_cancel', { workflowId });
     } catch (e) {
       console.warn('dw_cancel failed', e);
+    }
+  }
+
+  /* Approve straight from the card. The preflight MODAL is the rich
+   * approve path, but its resolve is an in-memory promise — dismiss it
+   * (ESC / backdrop) or reload the app and an awaiting_approval
+   * workflow persists with no way to confirm. These buttons are the
+   * durable fallback: fire dw_approve / dw_cancel directly. Optimistic
+   * status flip keeps the card responsive; backend events reconcile. */
+  async function approveFromCard() {
+    const cap = capDraft ?? workflow?.budgetCapUsd ?? 5;
+    try {
+      updateWorkflow(workflowId, { status: 'running', budgetCapUsd: cap });
+      await invoke('dw_approve', { workflowId, budgetCapUsd: cap });
+    } catch (e) {
+      console.warn('dw_approve failed', e);
+      updateWorkflow(workflowId, { status: 'awaiting_approval' });
     }
   }
 
@@ -134,6 +190,11 @@
         Interrupted on previous shutdown · partial transcripts below
       </div>
     {/if}
+    {#if budgetHit}
+      <div class="dw-budget-strip">
+        Budget cap {formatCostUsd(budgetHit.cap)} hit — spent {formatCostUsd(budgetHit.total)}. Remaining subagents skipped. Re-run <code>/dw</code> with a higher cap to finish.
+      </div>
+    {/if}
     <header class="dw-head">
       <span class="dw-badge dw-badge--{workflow.status}">{workflow.status}</span>
       <span class="dw-rationale">{workflow.planRationale ?? workflow.userPrompt}</span>
@@ -141,7 +202,20 @@
         {formatTokens(totalTokens)} · {formatCostUsd(workflow.totalCostUsd)}
         <span class="dw-cap">/ {formatCostUsd(workflow.budgetCapUsd)}</span>
       </span>
-      {#if workflow.status === 'running' || workflow.status === 'verifying' || workflow.status === 'planning'}
+      {#if workflow.status === 'awaiting_approval'}
+        <label class="dw-cap-edit" title="Budget cap before fan-out pauses">
+          cap $<input
+            type="number"
+            min="0.5"
+            step="0.5"
+            value={capDraft ?? workflow.budgetCapUsd}
+            oninput={(e) => (capDraft = parseFloat(e.currentTarget.value) || 0)}
+            class="dw-cap-input mono"
+          />
+        </label>
+        <button class="dw-approve" onclick={approveFromCard} aria-label="Approve workflow">approve</button>
+        <button class="dw-cancel" onclick={cancel} aria-label="Cancel workflow">cancel</button>
+      {:else if workflow.status === 'running' || workflow.status === 'verifying' || workflow.status === 'planning'}
         <button class="dw-cancel" onclick={cancel} aria-label="Cancel workflow">cancel</button>
       {/if}
     </header>
@@ -277,6 +351,48 @@
   }
   .dw-cancel:hover {
     background: color-mix(in srgb, var(--error, #e88264) 18%, transparent);
+  }
+  .dw-approve {
+    background: var(--accent);
+    color: var(--accent-fg);
+    border: 1px solid var(--accent);
+    padding: 2px 10px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .dw-approve:hover {
+    background: var(--accent-bright, var(--accent));
+  }
+  .dw-cap-edit {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 11px;
+    color: var(--text-mute);
+  }
+  .dw-cap-input {
+    width: 64px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    background: var(--bg-2);
+    color: var(--text-1);
+    font-size: 11px;
+  }
+  .dw-budget-strip {
+    font-size: 11px;
+    color: #c8923f;
+    background: color-mix(in srgb, #e0b16c 10%, transparent);
+    border-radius: 4px;
+    padding: 3px 8px;
+    margin-bottom: 6px;
+    border: 1px solid color-mix(in srgb, #e0b16c 30%, var(--border));
+  }
+  .dw-budget-strip code {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10.5px;
   }
   .dw-grid {
     margin: 0;

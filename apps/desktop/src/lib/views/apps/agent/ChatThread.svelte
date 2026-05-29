@@ -14,6 +14,7 @@
   import DynamicWorkflowCard from '$lib/components/agent/DynamicWorkflowCard.svelte';
   import ResumePill from '$lib/components/agent/ResumePill.svelte';
   import { workspaceForSession, isSddCardHidden } from '$lib/state/sdd.svelte';
+  import { activeWorkflowForSession, isWorkflowActive } from '$lib/state/dw.svelte';
   import CardContextMenu, { type MenuItem } from '$lib/views/apps/_shared/CardContextMenu.svelte';
   import { notify } from '$lib/state/toaster.svelte';
   import { setDragPayload } from '$lib/state/drag.svelte';
@@ -441,6 +442,17 @@
          floating full-width below the conversation. Rendered once,
          under whichever message is `lastVisibleIndex`. -->
     {#snippet inlineActions()}
+      {#if activeWorkflowForSession(sess.id)}
+        {@const activeDw = activeWorkflowForSession(sess.id)}
+        {#if activeDw}
+          <!-- Active DW pinned to follow the conversation bottom (same
+               slot grammar as the SDD card). Terminal workflows render
+               at their origin message instead. -->
+          <div class="action-wrap">
+            <DynamicWorkflowCard workflowId={activeDw.id} />
+          </div>
+        {/if}
+      {/if}
       {#if workspaceForSession(sess.id)}
         {@const sddWs = workspaceForSession(sess.id)}
         {#if sddWs && !isSddCardHidden(sddWs.id)}
@@ -591,7 +603,11 @@
                 <pre class="thinking-body">{msg.thinking}</pre>
               </details>
             {/if}
-            {#if msg.dwWorkflowId}
+            {#if msg.dwWorkflowId && !isWorkflowActive(msg.dwWorkflowId)}
+              <!-- Terminal workflows stay as a record at their origin
+                   message. The ACTIVE one renders in the pinned
+                   bottom-following slot (inlineActions) so it stays
+                   visible like the SDD card instead of scrolling away. -->
               <DynamicWorkflowCard workflowId={msg.dwWorkflowId} />
             {/if}
             {#if !shouldRenderBody(i)}
