@@ -113,15 +113,24 @@ jobs:
 
       - name: Fetch RTK sidecar binaries
         # RTK ships pre-built binaries at github.com/rtk-ai/rtk/releases.
-        # We pull both macOS arches so the universal Tauri bundle can
-        # embed them as externalBins (see `apps/desktop/src-tauri/
-        # tauri.conf.json#bundle.externalBin`). The script is idempotent
-        # and signs the macOS binaries ad-hoc on download so Gatekeeper
-        # accepts them inside the .app.
+        # We pull both macOS arches AND lipo them into a single
+        # universal binary so the `--target universal-apple-darwin`
+        # Tauri bundle can embed it as an externalBin (Tauri 2 appends
+        # `-<target-triple>` to each `externalBin` path on bundle, so
+        # the universal target literally looks for `rtk-universal-apple-darwin`
+        # on disk). Script is idempotent and signs macOS binaries
+        # ad-hoc on download; we re-sign the lipo'd universal binary
+        # so Gatekeeper accepts it inside the .app.
         run: |
           bash apps/desktop/src-tauri/scripts/fetch-rtk.sh --target aarch64-apple-darwin
           bash apps/desktop/src-tauri/scripts/fetch-rtk.sh --target x86_64-apple-darwin
-          ls -la apps/desktop/src-tauri/binaries/rtk-*
+          BIN_DIR=apps/desktop/src-tauri/binaries
+          lipo -create -output "$BIN_DIR/rtk-universal-apple-darwin" \
+            "$BIN_DIR/rtk-aarch64-apple-darwin" \
+            "$BIN_DIR/rtk-x86_64-apple-darwin"
+          codesign -s - --force --preserve-metadata=identifier,entitlements,flags \
+            "$BIN_DIR/rtk-universal-apple-darwin" || true
+          ls -la "$BIN_DIR/rtk-"*
 
       - name: Build SvelteKit frontend
         # Build the frontend EXPLICITLY before `tauri build` even though
