@@ -945,6 +945,13 @@
    * state + auto-fire the queued prompt if it dropped back under 95%.
    * Cleanup on app unmount. */
   let quotaWatchdog: ReturnType<typeof setInterval> | null = null;
+  /* Always-on idle refresh for the 5H/7D quota pills. The watchdog
+   * above only polls while a turn is in-flight, so when the app sits
+   * idle the pills froze at their last value and never self-updated.
+   * This keeps them live (skips when the tab is hidden; refreshPlanUsage
+   * still honours the 60s freshness gate + 429 backoff, so it can't
+   * hammer the endpoint). */
+  let quotaIdleInterval: ReturnType<typeof setInterval> | null = null;
   $effect(() => {
     const anyActive = sessionsState.list.some(
       (s) => s.sending || s.awaitingResume
@@ -1315,6 +1322,10 @@
     // refreshPlanUsage is debounced to MIN_REFRESH_MS (60s) so any
     // post-turn re-fetch is effectively free.
     void refreshPlanUsage();
+    quotaIdleInterval = setInterval(() => {
+      if (typeof document !== 'undefined' && document.hidden) return;
+      void refreshPlanUsage();
+    }, 90_000);
     // Same boot-time pattern as theme: apply the saved zoom level to
     // <html> before first paint so the layout doesn't briefly flash
     // at 100% then jump.
@@ -1502,6 +1513,7 @@
     if (sentryPollInterval) clearInterval(sentryPollInterval);
     if (tickInterval) clearInterval(tickInterval);
     if (connectionRefreshInterval) clearInterval(connectionRefreshInterval);
+    if (quotaIdleInterval) clearInterval(quotaIdleInterval);
     removeFocusListener?.();
     actionIpcUnlisten?.();
     claudeBgUnlisten?.();
