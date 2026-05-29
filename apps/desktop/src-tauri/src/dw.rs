@@ -583,7 +583,6 @@ async fn run_fanout(
     model: String,
 ) -> Result<(), String> {
     let wf = reg.get(&workflow_id).ok_or("workflow disappeared")?;
-    let cap = wf.budget_cap_usd;
     let parent_cwd_str = parent_cwd.to_string_lossy().to_string();
 
     // Stage 1: sequential worktree creation. Parallel `git worktree add`
@@ -632,7 +631,7 @@ async fn run_fanout(
 
     let sem = Arc::new(Semaphore::new(4));
     let cancel = Arc::new(AtomicBool::new(false));
-    run_subagents_subset(&app, &reg, &workflow_id, &model, cap, to_run, sem, cancel).await;
+    run_subagents_subset(&app, &reg, &workflow_id, &model, to_run, sem, cancel).await;
     Ok(())
 }
 
@@ -651,7 +650,6 @@ async fn run_subagents_subset(
     reg: &Arc<DwRegistry>,
     wf_id: &str,
     model: &str,
-    cap: f64,
     ids: Vec<String>,
     sem: Arc<Semaphore>,
     cancel: Arc<AtomicBool>,
@@ -950,10 +948,6 @@ async fn run_verifier(
                 }
             }
         });
-        let cap = reg
-            .get(&workflow_id)
-            .map(|w| w.budget_cap_usd)
-            .unwrap_or(DEFAULT_BUDGET_CAP_USD);
         let sem = Arc::new(Semaphore::new(4));
         let cancel = Arc::new(AtomicBool::new(false));
         run_subagents_subset(
@@ -961,7 +955,6 @@ async fn run_verifier(
             &reg,
             &workflow_id,
             &model,
-            cap,
             retry_ids.clone(),
             sem,
             cancel,
