@@ -534,6 +534,11 @@ export interface DynamicWorkflow {
   finalAnswer?: string;
   budgetCapUsd: number;
   totalCostUsd: number;
+  /** Account-wide quota util (%) this workflow's fan-out consumed (end −
+   *  start). Folded into the budget popover's per-session limits line so
+   *  DW burn isn't invisible there. Approximate (shared bucket). */
+  quotaDelta5h?: number;
+  quotaDelta7d?: number;
   createdAt: number;
   startedAt?: number;
   completedAt?: number;

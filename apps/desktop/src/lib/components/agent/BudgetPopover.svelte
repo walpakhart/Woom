@@ -80,6 +80,10 @@
       if (c5 !== null) prev5 = c5;
       if (c7 !== null) prev7 = c7;
     }
+    // Fold in DW fan-out quota burn — DW runs no chat turns, so its
+    // consumption isn't in the per-message stamps above.
+    d5 += dw.quota5h;
+    d7 += dw.quota7d;
     return { d5, d7, has: d5 > 0 || d7 > 0 };
   });
 

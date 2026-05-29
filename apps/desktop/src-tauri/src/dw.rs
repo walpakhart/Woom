@@ -121,6 +121,15 @@ pub struct DynamicWorkflow {
     pub final_answer: Option<String>,
     pub budget_cap_usd: f64,
     pub total_cost_usd: f64,
+    /// Account-wide quota utilization (%) this workflow's fan-out pushed
+    /// each rolling bucket up by (end − start, clamped ≥0). Lets the
+    /// budget popover fold DW spend into the per-session limits line —
+    /// DW runs no chat turns, so without this its quota burn was invisible
+    /// there. Approximate (bucket is shared with other clients).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quota_delta_5h: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quota_delta_7d: Option<f64>,
     pub created_at: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub started_at: Option<i64>,
@@ -487,6 +496,18 @@ fn parse_planner_json(raw: &str) -> Result<PlannerOutput, String> {
     })?;
     validate_planner_output(&p)?;
     Ok(p)
+}
+
+/// Snapshot account-wide 5H / 7D quota utilization (%). Returns (0, 0) on
+/// any failure so callers can diff start/end without error handling.
+async fn fetch_quota_util() -> (f64, f64) {
+    match claude_quota::fetch_plan_usage().await {
+        Ok(snap) => (
+            snap.five_hour.as_ref().and_then(|b| b.utilization).unwrap_or(0.0),
+            snap.seven_day.as_ref().and_then(|b| b.utilization).unwrap_or(0.0),
+        ),
+        Err(_) => (0.0, 0.0),
+    }
 }
 
 async fn call_oneshot(
@@ -1015,6 +1036,8 @@ pub async fn dw_plan(
         final_answer: None,
         budget_cap_usd: DEFAULT_BUDGET_CAP_USD,
         total_cost_usd: 0.0,
+        quota_delta_5h: None,
+        quota_delta_7d: None,
         created_at: now_ms,
         started_at: None,
         completed_at: None,
@@ -1056,6 +1079,9 @@ pub async fn dw_approve(
         .map(PathBuf::from)
         .ok_or_else(|| "workflow has no parent cwd — pass `cwd` to dw_plan".to_string())?;
     let model = "claude-opus-4-8".to_string();
+    // Quota utilization at fan-out start — diffed at done to attribute
+    // this workflow's burn to the per-session limits line.
+    let (q5_start, q7_start) = fetch_quota_util().await;
 
     let app_clone = app.clone();
     let reg_clone = reg.clone();
@@ -1127,12 +1153,17 @@ pub async fn dw_approve(
             }
         };
 
+        // Attribute quota burn: end − start, clamped ≥0 (a window reset
+        // mid-run would otherwise read negative).
+        let (q5_end, q7_end) = fetch_quota_util().await;
         let final_wf = reg_clone
             .mutate_persist(&app_clone, &wf_id_clone, |w| {
                 w.status = "done".to_string();
                 w.verifier_result = Some(synthesis.clone());
                 w.final_answer = Some(synthesis);
                 w.completed_at = Some(unix_ms());
+                w.quota_delta_5h = Some((q5_end - q5_start).max(0.0));
+                w.quota_delta_7d = Some((q7_end - q7_start).max(0.0));
             })
             .unwrap();
 
@@ -1583,6 +1614,8 @@ mod persistence {
             final_answer: None,
             budget_cap_usd: 5.0,
             total_cost_usd: 0.005,
+            quota_delta_5h: None,
+            quota_delta_7d: None,
             created_at: now - 1000,
             started_at: Some(now - 500),
             completed_at: completed_ms_ago.map(|ago| now - ago),

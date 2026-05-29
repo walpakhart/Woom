@@ -68,15 +68,24 @@ export function isWorkflowActive(id: string): boolean {
  *  on the workflow (not on chat-message `usage`), so the session budget
  *  chip / popover have to fold it in explicitly or the $ total ignores
  *  everything the fan-outs spent. */
-export function sessionDwTotals(sessionId: string): { costUsd: number; runs: number } {
+export function sessionDwTotals(sessionId: string): {
+  costUsd: number;
+  runs: number;
+  quota5h: number;
+  quota7d: number;
+} {
   let costUsd = 0;
   let runs = 0;
+  let quota5h = 0;
+  let quota7d = 0;
   for (const w of dwState.workflows) {
     if (w.sessionId !== sessionId) continue;
     costUsd += w.totalCostUsd || 0;
+    quota5h += w.quotaDelta5h || 0;
+    quota7d += w.quotaDelta7d || 0;
     runs += 1;
   }
-  return { costUsd, runs };
+  return { costUsd, runs, quota5h, quota7d };
 }
 
 export function updateWorkflow(id: string, patch: Partial<DynamicWorkflow>): void {

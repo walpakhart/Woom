@@ -1492,7 +1492,9 @@
         status: full.status,
         verifierResult: full.verifierResult,
         finalAnswer: full.finalAnswer,
-        completedAt: full.completedAt
+        completedAt: full.completedAt,
+        quotaDelta5h: full.quotaDelta5h,
+        quotaDelta7d: full.quotaDelta7d
       });
       if (full.status === 'done' && full.finalAnswer && full.finalAnswer.trim().length > 0) {
         appendSessionMessage(full.sessionId, {
