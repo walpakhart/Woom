@@ -64,6 +64,21 @@ export function isWorkflowActive(id: string): boolean {
   return w ? ACTIVE_DW_STATUSES.has(w.status) : false;
 }
 
+/** Aggregate DW spend + run count for a session. DW subagent cost lives
+ *  on the workflow (not on chat-message `usage`), so the session budget
+ *  chip / popover have to fold it in explicitly or the $ total ignores
+ *  everything the fan-outs spent. */
+export function sessionDwTotals(sessionId: string): { costUsd: number; runs: number } {
+  let costUsd = 0;
+  let runs = 0;
+  for (const w of dwState.workflows) {
+    if (w.sessionId !== sessionId) continue;
+    costUsd += w.totalCostUsd || 0;
+    runs += 1;
+  }
+  return { costUsd, runs };
+}
+
 export function updateWorkflow(id: string, patch: Partial<DynamicWorkflow>): void {
   const list = dwState.workflows;
   for (let i = 0; i < list.length; i++) {

@@ -13,6 +13,7 @@
   import { sessionsState, updateSession, dismissInterrupted } from '$lib/state/sessions.svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { sessionUsageTotals, formatTokens, formatCostUsd } from '$lib/usage';
+  import { sessionDwTotals } from '$lib/state/dw.svelte';
   import BudgetPopover from '$lib/components/agent/BudgetPopover.svelte';
   import { notify } from '$lib/state/toaster.svelte';
   import { tick, untrack } from 'svelte';
@@ -47,6 +48,10 @@
    *  stamped at end-of-turn, not on every delta), so the chip doesn't
    *  stutter mid-stream — matches the existing streaming-batch pattern. */
   const budget = $derived(sessionUsageTotals(sess));
+  /* DW fan-out spend lives on the workflow, not on chat-message usage —
+   * fold it into the chip's $ so the headline total matches the popover. */
+  const dwTotals = $derived(sess ? sessionDwTotals(sess.id) : { costUsd: 0, runs: 0 });
+  const chipCostUsd = $derived(budget.costUsd + dwTotals.costUsd);
 
   const elapsed = $derived.by(() => {
     const startedAt = sess ? p.thinkingStartedAt[sess.id] ?? null : null;
@@ -411,11 +416,11 @@
     {/if}
   </div>
 
-  {#if sess && budget.turns > 0}
+  {#if sess && (budget.turns > 0 || dwTotals.runs > 0)}
     <div class="ch-budget-wrap">
       <button
         class="ch-budget"
-        class:ch-budget--high={budget.costUsd >= 1}
+        class:ch-budget--high={chipCostUsd >= 1}
         class:ch-budget--open={budgetPopoverOpen}
         onclick={toggleBudgetPopover}
         title={budgetPopoverOpen
@@ -425,8 +430,8 @@
         aria-expanded={budgetPopoverOpen}
       >
         <span class="ch-budget-tokens mono">{formatTokens(budget.input + budget.output)}</span>
-        {#if budget.costUsd > 0}
-          <span class="ch-budget-cost mono">{formatCostUsd(budget.costUsd)}</span>
+        {#if chipCostUsd > 0}
+          <span class="ch-budget-cost mono">{formatCostUsd(chipCostUsd)}</span>
         {/if}
       </button>
       {#if budgetPopoverOpen}

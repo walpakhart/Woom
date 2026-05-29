@@ -602,7 +602,7 @@ async fn run_fanout(
         }
     }
 
-    let sem = Arc::new(Semaphore::new(20));
+    let sem = Arc::new(Semaphore::new(4));
     let cancel = Arc::new(AtomicBool::new(false));
     run_subagents_subset(&app, &reg, &workflow_id, &model, cap, to_run, sem, cancel).await;
     Ok(())
@@ -703,7 +703,26 @@ async fn run_subagents_subset(
             None => continue,
         };
 
-        let sem_t = sem.clone();
+        // Throttle SPAWNING here, not inside the task. Block until a
+        // permit frees so at most `Semaphore` subagents are launched
+        // before we re-check `cancel`. Previously every task was spawned
+        // instantly (spawn doesn't block) and acquired its permit
+        // internally, so the budget-cap `cancel` set by a finishing task
+        // couldn't stop the already-spawned rest — the cap overshot
+        // badly ($8 on a $5 cap). With the permit gate, once the cap
+        // trips the loop bails on its next acquire, bounding overshoot
+        // to the in-flight batch.
+        let permit = match sem.clone().acquire_owned().await {
+            Ok(p) => p,
+            Err(_) => break,
+        };
+        // A finishing task may have tripped the cap / cancel while we
+        // waited for the permit — don't launch another.
+        if cancel.load(Ordering::SeqCst) {
+            drop(permit);
+            break;
+        }
+
         let cancel_t = cancel.clone();
         let app_t = app.clone();
         let reg_t = reg.clone();
@@ -713,10 +732,8 @@ async fn run_subagents_subset(
         let worktree_buf = PathBuf::from(worktree_path);
 
         let h = tauri::async_runtime::spawn(async move {
-            let _permit = match sem_t.acquire().await {
-                Ok(p) => p,
-                Err(_) => return,
-            };
+            // Permit moved in — held for the turn, released on drop.
+            let _permit = permit;
             if cancel_t.load(Ordering::SeqCst) {
                 return;
             }
@@ -875,7 +892,7 @@ async fn run_verifier(
             .get(&workflow_id)
             .map(|w| w.budget_cap_usd)
             .unwrap_or(DEFAULT_BUDGET_CAP_USD);
-        let sem = Arc::new(Semaphore::new(20));
+        let sem = Arc::new(Semaphore::new(4));
         let cancel = Arc::new(AtomicBool::new(false));
         run_subagents_subset(
             &app,
