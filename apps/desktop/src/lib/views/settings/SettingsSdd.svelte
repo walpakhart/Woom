@@ -19,7 +19,7 @@
   {:else}
     <div class="grid">
       {#each sddState.workspaces as ws (ws.id)}
-        <label class="sdd-mode-row">
+        <div class="sdd-mode-row">
           <span class="sdd-mode-row-id mono">{ws.id.replace(/^sdd-/, '')}</span>
           <span class="sdd-mode-row-ask">{ws.user_prompt || '(no ask)'}</span>
           <select
@@ -51,7 +51,7 @@
             />
             plan-review gate
           </label>
-        </label>
+        </div>
       {/each}
     </div>
   {/if}

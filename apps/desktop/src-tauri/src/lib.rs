@@ -204,9 +204,32 @@ fn read_bundled_doc(app: tauri::AppHandle, name: String) -> Result<String, Strin
 fn bundled_docs_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
     use tauri::Manager;
     if let Ok(resource_dir) = app.path().resource_dir() {
-        let docs = resource_dir.join("docs");
-        if docs.is_dir() {
-            return Ok(docs);
+        /* Candidate 1: plain `docs/` (only happens when the resource
+         * glob has no `../` prefix). */
+        let plain = resource_dir.join("docs");
+        if plain.is_dir() {
+            return Ok(plain);
+        }
+        // Candidate 2: Tauri mangles each leading `..` in a resource
+        // path into `_up_`, so the `../../../docs` glob lands at
+        // `<resource>/_up_/_up_/_up_/docs`. This is the production
+        // path on a bundled .app — the previous code only probed
+        // candidate 1, which is why Settings showed "docs not found"
+        // on the installed build.
+        let mangled = resource_dir
+            .join("_up_")
+            .join("_up_")
+            .join("_up_")
+            .join("docs");
+        if mangled.is_dir() {
+            return Ok(mangled);
+        }
+        /* Candidate 3: bounded breadth walk under the resource dir for
+         * ANY directory named `docs` containing at least one `.md` —
+         * resilient to Tauri changing its mangling convention between
+         * versions. Depth-limited to 6 so a deep bundle can't spin. */
+        if let Some(found) = find_docs_dir(&resource_dir, 6) {
+            return Ok(found);
         }
     }
     /* Dev fallback. Walk up from the executable until we find a
@@ -226,6 +249,49 @@ fn bundled_docs_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String
         }
     }
     Err("docs directory not found (build with bundle resources or run from repo)".into())
+}
+
+/// Breadth-first search under `root` for a directory named `docs` that
+/// holds at least one `.md` file. Depth-bounded; returns the first
+/// match. Used as a resilience fallback in `bundled_docs_dir` against
+/// Tauri's `_up_` resource-path mangling shifting between versions.
+fn find_docs_dir(root: &std::path::Path, max_depth: usize) -> Option<std::path::PathBuf> {
+    let mut queue: std::collections::VecDeque<(std::path::PathBuf, usize)> =
+        std::collections::VecDeque::new();
+    queue.push_back((root.to_path_buf(), 0));
+    while let Some((dir, depth)) = queue.pop_front() {
+        if depth > max_depth {
+            continue;
+        }
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            if path.file_name().and_then(|s| s.to_str()) == Some("docs") {
+                let has_md = std::fs::read_dir(&path)
+                    .map(|mut it| {
+                        it.any(|e| {
+                            e.ok()
+                                .map(|e| {
+                                    e.path().extension().and_then(|x| x.to_str()) == Some("md")
+                                })
+                                .unwrap_or(false)
+                        })
+                    })
+                    .unwrap_or(false);
+                if has_md {
+                    return Some(path);
+                }
+            }
+            queue.push_back((path, depth + 1));
+        }
+    }
+    None
 }
 
 /// Kill any Woom sidecar processes left running from a previous
@@ -1290,19 +1356,33 @@ fn mcp_sidecar_health() -> Vec<SidecarHealth> {
         "woom-sentry",
         "woom-memory",
     ];
+    /* Resolve `pgrep` by ABSOLUTE path. Tauri-launched processes
+     * inherit a skinny PATH (same gotcha the `claude` binary lookup
+     * works around in claude.rs), so a bare `Command::new("pgrep")`
+     * fails to spawn → `.ok()` swallowed the error → every sidecar
+     * reported "not running" even while agents were actively driving
+     * them. `pgrep` lives at `/usr/bin/pgrep` on both macOS and Linux;
+     * fall back to the bare name if some distro put it elsewhere. */
+    let pgrep_bin = ["/usr/bin/pgrep", "/bin/pgrep"]
+        .iter()
+        .find(|p| std::path::Path::new(p).exists())
+        .map(|p| p.to_string())
+        .unwrap_or_else(|| "pgrep".to_string());
+
     names
         .iter()
         .map(|name| {
-            /* `pgrep -fc` returns the count of matches on stdout (or 0
-             * exit + empty when nothing matched, depending on the
-             * pgrep flavor). We just count newlines from `pgrep -f`
-             * since `-c` semantics differ between BSD/macOS pgrep
-             * and Linux pgrep. */
-            let count = std::process::Command::new("pgrep")
+            /* Count newlines from `pgrep -f` rather than `-c` since
+             * `-c` semantics differ between BSD/macOS and Linux pgrep.
+             * `-f` matches the full command line, so the externalBin
+             * triple-suffixed path (`…/woom-github-aarch64-apple-darwin`)
+             * still matches the bare `woom-github` substring. */
+            let count = std::process::Command::new(&pgrep_bin)
                 .arg("-f")
                 .arg(name)
                 .output()
                 .ok()
+                .filter(|out| out.status.success() || !out.stdout.is_empty())
                 .map(|out| {
                     String::from_utf8_lossy(&out.stdout)
                         .lines()

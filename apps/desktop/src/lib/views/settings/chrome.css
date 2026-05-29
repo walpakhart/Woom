@@ -622,7 +622,13 @@
 /* SDD execution-mode row */
 .sdd-mode-row {
   display: grid;
-  grid-template-columns: minmax(60px, auto) 1fr minmax(220px, auto) auto;
+  /* `minmax(0, …)` on the flexible tracks is the canonical CSS-grid
+   *  overflow fix — without it grid items default to `min-width:auto`
+   *  (= content size), so the long ask text + the long select option
+   *  ("three-call (plan → implement → verify)") refused to clip and
+   *  overlapped each other. Fixed 210px select column + min-width:0
+   *  everywhere keeps every cell inside its track. */
+  grid-template-columns: minmax(56px, max-content) minmax(0, 1fr) minmax(0, 210px) max-content;
   gap: 10px;
   align-items: center;
   padding: 6px 0;
@@ -633,14 +639,18 @@
 .sdd-mode-row-id {
   font-size: 10.5px;
   color: var(--text-mute);
+  white-space: nowrap;
 }
 .sdd-mode-row-ask {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--text-1);
 }
 .sdd-mode-select {
+  min-width: 0;
+  width: 100%;
   padding: 3px 6px;
   border-radius: 4px;
   border: 1px solid var(--border);
