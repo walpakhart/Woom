@@ -79,6 +79,7 @@
     const next = Math.min(ta.scrollHeight, cap);
     ta.style.height = next + 'px';
     ta.style.overflowY = ta.scrollHeight > cap ? 'auto' : 'hidden';
+    matchBackdropWrap();
   }
 
   function onInput(_e: Event) {
@@ -283,6 +284,52 @@
     return out;
   });
 
+  /* Which VISUAL row the caret sits on. The old check counted `\n`
+     only, so a soft-WRAPPED paragraph (no newline, several visual
+     rows) read as a single first line — pressing ↑ from row 2 jumped
+     into history instead of moving the caret up to row 1. We measure
+     the caret's pixel row in a hidden mirror that copies the
+     backdrop's exact box geometry (width + padding + font + wrap), so
+     soft wraps count as real rows. */
+  function caretVisualRow(): { onFirst: boolean; onLast: boolean } {
+    if (!ta || !backdropEl) return { onFirst: true, onLast: true };
+    const v = ta.value;
+    const caret = ta.selectionStart ?? v.length;
+    const cs = getComputedStyle(backdropEl);
+    const mirror = document.createElement('div');
+    const copy = [
+      'fontFamily', 'fontSize', 'fontWeight', 'fontStyle', 'lineHeight',
+      'letterSpacing', 'wordSpacing', 'whiteSpace', 'wordBreak',
+      'overflowWrap', 'fontVariantLigatures', 'fontFeatureSettings',
+      'fontKerning', 'textRendering', 'tabSize', 'boxSizing',
+      'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft',
+    ] as const;
+    for (const p of copy) mirror.style[p] = cs[p];
+    mirror.style.position = 'absolute';
+    mirror.style.visibility = 'hidden';
+    mirror.style.top = '0';
+    mirror.style.left = '-9999px';
+    mirror.style.width = backdropEl.offsetWidth + 'px';
+    const mk = document.createElement('span');
+    mk.textContent = '​';
+    mirror.append(
+      document.createTextNode(v.slice(0, caret)),
+      mk,
+      document.createTextNode(v.slice(caret) || '​'),
+    );
+    document.body.appendChild(mirror);
+    const padTop = parseFloat(cs.paddingTop) || 0;
+    const padBottom = parseFloat(cs.paddingBottom) || 0;
+    const lh = parseFloat(cs.lineHeight) || parseFloat(cs.fontSize) * 1.55;
+    const caretTop = mk.offsetTop - padTop;
+    const contentH = mirror.scrollHeight - padTop - padBottom;
+    document.body.removeChild(mirror);
+    return {
+      onFirst: caretTop < lh * 0.5,
+      onLast: caretTop > contentH - lh * 1.5,
+    };
+  }
+
   function shouldNavigateHistory(direction: 'ArrowUp' | 'ArrowDown'): boolean {
     if (userHistory.length === 0) return false;
     /* Already in history mode → always intercept. */
@@ -290,15 +337,12 @@
     /* Empty composer → both arrows are free for history. */
     const v = sess?.input ?? '';
     if (v.length === 0) return true;
-    /* Otherwise, only hijack ↑ on the first physical line (caret has
-     * no newline before it) and ↓ on the last line — matches what
-     * users expect from a multiline shell prompt. */
+    /* Otherwise hijack ↑ only on the first VISUAL row and ↓ only on
+     * the last — so multi-row drafts (hard \n OR soft wrap) move the
+     * caret within the text first, then reach history at the edges. */
     if (!ta) return false;
-    const caret = ta.selectionStart ?? v.length;
-    if (direction === 'ArrowUp') {
-      return v.slice(0, caret).indexOf('\n') === -1;
-    }
-    return v.slice(caret).indexOf('\n') === -1;
+    const { onFirst, onLast } = caretVisualRow();
+    return direction === 'ArrowUp' ? onFirst : onLast;
   }
 
   function navigateHistory(step: 1 | -1) {
@@ -641,6 +685,28 @@
     if (p.kind === 'claude') {
       void getRtkStatus().then((s) => { rtkStatus = s; });
     }
+    // Re-sync backdrop wrap when the input's available width changes
+    // (suffix chips appear/disappear, window resize, pane resize).
+    // The required pad is width-independent in theory but rounding at
+    // a new width can flip a boundary word, so recompute on resize.
+    let ro: ResizeObserver | null = null;
+    if (ta && typeof ResizeObserver !== 'undefined') {
+      // Width-only guard: autoGrow() mutates the textarea HEIGHT, which
+      // would re-fire the observer and loop. Only react when the WIDTH
+      // actually changed (the thing that flips wrap points).
+      let lastW = ta.clientWidth;
+      ro = new ResizeObserver((entries) => {
+        const w = entries[0]?.contentRect.width ?? lastW;
+        if (Math.abs(w - lastW) < 0.5) return;
+        lastW = w;
+        autoGrow();
+      });
+      ro.observe(ta);
+    }
+    // Initial match once layout settles (input may be non-empty after a
+    // session switch / restored draft).
+    requestAnimationFrame(() => autoGrow());
+    return () => ro?.disconnect();
   });
 
   /* Force-refresh state for the 5H/7D quota pills (SDD Phase 3).
@@ -847,6 +913,41 @@
     backdropEl.scrollLeft = ta.scrollLeft;
   }
 
+  /* Caret-drift killer. The textarea (owns the caret) and the backdrop
+     div (owns the visible glyphs) share font/width/padding, yet a
+     WKWebView <textarea> reserves end-of-line caret room a bare <div>
+     doesn't — so the div fits one extra word per line and the caret
+     lands on a different physical row than the glyph it sits next to.
+     We grow the backdrop's right padding (a CSS var) until the two
+     boxes report the SAME content height i.e. identical line count.
+     The needed pad is just the reserve (≈ one space-width, constant
+     per font/zoom), so we start from the last value and nudge ±1 —
+     steady state is 2 scrollHeight reads, no per-keystroke thrash. */
+  let backdropPadR = 0;
+  function matchBackdropWrap() {
+    if (!ta || !backdropEl) return;
+    const setPad = (px: number) => {
+      backdropPadR = px;
+      backdropEl!.style.setProperty('--backdrop-pad-r', px + 'px');
+      // read forces synchronous layout with the new pad applied
+      return backdropEl!.scrollHeight;
+    };
+    let back = setPad(backdropPadR);
+    let area = ta.scrollHeight;
+    let guard = 0;
+    // backdrop shorter than textarea => it fit more text => widen pad
+    while (back < area && backdropPadR < 24 && guard++ < 32) {
+      back = setPad(backdropPadR + 1);
+    }
+    // backdrop taller => it wrapped too early => shrink pad to the
+    // smallest value that still matches (avoids over-padding drift the
+    // other way, where a short line's caret sits past the last glyph)
+    while (back > area && backdropPadR > 0 && guard++ < 64) {
+      back = setPad(backdropPadR - 1);
+      if (back < area) { setPad(backdropPadR + 1); break; }
+    }
+  }
+
   function removeAttachment(m: Mention) {
     if (!sess) return;
     const next = sess.mentions.filter(
@@ -1036,6 +1137,32 @@
           >
             <span class="cmp-sdd-glyph">SDD</span>
           </button>
+
+          <!-- DW button — prefills `/dw ` into the composer, mirroring
+               the SDD launcher. Same code path as typing the slash
+               command (`runDwFromSlash` in routes/handleSlashCommand.ts).
+               Claude-only: Dynamic Workflows fan out parallel `claude`
+               subagents, which Cursor sessions can't drive. -->
+          {#if p.kind === 'claude'}
+            <button
+              class="cmp-dw-btn"
+              onclick={() => {
+                if (!sess) return;
+                updateSession(sess.id, { input: '/dw ' });
+                queueMicrotask(() => {
+                  if (ta) {
+                    ta.selectionStart = ta.value.length;
+                    ta.selectionEnd = ta.value.length;
+                    ta.focus();
+                  }
+                });
+              }}
+              aria-label="Start a Dynamic Workflow"
+              title="DW — planner fans out parallel subagents (each in its own git worktree), then a verifier synthesises one answer. Shows a cost estimate before it runs."
+            >
+              <span class="cmp-dw-glyph">DW</span>
+            </button>
+          {/if}
 
           <!-- SDD history moved to ChatHeader chip (next to memory).
                Removed the [HISTORY] composer button on user feedback:
@@ -1557,7 +1684,13 @@
   }
   .cmp-area-backdrop {
     position: absolute; inset: 0;
-    padding: 5px 0;
+    /* right padding is driven at runtime via --backdrop-pad-r so the
+       backdrop wraps at the SAME column as the textarea — WKWebView's
+       <textarea> reserves ~one space-width of end-of-line caret room,
+       so a bare div (no reserve) fits one extra word per line and the
+       caret drifts onto the wrong physical row. matchBackdropWrap()
+       grows this pad until both boxes report the same line count. */
+    padding: 5px var(--backdrop-pad-r, 0px) 5px 0;
     font-family: inherit;
     font-size: 14px; line-height: 1.55;
     color: var(--text-0);
@@ -1583,6 +1716,16 @@
     font-variant-ligatures: none;
     font-feature-settings: "liga" 0, "clig" 0, "calt" 0;
     font-kerning: none;
+    /* WKWebView ignores font-feature-settings/font-kerning on a bare
+       <textarea>, so it keeps kerning ON while this div had it off —
+       per-glyph advances diverged and the caret (textarea) drifted a
+       few px to the RIGHT of the visible glyph (backdrop). optimizeSpeed
+       forces no-kerning/no-ligatures at the rasteriser level on BOTH,
+       which the textarea DOES honour, so advances match byte-for-byte. */
+    text-rendering: optimizeSpeed;
+    letter-spacing: 0;
+    word-spacing: 0;
+    font-weight: 400;
     tab-size: 4;
     -moz-tab-size: 4;
   }
@@ -1644,6 +1787,11 @@
   .cmp-area {
     position: relative;
     width: 100%;
+    /* flex child of .cmp-area-wrap — without min-width:0 a long
+       unbreakable token blows the intrinsic min-content width past
+       the 1fr track, making the textarea wider than the backdrop and
+       wrapping the two differently. */
+    min-width: 0;
     resize: none; outline: none; border: none;
     background: transparent;
     color: transparent;
@@ -1672,6 +1820,12 @@
     font-variant-ligatures: none;
     font-feature-settings: "liga" 0, "clig" 0, "calt" 0;
     font-kerning: none;
+    /* See backdrop: optimizeSpeed is the one WKWebView honours on a
+       <textarea>, so caret advance matches the backdrop glyph. */
+    text-rendering: optimizeSpeed;
+    letter-spacing: 0;
+    word-spacing: 0;
+    font-weight: 400;
     tab-size: 4;
     -moz-tab-size: 4;
   }
@@ -1815,6 +1969,34 @@
     color: var(--accent-bright);
   }
   .cmp-sdd-glyph {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+  }
+
+  /* DW button — same one-shot-launcher chassis as SDD, but tinted
+   *  teal instead of the rust accent so the two fan-out launchers
+   *  read as distinct affordances side-by-side (SDD = sequential
+   *  phases, DW = parallel subagents). `#5bb3a8` matches the canvas
+   *  brand-accent family. */
+  .cmp-dw-btn {
+    display: inline-flex; align-items: center;
+    padding: 2px 7px;
+    border-radius: 5px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--text-mute);
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: background 120ms, border-color 120ms, color 120ms;
+  }
+  .cmp-dw-btn:hover {
+    background: color-mix(in srgb, #5bb3a8 16%, transparent);
+    border-color: color-mix(in srgb, #5bb3a8 38%, transparent);
+    color: #5bb3a8;
+  }
+  .cmp-dw-glyph {
     font-family: 'JetBrains Mono', monospace;
     font-size: 9.5px;
     font-weight: 700;
