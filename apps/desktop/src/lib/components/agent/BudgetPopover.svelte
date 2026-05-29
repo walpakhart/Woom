@@ -24,20 +24,31 @@
   const totals = $derived(sessionUsageTotals(session));
   const rtkSavings = $derived(estimateRtkSavings(session));
 
-  /* Cost contribution per bucket — synthesise a usage envelope with
-   * only that bucket non-zero, then re-use `costForUsage` so rate
-   * lookups (incl. Fast-mode keying) stay consistent with the chip. */
+  /* Cost contribution per bucket. MUST cost each turn at the model it
+   * actually ran on (`m.usage.model`), NOT the session's CURRENT model
+   * — otherwise switching the model mid-chat (e.g. Haiku turns, then
+   * flip to Opus) re-prices every past token at the new rate and the
+   * four bucket lines no longer sum to the header total (which
+   * `sessionUsageTotals` computes per-message). We mirror that: walk
+   * messages, isolate one bucket per probe, re-use `costForUsage` so
+   * rate + Fast-mode keying stay consistent. Σ buckets === totals.costUsd. */
   function bucketCost(bucket: 'input' | 'output' | 'cacheRead' | 'cacheCreation'): number {
-    const probe: ClaudeUsage = {
-      inputTokens: bucket === 'input' ? totals.input : 0,
-      cacheCreationTokens: bucket === 'cacheCreation' ? totals.cacheCreation : 0,
-      cacheReadTokens: bucket === 'cacheRead' ? totals.cacheRead : 0,
-      outputTokens: bucket === 'output' ? totals.output : 0,
-      contextSize: 0,
-      model: session.claudeModel ?? null,
-      fastMode: session.fastMode === true,
-    };
-    return costForUsage(probe);
+    let sum = 0;
+    for (const m of session.messages) {
+      if (m.role !== 'assistant' || !m.usage) continue;
+      const u = m.usage;
+      const probe: ClaudeUsage = {
+        inputTokens: bucket === 'input' ? (u.inputTokens || 0) : 0,
+        cacheCreationTokens: bucket === 'cacheCreation' ? (u.cacheCreationTokens || 0) : 0,
+        cacheReadTokens: bucket === 'cacheRead' ? (u.cacheReadTokens || 0) : 0,
+        outputTokens: bucket === 'output' ? (u.outputTokens || 0) : 0,
+        contextSize: 0,
+        model: u.model ?? null,
+        fastMode: u.fastMode === true,
+      };
+      sum += costForUsage(probe);
+    }
+    return sum;
   }
 
   /* Per-turn cost series for the sparkline. Walks assistant messages
