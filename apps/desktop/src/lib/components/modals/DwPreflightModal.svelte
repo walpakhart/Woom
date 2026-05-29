@@ -57,16 +57,6 @@
             </li>
           {/each}
         </ul>
-        <label class="dwp-budget">
-          <span class="dwp-budget-label">Budget cap (USD)</span>
-          <input
-            type="number"
-            min="0.5"
-            step="0.5"
-            bind:value={m.budgetCap}
-            class="dwp-budget-input mono"
-          />
-        </label>
       </div>
       <footer class="modal-actions">
         <button class="btn-secondary" onclick={() => finish({ kind: 'cancel' })}>
@@ -146,26 +136,6 @@
     font-size: 11.5px;
     white-space: pre-wrap;
     color: var(--text-1);
-  }
-  .dwp-budget {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding-top: 6px;
-    border-top: 1px solid var(--border);
-  }
-  .dwp-budget-label {
-    color: var(--text-mute);
-    font-size: 12px;
-  }
-  .dwp-budget-input {
-    width: 90px;
-    padding: 4px 8px;
-    border-radius: 5px;
-    border: 1px solid var(--border);
-    background: var(--bg-2);
-    color: var(--text-1);
-    font-size: 12px;
   }
   .modal-actions {
     display: flex;

@@ -749,22 +749,31 @@ async fn run_subagents_subset(
                 Ok((t, u)) => (t, u, None),
                 Err(e) => (String::new(), None, Some(e)),
             };
-            // Prefer real usage from the envelope; fall back to a
-            // 4-char-per-token estimate when the CLI omitted it. Real
-            // usage rolls cache-read + cache-creation into `input_tokens`
-            // for billing parity with the streaming path's accounting.
-            let (in_tokens, out_tokens) = match &usage {
+            // Cost the four token buckets at their REAL rates. The old
+            // code summed cache-read + cache-creation into `input` and
+            // charged the whole lot at the fresh-input rate — but cache
+            // read is 10× cheaper and cache write is 1.25×, so a turn
+            // that re-read a big cached prompt was billed ~10× too high
+            // (single subagents showing $11). Standard Anthropic ratios:
+            // cacheRead = input×0.1, cacheWrite = input×1.25.
+            let (input_t, cache_read_t, cache_write_t, out_tokens) = match &usage {
                 Some(u) => (
-                    u.input_tokens
-                        + u.cache_read_input_tokens
-                        + u.cache_creation_input_tokens,
+                    u.input_tokens,
+                    u.cache_read_input_tokens,
+                    u.cache_creation_input_tokens,
                     u.output_tokens,
                 ),
-                None => ((prompt.len() / 4) as u64, (text.len() / 4) as u64),
+                None => ((prompt.len() / 4) as u64, 0u64, 0u64, (text.len() / 4) as u64),
             };
+            // `tokens_in` stays the full input footprint for the card's
+            // token display; only the COST weights the buckets.
+            let in_tokens = input_t + cache_read_t + cache_write_t;
             let (r_in, r_out) = (5.0_f64, 25.0_f64);
-            let cost =
-                (in_tokens as f64 * r_in + out_tokens as f64 * r_out) / 1_000_000.0;
+            let cost = (input_t as f64 * r_in
+                + cache_read_t as f64 * r_in * 0.1
+                + cache_write_t as f64 * r_in * 1.25
+                + out_tokens as f64 * r_out)
+                / 1_000_000.0;
             let new_status = if error.is_some() { "failed" } else { "done" };
             let updated = reg_t.mutate_persist(&app_t, &wf_id_t, |w| {
                 for s in w.subagents.iter_mut() {
@@ -795,19 +804,11 @@ async fn run_subagents_subset(
                     "error": error,
                 }),
             );
-            if let Some(w) = updated {
-                if w.total_cost_usd >= cap {
-                    cancel_t.store(true, Ordering::SeqCst);
-                    let _ = app_t.emit(
-                        "dw:budget_exceeded",
-                        serde_json::json!({
-                            "workflowId": wf_id_t,
-                            "totalCostUsd": w.total_cost_usd,
-                            "capUsd": cap,
-                        }),
-                    );
-                }
-            }
+            // Budget cap enforcement removed — it overshot wildly under
+            // parallel fan-out and the numbers misled more than helped.
+            // `total_cost_usd` is now purely informational; the only
+            // stop controls are the user's Cancel button + quota-pause.
+            let _ = updated;
         });
         handles.push(h);
     }
@@ -851,21 +852,33 @@ async fn run_verifier(
     );
     let (raw, _usage) = call_oneshot(&prompt, Some(&parent_cwd), &model, None).await?;
     let stripped = strip_json_fence(raw.trim());
-    let val: serde_json::Value = serde_json::from_str(stripped).map_err(|e| {
-        format!(
-            "verifier JSON parse: {} — raw first 200: {}",
-            e,
-            raw.chars().take(200).collect::<String>()
-        )
-    })?;
-    let synthesis = val
-        .get("synthesis")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .trim()
-        .to_string();
-    let retry_ids: Vec<String> = val
-        .get("retry_subagents")
+    // Graceful degrade: the verifier sometimes answers in prose instead
+    // of the requested JSON. Previously a parse failure errored the
+    // WHOLE workflow ("Dynamic Workflow failed: verifier JSON parse"),
+    // throwing away every subagent result. Now a non-JSON verifier reply
+    // is used verbatim as the synthesis — the user still gets the
+    // consolidated answer; only the structured retry/conflict fields are
+    // skipped.
+    let val_opt = serde_json::from_str::<serde_json::Value>(stripped).ok();
+    let synthesis = match &val_opt {
+        Some(v) => {
+            let s = v
+                .get("synthesis")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if s.is_empty() {
+                raw.trim().to_string()
+            } else {
+                s
+            }
+        }
+        None => raw.trim().to_string(),
+    };
+    let retry_ids: Vec<String> = val_opt
+        .as_ref()
+        .and_then(|v| v.get("retry_subagents"))
         .and_then(|v| v.as_array())
         .map(|arr| {
             arr.iter()
