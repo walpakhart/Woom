@@ -2230,6 +2230,19 @@
     const str = (k: string): string => _mcpStr(input, k);
     const num = (k: string): number => _mcpNum(input, k);
     const pick = (...keys: string[]): string => pickFrom(input, ...keys);
+    /* Agent-initiated workflow kickoff. `start_sdd` / `start_dw` route
+     * straight through the same slash pipeline a user types, so spec /
+     * plan / budget approval gates still apply — the agent starts the
+     * workflow but can't bypass the user's go-ahead. */
+    if (name === 'mcp__app__start_sdd' || name === 'mcp__app__start_dw') {
+      const session = sessionsState.list.find((s) => s.id === _sessionId);
+      const prompt = str('prompt').trim();
+      if (session && prompt) {
+        const slash = name === 'mcp__app__start_sdd' ? `/sdd ${prompt}` : `/dw ${prompt}`;
+        void handleSlashCommand(slash, session);
+      }
+      return;
+    }
     // parseEdgeSpec moved to ./mcpInputParse.ts (wave-30 split).
     // Inbox/view/instance cases moved to ./appNavigationInbox.ts
     // (wave-32 split). Canvas + SDD cases moved to

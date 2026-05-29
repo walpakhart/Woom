@@ -2376,6 +2376,36 @@ impl App {
     // tries.
 
     #[tool(
+        description = "Kick off a NEW Spec-Driven-Development workspace for the current session from a natural-language ask — same as the user typing `/sdd <prompt>`. Use when the user asks you to 'run SDD' / 'start an SDD' / 'do this as an SDD workflow'. The user still approves the generated spec + each phase plan (you cannot bypass those gates). `prompt` is the full task brief."
+    )]
+    async fn start_sdd(
+        &self,
+        Parameters(StartWorkflowParams { prompt }): Parameters<StartWorkflowParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        if prompt.trim().is_empty() {
+            return Err(ErrorData::invalid_params("prompt must not be empty", None));
+        }
+        Ok(CallToolResult::success(vec![Content::text(
+            "Starting SDD workspace. The desktop side runs the spec-writer; the user approves the spec + each phase plan.",
+        )]))
+    }
+
+    #[tool(
+        description = "Kick off a NEW Dynamic Workflow (parallel subagent fan-out + verifier synthesis) for the current session — same as the user typing `/dw <prompt>`. Use when the user asks you to 'run DW' / 'start a dynamic workflow' / 'fan this out in parallel'. The user still approves the plan + budget cap before fan-out fires. `prompt` is the full task brief."
+    )]
+    async fn start_dw(
+        &self,
+        Parameters(StartWorkflowParams { prompt }): Parameters<StartWorkflowParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        if prompt.trim().is_empty() {
+            return Err(ErrorData::invalid_params("prompt must not be empty", None));
+        }
+        Ok(CallToolResult::success(vec![Content::text(
+            "Starting Dynamic Workflow. The desktop side runs the planner; the user approves the plan + budget cap before fan-out.",
+        )]))
+    }
+
+    #[tool(
         description = "Read the full SDD workspace snapshot (stage, phases, recovery state). Use to refresh your view of what's running, what's done, what's failed. Read-only — no audit cost. Pass `id` from the `linked_to_sdd_phase=<wsid>:<phase>` line in your layout preamble."
     )]
     async fn sdd_get(
@@ -2904,6 +2934,14 @@ struct SddIdParams {
     /// `linked_to_sdd_phase=<wsid>:<phase>` line in the layout snapshot
     /// at the top of your system prompt.
     id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct StartWorkflowParams {
+    /// The task / ask to drive the workflow. Same text the user would
+    /// type after `/sdd ` or `/dw `. Be specific — this is the whole
+    /// brief the spec-writer (SDD) or planner (DW) works from.
+    prompt: String,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
