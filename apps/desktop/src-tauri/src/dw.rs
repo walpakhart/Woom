@@ -486,6 +486,7 @@ async fn call_oneshot(
     prompt: &str,
     cwd: Option<&Path>,
     model: &str,
+    timeout: Option<std::time::Duration>,
 ) -> Result<(String, Option<crate::claude::OneshotUsage>), String> {
     let status = crate::claude::detect();
     if !status.detected {
@@ -495,19 +496,22 @@ async fn call_oneshot(
         return Err("claude CLI not authenticated".into());
     }
     let bin = status.path.as_deref().unwrap_or("claude");
-    // Hard timeout — the oneshot subprocess can stall (MCP init, network,
-    // a wedged CLI) and there is no other ceiling on this await, so a
-    // planner/verifier turn would hang the whole `/dw` flow with no UI
-    // feedback. Bound it so the caller surfaces a real error instead.
     let fut = crate::claude::run_claude_oneshot(bin, prompt, None, None, cwd, Some(model));
-    let resp = match tokio::time::timeout(ONESHOT_TIMEOUT, fut).await {
-        Ok(r) => r.map_err(|e| format!("claude oneshot: {}", e))?,
-        Err(_) => {
-            return Err(format!(
-                "claude oneshot timed out after {}s",
-                ONESHOT_TIMEOUT.as_secs()
-            ))
-        }
+    // The timeout only guards the PLANNER (a quick decompose turn whose
+    // hang originally froze `/dw` with no UI feedback). Subagents +
+    // verifier do real, open-ended work — surveying a codebase across
+    // many tool calls routinely runs minutes — so they pass `None` and
+    // run unbounded, gated instead by the budget cap, quota-pause, and
+    // user cancel. A short shared ceiling here was killing legit
+    // subagent turns (3/6 timing out).
+    let resp = match timeout {
+        Some(dur) => match tokio::time::timeout(dur, fut).await {
+            Ok(r) => r.map_err(|e| format!("claude oneshot: {}", e))?,
+            Err(_) => {
+                return Err(format!("claude oneshot timed out after {}s", dur.as_secs()))
+            }
+        },
+        None => fut.await.map_err(|e| format!("claude oneshot: {}", e))?,
     };
     Ok((resp.text, resp.usage))
 }
@@ -521,7 +525,7 @@ async fn run_planner(
     model: &str,
 ) -> Result<PlannerOutput, String> {
     let prompt = build_planner_prompt(user_prompt);
-    let (raw, _usage) = call_oneshot(&prompt, cwd, model).await?;
+    let (raw, _usage) = call_oneshot(&prompt, cwd, model, Some(ONESHOT_TIMEOUT)).await?;
     match parse_planner_json(&raw) {
         Ok(p) => Ok(p),
         Err(parse_err) => {
@@ -531,7 +535,8 @@ async fn run_planner(
                  Schema:\n{}\n\nOriginal request:\n{}",
                 parse_err, PLANNER_SCHEMA, user_prompt
             );
-            let (raw2, _usage2) = call_oneshot(&retry_prompt, cwd, model).await?;
+            let (raw2, _usage2) =
+                call_oneshot(&retry_prompt, cwd, model, Some(ONESHOT_TIMEOUT)).await?;
             parse_planner_json(&raw2)
         }
     }
@@ -722,7 +727,7 @@ async fn run_subagents_subset(
                     }
                 }
             });
-            let result = call_oneshot(&prompt, Some(&worktree_buf), &model_t).await;
+            let result = call_oneshot(&prompt, Some(&worktree_buf), &model_t, None).await;
             let (text, usage, error) = match result {
                 Ok((t, u)) => (t, u, None),
                 Err(e) => (String::new(), None, Some(e)),
@@ -827,7 +832,7 @@ async fn run_verifier(
          {{\"synthesis\": \"<consolidated answer>\", \"conflicts_found\": [\"...\"], \"retry_subagents\": [\"sub-id\", ...]}}",
         verifier_prompt, parts
     );
-    let (raw, _usage) = call_oneshot(&prompt, Some(&parent_cwd), &model).await?;
+    let (raw, _usage) = call_oneshot(&prompt, Some(&parent_cwd), &model, None).await?;
     let stripped = strip_json_fence(raw.trim());
     let val: serde_json::Value = serde_json::from_str(stripped).map_err(|e| {
         format!(

@@ -2237,9 +2237,18 @@
     if (name === 'mcp__app__start_sdd' || name === 'mcp__app__start_dw') {
       const session = sessionsState.list.find((s) => s.id === _sessionId);
       const prompt = str('prompt').trim();
+      const which = name === 'mcp__app__start_sdd' ? 'start_sdd' : 'start_dw';
       if (session && prompt) {
         const slash = name === 'mcp__app__start_sdd' ? `/sdd ${prompt}` : `/dw ${prompt}`;
         void handleSlashCommand(slash, session);
+      } else if (session) {
+        /* Sidecar already acked "Starting…" to the agent, so a silent
+         * no-op here would lie. Surface why nothing happened. */
+        appendSessionMessage(session.id, {
+          role: 'system',
+          content: `_${which} ignored — empty prompt._`,
+          at: new Date().toISOString(),
+        });
       }
       return;
     }

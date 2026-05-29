@@ -211,6 +211,12 @@ pub(crate) fn build_mcp_config(
         allowed.push("mcp__app__sdd_save_phase_verify".into());
         allowed.push("mcp__app__sdd_approve_phase_plan".into());
         allowed.push("mcp__app__sdd_discard_phase_plan".into());
+        // Workflow kickoff (0.2.6) — let the agent START an SDD / DW
+        // when the user asks it to. Without these in the allowlist the
+        // `--allowedTools` filter strips them: the agent sees the tools
+        // in its catalog but every call is rejected.
+        allowed.push("mcp__app__start_sdd".into());
+        allowed.push("mcp__app__start_dw".into());
     }
 
     // Merge in any third-party MCP servers the user has installed via
