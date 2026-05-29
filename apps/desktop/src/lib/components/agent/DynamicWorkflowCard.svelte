@@ -130,6 +130,17 @@
         updateWorkflow(workflowId, { status: 'running' });
       })
     );
+    unlistens.push(
+      await listen<typeof workflow>('dw:awaiting_verify', (e) => {
+        const payload = e.payload as typeof workflow;
+        if (!payload || payload.id !== workflowId) return;
+        updateWorkflow(workflowId, {
+          status: 'awaiting_verify',
+          quotaDelta5h: payload.quotaDelta5h,
+          quotaDelta7d: payload.quotaDelta7d
+        });
+      })
+    );
   });
   onDestroy(() => {
     for (const u of unlistens) u();
@@ -173,6 +184,18 @@
     }
   }
 
+  /* Run the verifier AFTER the user has applied the diffs they want.
+   * It inspects the merged repo, resolves conflicts, finalises. */
+  async function verifyWorkflow() {
+    try {
+      updateWorkflow(workflowId, { status: 'verifying' });
+      await invoke('dw_verify', { workflowId });
+    } catch (e) {
+      console.warn('dw_verify failed', e);
+      updateWorkflow(workflowId, { status: 'awaiting_verify' });
+    }
+  }
+
   function statusIcon(status: string): string {
     switch (status) {
       case 'queued': return '◌';
@@ -201,10 +224,19 @@
       {#if workflow.status === 'awaiting_approval'}
         <button class="dw-approve" onclick={approveFromCard} aria-label="Approve workflow">approve</button>
         <button class="dw-cancel" onclick={cancel} aria-label="Cancel workflow">cancel</button>
+      {:else if workflow.status === 'awaiting_verify'}
+        <button class="dw-approve" onclick={verifyWorkflow} aria-label="Run verifier" title="Apply the diffs you want first — the verifier reconciles the merged repo + finalises">verify</button>
+        <button class="dw-cancel" onclick={cancel} aria-label="Cancel workflow">cancel</button>
       {:else if workflow.status === 'running' || workflow.status === 'verifying' || workflow.status === 'planning'}
         <button class="dw-cancel" onclick={cancel} aria-label="Cancel workflow">cancel</button>
       {/if}
     </header>
+
+    {#if workflow.status === 'awaiting_verify'}
+      <div class="dw-verify-hint">
+        Review each subagent's changes below and <strong>apply</strong> the ones you want, then hit <strong>verify</strong> — the verifier reconciles the merged repo and writes the conclusion.
+      </div>
+    {/if}
 
     <ul class="dw-grid">
       {#each workflow.subagents as sub (sub.id)}
@@ -376,6 +408,15 @@
   }
   .dw-approve:hover {
     background: var(--accent-bright, var(--accent));
+  }
+  .dw-verify-hint {
+    font-size: 11.5px;
+    color: var(--text-1);
+    background: color-mix(in srgb, var(--accent) 8%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border));
+    border-radius: 5px;
+    padding: 6px 9px;
+    margin-bottom: 8px;
   }
   .dw-grid {
     margin: 0;

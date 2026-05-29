@@ -888,7 +888,14 @@ async fn run_verifier(
         }
     }
     let prompt = format!(
-        "{}\n\nSubagent results:\n\n{}\n\nOutput ONLY a JSON object (no markdown fences, no prose):\n\
+        "{}\n\nSubagent results:\n\n{}\n\n\
+         IMPORTANT: the user may have applied some subagents' changes to THIS \
+         repository (your cwd) before asking you to verify. Inspect the current \
+         working tree (`git status`, `git diff`) to see what actually landed. \
+         Reconcile overlapping or conflicting edits, note anything that didn't \
+         apply cleanly, and base your conclusion on the REAL post-apply state — \
+         not just the subagent text above.\n\n\
+         Output ONLY a JSON object (no markdown fences, no prose):\n\
          {{\"synthesis\": \"<consolidated answer>\", \"conflicts_found\": [\"...\"], \"retry_subagents\": [\"sub-id\", ...]}}",
         verifier_prompt, parts
     );
@@ -1122,58 +1129,99 @@ pub async fn dw_approve(
             }
         }
 
-        // 2. Verifier.
-        let _ = reg_clone.mutate_persist(&app_clone, &wf_id_clone, |w| {
-            w.status = "verifying".to_string();
-        });
-        let synthesis = match run_verifier(
-            app_clone.clone(),
-            reg_clone.clone(),
-            wf_id_clone.clone(),
-            parent_cwd.clone(),
-            model.clone(),
-            false,
+        // Fan-out quota burn (the bulk of it) — recorded now whether or
+        // not we defer the verifier.
+        let (q5_end, q7_end) = fetch_quota_util().await;
+
+        // Gate: if any subagent produced a diff, STOP in `awaiting_verify`
+        // so the user can review + apply the changes first. The verifier
+        // then runs via `dw_verify` against the APPLIED repo, resolving
+        // conflicts + finalising. Research-only runs (no diffs) have
+        // nothing to apply, so they verify immediately.
+        let has_diffs = after_fanout
+            .as_ref()
+            .map(|w| {
+                w.subagents
+                    .iter()
+                    .any(|s| s.diff.as_deref().map_or(false, |d| !d.trim().is_empty()))
+            })
+            .unwrap_or(false);
+        if has_diffs {
+            let wf_av = reg_clone.mutate_persist(&app_clone, &wf_id_clone, |w| {
+                w.status = "awaiting_verify".to_string();
+                w.quota_delta_5h = Some((q5_end - q5_start).max(0.0));
+                w.quota_delta_7d = Some((q7_end - q7_start).max(0.0));
+            });
+            if let Some(w) = wf_av {
+                let _ = app_clone.emit("dw:awaiting_verify", &w);
+            }
+            return;
+        }
+
+        // Research-only — verify immediately.
+        if let Err(e) = run_verify_and_finalize(
+            &app_clone,
+            &reg_clone,
+            &wf_id_clone,
+            &parent_cwd,
+            &model,
+            (q5_end - q5_start).max(0.0),
+            (q7_end - q7_start).max(0.0),
         )
         .await
         {
-            Ok(s) => s,
-            Err(e) => {
-                let _ = reg_clone.mutate_persist(&app_clone, &wf_id_clone, |w| {
-                    w.status = "failed".to_string();
-                    w.completed_at = Some(unix_ms());
-                });
-                let _ = app_clone.emit(
-                    "dw:workflow_done",
-                    serde_json::json!({
-                        "workflowId": wf_id_clone,
-                        "error": format!("verifier: {}", e),
-                    }),
-                );
-                return;
-            }
-        };
-
-        // Attribute quota burn: end − start, clamped ≥0 (a window reset
-        // mid-run would otherwise read negative).
-        let (q5_end, q7_end) = fetch_quota_util().await;
-        let final_wf = reg_clone
-            .mutate_persist(&app_clone, &wf_id_clone, |w| {
-                w.status = "done".to_string();
-                w.verifier_result = Some(synthesis.clone());
-                w.final_answer = Some(synthesis);
+            let _ = reg_clone.mutate_persist(&app_clone, &wf_id_clone, |w| {
+                w.status = "failed".to_string();
                 w.completed_at = Some(unix_ms());
-                w.quota_delta_5h = Some((q5_end - q5_start).max(0.0));
-                w.quota_delta_7d = Some((q7_end - q7_start).max(0.0));
-            })
-            .unwrap();
-
-        // 3. Best-effort worktree cleanup once we've harvested results.
-        if let Some(p) = &final_wf.parent_cwd {
-            let _ = worktree::cleanup_workflow_worktrees(p, &wf_id_clone);
+            });
+            let _ = app_clone.emit(
+                "dw:workflow_done",
+                serde_json::json!({ "workflowId": wf_id_clone, "error": format!("verifier: {}", e) }),
+            );
         }
-
-        let _ = app_clone.emit("dw:workflow_done", &final_wf);
     });
+    Ok(())
+}
+
+/// Run the verifier turn + finalise the workflow to `done`. Shared by the
+/// research-only auto path (in `dw_approve`) and the user-triggered
+/// `dw_verify` (post-apply). `quota_*` are the already-computed fan-out
+/// deltas to stamp on the finished workflow.
+async fn run_verify_and_finalize(
+    app: &AppHandle,
+    reg: &Arc<DwRegistry>,
+    wf_id: &str,
+    parent_cwd: &Path,
+    model: &str,
+    quota_5h: f64,
+    quota_7d: f64,
+) -> Result<(), String> {
+    reg.mutate_persist(app, wf_id, |w| {
+        w.status = "verifying".to_string();
+    });
+    let synthesis = run_verifier(
+        app.clone(),
+        reg.clone(),
+        wf_id.to_string(),
+        parent_cwd.to_path_buf(),
+        model.to_string(),
+        false,
+    )
+    .await?;
+    let final_wf = reg
+        .mutate_persist(app, wf_id, |w| {
+            w.status = "done".to_string();
+            w.verifier_result = Some(synthesis.clone());
+            w.final_answer = Some(synthesis.clone());
+            w.completed_at = Some(unix_ms());
+            w.quota_delta_5h = Some(quota_5h);
+            w.quota_delta_7d = Some(quota_7d);
+        })
+        .ok_or_else(|| "workflow vanished before finalize".to_string())?;
+    if let Some(p) = &final_wf.parent_cwd {
+        let _ = worktree::cleanup_workflow_worktrees(p, wf_id);
+    }
+    let _ = app.emit("dw:workflow_done", &final_wf);
     Ok(())
 }
 
@@ -1229,6 +1277,50 @@ pub async fn dw_apply_subagent(
             if s.id == subagent_id {
                 s.applied = true;
             }
+        }
+    });
+    Ok(())
+}
+
+/// User-triggered verifier run for a workflow parked in `awaiting_verify`.
+/// Called from the card's "verify" button AFTER the user has applied the
+/// subagent diffs they want — the verifier inspects the now-merged repo,
+/// resolves conflicts from overlapping changes, and produces the final
+/// conclusion.
+#[tauri::command]
+pub async fn dw_verify(app: AppHandle, workflow_id: String) -> Result<(), String> {
+    let registry: tauri::State<'_, Arc<DwRegistry>> = app.state();
+    let reg = registry.inner().clone();
+    let wf = reg
+        .get(&workflow_id)
+        .ok_or_else(|| format!("workflow not found: {}", workflow_id))?;
+    if wf.status != "awaiting_verify" {
+        return Err(format!(
+            "workflow not awaiting verify (status: {})",
+            wf.status
+        ));
+    }
+    let parent_cwd = wf
+        .parent_cwd
+        .as_deref()
+        .map(PathBuf::from)
+        .ok_or_else(|| "workflow has no parent cwd".to_string())?;
+    let q5 = wf.quota_delta_5h.unwrap_or(0.0);
+    let q7 = wf.quota_delta_7d.unwrap_or(0.0);
+    let model = "claude-opus-4-8".to_string();
+    let app_c = app.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) =
+            run_verify_and_finalize(&app_c, &reg, &workflow_id, &parent_cwd, &model, q5, q7).await
+        {
+            let _ = reg.mutate_persist(&app_c, &workflow_id, |w| {
+                w.status = "failed".to_string();
+                w.completed_at = Some(unix_ms());
+            });
+            let _ = app_c.emit(
+                "dw:workflow_done",
+                serde_json::json!({ "workflowId": workflow_id, "error": format!("verifier: {}", e) }),
+            );
         }
     });
     Ok(())

@@ -41,6 +41,7 @@ export function getWorkflow(id: string): DynamicWorkflow | null {
 const ACTIVE_DW_STATUSES = new Set([
   'awaiting_approval',
   'running',
+  'awaiting_verify',
   'verifying',
   'paused_quota',
 ]);
