@@ -436,6 +436,18 @@
   .dw-cell[data-status='done'] {
     border-color: color-mix(in srgb, #6cb87a 35%, var(--border));
   }
+  /* Live pulse on actively-working subagents so you can see which are
+     running vs idle/hung. */
+  @keyframes dw-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+  .dw-cell[data-status='streaming'] {
+    border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  }
+  .dw-cell[data-status='streaming'] .dw-cell-icon {
+    animation: dw-pulse 1.1s ease-in-out infinite;
+  }
   .dw-cell[data-status='failed'] {
     border-color: color-mix(in srgb, var(--error, #e88264) 35%, var(--border));
   }

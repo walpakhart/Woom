@@ -437,14 +437,18 @@ fn rate_for(model: &str, fast: bool) -> (f64, f64) {
 pub fn estimate_workflow_cost(plan: &PlannerOutput, model: &str, fast: bool) -> f64 {
     let (r_in, r_out) = rate_for(model, fast);
     let n = plan.subagents.len() as f64;
-    // 3K avg in + 3K avg out per subagent + 5K total for verifier.
-    let cost = (n * 3_000.0 * r_in
-        + n * 3_000.0 * r_out
-        + 5_000.0 * r_in
-        + 0.0_f64.max(5_000.0 * r_out))
+    // Each subagent is a FULL agentic turn — it reads files, greps, runs
+    // tools, often surveying a big chunk of the repo. The old 3K-in/3K-out
+    // guess modelled a single Q&A and undershot real runs by 3-10×. A
+    // codebase-survey subagent realistically pulls ~12K fresh input +
+    // emits ~10K, plus a heavier verifier consolidation pass. Cost still
+    // varies WIDELY with how much each subagent chooses to read — this is
+    // a rough floor, not a promise.
+    let cost = (n * 12_000.0 * r_in
+        + n * 10_000.0 * r_out
+        + 12_000.0 * r_in
+        + 6_000.0 * r_out)
         / 1_000_000.0;
-    // ×1.2 safety margin so the user isn't surprised when actual lands
-    // above estimate.
     cost * 1.2
 }
 

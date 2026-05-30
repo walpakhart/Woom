@@ -32,7 +32,7 @@
       <header class="modal-head">
         <div>
           <div class="modal-title">Dynamic Workflow — pre-flight</div>
-          <div class="modal-sub">{m.plan.subagents.length} subagent{m.plan.subagents.length === 1 ? '' : 's'} · estimated cost <span class="mono">{formatCostUsd(m.estimateUsd)}</span></div>
+          <div class="modal-sub">{m.plan.subagents.length} subagent{m.plan.subagents.length === 1 ? '' : 's'} · rough est. <span class="mono">~{formatCostUsd(m.estimateUsd)}</span> <span class="dwp-est-note">(agentic cost varies widely)</span></div>
         </div>
         <button class="modal-close" onclick={() => finish({ kind: 'cancel' })} aria-label="Cancel">
           <svg class="i" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12" /></svg>
@@ -78,6 +78,7 @@
     max-width: 560px;
     width: 90vw;
   }
+  .dwp-est-note { color: var(--text-mute); font-size: 11px; }
   .dwp-rationale {
     padding: 8px 10px;
     background: var(--bg-2);
