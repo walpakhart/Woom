@@ -3018,7 +3018,10 @@ struct DwLaunchParams {
     /// Workflow id to launch (must already have ≥1 subagent added).
     workflow_id: String,
     /// Optional instructions for the verifier turn that consolidates the
-    /// subagent results. Omit for a sensible default.
+    /// subagent results. Omit for a sensible default. Advertised in the
+    /// schema so the agent can pass it; the desktop side reads it from
+    /// the tool input (the sidecar stub itself doesn't).
+    #[allow(dead_code)]
     verifier_prompt: Option<String>,
 }
 
