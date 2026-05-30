@@ -2193,6 +2193,45 @@
     await sendClaudeMessage({ silent: true, kind: s.agentKind });
   }
 
+  /** Run a DW verifier as a VISIBLE streamed chat turn (Phase 2b), then
+   *  finalise the workflow. The conclusion streams in chat (thinking →
+   *  answer) instead of arriving silently from a backend oneshot. */
+  async function onDwVerify(workflowId: string): Promise<void> {
+    const w = getWorkflow(workflowId);
+    if (!w) return;
+    const parts = w.subagents
+      .map((s) =>
+        s.result
+          ? `## ${s.id}\n${s.result}`
+          : s.error
+            ? `## ${s.id} (FAILED: ${s.error})`
+            : ''
+      )
+      .filter(Boolean)
+      .join('\n\n');
+    const vp =
+      w.verifierPrompt ||
+      'Consolidate the subagent results into a single deduplicated, prioritized answer. Flag conflicts.';
+    const prompt =
+      `${vp}\n\nSubagent results:\n\n${parts}\n\n` +
+      `Some of these changes may already be applied to this repo — inspect git status / git diff, ` +
+      `reconcile any conflicts, and write the final conclusion grounded in the real post-apply state. Be concise.`;
+    sessionsState.activeClaudeId = w.sessionId;
+    sessionsState.activeIds.claude = w.sessionId;
+    updateSession(w.sessionId, { input: prompt });
+    await Promise.resolve();
+    try {
+      await sendClaudeMessage({ kind: 'claude' });
+    } catch (e) {
+      console.warn('dw verify turn failed', e);
+    }
+    try {
+      await invoke('dw_finalize', { workflowId });
+    } catch (e) {
+      console.warn('dw_finalize failed', e);
+    }
+  }
+
   /** Options for `sendClaudeMessage`. `silent` is used by the SDD
    *  orchestrator to push phase prompts into the agent's CLI session
    *  WITHOUT polluting the visible chat with the giant template — the
@@ -3058,6 +3097,7 @@
           onDrop={(e) => onAgentDrop(APP_INSTANCE_IDS.claude, 'claude', e)}
           onDragLeave={() => onAgentDragLeave(APP_INSTANCE_IDS.claude)}
           onSddAdvance={onSddAdvance}
+          onDwVerify={onDwVerify}
           onResumeAfterQuota={onResumeAfterQuota}
         />
       {/if}
@@ -3114,6 +3154,7 @@
           onDrop={(e) => onAgentDrop(APP_INSTANCE_IDS.cursor, 'cursor', e)}
           onDragLeave={() => onAgentDragLeave(APP_INSTANCE_IDS.cursor)}
           onSddAdvance={onSddAdvance}
+          onDwVerify={onDwVerify}
           onResumeAfterQuota={onResumeAfterQuota}
         />
       {/if}

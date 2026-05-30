@@ -552,7 +552,7 @@ pub fn run() {
             dw::dw_approve,
             dw::dw_cancel,
             dw::dw_apply_subagent,
-            dw::dw_verify,
+            dw::dw_finalize,
             dw::dw_create,
             dw::dw_set_task,
             dw::dw_add_subagent,

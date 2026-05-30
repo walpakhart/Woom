@@ -862,127 +862,6 @@ async fn run_subagents_subset(
     }
 }
 
-/// One real Opus 4.8 turn that synthesises subagent results into the
-/// final answer. JSON-strict envelope `{synthesis, conflicts_found,
-/// retry_subagents}`. When `retried == false` AND `retry_subagents` is
-/// non-empty: reset those subagents' status to `queued`, re-run them
-/// via `run_subagents_subset` (worktrees still exist — cleanup runs
-/// AFTER verifier success), then recurse with `retried=true` so the
-/// retry path is bounded to exactly one round.
-async fn run_verifier(
-    app: AppHandle,
-    reg: Arc<DwRegistry>,
-    workflow_id: String,
-    parent_cwd: PathBuf,
-    model: String,
-    retried: bool,
-) -> Result<String, String> {
-    let wf = reg.get(&workflow_id).ok_or("workflow disappeared")?;
-    let verifier_prompt = wf.verifier_prompt.clone().unwrap_or_else(|| {
-        "Synthesise subagent outputs into a single coherent answer. Flag conflicts.".to_string()
-    });
-    let mut parts = String::new();
-    for s in wf.subagents.iter() {
-        if let Some(r) = &s.result {
-            parts.push_str(&format!("## {}\n{}\n\n", s.id, r));
-        } else if let Some(err) = &s.error {
-            parts.push_str(&format!("## {} (FAILED: {})\n\n", s.id, err));
-        }
-    }
-    let prompt = format!(
-        "{}\n\nSubagent results:\n\n{}\n\n\
-         IMPORTANT: the user may have applied some subagents' changes to THIS \
-         repository (your cwd) before asking you to verify. Inspect the current \
-         working tree (`git status`, `git diff`) to see what actually landed. \
-         Reconcile overlapping or conflicting edits, note anything that didn't \
-         apply cleanly, and base your conclusion on the REAL post-apply state — \
-         not just the subagent text above.\n\n\
-         Output ONLY a JSON object (no markdown fences, no prose):\n\
-         {{\"synthesis\": \"<consolidated answer>\", \"conflicts_found\": [\"...\"], \"retry_subagents\": [\"sub-id\", ...]}}",
-        verifier_prompt, parts
-    );
-    let (raw, _usage) = call_oneshot(&prompt, Some(&parent_cwd), &model, None).await?;
-    let stripped = strip_json_fence(raw.trim());
-    // Graceful degrade: the verifier sometimes answers in prose instead
-    // of the requested JSON. Previously a parse failure errored the
-    // WHOLE workflow ("Dynamic Workflow failed: verifier JSON parse"),
-    // throwing away every subagent result. Now a non-JSON verifier reply
-    // is used verbatim as the synthesis — the user still gets the
-    // consolidated answer; only the structured retry/conflict fields are
-    // skipped.
-    let val_opt = serde_json::from_str::<serde_json::Value>(stripped).ok();
-    let synthesis = match &val_opt {
-        Some(v) => {
-            let s = v
-                .get("synthesis")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .trim()
-                .to_string();
-            if s.is_empty() {
-                raw.trim().to_string()
-            } else {
-                s
-            }
-        }
-        None => raw.trim().to_string(),
-    };
-    let retry_ids: Vec<String> = val_opt
-        .as_ref()
-        .and_then(|v| v.get("retry_subagents"))
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|x| x.as_str().map(String::from))
-                .collect()
-        })
-        .unwrap_or_default();
-
-    if !retried && !retry_ids.is_empty() {
-        // Reset those subagents' status to 'queued' + clear prior result
-        // / error so `run_subagents_subset` picks them up fresh. Worktree
-        // paths stay intact — cleanup happens after the verifier branch
-        // finalises in `dw_approve`, so re-runs reuse the same trees.
-        reg.mutate_persist(&app, &workflow_id, |w| {
-            for s in w.subagents.iter_mut() {
-                if retry_ids.contains(&s.id) {
-                    s.status = "queued".to_string();
-                    s.result = None;
-                    s.error = None;
-                }
-            }
-        });
-        let sem = Arc::new(Semaphore::new(4));
-        let cancel = Arc::new(AtomicBool::new(false));
-        run_subagents_subset(
-            &app,
-            &reg,
-            &workflow_id,
-            &model,
-            retry_ids.clone(),
-            sem,
-            cancel,
-        )
-        .await;
-        // Recurse with retried=true so the retry branch can't loop.
-        // `Box::pin` because `async fn` can't recurse directly.
-        return Box::pin(run_verifier(
-            app,
-            reg,
-            workflow_id,
-            parent_cwd,
-            model,
-            true,
-        ))
-        .await;
-    }
-
-    if synthesis.is_empty() {
-        return Err("verifier returned empty synthesis".into());
-    }
-    Ok(synthesis)
-}
-
 // ---- Tauri commands -------------------------------------------------------
 
 #[derive(Debug, Serialize)]
@@ -1139,93 +1018,22 @@ fn spawn_workflow_run(
         }
 
         let (q5_end, q7_end) = fetch_quota_util().await;
+        let _ = (&parent_cwd, &model); // no longer used post-fanout
 
-        // Gate: any subagent diff → park in `awaiting_verify` so the user
-        // applies changes first; verifier (via `dw_verify`) then runs
-        // against the applied repo. Research-only runs verify now.
-        let has_diffs = after_fanout
-            .as_ref()
-            .map(|w| {
-                w.subagents
-                    .iter()
-                    .any(|s| s.diff.as_deref().map_or(false, |d| !d.trim().is_empty()))
-            })
-            .unwrap_or(false);
-        if has_diffs {
-            let wf_av = reg.mutate_persist(&app, &workflow_id, |w| {
-                w.status = "awaiting_verify".to_string();
-                w.quota_delta_5h = Some((q5_end - q5_start).max(0.0));
-                w.quota_delta_7d = Some((q7_end - q7_start).max(0.0));
-            });
-            if let Some(w) = wf_av {
-                let _ = app.emit("dw:awaiting_verify", &w);
-            }
-            return;
-        }
-
-        if let Err(e) = run_verify_and_finalize(
-            &app,
-            &reg,
-            &workflow_id,
-            &parent_cwd,
-            &model,
-            (q5_end - q5_start).max(0.0),
-            (q7_end - q7_start).max(0.0),
-        )
-        .await
-        {
-            let _ = reg.mutate_persist(&app, &workflow_id, |w| {
-                w.status = "failed".to_string();
-                w.completed_at = Some(unix_ms());
-            });
-            let _ = app.emit(
-                "dw:workflow_done",
-                serde_json::json!({ "workflowId": workflow_id, "error": format!("verifier: {}", e) }),
-            );
+        // Always park in `awaiting_verify` once fan-out completes. The
+        // verifier is now a STREAMED chat turn (frontend `onDwVerify`) so
+        // its reasoning + answer appear live in chat instead of arriving
+        // silently. Research-only runs (no diffs) auto-fire it card-side;
+        // refactor runs wait for the user to apply diffs first.
+        let wf_av = reg.mutate_persist(&app, &workflow_id, |w| {
+            w.status = "awaiting_verify".to_string();
+            w.quota_delta_5h = Some((q5_end - q5_start).max(0.0));
+            w.quota_delta_7d = Some((q7_end - q7_start).max(0.0));
+        });
+        if let Some(w) = wf_av {
+            let _ = app.emit("dw:awaiting_verify", &w);
         }
     });
-}
-
-/// Run the verifier turn + finalise the workflow to `done`. Shared by the
-/// research-only auto path (in `dw_approve`) and the user-triggered
-/// `dw_verify` (post-apply). `quota_*` are the already-computed fan-out
-/// deltas to stamp on the finished workflow.
-async fn run_verify_and_finalize(
-    app: &AppHandle,
-    reg: &Arc<DwRegistry>,
-    wf_id: &str,
-    parent_cwd: &Path,
-    model: &str,
-    quota_5h: f64,
-    quota_7d: f64,
-) -> Result<(), String> {
-    reg.mutate_persist(app, wf_id, |w| {
-        w.status = "verifying".to_string();
-    });
-    let synthesis = run_verifier(
-        app.clone(),
-        reg.clone(),
-        wf_id.to_string(),
-        parent_cwd.to_path_buf(),
-        model.to_string(),
-        false,
-    )
-    .await?;
-    let final_wf = reg
-        .mutate_persist(app, wf_id, |w| {
-            w.status = "done".to_string();
-            w.verifier_result = Some(synthesis.clone());
-            w.final_answer = Some(synthesis.clone());
-            w.completed_at = Some(unix_ms());
-            w.quota_delta_5h = Some(quota_5h);
-            w.quota_delta_7d = Some(quota_7d);
-        })
-        .ok_or_else(|| "workflow vanished before finalize".to_string())?;
-    if let Some(p) = &final_wf.parent_cwd {
-        let _ = worktree::cleanup_workflow_worktrees(p, wf_id);
-    }
-    let _ = app.emit("dw:workflow_done", &final_wf);
-    Ok(())
 }
 
 #[tauri::command]
@@ -1285,47 +1093,43 @@ pub async fn dw_apply_subagent(
     Ok(())
 }
 
-/// User-triggered verifier run for a workflow parked in `awaiting_verify`.
-/// Called from the card's "verify" button AFTER the user has applied the
-/// subagent diffs they want — the verifier inspects the now-merged repo,
-/// resolves conflicts from overlapping changes, and produces the final
-/// conclusion.
+/// Finalise a workflow to `done` after the verifier chat turn has run.
+/// The verifier is now a STREAMED chat turn (frontend `onDwVerify`), so
+/// its answer already lives in the thread — this just flips the workflow
+/// terminal (unpins the card) + reaps worktrees. `synthesis` is optional;
+/// when omitted the conclusion is the chat message, not a card field.
 #[tauri::command]
-pub async fn dw_verify(app: AppHandle, workflow_id: String) -> Result<(), String> {
+pub async fn dw_finalize(
+    app: AppHandle,
+    workflow_id: String,
+    synthesis: Option<String>,
+) -> Result<(), String> {
     let registry: tauri::State<'_, Arc<DwRegistry>> = app.state();
-    let reg = registry.inner().clone();
-    let wf = reg
-        .get(&workflow_id)
+    let wf = registry
+        .inner()
+        .mutate_persist(&app, &workflow_id, |w| {
+            w.status = "done".to_string();
+            w.completed_at = Some(unix_ms());
+            if let Some(s) = &synthesis {
+                w.verifier_result = Some(s.clone());
+                w.final_answer = Some(s.clone());
+            }
+        })
         .ok_or_else(|| format!("workflow not found: {}", workflow_id))?;
-    if wf.status != "awaiting_verify" {
-        return Err(format!(
-            "workflow not awaiting verify (status: {})",
-            wf.status
-        ));
+    if let Some(p) = &wf.parent_cwd {
+        let _ = worktree::cleanup_workflow_worktrees(p, &workflow_id);
     }
-    let parent_cwd = wf
-        .parent_cwd
-        .as_deref()
-        .map(PathBuf::from)
-        .ok_or_else(|| "workflow has no parent cwd".to_string())?;
-    let q5 = wf.quota_delta_5h.unwrap_or(0.0);
-    let q7 = wf.quota_delta_7d.unwrap_or(0.0);
-    let model = "claude-opus-4-8".to_string();
-    let app_c = app.clone();
-    tauri::async_runtime::spawn(async move {
-        if let Err(e) =
-            run_verify_and_finalize(&app_c, &reg, &workflow_id, &parent_cwd, &model, q5, q7).await
-        {
-            let _ = reg.mutate_persist(&app_c, &workflow_id, |w| {
-                w.status = "failed".to_string();
-                w.completed_at = Some(unix_ms());
-            });
-            let _ = app_c.emit(
-                "dw:workflow_done",
-                serde_json::json!({ "workflowId": workflow_id, "error": format!("verifier: {}", e) }),
-            );
-        }
-    });
+    // Emit WITHOUT a final_answer field so the frontend's workflow_done
+    // listener doesn't append a duplicate of the streamed verifier turn.
+    let _ = app.emit(
+        "dw:workflow_done",
+        serde_json::json!({
+            "workflowId": workflow_id,
+            "id": workflow_id,
+            "status": "done",
+            "completedAt": wf.completed_at,
+        }),
+    );
     Ok(())
 }
 

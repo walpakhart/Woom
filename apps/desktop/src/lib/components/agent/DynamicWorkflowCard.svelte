@@ -17,8 +17,11 @@
 
   interface Props {
     workflowId: string;
+    /** Run the verifier as a streamed chat turn (Phase 2b). Wired up
+     *  through ChatThread → AgentApp → +page `onDwVerify`. */
+    onVerify?: () => void;
   }
-  const { workflowId }: Props = $props();
+  const { workflowId, onVerify }: Props = $props();
 
   const workflow = $derived(
     dwState.workflows.find((w) => w.id === workflowId) ?? null
@@ -185,16 +188,30 @@
   }
 
   /* Run the verifier AFTER the user has applied the diffs they want.
-   * It inspects the merged repo, resolves conflicts, finalises. */
-  async function verifyWorkflow() {
-    try {
-      updateWorkflow(workflowId, { status: 'verifying' });
-      await invoke('dw_verify', { workflowId });
-    } catch (e) {
-      console.warn('dw_verify failed', e);
-      updateWorkflow(workflowId, { status: 'awaiting_verify' });
-    }
+   * Delegates to the parent, which streams it as a visible chat turn
+   * (thinking → answer) then finalises the workflow. */
+  function verifyWorkflow() {
+    updateWorkflow(workflowId, { status: 'verifying' });
+    onVerify?.();
   }
+
+  /* Research-only runs (no subagent produced a diff) have nothing to
+   * apply, so auto-fire the verifier once they reach `awaiting_verify`.
+   * Refactor runs wait for the user to apply diffs + click verify. */
+  let autoVerifyFired = $state(false);
+  $effect(() => {
+    const w = workflow;
+    if (
+      w &&
+      w.status === 'awaiting_verify' &&
+      !autoVerifyFired &&
+      w.subagents.length > 0 &&
+      !w.subagents.some((s) => s.diff && s.diff.trim().length > 0)
+    ) {
+      autoVerifyFired = true;
+      verifyWorkflow();
+    }
+  });
 
   function statusIcon(status: string): string {
     switch (status) {

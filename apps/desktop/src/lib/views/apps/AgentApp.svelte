@@ -88,6 +88,7 @@
      *  in the linked editor (or the active editor instance). */
     onOpenFile?: (path: string) => void;
     onSddAdvance?: (sessionId: string, prompt: string) => void;
+    onDwVerify?: (workflowId: string) => void;
     onResumeAfterQuota?: (sessionId: string) => void;
   }
   let p: Props = $props();
@@ -212,6 +213,7 @@
                 onResendMessage={p.onResendMessage}
                 onOpenFile={p.onOpenFile}
                 onSddAdvance={p.onSddAdvance}
+                onDwVerify={p.onDwVerify}
               onResumeAfterQuota={p.onResumeAfterQuota}
   />
               <Composer
@@ -283,6 +285,7 @@
               onResendMessage={p.onResendMessage}
               onOpenFile={p.onOpenFile}
               onSddAdvance={p.onSddAdvance}
+                onDwVerify={p.onDwVerify}
               onResumeAfterQuota={p.onResumeAfterQuota}
 />
             <Composer

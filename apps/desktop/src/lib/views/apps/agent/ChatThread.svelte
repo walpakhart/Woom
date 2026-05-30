@@ -44,6 +44,7 @@
      *  the same send pipeline a manual user message uses. Wired up from
      *  +page.svelte; null when the parent hasn't plumbed it (e.g. tests). */
     onSddAdvance?: (sessionId: string, prompt: string) => void;
+    onDwVerify?: (workflowId: string) => void;
     /** Quota-resume click (SDD Phase 2). Drains the session's
      *  pendingQueue[0] and fires `sendClaudeMessage`. Owned by the
      *  parent so ResumePill stays decoupled from the send-pipeline. */
@@ -449,7 +450,7 @@
                slot grammar as the SDD card). Terminal workflows render
                at their origin message instead. -->
           <div class="action-wrap">
-            <DynamicWorkflowCard workflowId={activeDw.id} />
+            <DynamicWorkflowCard workflowId={activeDw.id} onVerify={() => p.onDwVerify?.(activeDw.id)} />
           </div>
         {/if}
       {/if}
@@ -608,7 +609,7 @@
                    message. The ACTIVE one renders in the pinned
                    bottom-following slot (inlineActions) so it stays
                    visible like the SDD card instead of scrolling away. -->
-              <DynamicWorkflowCard workflowId={msg.dwWorkflowId} />
+              <DynamicWorkflowCard workflowId={msg.dwWorkflowId} onVerify={() => p.onDwVerify?.(msg.dwWorkflowId!)} />
             {/if}
             {#if !shouldRenderBody(i)}
               <!-- Off-viewport placeholder. Approximate height keeps the
