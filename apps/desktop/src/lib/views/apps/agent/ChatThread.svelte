@@ -567,7 +567,11 @@
             {#if i === lastVisibleIndex}{@render inlineActions()}{/if}
           </div>
         </article>
-      {:else if msg.role === 'assistant'}
+      {:else if msg.role === 'assistant' && !(msg.dwWorkflowId && !msg.content?.trim() && !msg.thinking && isWorkflowActive(msg.dwWorkflowId))}
+        <!-- Skip the empty DW-host bubble while its workflow is active:
+             the live card renders in the pinned slot, so this would
+             otherwise show as a blank "claude" byline. Once terminal it
+             renders here (the card's resting place). -->
         <article
           class="msg msg--assistant"
           use:observeArticle={i}
