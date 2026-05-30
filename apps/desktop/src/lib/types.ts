@@ -521,6 +521,7 @@ export interface DynamicWorkflow {
   status:
     | 'planning'
     | 'building'
+    | 'awaiting_launch'
     | 'awaiting_approval'
     | 'running'
     | 'awaiting_verify'

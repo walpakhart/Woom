@@ -2439,7 +2439,7 @@ impl App {
     }
 
     #[tool(
-        description = "Launch a Dynamic Workflow you've finished building (≥1 subagent added) — kicks off the parallel fan-out + verifier. Optional `verifierPrompt` tunes how results are consolidated. After this the user reviews subagent diffs + applies them, then runs the verifier."
+        description = "Finish building a Dynamic Workflow (≥1 subagent added). This does NOT start the run — it parks the workflow for the USER to review the slices and press 'approve' on the card, which kicks the fan-out. Optional `verifierPrompt` tunes how results are consolidated. Call this once all subagents are added; then stop and let the user approve."
     )]
     async fn dw_launch(
         &self,
@@ -2452,7 +2452,7 @@ impl App {
             return Err(ErrorData::invalid_params("workflowId required", None));
         }
         Ok(CallToolResult::success(vec![Content::text(
-            "Launching fan-out. Subagents run in parallel; the card shows live progress.",
+            "Workflow built. Parked for the user to approve on the card — they press 'approve' to start the fan-out. You're done building; stop here.",
         )]))
     }
 

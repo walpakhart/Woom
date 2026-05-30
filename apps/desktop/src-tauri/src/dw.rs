@@ -1236,8 +1236,9 @@ pub async fn dw_add_subagent(
     Ok(new_id)
 }
 
-/// Finalise a live-built workflow + kick the fan-out pipeline. Sets a
-/// default verifier prompt when the agent didn't supply one.
+/// Agent finished building — park the workflow in `awaiting_launch` so
+/// the USER reviews the plan and presses "approve" (→ `dw_run`). Stores
+/// the verifier prompt; does NOT spawn the fan-out yet.
 #[tauri::command]
 pub async fn dw_launch(
     app: AppHandle,
@@ -1245,19 +1246,15 @@ pub async fn dw_launch(
     verifier_prompt: Option<String>,
 ) -> Result<(), String> {
     let registry: tauri::State<'_, Arc<DwRegistry>> = app.state();
-    let reg = registry.inner().clone();
-    let wf = reg
+    let wf = registry
+        .inner()
         .get(&workflow_id)
         .ok_or_else(|| format!("workflow not found: {}", workflow_id))?;
     if wf.subagents.is_empty() {
         return Err("no subagents added — call dw_add_subagent first".into());
     }
-    let parent_cwd = wf
-        .parent_cwd
-        .as_deref()
-        .map(PathBuf::from)
-        .ok_or_else(|| "workflow has no parent cwd".to_string())?;
-    let wf = reg
+    let wf = registry
+        .inner()
         .mutate_persist(&app, &workflow_id, |w| {
             if w
                 .verifier_prompt
@@ -1270,6 +1267,32 @@ pub async fn dw_launch(
                         .to_string()
                 }));
             }
+            w.status = "awaiting_launch".to_string();
+        })
+        .unwrap();
+    let _ = app.emit("dw:updated", &wf);
+    Ok(())
+}
+
+/// User-approved launch (card "approve" button) — kicks the fan-out
+/// pipeline for a workflow parked in `awaiting_launch`.
+#[tauri::command]
+pub async fn dw_run(app: AppHandle, workflow_id: String) -> Result<(), String> {
+    let registry: tauri::State<'_, Arc<DwRegistry>> = app.state();
+    let reg = registry.inner().clone();
+    let wf = reg
+        .get(&workflow_id)
+        .ok_or_else(|| format!("workflow not found: {}", workflow_id))?;
+    if wf.subagents.is_empty() {
+        return Err("no subagents to run".into());
+    }
+    let parent_cwd = wf
+        .parent_cwd
+        .as_deref()
+        .map(PathBuf::from)
+        .ok_or_else(|| "workflow has no parent cwd".to_string())?;
+    let wf = reg
+        .mutate_persist(&app, &workflow_id, |w| {
             w.status = "running".to_string();
             w.started_at = Some(unix_ms());
         })

@@ -40,6 +40,7 @@ export function getWorkflow(id: string): DynamicWorkflow | null {
  *  scrolling away at its origin message. */
 const ACTIVE_DW_STATUSES = new Set([
   'building',
+  'awaiting_launch',
   'awaiting_approval',
   'running',
   'awaiting_verify',

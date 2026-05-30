@@ -187,6 +187,19 @@
     }
   }
 
+  /* Approve the freshly-built plan → kick the fan-out (the gate between
+   * `building` and `running`). The agent stops at `awaiting_launch`; the
+   * user reviews the slices on the card, then presses approve. */
+  async function runWorkflow() {
+    try {
+      updateWorkflow(workflowId, { status: 'running' });
+      await invoke('dw_run', { workflowId });
+    } catch (e) {
+      console.warn('dw_run failed', e);
+      updateWorkflow(workflowId, { status: 'awaiting_launch' });
+    }
+  }
+
   /* Run the verifier AFTER the user has applied the diffs they want.
    * Delegates to the parent, which streams it as a visible chat turn
    * (thinking → answer) then finalises the workflow. */
@@ -238,7 +251,10 @@
       <span class="dw-totals mono">
         {formatTokens(totalTokens)} · {formatCostUsd(workflow.totalCostUsd)}
       </span>
-      {#if workflow.status === 'awaiting_approval'}
+      {#if workflow.status === 'awaiting_launch'}
+        <button class="dw-approve" onclick={runWorkflow} aria-label="Approve + run">approve</button>
+        <button class="dw-cancel" onclick={cancel} aria-label="Cancel workflow">cancel</button>
+      {:else if workflow.status === 'awaiting_approval'}
         <button class="dw-approve" onclick={approveFromCard} aria-label="Approve workflow">approve</button>
         <button class="dw-cancel" onclick={cancel} aria-label="Cancel workflow">cancel</button>
       {:else if workflow.status === 'awaiting_verify'}
@@ -252,6 +268,11 @@
     {#if workflow.status === 'building'}
       <div class="dw-verify-hint">
         Agent is building this workflow — surveying the repo and adding subagents. Blocks appear below as it goes.
+      </div>
+    {/if}
+    {#if workflow.status === 'awaiting_launch'}
+      <div class="dw-verify-hint">
+        Plan ready — review the subagents below, then <strong>approve</strong> to run the fan-out.
       </div>
     {/if}
     {#if workflow.status === 'awaiting_verify'}
@@ -381,7 +402,8 @@
   .dw-badge--running,
   .dw-badge--verifying,
   .dw-badge--planning,
-  .dw-badge--building {
+  .dw-badge--building,
+  .dw-badge--awaiting_launch {
     background: color-mix(in srgb, var(--accent) 12%, transparent);
     border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
     color: var(--accent-bright, var(--accent));
