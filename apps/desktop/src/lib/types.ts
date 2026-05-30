@@ -520,6 +520,7 @@ export interface DynamicWorkflow {
   userPrompt: string;
   status:
     | 'planning'
+    | 'building'
     | 'awaiting_approval'
     | 'running'
     | 'awaiting_verify'

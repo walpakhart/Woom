@@ -2406,6 +2406,57 @@ impl App {
     }
 
     #[tool(
+        description = "Set/refine the task description of a Dynamic Workflow you're BUILDING live (status `building`). Pass the `workflowId` from your 'Building DW <id>' brief. Call this once you understand the task, before adding subagents."
+    )]
+    async fn dw_set_task(
+        &self,
+        Parameters(DwSetTaskParams { workflow_id, task }): Parameters<DwSetTaskParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        if workflow_id.trim().is_empty() || task.trim().is_empty() {
+            return Err(ErrorData::invalid_params("workflowId and task required", None));
+        }
+        Ok(CallToolResult::success(vec![Content::text(
+            "Task set. Now add subagents with dw_add_subagent, then dw_launch.",
+        )]))
+    }
+
+    #[tool(
+        description = "Add ONE subagent to a Dynamic Workflow you're building. Call repeatedly — once per independent slice of the work. Each `prompt` must be self-contained (no cross-subagent dependencies): say exactly what to investigate/change and what to report. The card grows live as you add them. Survey the repo FIRST so each slice is grounded."
+    )]
+    async fn dw_add_subagent(
+        &self,
+        Parameters(DwAddSubagentParams { workflow_id, prompt }): Parameters<DwAddSubagentParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        if workflow_id.trim().is_empty() || prompt.trim().is_empty() {
+            return Err(ErrorData::invalid_params(
+                "workflowId and prompt required",
+                None,
+            ));
+        }
+        Ok(CallToolResult::success(vec![Content::text(
+            "Subagent added. Add more, or dw_launch when the plan is complete.",
+        )]))
+    }
+
+    #[tool(
+        description = "Launch a Dynamic Workflow you've finished building (≥1 subagent added) — kicks off the parallel fan-out + verifier. Optional `verifierPrompt` tunes how results are consolidated. After this the user reviews subagent diffs + applies them, then runs the verifier."
+    )]
+    async fn dw_launch(
+        &self,
+        Parameters(DwLaunchParams {
+            workflow_id,
+            verifier_prompt: _,
+        }): Parameters<DwLaunchParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        if workflow_id.trim().is_empty() {
+            return Err(ErrorData::invalid_params("workflowId required", None));
+        }
+        Ok(CallToolResult::success(vec![Content::text(
+            "Launching fan-out. Subagents run in parallel; the card shows live progress.",
+        )]))
+    }
+
+    #[tool(
         description = "Read the full SDD workspace snapshot (stage, phases, recovery state). Use to refresh your view of what's running, what's done, what's failed. Read-only — no audit cost. Pass `id` from the `linked_to_sdd_phase=<wsid>:<phase>` line in your layout preamble."
     )]
     async fn sdd_get(
@@ -2942,6 +2993,33 @@ struct StartWorkflowParams {
     /// type after `/sdd ` or `/dw `. Be specific — this is the whole
     /// brief the spec-writer (SDD) or planner (DW) works from.
     prompt: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct DwSetTaskParams {
+    /// Workflow id from the `Building DW <id>` line in your build brief.
+    workflow_id: String,
+    /// One-line task description for the workflow (shown on the card).
+    task: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct DwAddSubagentParams {
+    /// Workflow id you're building.
+    workflow_id: String,
+    /// Self-contained prompt for ONE subagent — an independent slice of
+    /// the work, no cross-subagent dependencies. Spell out exactly what
+    /// to investigate / change and what to report back.
+    prompt: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct DwLaunchParams {
+    /// Workflow id to launch (must already have ≥1 subagent added).
+    workflow_id: String,
+    /// Optional instructions for the verifier turn that consolidates the
+    /// subagent results. Omit for a sensible default.
+    verifier_prompt: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]

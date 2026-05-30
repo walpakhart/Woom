@@ -39,6 +39,7 @@ export function getWorkflow(id: string): DynamicWorkflow | null {
  *  workflow here so it stays visible like the SDD card, instead of
  *  scrolling away at its origin message. */
 const ACTIVE_DW_STATUSES = new Set([
+  'building',
   'awaiting_approval',
   'running',
   'awaiting_verify',

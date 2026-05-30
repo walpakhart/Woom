@@ -217,6 +217,10 @@ pub(crate) fn build_mcp_config(
         // in its catalog but every call is rejected.
         allowed.push("mcp__app__start_sdd".into());
         allowed.push("mcp__app__start_dw".into());
+        // Live DW build (0.2.16) — agent constructs the workflow itself.
+        allowed.push("mcp__app__dw_set_task".into());
+        allowed.push("mcp__app__dw_add_subagent".into());
+        allowed.push("mcp__app__dw_launch".into());
     }
 
     // Merge in any third-party MCP servers the user has installed via

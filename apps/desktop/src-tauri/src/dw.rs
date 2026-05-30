@@ -1086,29 +1086,42 @@ pub async fn dw_approve(
     // Quota utilization at fan-out start — diffed at done to attribute
     // this workflow's burn to the per-session limits line.
     let (q5_start, q7_start) = fetch_quota_util().await;
+    spawn_workflow_run(app, reg, workflow_id, parent_cwd, model, q5_start, q7_start);
+    Ok(())
+}
 
-    let app_clone = app.clone();
-    let reg_clone = reg.clone();
-    let wf_id_clone = workflow_id.clone();
+/// Spawn the fan-out → verify-gate → finalise pipeline for a running
+/// workflow. Shared by `dw_approve` (planner-built) and `dw_launch`
+/// (agent-built live). `q5_start`/`q7_start` are the pre-fan-out quota
+/// utilization, diffed at done for the per-session limits line.
+fn spawn_workflow_run(
+    app: AppHandle,
+    reg: Arc<DwRegistry>,
+    workflow_id: String,
+    parent_cwd: PathBuf,
+    model: String,
+    q5_start: f64,
+    q7_start: f64,
+) {
     tauri::async_runtime::spawn(async move {
-        // 1. Fan-out — real parallel claude turns under Semaphore(20).
+        // 1. Fan-out — real parallel claude turns under the semaphore.
         if let Err(e) = run_fanout(
-            app_clone.clone(),
-            reg_clone.clone(),
-            wf_id_clone.clone(),
+            app.clone(),
+            reg.clone(),
+            workflow_id.clone(),
             parent_cwd.clone(),
             model.clone(),
         )
         .await
         {
-            let _ = reg_clone.mutate_persist(&app_clone, &wf_id_clone, |w| {
+            let _ = reg.mutate_persist(&app, &workflow_id, |w| {
                 w.status = "failed".to_string();
                 w.completed_at = Some(unix_ms());
             });
-            let _ = app_clone.emit(
+            let _ = app.emit(
                 "dw:workflow_done",
                 serde_json::json!({
-                    "workflowId": wf_id_clone,
+                    "workflowId": workflow_id,
                     "error": format!("fanout: {}", e),
                 }),
             );
@@ -1116,25 +1129,20 @@ pub async fn dw_approve(
         }
 
         // If fan-out paused on quota, leave the workflow in
-        // `paused_quota` state — verifier won't run until the user
-        // re-approves once quota recovers.
-        let after_fanout = reg_clone.get(&wf_id_clone);
+        // `paused_quota` — verifier won't run until quota recovers.
+        let after_fanout = reg.get(&workflow_id);
         if let Some(w) = &after_fanout {
             if w.status == "paused_quota" || w.status == "cancelled" {
-                let _ = app_clone.emit("dw:workflow_done", w);
+                let _ = app.emit("dw:workflow_done", w);
                 return;
             }
         }
 
-        // Fan-out quota burn (the bulk of it) — recorded now whether or
-        // not we defer the verifier.
         let (q5_end, q7_end) = fetch_quota_util().await;
 
-        // Gate: if any subagent produced a diff, STOP in `awaiting_verify`
-        // so the user can review + apply the changes first. The verifier
-        // then runs via `dw_verify` against the APPLIED repo, resolving
-        // conflicts + finalising. Research-only runs (no diffs) have
-        // nothing to apply, so they verify immediately.
+        // Gate: any subagent diff → park in `awaiting_verify` so the user
+        // applies changes first; verifier (via `dw_verify`) then runs
+        // against the applied repo. Research-only runs verify now.
         let has_diffs = after_fanout
             .as_ref()
             .map(|w| {
@@ -1144,22 +1152,21 @@ pub async fn dw_approve(
             })
             .unwrap_or(false);
         if has_diffs {
-            let wf_av = reg_clone.mutate_persist(&app_clone, &wf_id_clone, |w| {
+            let wf_av = reg.mutate_persist(&app, &workflow_id, |w| {
                 w.status = "awaiting_verify".to_string();
                 w.quota_delta_5h = Some((q5_end - q5_start).max(0.0));
                 w.quota_delta_7d = Some((q7_end - q7_start).max(0.0));
             });
             if let Some(w) = wf_av {
-                let _ = app_clone.emit("dw:awaiting_verify", &w);
+                let _ = app.emit("dw:awaiting_verify", &w);
             }
             return;
         }
 
-        // Research-only — verify immediately.
         if let Err(e) = run_verify_and_finalize(
-            &app_clone,
-            &reg_clone,
-            &wf_id_clone,
+            &app,
+            &reg,
+            &workflow_id,
             &parent_cwd,
             &model,
             (q5_end - q5_start).max(0.0),
@@ -1167,17 +1174,16 @@ pub async fn dw_approve(
         )
         .await
         {
-            let _ = reg_clone.mutate_persist(&app_clone, &wf_id_clone, |w| {
+            let _ = reg.mutate_persist(&app, &workflow_id, |w| {
                 w.status = "failed".to_string();
                 w.completed_at = Some(unix_ms());
             });
-            let _ = app_clone.emit(
+            let _ = app.emit(
                 "dw:workflow_done",
-                serde_json::json!({ "workflowId": wf_id_clone, "error": format!("verifier: {}", e) }),
+                serde_json::json!({ "workflowId": workflow_id, "error": format!("verifier: {}", e) }),
             );
         }
     });
-    Ok(())
 }
 
 /// Run the verifier turn + finalise the workflow to `done`. Shared by the
@@ -1320,6 +1326,154 @@ pub async fn dw_verify(app: AppHandle, workflow_id: String) -> Result<(), String
             );
         }
     });
+    Ok(())
+}
+
+// ---- Live agent-built workflows (Phase 2a) --------------------------------
+// Instead of a hidden planner oneshot + pre-flight modal, the MAIN chat
+// agent builds the workflow visibly: `dw_create` makes an empty shell,
+// then the agent calls `dw_set_task` / `dw_add_subagent` (one per slice)
+// and `dw_launch` — the card grows live like an SDD workspace.
+
+/// Create an empty `building` workflow. Returns its id for the agent to
+/// pass into the build tools.
+#[tauri::command]
+pub async fn dw_create(
+    app: AppHandle,
+    session_id: String,
+    task: String,
+    cwd: Option<String>,
+) -> Result<String, String> {
+    let registry: tauri::State<'_, Arc<DwRegistry>> = app.state();
+    let workflow_id = format!("dw-{}", uuid_v4());
+    let wf = DynamicWorkflow {
+        id: workflow_id.clone(),
+        session_id,
+        user_prompt: task.clone(),
+        status: "building".to_string(),
+        plan_rationale: if task.trim().is_empty() { None } else { Some(task) },
+        subagents: vec![],
+        verifier_prompt: None,
+        verifier_result: None,
+        final_answer: None,
+        budget_cap_usd: DEFAULT_BUDGET_CAP_USD,
+        total_cost_usd: 0.0,
+        quota_delta_5h: None,
+        quota_delta_7d: None,
+        created_at: unix_ms(),
+        started_at: None,
+        completed_at: None,
+        parent_cwd: cwd,
+    };
+    persist_workflow(&app, &wf);
+    registry.inner().upsert(wf.clone());
+    let _ = app.emit("dw:created", &wf);
+    Ok(workflow_id)
+}
+
+/// Set / refine the workflow's task description while it's being built.
+#[tauri::command]
+pub async fn dw_set_task(app: AppHandle, workflow_id: String, task: String) -> Result<(), String> {
+    let registry: tauri::State<'_, Arc<DwRegistry>> = app.state();
+    let wf = registry
+        .inner()
+        .mutate_persist(&app, &workflow_id, |w| {
+            w.user_prompt = task.clone();
+            w.plan_rationale = Some(task.clone());
+        })
+        .ok_or_else(|| format!("workflow not found: {}", workflow_id))?;
+    let _ = app.emit("dw:updated", &wf);
+    Ok(())
+}
+
+/// Append one subagent (auto id `sub-N`). Returns the new id.
+#[tauri::command]
+pub async fn dw_add_subagent(
+    app: AppHandle,
+    workflow_id: String,
+    prompt: String,
+) -> Result<String, String> {
+    if prompt.trim().is_empty() {
+        return Err("subagent prompt is empty".into());
+    }
+    let registry: tauri::State<'_, Arc<DwRegistry>> = app.state();
+    let mut new_id = String::new();
+    let wf = registry
+        .inner()
+        .mutate_persist(&app, &workflow_id, |w| {
+            if w.subagents.len() >= MAX_SUBAGENTS {
+                return;
+            }
+            let id = format!("sub-{}", w.subagents.len() + 1);
+            new_id = id.clone();
+            w.subagents.push(DwSubagentState {
+                id,
+                prompt: prompt.clone(),
+                cwd_strategy: "inherit".to_string(),
+                cwd_subpath: None,
+                expected_artifacts: vec![],
+                status: "queued".to_string(),
+                claude_uuid: None,
+                worktree_path: None,
+                result: None,
+                error: None,
+                tokens_in: 0,
+                tokens_out: 0,
+                cost_usd: 0.0,
+                diff: None,
+                applied: false,
+            });
+        })
+        .ok_or_else(|| format!("workflow not found: {}", workflow_id))?;
+    if new_id.is_empty() {
+        return Err(format!("subagent cap ({}) reached", MAX_SUBAGENTS));
+    }
+    let _ = app.emit("dw:updated", &wf);
+    Ok(new_id)
+}
+
+/// Finalise a live-built workflow + kick the fan-out pipeline. Sets a
+/// default verifier prompt when the agent didn't supply one.
+#[tauri::command]
+pub async fn dw_launch(
+    app: AppHandle,
+    workflow_id: String,
+    verifier_prompt: Option<String>,
+) -> Result<(), String> {
+    let registry: tauri::State<'_, Arc<DwRegistry>> = app.state();
+    let reg = registry.inner().clone();
+    let wf = reg
+        .get(&workflow_id)
+        .ok_or_else(|| format!("workflow not found: {}", workflow_id))?;
+    if wf.subagents.is_empty() {
+        return Err("no subagents added — call dw_add_subagent first".into());
+    }
+    let parent_cwd = wf
+        .parent_cwd
+        .as_deref()
+        .map(PathBuf::from)
+        .ok_or_else(|| "workflow has no parent cwd".to_string())?;
+    let wf = reg
+        .mutate_persist(&app, &workflow_id, |w| {
+            if w
+                .verifier_prompt
+                .as_deref()
+                .map_or(true, |s| s.trim().is_empty())
+            {
+                w.verifier_prompt = Some(verifier_prompt.clone().unwrap_or_else(|| {
+                    "Consolidate the subagent results into a single deduplicated, \
+                     prioritized answer. Flag conflicts."
+                        .to_string()
+                }));
+            }
+            w.status = "running".to_string();
+            w.started_at = Some(unix_ms());
+        })
+        .unwrap();
+    let _ = app.emit("dw:workflow_started", &wf);
+    let model = "claude-opus-4-8".to_string();
+    let (q5_start, q7_start) = fetch_quota_util().await;
+    spawn_workflow_run(app, reg, workflow_id, parent_cwd, model, q5_start, q7_start);
     Ok(())
 }
 

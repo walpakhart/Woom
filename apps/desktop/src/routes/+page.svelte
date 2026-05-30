@@ -237,7 +237,7 @@
     discardSddPhasePlan,
     setSddAutoFireDispatcher
   } from '$lib/state/sdd.svelte';
-  import { dwState, updateWorkflow, loadPersistedWorkflows } from '$lib/state/dw.svelte';
+  import { dwState, addWorkflow, getWorkflow, updateWorkflow, loadPersistedWorkflows } from '$lib/state/dw.svelte';
   import type { DynamicWorkflow } from '$lib/types';
   import SddCard from '$lib/components/agent/SddCard.svelte';
   import {
@@ -766,6 +766,8 @@
      the close-flush hook inside onMount for what they catch. */
   let tauriCloseUnlisten: UnlistenFn | null = null;
   let dwDoneUnlistenRef: UnlistenFn | null = null;
+  let dwCreatedUnlistenRef: UnlistenFn | null = null;
+  let dwUpdatedUnlistenRef: UnlistenFn | null = null;
   let dwRecoverUnlistenRef: UnlistenFn | null = null;
   let beforeUnloadHandler: (() => void) | null = null;
   let closeFlushInProgress = false;
@@ -1505,6 +1507,21 @@
       }
     });
     dwDoneUnlistenRef = dwDoneUnlisten;
+
+    // Live-build (Phase 2a): the agent's dw_create / dw_set_task /
+    // dw_add_subagent tool calls emit these so the card appears + grows
+    // in real time.
+    dwCreatedUnlistenRef = await listen<DynamicWorkflow>('dw:created', (e) => {
+      const wf = e.payload as DynamicWorkflow;
+      if (!wf?.id) return;
+      if (!getWorkflow(wf.id)) addWorkflow(wf);
+    });
+    dwUpdatedUnlistenRef = await listen<DynamicWorkflow>('dw:updated', (e) => {
+      const wf = e.payload as DynamicWorkflow;
+      if (!wf?.id) return;
+      if (getWorkflow(wf.id)) updateWorkflow(wf.id, wf);
+      else addWorkflow(wf);
+    });
   });
 
   /* formatBytesShort moved to ./page_helpers.ts */
@@ -1521,6 +1538,8 @@
     claudeBgUnlisten?.();
     tauriCloseUnlisten?.();
     dwDoneUnlistenRef?.();
+    dwCreatedUnlistenRef?.();
+    dwUpdatedUnlistenRef?.();
     dwRecoverUnlistenRef?.();
     if (beforeUnloadHandler && typeof window !== 'undefined') {
       window.removeEventListener('beforeunload', beforeUnloadHandler);
@@ -2252,6 +2271,23 @@
           at: new Date().toISOString(),
         });
       }
+      return;
+    }
+    /* Live DW build (Phase 2a) — the agent constructs the workflow via
+     * these tools; each invoke mutates Rust state + emits dw:created /
+     * dw:updated / dw:workflow_started, which the global listeners below
+     * fold into dwState so the card grows live. */
+    if (name === 'mcp__app__dw_set_task') {
+      void invoke('dw_set_task', { workflowId: str('workflow_id'), task: str('task') });
+      return;
+    }
+    if (name === 'mcp__app__dw_add_subagent') {
+      void invoke('dw_add_subagent', { workflowId: str('workflow_id'), prompt: str('prompt') });
+      return;
+    }
+    if (name === 'mcp__app__dw_launch') {
+      const vp = str('verifier_prompt');
+      void invoke('dw_launch', { workflowId: str('workflow_id'), verifierPrompt: vp || null });
       return;
     }
     // parseEdgeSpec moved to ./mcpInputParse.ts (wave-30 split).

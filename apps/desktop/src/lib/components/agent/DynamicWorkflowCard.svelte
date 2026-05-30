@@ -35,7 +35,7 @@
    * summaries only; subagent detail loads on demand here). */
   $effect(() => {
     const w = workflow;
-    if (w && w.subagents.length === 0 && w.status !== 'planning' && w.status !== 'awaiting_approval') {
+    if (w && w.subagents.length === 0 && w.status !== 'planning' && w.status !== 'awaiting_approval' && w.status !== 'building') {
       void loadWorkflow(w.id);
     }
   });
@@ -227,11 +227,16 @@
       {:else if workflow.status === 'awaiting_verify'}
         <button class="dw-approve" onclick={verifyWorkflow} aria-label="Run verifier" title="Apply the diffs you want first — the verifier reconciles the merged repo + finalises">verify</button>
         <button class="dw-cancel" onclick={cancel} aria-label="Cancel workflow">cancel</button>
-      {:else if workflow.status === 'running' || workflow.status === 'verifying' || workflow.status === 'planning'}
+      {:else if workflow.status === 'running' || workflow.status === 'verifying' || workflow.status === 'planning' || workflow.status === 'building'}
         <button class="dw-cancel" onclick={cancel} aria-label="Cancel workflow">cancel</button>
       {/if}
     </header>
 
+    {#if workflow.status === 'building'}
+      <div class="dw-verify-hint">
+        Agent is building this workflow — surveying the repo and adding subagents. Blocks appear below as it goes.
+      </div>
+    {/if}
     {#if workflow.status === 'awaiting_verify'}
       <div class="dw-verify-hint">
         Review each subagent's changes below and <strong>apply</strong> the ones you want, then hit <strong>verify</strong> — the verifier reconciles the merged repo and writes the conclusion.
@@ -358,7 +363,8 @@
   }
   .dw-badge--running,
   .dw-badge--verifying,
-  .dw-badge--planning {
+  .dw-badge--planning,
+  .dw-badge--building {
     background: color-mix(in srgb, var(--accent) 12%, transparent);
     border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
     color: var(--accent-bright, var(--accent));

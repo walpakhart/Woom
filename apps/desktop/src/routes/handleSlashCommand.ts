@@ -26,14 +26,11 @@ import {
 } from '$lib/services/slashCommands';
 import {
   appendSessionMessage,
-  sessionsState,
   setSessionInput,
   updateSession,
 } from '$lib/state/sessions.svelte';
 import { skillsState, renderSkill } from '$lib/state/skills.svelte';
-import { addWorkflow } from '$lib/state/dw.svelte';
-import { openDwPreflightModal, type DwPlanSummary } from '$lib/state/modals.svelte';
-import type { ClaudeSession, DynamicWorkflow } from '$lib/types';
+import type { ClaudeSession } from '$lib/types';
 
 export interface SlashCommandDeps {
   sendClaudeMessage(opts?: { silent?: boolean; kind?: 'claude' | 'cursor' }): Promise<void>;
@@ -208,7 +205,7 @@ export async function handleSlashCommand(
       }
       void deps.scrollChatBottom();
     } else if (withArgs.name === 'dw') {
-      await runDwFromSlash(session, withArgs.args);
+      await runDwFromSlash(session, withArgs.args, deps);
       void deps.scrollChatBottom();
     }
     return true;
@@ -257,95 +254,50 @@ export async function handleSlashCommand(
  *  and appends an assistant message carrying `dwWorkflowId` — ChatThread
  *  renders <DynamicWorkflowCard> after that message. On cancel drops
  *  the workflow from state (server-side will GC the orphan entry). */
-async function runDwFromSlash(session: ClaudeSession, userPrompt: string): Promise<void> {
+async function runDwFromSlash(
+  session: ClaudeSession,
+  userPrompt: string,
+  deps: SlashCommandDeps,
+): Promise<void> {
   appendSessionMessage(session.id, {
     role: 'user',
     content: `/dw ${userPrompt}`,
     at: new Date().toISOString(),
   });
-  /* In-flight feedback. `dw_plan` shells out to a planner oneshot that
-   * can take a while; without a visible marker the composer just looks
-   * frozen (no `sending` flag is set for the planning phase). Append a
-   * placeholder bubble and drop it once the plan resolves / fails. */
-  const PLANNING_MARKER = '_Planning workflow…_';
-  appendSessionMessage(session.id, {
-    role: 'assistant',
-    content: PLANNING_MARKER,
-    at: new Date().toISOString(),
-  });
-  const dropPlanningPlaceholder = () => {
-    const s = sessionsState.list.find((x) => x.id === session.id);
-    if (!s) return;
-    const last = s.messages[s.messages.length - 1];
-    if (last?.role === 'assistant' && last.content === PLANNING_MARKER) {
-      updateSession(session.id, { messages: s.messages.slice(0, -1) });
-    }
-  };
-  let planResult: { workflowId: string; plan: { rationale: string; subagents: { id: string; prompt: string }[]; verifierPrompt: string }; estimateUsd: number };
   const cwd = session.worktreePath ?? session.cwd ?? null;
+  // Phase 2a: create an EMPTY `building` workflow, then let the MAIN
+  // chat agent construct it live (survey → dw_set_task → dw_add_subagent
+  // ×N → dw_launch) — no hidden planner oneshot, no pre-flight modal.
+  let workflowId: string;
   try {
-    planResult = await invoke('dw_plan', { userPrompt, sessionId: session.id, cwd });
-  } catch (e) {
-    dropPlanningPlaceholder();
-    appendSessionMessage(session.id, {
-      role: 'assistant',
-      content: `_DW planner failed: ${String(e)}_`,
-      at: new Date().toISOString(),
-    });
-    return;
-  }
-  dropPlanningPlaceholder();
-  const wf: DynamicWorkflow = {
-    id: planResult.workflowId,
-    sessionId: session.id,
-    userPrompt,
-    status: 'awaiting_approval',
-    planRationale: planResult.plan.rationale,
-    subagents: planResult.plan.subagents.map((s) => ({
-      id: s.id,
-      prompt: s.prompt,
-      cwdStrategy: 'inherit',
-      expectedArtifacts: [],
-      status: 'queued',
-      tokensIn: 0,
-      tokensOut: 0,
-      costUsd: 0
-    })),
-    verifierPrompt: planResult.plan.verifierPrompt,
-    budgetCapUsd: 5,
-    totalCostUsd: 0,
-    createdAt: Date.now()
-  };
-  addWorkflow(wf);
-  const summary: DwPlanSummary = {
-    workflowId: planResult.workflowId,
-    rationale: planResult.plan.rationale,
-    subagents: planResult.plan.subagents.map((s) => ({ id: s.id, prompt: s.prompt }))
-  };
-  const decision = await openDwPreflightModal({ plan: summary, estimateUsd: planResult.estimateUsd });
-  if (decision.kind === 'cancel') {
-    try { await invoke('dw_cancel', { workflowId: planResult.workflowId }); } catch { /* noop */ }
-    appendSessionMessage(session.id, {
-      role: 'assistant',
-      content: '_DW cancelled before fan-out._',
-      at: new Date().toISOString(),
-    });
-    return;
-  }
-  try {
-    await invoke('dw_approve', { workflowId: planResult.workflowId, budgetCapUsd: decision.cap });
+    workflowId = await invoke('dw_create', { sessionId: session.id, task: userPrompt, cwd });
   } catch (e) {
     appendSessionMessage(session.id, {
       role: 'assistant',
-      content: `_DW approve failed: ${String(e)}_`,
+      content: `_DW create failed: ${String(e)}_`,
       at: new Date().toISOString(),
     });
     return;
   }
+  // Assistant message that HOSTS the card once the workflow finishes
+  // (terminal workflows render at their origin message; the active one
+  // is shown in the pinned bottom slot meanwhile).
   appendSessionMessage(session.id, {
     role: 'assistant',
     content: '',
     at: new Date().toISOString(),
-    dwWorkflowId: planResult.workflowId
+    dwWorkflowId: workflowId,
   });
+  // Silent build brief — drives a normal (visible) agent turn that
+  // populates the workflow via the dw_* tools.
+  const brief =
+    `You are building Dynamic Workflow \`${workflowId}\` for this task:\n\n${userPrompt}\n\n` +
+    `Survey the repo just enough to split this into INDEPENDENT slices (no cross-slice deps). Then:\n` +
+    `1. mcp__app__dw_set_task — workflowId "${workflowId}", a one-line task summary.\n` +
+    `2. mcp__app__dw_add_subagent — workflowId "${workflowId}", one self-contained prompt per slice (call repeatedly). Spell out what to investigate/change + what to report.\n` +
+    `3. mcp__app__dw_launch — workflowId "${workflowId}" once all slices are added.\n` +
+    `Use read-only tools for the survey. Keep it tight — no long preamble, just build it.`;
+  updateSession(session.id, { input: brief });
+  await Promise.resolve();
+  await deps.sendClaudeMessage({ silent: true });
 }
