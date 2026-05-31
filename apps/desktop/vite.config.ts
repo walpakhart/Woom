@@ -1,9 +1,12 @@
 import { sveltekit } from '@sveltejs/kit/vite';
-import { defineConfig } from 'vite';
+// `defineConfig` from `vitest/config` (not `vite`) so the `test` field
+// below is typed — vitest augments UserConfig there. Plain `vite`'s
+// `defineConfig` doesn't know `test`, which tripped the overload error.
+import { defineConfig } from 'vitest/config';
 
 const host = process.env.TAURI_DEV_HOST;
 
-export default defineConfig(async () => ({
+export default defineConfig(() => ({
   plugins: [sveltekit()],
 
   // Force browser-side resolution for `svelte` and friends. Without this,
@@ -24,7 +27,7 @@ export default defineConfig(async () => ({
   // them inline, so production users don't ship `//# sourceMappingURL`
   // comments — devs can still load the maps manually).
   build: {
-    sourcemap: 'inline'
+    sourcemap: 'inline' as const
   },
 
   // Vite options tailored for Tauri development

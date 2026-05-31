@@ -40,15 +40,10 @@ import type { PanelKind } from '$lib/types';
 // here so we don't force the helper to import from the route file.
 type View = string;
 type DetailTab = string;
-type SentryStatus = string;
-type SentryLevel = string;
-type SentryFilterPatch = {
-  projects?: string[];
-  search?: string;
-  status?: SentryStatus;
-  level?: SentryLevel;
-  environment?: string | null;
-};
+// Sentry filter types are canonical in ./mcpTypeGuards — the old local
+// `string` shadows here masked the union and made `setSentryFilters`
+// (which wants the real union) a type error. Import the real ones.
+import type { SentryStatus, SentryLevel, SentryFilterPatch } from './mcpTypeGuards';
 
 export interface InboxMcpDeps {
   /** Local `view` setter. Required because Svelte 5 `let`-state

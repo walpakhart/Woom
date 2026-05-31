@@ -270,7 +270,13 @@ async function runDwFromSlash(
   // ×N → dw_launch) — no hidden planner oneshot, no pre-flight modal.
   let workflowId: string;
   try {
-    workflowId = await invoke('dw_create', { sessionId: session.id, task: userPrompt, cwd });
+    workflowId = await invoke('dw_create', {
+      sessionId: session.id,
+      task: userPrompt,
+      cwd,
+      model: session.claudeModel ?? null,
+      fast: session.fastMode === true,
+    });
   } catch (e) {
     appendSessionMessage(session.id, {
       role: 'assistant',

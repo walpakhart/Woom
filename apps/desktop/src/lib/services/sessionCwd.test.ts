@@ -46,11 +46,13 @@ function fakeSession(messages: ClaudeSession['messages']): ClaudeSession {
 }
 
 describe('buildCwdSwitchRecap', () => {
-  it('returns null when there are no meaningful messages', () => {
-    expect(buildCwdSwitchRecap(fakeSession([]), '/old', '/new', { resumed: false })).toBeNull();
+  it('always returns a recap string (never null), even with no messages', () => {
+    const r = buildCwdSwitchRecap(fakeSession([]), '/old', '/new', { resumed: false });
+    expect(typeof r).toBe('string');
+    expect(r).toContain('No prior exchanges to recap');
   });
 
-  it('skips empty / whitespace-only messages and returns null when nothing remains', () => {
+  it('skips empty / whitespace-only messages → "no prior exchanges" recap', () => {
     const r = buildCwdSwitchRecap(
       fakeSession([
         { role: 'user', content: '', at: '2026-01-01' },
@@ -60,7 +62,7 @@ describe('buildCwdSwitchRecap', () => {
       '/new',
       { resumed: false }
     );
-    expect(r).toBeNull();
+    expect(r).toContain('No prior exchanges to recap');
   });
 
   it('uses the "fresh CLI session" framing when resumed: false', () => {
@@ -70,9 +72,9 @@ describe('buildCwdSwitchRecap', () => {
       '/new',
       { resumed: false }
     );
-    expect(r).toContain('cwd just changed mid-conversation');
-    expect(r).toContain('- Previous cwd: /old');
-    expect(r).toContain('- New cwd: /new');
+    expect(r).toContain('project the session has not visited before');
+    expect(r).toContain('- Previous cwd (just left): /old');
+    expect(r).toContain('- Current cwd: /new');
     expect(r).toContain('User: Hello');
   });
 
@@ -83,34 +85,39 @@ describe('buildCwdSwitchRecap', () => {
       '/new',
       { resumed: true }
     );
-    expect(r).toContain("returning to a project you've been in before");
-    expect(r).toContain('- Now back in: /new');
+    expect(r).toContain("cwd just returned to a project you've worked in before");
+    expect(r).toContain('- Current cwd: /new');
   });
 
-  it('caps to the last 6 meaningful messages', () => {
+  it('caps to the last 30 meaningful messages (+ first-message anchor)', () => {
     const messages: ClaudeSession['messages'] = [];
-    for (let i = 0; i < 10; i++) {
+    for (let i = 0; i < 35; i++) {
       messages.push({ role: 'user', content: `msg ${i}`, at: '2026-01-01' });
     }
-    const r = buildCwdSwitchRecap(fakeSession(messages), null, '/new', { resumed: false }) ?? '';
-    // Earliest 4 should be dropped, latest 6 kept.
-    expect(r).not.toContain('msg 0');
-    expect(r).not.toContain('msg 3');
-    expect(r).toContain('msg 4');
-    expect(r).toContain('msg 9');
+    const r = buildCwdSwitchRecap(fakeSession(messages), null, '/new', { resumed: false });
+    // Last 30 kept (msg 5..34); msg 4 dropped; msg 0 re-included as the
+    // ORIGINAL TASK north-star anchor.
+    expect(r).toContain('msg 34');
+    expect(r).toContain('msg 5');
+    expect(r).not.toContain('msg 4');
+    expect(r).toContain('msg 0');
   });
 
-  it('truncates individual messages over 800 chars with an ellipsis', () => {
-    const long = 'x'.repeat(2000);
+  it('truncates a long non-tail message at the 2500-char cap', () => {
+    const long = 'x'.repeat(3000);
     const r = buildCwdSwitchRecap(
-      fakeSession([{ role: 'user', content: long, at: '2026-01-01' }]),
+      fakeSession([
+        { role: 'user', content: long, at: '2026-01-01' },
+        { role: 'assistant', content: 'a', at: '2026-01-01' },
+        { role: 'user', content: 'b', at: '2026-01-01' }
+      ]),
       null,
       '/new',
       { resumed: false }
-    ) ?? '';
-    // Should contain the head (799 chars + "…") but not the tail.
-    expect(r).toContain('x'.repeat(799) + '…');
-    expect(r).not.toContain('x'.repeat(801));
+    );
+    // Non-tail messages cap at 2500 → 2499 chars + ellipsis.
+    expect(r).toContain('x'.repeat(2499) + '…');
+    expect(r).not.toContain('x'.repeat(2501));
   });
 
   it('omits the cwd lines when oldCwd / newCwd are null', () => {
@@ -119,8 +126,8 @@ describe('buildCwdSwitchRecap', () => {
       null,
       null,
       { resumed: false }
-    ) ?? '';
-    expect(r).not.toContain('Previous cwd:');
-    expect(r).not.toContain('New cwd:');
+    );
+    expect(r).not.toContain('Previous cwd');
+    expect(r).not.toContain('Current cwd:');
   });
 });

@@ -29,6 +29,13 @@ interface LoadOpts<T> {
 /** Load + migrate a value. Returns `null` when nothing was stored or all
  *  recovery paths failed (caller falls back to its built-in default). */
 export function loadVersioned<T>(key: string, opts: LoadOpts<T>): T | null {
+  // Guard the whole `localStorage` surface, not just `typeof undefined`:
+  // Node 25 exposes a partial `localStorage` global (present, but
+  // `getItem` isn't a function) which threw at module-init under vitest.
+  // Treat any non-functional store as "nothing stored".
+  if (typeof localStorage === 'undefined' || typeof localStorage.getItem !== 'function') {
+    return null;
+  }
   const raw = localStorage.getItem(key);
   if (raw === null) return null;
   let parsed: unknown;

@@ -51,6 +51,11 @@ pub const DEFAULT_BUDGET_CAP_USD: f64 = 5.0;
 /// Without it a stalled `claude` subprocess hangs the whole `/dw` flow.
 const ONESHOT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
+/// serde default for `DynamicWorkflow.model` on pre-0.2.22 persisted JSON.
+fn default_model() -> String {
+    "claude-opus-4-8".to_string()
+}
+
 // ---- Serde types (mirror the TS shapes in `lib/types.ts`) -----------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -121,6 +126,15 @@ pub struct DynamicWorkflow {
     pub final_answer: Option<String>,
     pub budget_cap_usd: f64,
     pub total_cost_usd: f64,
+    /// Model + fast-tier the workflow runs on — captured from the session
+    /// at create so planner/subagent/verifier turns + cost math use the
+    /// real tier (was hardcoded `claude-opus-4-8` base → fast/[1m]
+    /// sessions under-billed 2×). Defaulted for back-compat with
+    /// persisted pre-0.2.22 workflows.
+    #[serde(default = "default_model")]
+    pub model: String,
+    #[serde(default)]
+    pub fast: bool,
     /// Account-wide quota utilization (%) this workflow's fan-out pushed
     /// each rolling bucket up by (end − start, clamped ≥0). Lets the
     /// budget popover fold DW spend into the per-session limits line —
@@ -658,6 +672,8 @@ async fn run_subagents_subset(
     sem: Arc<Semaphore>,
     cancel: Arc<AtomicBool>,
 ) {
+    // Fast-tier flag drives the cost rate — read once from the workflow.
+    let fast = reg.get(wf_id).map(|w| w.fast).unwrap_or(false);
     let mut handles = Vec::with_capacity(ids.len());
     for sub_id in ids {
         if cancel.load(Ordering::SeqCst) {
@@ -798,7 +814,7 @@ async fn run_subagents_subset(
             // `tokens_in` stays the full input footprint for the card's
             // token display; only the COST weights the buckets.
             let in_tokens = input_t + cache_read_t + cache_write_t;
-            let (r_in, r_out) = (5.0_f64, 25.0_f64);
+            let (r_in, r_out) = rate_for(&model_t, fast);
             let cost = (input_t as f64 * r_in
                 + cache_read_t as f64 * r_in * 0.1
                 + cache_write_t as f64 * r_in * 1.25
@@ -919,6 +935,8 @@ pub async fn dw_plan(
         final_answer: None,
         budget_cap_usd: DEFAULT_BUDGET_CAP_USD,
         total_cost_usd: 0.0,
+        model: model.to_string(),
+        fast: false,
         quota_delta_5h: None,
         quota_delta_7d: None,
         created_at: now_ms,
@@ -961,7 +979,7 @@ pub async fn dw_approve(
         .as_deref()
         .map(PathBuf::from)
         .ok_or_else(|| "workflow has no parent cwd — pass `cwd` to dw_plan".to_string())?;
-    let model = "claude-opus-4-8".to_string();
+    let model = wf.model.clone();
     // Quota utilization at fan-out start — diffed at done to attribute
     // this workflow's burn to the per-session limits line.
     let (q5_start, q7_start) = fetch_quota_util().await;
@@ -1147,6 +1165,8 @@ pub async fn dw_create(
     session_id: String,
     task: String,
     cwd: Option<String>,
+    model: Option<String>,
+    fast: Option<bool>,
 ) -> Result<String, String> {
     let registry: tauri::State<'_, Arc<DwRegistry>> = app.state();
     let workflow_id = format!("dw-{}", uuid_v4());
@@ -1162,6 +1182,8 @@ pub async fn dw_create(
         final_answer: None,
         budget_cap_usd: DEFAULT_BUDGET_CAP_USD,
         total_cost_usd: 0.0,
+        model: model.filter(|m| !m.trim().is_empty()).unwrap_or_else(default_model),
+        fast: fast.unwrap_or(false),
         quota_delta_5h: None,
         quota_delta_7d: None,
         created_at: unix_ms(),
@@ -1298,7 +1320,7 @@ pub async fn dw_run(app: AppHandle, workflow_id: String) -> Result<(), String> {
         })
         .unwrap();
     let _ = app.emit("dw:workflow_started", &wf);
-    let model = "claude-opus-4-8".to_string();
+    let model = wf.model.clone();
     let (q5_start, q7_start) = fetch_quota_util().await;
     spawn_workflow_run(app, reg, workflow_id, parent_cwd, model, q5_start, q7_start);
     Ok(())
@@ -1684,6 +1706,8 @@ mod persistence {
             final_answer: None,
             budget_cap_usd: 5.0,
             total_cost_usd: 0.005,
+            model: "claude-opus-4-8".to_string(),
+            fast: false,
             quota_delta_5h: None,
             quota_delta_7d: None,
             created_at: now - 1000,
