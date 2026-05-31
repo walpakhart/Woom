@@ -2221,7 +2221,10 @@
     updateSession(w.sessionId, { input: prompt });
     await Promise.resolve();
     try {
-      await sendClaudeMessage({ kind: 'claude' });
+      // SILENT: the verifier prompt (subagent results dump) is internal —
+      // mark it hidden so it doesn't show as a giant user bubble. The
+      // agent's streamed reply (the conclusion) stays visible.
+      await sendClaudeMessage({ silent: true, kind: 'claude' });
     } catch (e) {
       console.warn('dw verify turn failed', e);
     }

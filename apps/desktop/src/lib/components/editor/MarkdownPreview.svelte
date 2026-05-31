@@ -25,6 +25,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import { openUrl } from '@tauri-apps/plugin-opener';
   import { marked } from 'marked';
+  import { sanitizeMarkdownHtml } from '$lib/markdownSafe';
 
   interface Props {
     /** Absolute path of the .md file to render. */
@@ -56,7 +57,7 @@
            registered; explicit Promise.resolve cast covers the
            updated type signature without forcing async churn. */
         Promise.resolve(marked.parse(src) as string | Promise<string>)
-          .then((s) => (html = s))
+          .then((s) => (html = sanitizeMarkdownHtml(s)))
           .catch((e) => (error = e instanceof Error ? e.message : String(e)));
       } catch (e) {
         error = e instanceof Error ? e.message : String(e);

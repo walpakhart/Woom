@@ -3,6 +3,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import { getVersion } from '@tauri-apps/api/app';
   import { marked } from 'marked';
+  import { sanitizeMarkdownHtml } from '$lib/markdownSafe';
   import { SESSIONS_STORAGE_KEY, RULES_STORAGE_KEY } from '$lib/state/sessions.svelte';
   import { resetWelcome, welcomeState } from '$lib/state/welcome.svelte';
 
@@ -31,7 +32,9 @@
     activeDocLoading = true;
     try {
       const md = await invoke<string>('read_bundled_doc', { name });
-      activeDocBody = await Promise.resolve(marked.parse(md) as string | Promise<string>);
+      activeDocBody = sanitizeMarkdownHtml(
+        await Promise.resolve(marked.parse(md) as string | Promise<string>)
+      );
     } catch (e) {
       activeDocError = typeof e === 'string' ? e : (e as Error).message ?? 'unknown error';
     } finally {

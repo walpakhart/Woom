@@ -24,6 +24,7 @@
   import type { Shape } from '$lib/state/canvas.svelte';
   import { patchShape } from '$lib/state/canvas.svelte';
   import { marked } from 'marked';
+  import { sanitizeMarkdownHtml } from '$lib/markdownSafe';
   import { getStroke } from 'perfect-freehand';
   import { findJiraItem, findGithubItem, findSentryIssue, findChatMessage } from '$lib/services/liveCardData';
 
@@ -235,7 +236,9 @@
      locally; nothing crosses a network boundary into the canvas, so we
      skip a sanitizer and accept the standard CommonMark output. */
   const stickyHtml = $derived(
-    marked.parse(pSticky.body, { gfm: true, breaks: true, async: false }) as string
+    sanitizeMarkdownHtml(
+      marked.parse(pSticky.body, { gfm: true, breaks: true, async: false }) as string
+    )
   );
 
   const pMermaid = $derived.by(() => {
