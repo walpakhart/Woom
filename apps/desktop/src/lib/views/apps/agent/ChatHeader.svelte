@@ -13,7 +13,7 @@
   import { sessionsState, updateSession, dismissInterrupted } from '$lib/state/sessions.svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { sessionUsageTotals, formatTokens, formatCostUsd } from '$lib/usage';
-  import { sessionDwTotals } from '$lib/state/dw.svelte';
+  import { sessionDwTotals, dwState } from '$lib/state/dw.svelte';
   import BudgetPopover from '$lib/components/agent/BudgetPopover.svelte';
   import { notify } from '$lib/state/toaster.svelte';
   import { tick, untrack } from 'svelte';
@@ -227,6 +227,21 @@
     budgetPopoverOpen = false;
   }
 
+  /* DW history — every Dynamic Workflow this session ran (newest first;
+   * `addWorkflow` prepends). The inline cards live in the thread + scroll
+   * away; this chip is the quick overview + jump-back. */
+  const dwHistory = $derived(
+    sess ? dwState.workflows.filter((w) => w.sessionId === sess.id) : []
+  );
+  let dwPopoverOpen = $state(false);
+  let dwPopoverEl = $state<HTMLDivElement | null>(null);
+  function toggleDwPopover() {
+    dwPopoverOpen = !dwPopoverOpen;
+  }
+  function closeDwPopover() {
+    dwPopoverOpen = false;
+  }
+
   function toggleMemExpanded(id: number) {
     memExpandedId = memExpandedId === id ? null : id;
   }
@@ -379,6 +394,30 @@
       window.removeEventListener('keydown', onKey);
     };
   });
+
+  /* Outside-click + ESC for the DW history popover — same pattern. */
+  $effect(() => {
+    if (!dwPopoverOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (!dwPopoverEl) return;
+      if (dwPopoverEl.contains(e.target as Node)) return;
+      const t = e.target as HTMLElement | null;
+      if (t?.closest?.('.ch-dw')) return;
+      closeDwPopover();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        closeDwPopover();
+      }
+    };
+    window.addEventListener('mousedown', onDown, true);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('mousedown', onDown, true);
+      window.removeEventListener('keydown', onKey);
+    };
+  });
 </script>
 
 <header class="ch">
@@ -437,6 +476,36 @@
       {#if budgetPopoverOpen}
         <div bind:this={budgetPopoverEl}>
           <BudgetPopover session={sess} onClose={closeBudgetPopover} />
+        </div>
+      {/if}
+    </div>
+  {/if}
+
+  {#if sess && dwHistory.length > 0}
+    <div class="ch-dw-wrap">
+      <button
+        class="ch-dw"
+        class:ch-dw--open={dwPopoverOpen}
+        onclick={toggleDwPopover}
+        title="Dynamic Workflows run in this session"
+        aria-label="DW history"
+        aria-expanded={dwPopoverOpen}
+      >
+        <span class="ch-dw-tag mono">DW</span>
+        <span class="ch-dw-count">{dwHistory.length}</span>
+      </button>
+      {#if dwPopoverOpen}
+        <div bind:this={dwPopoverEl} class="ch-dw-pop" role="dialog" aria-label="Dynamic Workflow history">
+          <div class="ch-dw-pop-head mono">Dynamic Workflows · {dwHistory.length}</div>
+          <ul class="ch-dw-list">
+            {#each dwHistory as wf (wf.id)}
+              <li class="ch-dw-item">
+                <span class="ch-dw-status ch-dw-status--{wf.status} mono">{wf.status}</span>
+                <span class="ch-dw-prompt">{wf.userPrompt}</span>
+                <span class="ch-dw-cost mono">{formatCostUsd(wf.totalCostUsd)}</span>
+              </li>
+            {/each}
+          </ul>
         </div>
       {/if}
     </div>
@@ -790,6 +859,53 @@
   .ch-budget--high .ch-budget-cost {
     color: var(--accent-bright, var(--accent));
   }
+
+  /* DW history chip + popover — sibling to the budget chip. */
+  .ch-dw-wrap { position: relative; }
+  .ch-dw {
+    display: inline-flex; align-items: center; gap: 5px;
+    height: 24px; padding: 0 9px;
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    color: var(--text-mute);
+    font-size: 11px; line-height: 1; cursor: pointer;
+    transition: color 140ms, background 140ms, border-color 140ms;
+  }
+  .ch-dw:hover, .ch-dw--open { color: var(--text-1); border-color: var(--border-hi); }
+  .ch-dw--open { background: color-mix(in srgb, var(--accent) 6%, var(--bg-2)); }
+  .ch-dw-tag { font-weight: 600; letter-spacing: 0.04em; font-size: 10px; }
+  .ch-dw-count { color: var(--text-1); font-weight: 600; }
+  .ch-dw-pop {
+    position: absolute; top: calc(100% + 6px); right: 0; z-index: 40;
+    width: 320px; max-height: 360px; overflow-y: auto;
+    padding: 8px; background: var(--bg-1);
+    border: 1px solid var(--border-hi); border-radius: 8px;
+    box-shadow: 0 6px 22px rgba(0, 0, 0, 0.22);
+  }
+  .ch-dw-pop-head {
+    font-size: 10.5px; color: var(--text-mute);
+    text-transform: uppercase; letter-spacing: 0.06em;
+    padding: 2px 6px 8px; border-bottom: 1px solid var(--border);
+  }
+  .ch-dw-list { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+  .ch-dw-item {
+    display: grid; grid-template-columns: auto 1fr auto; align-items: baseline; gap: 8px;
+    padding: 5px 6px; border-radius: 5px; font-size: 12px;
+  }
+  .ch-dw-item:hover { background: var(--bg-2); }
+  .ch-dw-status {
+    font-size: 9px; text-transform: uppercase; letter-spacing: 0.05em;
+    color: var(--text-mute); flex-shrink: 0;
+  }
+  .ch-dw-status--done { color: #6cb87a; }
+  .ch-dw-status--failed, .ch-dw-status--cancelled { color: var(--error, #e88264); }
+  .ch-dw-status--running, .ch-dw-status--building, .ch-dw-status--awaiting_verify,
+  .ch-dw-status--awaiting_launch, .ch-dw-status--verifying { color: var(--accent-bright, var(--accent)); }
+  .ch-dw-prompt {
+    color: var(--text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .ch-dw-cost { color: var(--text-mute); font-size: 11px; flex-shrink: 0; }
 
   /* Workspace memory chip — small subtle pill on the right edge of
      the header. Surfaces "the agent has prior context on this
