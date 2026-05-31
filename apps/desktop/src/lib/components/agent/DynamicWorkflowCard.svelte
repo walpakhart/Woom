@@ -208,6 +208,17 @@
     onVerify?.();
   }
 
+  /* Re-run one failed subagent in place — recreates its worktree, resets
+   * the cell, runs just that slice; backend re-parks at awaiting_verify. */
+  async function retrySubagent(subId: string) {
+    try {
+      updateSubagent(workflowId, subId, { status: 'streaming', error: undefined });
+      await invoke('dw_retry_subagent', { workflowId, subagentId: subId });
+    } catch (e) {
+      console.warn('dw_retry_subagent failed', e);
+    }
+  }
+
   /* Research-only runs (no subagent produced a diff) have nothing to
    * apply, so auto-fire the verifier once they reach `awaiting_verify`.
    * Refactor runs wait for the user to apply diffs + click verify. */
@@ -333,7 +344,10 @@
               {/if}
               {#if sub.error}
                 <div class="dw-cell-section dw-cell-section--error">
-                  <div class="dw-cell-label">Error</div>
+                  <div class="dw-cell-label">
+                    Error
+                    <button class="dw-raw-toggle" onclick={() => retrySubagent(sub.id)}>retry</button>
+                  </div>
                   <pre class="dw-cell-text">{sub.error}</pre>
                 </div>
               {/if}

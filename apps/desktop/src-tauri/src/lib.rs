@@ -556,6 +556,7 @@ pub fn run() {
             dw::dw_create,
             dw::dw_set_task,
             dw::dw_add_subagent,
+            dw::dw_retry_subagent,
             dw::dw_launch,
             dw::dw_run,
             dw::dw_status,

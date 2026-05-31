@@ -1258,6 +1258,69 @@ pub async fn dw_add_subagent(
     Ok(new_id)
 }
 
+/// Re-run ONE subagent (card "retry" on a failed/done cell). Recreates
+/// its worktree if needed (idempotent), resets it to `queued` + clears
+/// the prior result/error/diff, then runs just that subagent. Used while
+/// the workflow is parked in `awaiting_verify` before finalising.
+#[tauri::command]
+pub async fn dw_retry_subagent(
+    app: AppHandle,
+    workflow_id: String,
+    subagent_id: String,
+) -> Result<(), String> {
+    let registry: tauri::State<'_, Arc<DwRegistry>> = app.state();
+    let reg = registry.inner().clone();
+    let wf = reg
+        .get(&workflow_id)
+        .ok_or_else(|| format!("workflow not found: {}", workflow_id))?;
+    if !wf.subagents.iter().any(|s| s.id == subagent_id) {
+        return Err(format!("subagent {} not found", subagent_id));
+    }
+    let parent_cwd = wf
+        .parent_cwd
+        .clone()
+        .ok_or_else(|| "workflow has no parent cwd".to_string())?;
+    let model = wf.model.clone();
+    // Ensure the worktree exists (it may have been reaped after a prior
+    // finalize) — `create_for_subagent` returns the existing one if the
+    // dir is still there.
+    let worktree = worktree::create_for_subagent(&parent_cwd, &workflow_id, &subagent_id)
+        .map_err(|e| format!("worktree: {}", e))?;
+    let reset = reg.mutate_persist(&app, &workflow_id, |w| {
+        for s in w.subagents.iter_mut() {
+            if s.id == subagent_id {
+                s.status = "queued".to_string();
+                s.result = None;
+                s.error = None;
+                s.diff = None;
+                s.worktree_path = Some(worktree.path.clone());
+            }
+        }
+        // Surface that the workflow is active again so the card un-greys.
+        if w.status == "awaiting_verify" || w.status == "done" || w.status == "failed" {
+            w.status = "running".to_string();
+        }
+    });
+    if let Some(w) = reset {
+        let _ = app.emit("dw:updated", &w);
+    }
+    let app_c = app.clone();
+    let sub = subagent_id.clone();
+    tauri::async_runtime::spawn(async move {
+        let sem = Arc::new(Semaphore::new(1));
+        let cancel = Arc::new(AtomicBool::new(false));
+        run_subagents_subset(&app_c, &reg, &workflow_id, &model, vec![sub], sem, cancel).await;
+        // Re-park for verification once the retry lands.
+        let wf2 = reg.mutate_persist(&app_c, &workflow_id, |w| {
+            w.status = "awaiting_verify".to_string();
+        });
+        if let Some(w) = wf2 {
+            let _ = app_c.emit("dw:awaiting_verify", &w);
+        }
+    });
+    Ok(())
+}
+
 /// Agent finished building — park the workflow in `awaiting_launch` so
 /// the USER reviews the plan and presses "approve" (→ `dw_run`). Stores
 /// the verifier prompt; does NOT spawn the fan-out yet.
