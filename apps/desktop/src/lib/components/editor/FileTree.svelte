@@ -5,6 +5,7 @@
   import { setDragPayload } from '$lib/state/drag.svelte';
   import { attachDragChip } from '$lib/dragImage';
   import { iconFor } from '$lib/components/editor/fileIcons';
+  import { foldStatus } from '$lib/components/editor/gitDecorations';
 
   interface Entry { name: string; path: string; is_dir: boolean; size: number; }
   interface Item { name: string; path: string; is_dir: boolean; depth: number; expanded: boolean; ignored: boolean; }
@@ -275,6 +276,40 @@
     }
   }
 
+  /* Folder rollup: aggregate each directory row's git status from its
+     descendants. Computed in ONE pass over `gitStatusByPath` (no per-node
+     scan, no git calls) — for each changed file we attribute its code to
+     every ancestor-dir path that's currently present in the tree, then
+     fold each bucket to its highest-severity code. Recomputes only when
+     `gitStatusByPath` or `items` change. */
+  const folderStatusByPath = $derived.by<Record<string, string>>(() => {
+    const dirSet = new Set<string>();
+    for (const it of items) if (it.is_dir) dirSet.add(it.path);
+    if (dirSet.size === 0) return {};
+    const buckets: Record<string, string[]> = {};
+    for (const [path, code] of Object.entries(gitStatusByPath)) {
+      // Walk up the ancestors of this file, attributing its code to any
+      // ancestor dir we're actually rendering.
+      let slash = path.lastIndexOf('/');
+      while (slash > 0) {
+        const dir = path.slice(0, slash);
+        if (dirSet.has(dir)) (buckets[dir] ??= []).push(code);
+        slash = path.lastIndexOf('/', slash - 1);
+      }
+    }
+    const out: Record<string, string> = {};
+    for (const [dir, codes] of Object.entries(buckets)) {
+      const folded = foldStatus(codes);
+      if (folded) out[dir] = folded;
+    }
+    return out;
+  });
+
+  /** Git code for a row (file → direct status, dir → rolled-up), or ''. */
+  function rowCode(it: Item): string {
+    return it.is_dir ? (folderStatusByPath[it.path] ?? '') : (gitStatusByPath[it.path] ?? '');
+  }
+
   /* Right-click context menu (M4 §2.1.2). Standard macOS Finder
    * complement: Reveal, Copy path, Rename, Delete. Anchored at the
    * cursor; closes on outside click / Esc. Rename is inline (an
@@ -394,6 +429,7 @@
       class:selected={selectedPath === it.path && !it.is_dir}
       class:dir={it.is_dir}
       class:ignored={it.ignored}
+      data-git={rowCode(it) ? gitClass(rowCode(it)) : ''}
       style="padding-left: {8 + it.depth * 12}px"
       onclick={() => toggle(i)}
       oncontextmenu={(e) => openContextMenu(e, it)}
@@ -448,9 +484,12 @@
       {:else}
         <span class="tree-name mono">{it.name}</span>
       {/if}
-      {#if !it.is_dir && gitStatusByPath[it.path]}
-        {@const code = gitStatusByPath[it.path]}
-        <span class="tree-git mono tree-git--{gitClass(code)}" title={gitTitle(code)}>{code}</span>
+      {#if rowCode(it)}
+        {@const code = rowCode(it)}
+        <span
+          class="tree-git mono tree-git--{gitClass(code)}"
+          title={it.is_dir ? `Contains ${gitTitle(code).toLowerCase()} changes` : gitTitle(code)}
+        >{code}</span>
       {/if}
     </button>
   {/each}
@@ -545,6 +584,20 @@
   .tree-git--new { color: var(--accent-bright); background: var(--accent-soft); }
   .tree-git--ren { color: var(--accent); background: var(--accent-soft); }
   .tree-git--conflict { color: var(--error); background: rgba(232, 130, 100, 0.25); }
+
+  /* Git state colours the row's NAME text (VS Code style) — no left rail,
+     no dots, just the filename tinted + a letter badge on the right. The
+     same status set drives files AND folders (folder = rolled-up code).
+     `.selected` / `.ignored` still win since their rules come later /
+     are more specific. Untracked (`new`) = accent, modified = `--warning`. */
+  .tree-row[data-git='mod'] .tree-name { color: var(--warning); }
+  .tree-row[data-git='add'] .tree-name { color: var(--success); }
+  .tree-row[data-git='del'] .tree-name { color: var(--error); }
+  .tree-row[data-git='ren'] .tree-name { color: var(--accent-bright); }
+  .tree-row[data-git='new'] .tree-name { color: var(--accent-bright); }
+  .tree-row[data-git='conflict'] .tree-name { color: var(--error); }
+  /* Selection keeps its own accent text so a selected changed row stays legible. */
+  .tree-row.selected .tree-name { color: var(--accent-bright); }
 
   /* Inline rename input — sized to fit the row, takes the same font
      so the swap doesn't shift the row height. */

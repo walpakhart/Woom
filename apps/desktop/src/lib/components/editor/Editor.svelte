@@ -367,9 +367,13 @@
 
   export async function reload() {
     if (!path) return;
+    // `load` recreates the view, so capture focus and restore it after —
+    // an external-change reload shouldn't yank the caret out of the editor.
+    const wasFocused = view?.hasFocus ?? false;
     const prev = lastLoadedPath;
     lastLoadedPath = '';
     await load(prev || path);
+    if (wasFocused) view?.focus();
   }
 
   export async function saveNow() {
@@ -502,22 +506,36 @@
   .ed-surface :global(.cm-editor.cm-focused) { outline: none; }
   .ed-surface :global(.cm-scroller) { font-family: inherit; }
 
-  /* Git change bar — 3px stripe painted as a border-left on changed
-     lines. Add = green, Mod = ochre, Del = red hairline at the
-     line preceding deleted content. Matches VS Code / IntelliJ. */
-  .ed-surface :global(.cm-line-changebar) {
-    border-left: 3px solid transparent;
-    padding-left: 3px;
+  /* Git change bar — a dedicated thin gutter column (à la VS Code / Cursor):
+     crisp full-line-height stripes that never shift the code. add = green,
+     mod = ochre, del = a small red triangle on the line above removed code. */
+  .ed-surface :global(.cm-changebar) {
+    width: 3px;
+    padding: 0;
+    background: transparent;
+    border: none;
   }
-  .ed-surface :global(.cm-line-changebar--add) {
-    border-left-color: #6faE88;
+  .ed-surface :global(.cm-changebar .cm-gutterElement) {
+    padding: 0;
+    display: flex;
+    align-items: stretch;
   }
-  .ed-surface :global(.cm-line-changebar--mod) {
-    border-left-color: #d9b86e;
+  .ed-surface :global(.cm-changebar-mark) {
+    width: 3px;
+    align-self: stretch;
   }
-  .ed-surface :global(.cm-line-changebar--del) {
-    border-left-color: #e88264;
-    box-shadow: inset 0 -2px 0 0 #e88264;
+  .ed-surface :global(.cm-changebar-mark--add) { background: #6faE88; }
+  .ed-surface :global(.cm-changebar-mark--mod) { background: #d9b86e; }
+  /* Deleted-above indicator: a downward red triangle pinned to the cell
+     bottom, so it reads as "lines removed here" rather than a full stripe. */
+  .ed-surface :global(.cm-changebar-mark--del) {
+    width: 0; height: 0;
+    background: transparent;
+    align-self: flex-end;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 5px solid #e88264;
+    margin-left: -2.5px;
   }
   .ed-error {
     padding: 8px 14px;

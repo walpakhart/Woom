@@ -1,8 +1,9 @@
-import { Decoration, type DecorationSet, EditorView } from '@codemirror/view';
+import { gutter, GutterMarker, EditorView } from '@codemirror/view';
 import {
   StateField,
   StateEffect,
   RangeSetBuilder,
+  RangeSet,
   type Extension,
   type Transaction
 } from '@codemirror/state';
@@ -10,41 +11,64 @@ import {
 export type LineChangeKind = 'add' | 'mod' | 'del';
 export type LineChanges = Map<number, LineChangeKind>;
 
-const ADD_DECO = Decoration.line({ attributes: { class: 'cm-line-changebar cm-line-changebar--add' } });
-const MOD_DECO = Decoration.line({ attributes: { class: 'cm-line-changebar cm-line-changebar--mod' } });
-const DEL_DECO = Decoration.line({ attributes: { class: 'cm-line-changebar cm-line-changebar--del' } });
+/* Git change indicators rendered in a dedicated thin gutter column (like
+   VS Code / Cursor) rather than as a border on the text line — so the stripe
+   is crisp, full line-height, and never shifts the code. add = green stripe,
+   mod = ochre stripe, del = red triangle on the line above the removed code. */
+class ChangeMarker extends GutterMarker {
+  constructor(readonly kind: LineChangeKind) {
+    super();
+  }
+  eq(other: ChangeMarker): boolean {
+    return other.kind === this.kind;
+  }
+  toDOM(): HTMLElement {
+    const el = document.createElement('div');
+    el.className = `cm-changebar-mark cm-changebar-mark--${this.kind}`;
+    return el;
+  }
+}
+
+const MARKERS: Record<LineChangeKind, ChangeMarker> = {
+  add: new ChangeMarker('add'),
+  mod: new ChangeMarker('mod'),
+  del: new ChangeMarker('del')
+};
 
 export const setChangeBar = StateEffect.define<LineChanges>();
 
-function buildDecorations(map: LineChanges, doc: EditorView['state']['doc']): DecorationSet {
-  const builder = new RangeSetBuilder<Decoration>();
+function buildMarkers(map: LineChanges, doc: EditorView['state']['doc']): RangeSet<GutterMarker> {
+  const builder = new RangeSetBuilder<GutterMarker>();
   if (map.size === 0) return builder.finish();
   const total = doc.lines;
   const keys = [...map.keys()].sort((a, b) => a - b);
   for (const ln of keys) {
     if (ln < 1 || ln > total) continue;
-    const kind = map.get(ln)!;
     const line = doc.line(ln);
-    const deco = kind === 'add' ? ADD_DECO : kind === 'mod' ? MOD_DECO : DEL_DECO;
-    builder.add(line.from, line.from, deco);
+    builder.add(line.from, line.from, MARKERS[map.get(ln)!]);
   }
   return builder.finish();
 }
 
-const changeBarField = StateField.define<DecorationSet>({
-  create: () => Decoration.none,
-  update(value: DecorationSet, tr: Transaction): DecorationSet {
+const markerField = StateField.define<RangeSet<GutterMarker>>({
+  create: () => RangeSet.empty as RangeSet<GutterMarker>,
+  update(value: RangeSet<GutterMarker>, tr: Transaction): RangeSet<GutterMarker> {
     for (const e of tr.effects) {
-      if (e.is(setChangeBar)) return buildDecorations(e.value, tr.state.doc);
+      if (e.is(setChangeBar)) return buildMarkers(e.value, tr.state.doc);
     }
     if (tr.docChanged) return value.map(tr.changes);
     return value;
-  },
-  provide: (f) => EditorView.decorations.from(f)
+  }
 });
 
 export function changeBarExtension(): Extension {
-  return [changeBarField];
+  return [
+    markerField,
+    gutter({
+      class: 'cm-changebar',
+      markers: (view) => view.state.field(markerField)
+    })
+  ];
 }
 
 /** Parse unified-diff text → per-line markers on new (right) side. */

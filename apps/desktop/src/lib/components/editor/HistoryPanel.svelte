@@ -25,9 +25,14 @@
 
   const PAGE = 30;
 
+  interface RepoInfo { is_git: boolean; }
+
   let commits = $state<CommitEntry[]>([]);
   let loading = $state(false);
   let error = $state<string | null>(null);
+  /** True when `repo` is not inside any git repository — render a friendly
+   *  empty-state instead of a raw `fatal:` string. */
+  let notRepo = $state(false);
 
   async function load() {
     if (!repo) {
@@ -36,10 +41,23 @@
     }
     loading = true;
     error = null;
+    notRepo = false;
     try {
       commits = await invoke<CommitEntry[]>('git_log', { repo, limit: PAGE });
     } catch (e) {
-      error = typeof e === 'string' ? e : String(e);
+      // Not-a-repo is a valid state, not an error — probe to distinguish it
+      // from a genuine git failure rather than string-matching stderr.
+      try {
+        const info = await invoke<RepoInfo>('git_repo_info', { path: repo });
+        if (!info.is_git) {
+          notRepo = true;
+          commits = [];
+        } else {
+          error = typeof e === 'string' ? e : String(e);
+        }
+      } catch {
+        error = typeof e === 'string' ? e : String(e);
+      }
     } finally {
       loading = false;
     }
@@ -87,7 +105,9 @@
       </svg>
     </button>
   </div>
-  {#if error}
+  {#if notRepo}
+    <div class="hp-state">Not a git repository</div>
+  {:else if error}
     <div class="hp-state hp-state--err">{error}</div>
   {:else if loading && commits.length === 0}
     <div class="hp-state">Loading…</div>

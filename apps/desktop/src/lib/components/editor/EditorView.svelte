@@ -20,7 +20,9 @@
     sessionsState,
     consumeEditorOpenFile,
     getPendingEditEvents,
-    updateEditEvent
+    updateEditEvent,
+    setEditorRoots,
+    removeEditorRoot
   } from '$lib/state/sessions.svelte';
   import { revertEditEvent } from '$lib/services/diffActions';
 
@@ -62,6 +64,10 @@
     /** Two-way bound to the parent so Claude sessions can pick up the repo
         as their default cwd. */
     repoPath?: string;
+    /** Ordered open-root set (multi-root workspace). Single-root callers
+        leave it empty and the component falls back to `[repoPath]`. The
+        primary root stays `repoPath` (=== repoPaths[0]). */
+    repoPaths?: string[];
     /** Pickable rows for the link dropdown — one per Claude/Cursor
         session (so the user knows exactly which chat will get linked).
         `name` is the session title, `id` is the agent column instance,
@@ -108,6 +114,7 @@
   }
   let {
     repoPath = $bindable(''),
+    repoPaths = [],
     agentInstances = [],
     linkedAgents = [],
     onLinkToAgent,
@@ -130,6 +137,50 @@
   );
 
   let showLinkPicker = $state(false);
+
+  /** Effective open-root set. Single-root callers pass no `repoPaths`, so we
+      fall back to `[repoPath]` — every downstream loop then behaves exactly
+      as the old single-root path. Empty when no folder is open. */
+  const roots = $derived(
+    repoPaths.length > 0 ? repoPaths : repoPath ? [repoPath] : []
+  );
+
+  /** Owning root for an absolute path — longest matching root prefix, else
+      the primary root. Lets tabs / relative labels work across roots. */
+  function rootForPath(abs: string): string {
+    if (!abs) return repoPath;
+    let best = '';
+    for (const r of roots) {
+      if ((abs === r || abs.startsWith(r + '/')) && r.length > best.length) best = r;
+    }
+    return best || repoPath;
+  }
+
+  /** Collapsed root nodes in the multi-root explorer (by root path). */
+  let collapsedRoots = $state<Set<string>>(new Set());
+  function toggleRootCollapse(root: string) {
+    const next = new Set(collapsedRoots);
+    if (next.has(root)) next.delete(root); else next.add(root);
+    collapsedRoots = next;
+  }
+
+  /** Which root the SOURCE CONTROL panel targets. Defaults to the active
+      tab's owning root, else the primary. Clamped into the current set so a
+      removed root can't leave it dangling. */
+  let activeGitRoot = $state('');
+  $effect(() => {
+    const fromTab = activePath ? rootForPath(activePath) : '';
+    const candidate = fromTab || repoPath;
+    if (roots.length > 0 && !roots.includes(activeGitRoot)) {
+      activeGitRoot = roots.includes(candidate) ? candidate : roots[0];
+    } else if (roots.length === 0) {
+      activeGitRoot = '';
+    }
+  });
+
+  /** Custom SCM repo-picker open state (replaces the native <select> with a
+      styled popover matching the rest of the editor chrome). */
+  let scmPickerOpen = $state(false);
 
   let tabs = $state<string[]>([]);
   let activePath = $state<string>('');
@@ -542,24 +593,48 @@
     branch: string | null; upstream: string | null; ahead: number; behind: number; files: FileStatus[];
   }
 
-  function onGitStatusChange(files: FileStatus[]) {
-    const root = repoPath.replace(/\/$/, '');
-    const map: Record<string, string> = {};
-    for (const f of files) {
-      // `code` is 2 chars: index + worktree. Pick the stronger indicator.
-      const idx = f.code.charAt(0);
-      const wt = f.code.charAt(1);
-      let c = ' ';
-      if (idx !== ' ' && idx !== '?') c = idx;
-      else if (wt !== ' ') c = wt;
-      if (c === ' ') c = 'M';
-      map[`${root}/${f.path}`] = c;
-    }
-    gitStatusByPath = map;
+  /** Reduce a 2-char porcelain code (index + worktree) to the single
+      stronger indicator the tree decorations consume. */
+  function strongestCode(code: string): string {
+    const idx = code.charAt(0);
+    const wt = code.charAt(1);
+    let c = ' ';
+    if (idx !== ' ' && idx !== '?') c = idx;
+    else if (wt !== ' ') c = wt;
+    if (c === ' ') c = 'M';
+    return c;
   }
 
-  /** Called after a successful ⌘S. Optimistic M + immediate refresh. */
+  /** Merge ONE root's status slice into the union `gitStatusByPath`. Entries
+      are keyed by absolute path, so we drop the prior slice for THIS root
+      (prefix match) then add the fresh one — other roots' entries are left
+      intact. Single-root callers just replace the whole (one-root) map. */
+  function onGitStatusChange(files: FileStatus[], rootArg?: string) {
+    const root = (rootArg ?? repoPath).replace(/\/$/, '');
+    if (!root) return;
+    const prefix = `${root}/`;
+    const next: Record<string, string> = {};
+    // Carry over entries that belong to OTHER roots.
+    for (const [path, code] of Object.entries(gitStatusByPath)) {
+      if (!path.startsWith(prefix)) next[path] = code;
+    }
+    for (const f of files) {
+      next[`${root}/${f.path}`] = strongestCode(f.code);
+    }
+    gitStatusByPath = next;
+  }
+
+  /** Path+timestamp of our own most recent write. The fs watcher echoes
+   *  our save back as an `fs:changed` event; without this guard the
+   *  handler below would `reload()` the active buffer right after an
+   *  autosave — recreating the CodeMirror view and dropping the caret /
+   *  focus mid-edit. We skip the self-triggered reload within a short
+   *  window since the buffer already holds exactly what we wrote. */
+  let lastSelfSave: { path: string; at: number } | null = null;
+
+  /** Called after a successful ⌘S / autosave. Optimistic M + immediate refresh. */
   async function onFileSaved(savedPath: string) {
+    lastSelfSave = { path: savedPath, at: Date.now() };
     gitStatusByPath = { ...gitStatusByPath, [savedPath]: 'M' };
     await refreshGitStatus(); // authoritative, shows real M or ? or A
     void gitPanel?.refresh();
@@ -581,18 +656,25 @@
       up). Called from: save hook, fs watcher (debounced), branch switch,
       polling timer. */
   async function refreshGitStatus() {
-    if (!repoPath || statusInFlight || destroyed) return;
+    if (roots.length === 0 || statusInFlight || destroyed) return;
     statusInFlight = true;
     try {
-      const s = await invoke<GitStatusPayload>('git_status', { repo: repoPath });
-      // Destroy could have landed during the await above. Stop here
-      // so we don't invoke the parent callback with stale data.
-      if (destroyed) return;
-      onGitStatusChange(s.files);
-      gitBranch = s.branch ?? '';
+      // One `git_status` per root; merge each slice into the union map.
+      // The primary root (roots[0]) drives the header branch label.
+      for (let i = 0; i < roots.length; i++) {
+        const root = roots[i];
+        try {
+          const s = await invoke<GitStatusPayload>('git_status', { repo: root });
+          // Destroy could have landed during the await above. Stop here
+          // so we don't write to a parent that's no longer interested.
+          if (destroyed) return;
+          onGitStatusChange(s.files, root);
+          if (i === 0) gitBranch = s.branch ?? '';
+        } catch (e) {
+          console.warn('git_status failed for', root, e);
+        }
+      }
       lastStatusAt = Date.now();
-    } catch (e) {
-      console.warn('git_status failed:', e);
     } finally {
       statusInFlight = false;
     }
@@ -632,7 +714,12 @@
     // fires a single `git status` call, not 5.
     watchUnlisten = await listen<{ path: string; kind: string }>('fs:changed', (e) => {
       const p = e.payload.path;
-      if (p === activePath && !dirtyByPath[activePath] && editor) {
+      // Skip the reload when this event is the echo of our OWN save —
+      // reloading would recreate the editor view and steal focus / caret
+      // mid-edit. Only reload for genuine external changes.
+      const isSelfSave =
+        !!lastSelfSave && lastSelfSave.path === p && Date.now() - lastSelfSave.at < 1500;
+      if (p === activePath && !dirtyByPath[activePath] && editor && !isSelfSave) {
         void editor.reload();
       }
       scheduleGitStatus(250);
@@ -701,29 +788,69 @@
   async function pickFolder() {
     let picked: string | string[] | null;
     try {
-      picked = await openDialog({ directory: true, multiple: false, title: 'Open folder' });
+      // multiple:true → the user can pick several folders at once and open
+      // them all as a multi-root workspace (like VS Code / Cursor).
+      picked = await openDialog({ directory: true, multiple: true, title: 'Open folder(s)' });
     } catch (e) {
       notifyError(e, { title: "Couldn't open folder picker" });
       return;
     }
-    if (!picked || Array.isArray(picked)) return;
+    if (!picked) return;
+    const list = (Array.isArray(picked) ? picked : [picked]).filter(Boolean);
+    if (list.length === 0) return;
     try {
-      await setRoot(picked);
+      // "Open folder(s)" REPLACES the current root set — opening a fresh
+      // selection forgets the previous roots (it doesn't silently keep them).
+      await openRoots(list);
     } catch (e) {
       notifyError(e, { title: "Couldn't open folder" });
     }
   }
 
-  async function setRoot(path: string) {
-    error = null;
+  /** Resolve a picked folder to its git work-tree root (walk up), falling
+      back to the folder itself when it isn't inside a repo. */
+  async function resolveRoot(path: string): Promise<string> {
     try {
       const root = await invoke<string>('git_repo_root', { path });
-      repoPath = (root || path).trim();
+      return (root || path).trim();
     } catch {
-      repoPath = path;
+      return path;
     }
-    localStorage.setItem(rootKey(instanceId), repoPath);
+  }
+
+  /** Open `paths` as THE workspace root set (replace), resolving each to its
+      git root. Keeps the bindable `repoPath` synced to the primary. */
+  async function openRoots(paths: string[]) {
+    error = null;
+    const resolved: string[] = [];
+    for (const p of paths) resolved.push(await resolveRoot(p));
+    setEditorRoots(instanceId, resolved);
+    repoPath = resolved[0] ?? '';
+    if (repoPath) localStorage.setItem(rootKey(instanceId), repoPath);
     await startWatch();
+  }
+
+  async function setRoot(path: string) {
+    await openRoots([path]);
+  }
+
+  /** Remove a workspace root: prune its open tabs (by path prefix), drop it
+      from the set, and restart the watcher on the new primary. */
+  function removeRoot(root: string) {
+    const prefix = root + '/';
+    const survivors = tabs.filter((p) => p !== root && !p.startsWith(prefix));
+    if (survivors.length !== tabs.length) {
+      const wasActiveGone = !survivors.includes(activePath);
+      tabs = survivors;
+      const nextDirty: Record<string, boolean> = {};
+      for (const p of survivors) if (dirtyByPath[p]) nextDirty[p] = true;
+      dirtyByPath = nextDirty;
+      if (wasActiveGone) activePath = survivors[0] ?? '';
+      persistTabs();
+    }
+    removeEditorRoot(instanceId, root);
+    collapsedRoots = new Set([...collapsedRoots].filter((r) => r !== root));
+    void startWatch();
   }
 
   async function startWatch() {
@@ -851,8 +978,10 @@
   }
 
   function relToRepo(p: string) {
-    if (!p || !repoPath) return p;
-    return p.startsWith(repoPath + '/') ? p.slice(repoPath.length + 1) : p;
+    if (!p) return p;
+    const root = rootForPath(p);
+    if (!root) return p;
+    return p.startsWith(root + '/') ? p.slice(root.length + 1) : p;
   }
 
   /** Tab display name: just the basename, with the immediate parent
@@ -985,25 +1114,89 @@
           <!-- Sidebar body: one of five panels picked by the activity bar. -->
           <div class="ev-sidebar-body">
             {#if sidebarTab === 'explorer'}
-              <FileTree
-                rootPath={repoPath}
-                selectedPath={diffTarget ? `${repoPath}/${diffTarget.path}` : activePath}
-                onSelect={openFile}
-                {gitStatusByPath}
-              />
+              {#if roots.length > 1}
+                <!-- Multi-root: each root is a collapsible top-level node with
+                     its own FileTree. The union gitStatusByPath decorates every
+                     tree (Phase 4); each FileTree keeps its own expand cache. -->
+                {#each roots as root (root)}
+                  {@const collapsed = collapsedRoots.has(root)}
+                  <div class="ev-root-group">
+                    <div class="ev-root-bar">
+                      <button class="ev-root-toggle" onclick={() => toggleRootCollapse(root)} title={root}>
+                        <svg class="i i-sm" viewBox="0 0 24 24" style="transform: rotate({collapsed ? 0 : 90}deg)"><path d="M9 6l6 6-6 6" /></svg>
+                        <span class="ev-root-label mono">{fileName(root)}</span>
+                      </button>
+                      <button class="ev-root-remove" onclick={() => removeRoot(root)} title="Remove folder from workspace" aria-label="Remove folder">
+                        <svg class="i i-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M6 6l12 12M6 18 18 6"/></svg>
+                      </button>
+                    </div>
+                    {#if !collapsed}
+                      <FileTree
+                        rootPath={root}
+                        selectedPath={diffTarget ? `${activeGitRoot}/${diffTarget.path}` : activePath}
+                        onSelect={openFile}
+                        {gitStatusByPath}
+                      />
+                    {/if}
+                  </div>
+                {/each}
+              {:else}
+                <FileTree
+                  rootPath={repoPath}
+                  selectedPath={diffTarget ? `${repoPath}/${diffTarget.path}` : activePath}
+                  onSelect={openFile}
+                  {gitStatusByPath}
+                />
+              {/if}
             {:else if sidebarTab === 'git'}
+              {#if roots.length > 1}
+                <!-- Per-root SOURCE CONTROL: switcher picks which repo the
+                     panel + history target so commit/push is unambiguous. -->
+                <div class="ev-scm-switcher">
+                  <span class="ev-scm-label">Repo</span>
+                  <div class="ev-scm-picker">
+                    <button
+                      class="ev-scm-trigger"
+                      onclick={() => (scmPickerOpen = !scmPickerOpen)}
+                      title="Switch source-control repo"
+                    >
+                      <svg class="i i-sm ev-scm-branch" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="M6 8.5V14a4 4 0 0 0 4 4h6"/></svg>
+                      <span class="ev-scm-current mono">{fileName(activeGitRoot)}</span>
+                      <svg class="i i-sm ev-scm-caret" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" /></svg>
+                    </button>
+                    {#if scmPickerOpen}
+                      <div class="ev-scm-backdrop" role="presentation" onclick={() => (scmPickerOpen = false)}></div>
+                      <div class="ev-scm-menu" role="menu">
+                        {#each roots as root (root)}
+                          <button
+                            class="ev-scm-item mono"
+                            class:active={root === activeGitRoot}
+                            role="menuitemradio"
+                            aria-checked={root === activeGitRoot}
+                            onclick={() => { activeGitRoot = root; scmPickerOpen = false; }}
+                            title={root}
+                          >
+                            <span class="ev-scm-check">{#if root === activeGitRoot}✓{/if}</span>
+                            <span class="ev-scm-item-name">{fileName(root)}</span>
+                          </button>
+                        {/each}
+                      </div>
+                    {/if}
+                  </div>
+                </div>
+              {/if}
               <Splitter direction="vertical" persistKey="editor-git-tab" initial={300} min={140} max={900}>
                 {#snippet start()}
                   <GitPanel
                     bind:this={gitPanel}
-                    repo={repoPath}
-                    onStatusChange={(files) => { onGitStatusChange(files); gitChangeCount += 1; }}
+                    repo={roots.length > 1 ? activeGitRoot : repoPath}
+                    onStatusChange={(files) => { onGitStatusChange(files, roots.length > 1 ? activeGitRoot : repoPath); gitChangeCount += 1; }}
                     onOpenDiff={openDiff}
                     aiKind={linkedAiKind}
                   />
                 {/snippet}
                 {#snippet end()}
-                  <HistoryPanel repo={repoPath} refreshKey={gitChangeCount} />
+                  <HistoryPanel repo={roots.length > 1 ? activeGitRoot : repoPath} refreshKey={gitChangeCount} />
                 {/snippet}
               </Splitter>
             {:else if sidebarTab === 'search'}
@@ -1364,6 +1557,78 @@
 
 <style>
   .ev { position: relative; display: flex; height: 100%; min-height: 0; flex: 1; background: var(--bg-0); }
+
+  /* Multi-root explorer — one collapsible group per workspace root. Only
+     rendered when >1 root is open; single-root keeps the bare tree. */
+  .ev-root-group { border-bottom: 1px solid var(--border-neutral); }
+  .ev-root-bar {
+    display: flex; align-items: center; gap: 4px;
+    padding: 2px 6px 2px 4px;
+    background: var(--bg-2);
+  }
+  .ev-root-toggle {
+    flex: 1; min-width: 0;
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 3px 4px;
+    color: var(--text-0); font-size: 11.5px; font-weight: 600;
+    text-align: left;
+  }
+  .ev-root-toggle :global(svg) { width: 11px; height: 11px; color: var(--text-2); transition: transform var(--dur-base) var(--ease-spring); flex-shrink: 0; }
+  .ev-root-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ev-root-remove {
+    width: 20px; height: 20px; flex-shrink: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 4px; color: var(--text-2); opacity: 0;
+    transition: opacity 100ms, color 100ms, background 100ms;
+  }
+  .ev-root-bar:hover .ev-root-remove { opacity: 1; }
+  .ev-root-remove:hover { color: var(--error); background: var(--bg-3); }
+  .ev-root-remove :global(svg) { width: 12px; height: 12px; }
+
+  /* Per-root SOURCE CONTROL switcher. */
+  .ev-scm-switcher {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--border-neutral);
+    background: var(--bg-2);
+  }
+  .ev-scm-label { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-mute); flex-shrink: 0; }
+  /* Custom repo picker — styled button + popover (replaces the native
+     <select> so it matches the editor chrome instead of the OS widget). */
+  .ev-scm-picker { position: relative; flex: 1; min-width: 0; }
+  .ev-scm-trigger {
+    display: flex; align-items: center; gap: 6px;
+    width: 100%; min-width: 0;
+    padding: 5px 8px; border-radius: 6px;
+    background: var(--bg-0); color: var(--text-0);
+    border: 1px solid var(--border-neutral-hi);
+    font-size: 12px; text-align: left;
+  }
+  .ev-scm-trigger:hover { border-color: var(--border-hi2); background: var(--bg-1); }
+  .ev-scm-branch { width: 12px; height: 12px; color: var(--accent-bright); flex-shrink: 0; }
+  .ev-scm-current { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ev-scm-caret { width: 12px; height: 12px; color: var(--text-2); flex-shrink: 0; }
+
+  .ev-scm-backdrop { position: fixed; inset: 0; z-index: 600; background: transparent; }
+  .ev-scm-menu {
+    position: absolute; z-index: 601;
+    top: calc(100% + 4px); left: 0; right: 0;
+    padding: 4px;
+    background: var(--bg-3);
+    border: 1px solid var(--border-neutral-hi);
+    border-radius: 8px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.36);
+    max-height: 280px; overflow-y: auto;
+  }
+  .ev-scm-item {
+    display: flex; align-items: center; gap: 6px;
+    width: 100%; padding: 6px 8px; border-radius: 5px;
+    color: var(--text-1); font-size: 12px; text-align: left;
+  }
+  .ev-scm-item:hover { background: var(--bg-2); color: var(--text-0); }
+  .ev-scm-item.active { color: var(--accent-bright); }
+  .ev-scm-check { width: 12px; flex-shrink: 0; font-size: 11px; color: var(--accent-bright); }
+  .ev-scm-item-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
   .ev-empty { flex: 1; display: flex; align-items: center; justify-content: center; padding: 40px; }
   .ev-empty-card { max-width: 440px; text-align: center; }

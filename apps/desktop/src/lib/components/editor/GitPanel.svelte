@@ -13,6 +13,7 @@
     files: FileStatus[];
   }
   interface Branch { name: string; is_current: boolean; is_remote: boolean; upstream: string | null; }
+  interface RepoInfo { is_git: boolean; }
 
   interface Props {
     repo: string;
@@ -31,6 +32,10 @@
   let branches = $state<Branch[]>([]);
   let loading = $state(false);
   let error = $state<string | null>(null);
+  /** True when `repo` is not inside any git repository. Distinguished from a
+   *  real git error via `git_repo_info` so we render a friendly empty-state
+   *  instead of leaking a raw `fatal: not a git repository …` string. */
+  let notRepo = $state(false);
   let commitMsg = $state('');
   let busy = $state<string | null>(null);
   let showBranches = $state(false);
@@ -87,6 +92,7 @@
     if (!repo) { status = null; branches = []; onStatusChange?.([]); return; }
     loading = true;
     error = null;
+    notRepo = false;
     try {
       const [s, b] = await Promise.all([
         invoke<GitStatus>('git_status', { repo }),
@@ -96,7 +102,21 @@
       branches = b;
       onStatusChange?.(s.files);
     } catch (e: unknown) {
-      error = e instanceof Error ? e.message : String(e);
+      // Distinguish "this folder isn't a git repo" (a valid state → friendly
+      // empty-state) from a real git error. Probe via git_repo_info rather
+      // than string-matching the stderr.
+      try {
+        const info = await invoke<RepoInfo>('git_repo_info', { path: repo });
+        if (!info.is_git) {
+          notRepo = true;
+          status = null;
+          onStatusChange?.([]);
+        } else {
+          error = e instanceof Error ? e.message : String(e);
+        }
+      } catch {
+        error = e instanceof Error ? e.message : String(e);
+      }
     } finally {
       loading = false;
     }
@@ -425,6 +445,7 @@
     </div>
   {/if}
 
+  {#if notRepo}<div class="gp-empty">Not a git repository</div>{/if}
   {#if error}<div class="gp-error">{error}</div>{/if}
   {#if busy}<div class="gp-busy">{busy}…</div>{/if}
   {#if lastPrUrl}

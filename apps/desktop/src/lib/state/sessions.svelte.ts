@@ -114,27 +114,86 @@ export async function flushSessionsNow(): Promise<void> {
 
 function loadStoredEditorState(): Record<
   string,
-  { repoPath: string; pendingOpenFile?: string | null }
+  { repoPath: string; repoPaths?: string[]; pendingOpenFile?: string | null }
 > {
   if (typeof localStorage === 'undefined') return {};
   try {
     const raw = localStorage.getItem(EDITOR_STATE_STORAGE_KEY);
     if (!raw) return {};
     const parsed = JSON.parse(raw) as Record<string, unknown>;
-    const out: Record<string, { repoPath: string; pendingOpenFile?: string | null }> = {};
+    const out: Record<string, { repoPath: string; repoPaths?: string[]; pendingOpenFile?: string | null }> = {};
     for (const [k, v] of Object.entries(parsed)) {
       if (v && typeof v === 'object' && typeof (v as { repoPath?: unknown }).repoPath === 'string') {
         // Intentionally drop `pendingOpenFile` on rehydrate. It's a
         // one-shot signal from the diff card to the editor; persisting
         // it would cause the editor to silently re-open a stale file
         // every reload.
-        out[k] = { repoPath: (v as { repoPath: string }).repoPath };
+        const repoPath = (v as { repoPath: string }).repoPath;
+        // Back-compat: a legacy {repoPath} snapshot hydrates as a single-root
+        // set; a newer one carries the full ordered `repoPaths`.
+        const rawPaths = (v as { repoPaths?: unknown }).repoPaths;
+        const repoPaths = Array.isArray(rawPaths)
+          ? rawPaths.filter((p): p is string => typeof p === 'string')
+          : repoPath
+            ? [repoPath]
+            : [];
+        out[k] = { repoPath, repoPaths };
       }
     }
     return out;
   } catch {
     return {};
   }
+}
+
+/** Ordered open-root set for an editor instance. Falls back to the legacy
+ *  single `repoPath` when `repoPaths` is absent/empty so external writers
+ *  that only set `repoPath` still resolve to a valid one-root set. */
+export function editorRoots(instanceId: string): string[] {
+  const slot = sessionsState.editorInstanceState[instanceId];
+  if (!slot) return [];
+  if (slot.repoPaths && slot.repoPaths.length > 0) return slot.repoPaths;
+  return slot.repoPath ? [slot.repoPath] : [];
+}
+
+/** Replace the entire open-root set (dedupe, preserve order). Used by the
+ *  "Open folder(s)" picker so opening a fresh selection forgets the previous
+ *  roots — matching VS Code / Cursor's "Open Folder" semantics. */
+export function setEditorRoots(instanceId: string, paths: string[]): void {
+  const uniq = [...new Set(paths.map((p) => p.trim()).filter(Boolean))];
+  const slot = sessionsState.editorInstanceState[instanceId];
+  sessionsState.editorInstanceState = {
+    ...sessionsState.editorInstanceState,
+    [instanceId]: { ...(slot ?? {}), repoPath: uniq[0] ?? '', repoPaths: uniq }
+  };
+}
+
+/** Append `path` as an additional root (dedupe, preserve order). Keeps
+ *  `repoPath` === repoPaths[0] so legacy readers see the primary root. */
+export function addEditorRoot(instanceId: string, path: string): void {
+  const p = path.trim();
+  if (!p) return;
+  const current = editorRoots(instanceId);
+  if (current.includes(p)) return;
+  const next = [...current, p];
+  const slot = sessionsState.editorInstanceState[instanceId];
+  sessionsState.editorInstanceState = {
+    ...sessionsState.editorInstanceState,
+    [instanceId]: { ...(slot ?? {}), repoPath: next[0], repoPaths: next }
+  };
+}
+
+/** Drop `path` from the root set, resyncing `repoPath` to the new first
+ *  root (or '' when none remain). */
+export function removeEditorRoot(instanceId: string, path: string): void {
+  const current = editorRoots(instanceId);
+  const next = current.filter((r) => r !== path);
+  if (next.length === current.length) return;
+  const slot = sessionsState.editorInstanceState[instanceId];
+  sessionsState.editorInstanceState = {
+    ...sessionsState.editorInstanceState,
+    [instanceId]: { ...(slot ?? {}), repoPath: next[0] ?? '', repoPaths: next }
+  };
 }
 
 export function genId() {
@@ -214,7 +273,10 @@ export const sessionsState = $state<{
   // specific file. Keyed by PanelInstance.id.
   editorInstanceState: Record<
     string,
-    { repoPath: string; pendingOpenFile?: string | null }
+    // `repoPath` is the PRIMARY root (kept === repoPaths[0]) — external
+    // writers (set_editor_repo_path MCP, diff cards) still use it. `repoPaths`
+    // is the ordered multi-root set; absent/empty ⇒ treat as [repoPath].
+    { repoPath: string; repoPaths?: string[]; pendingOpenFile?: string | null }
   >;
   /** Transient "expand the InlineClaude row for this session" signal.
    *  Set by `applyRangeToAgent` after a user clicks "Apply to <agent>"
@@ -466,9 +528,12 @@ export function persistEditorInstanceStateEffect() {
   $effect(() => {
     if (typeof localStorage === 'undefined') return;
     try {
-      const stripped: Record<string, { repoPath: string }> = {};
+      const stripped: Record<string, { repoPath: string; repoPaths: string[] }> = {};
       for (const [k, v] of Object.entries(sessionsState.editorInstanceState)) {
-        stripped[k] = { repoPath: v.repoPath };
+        stripped[k] = {
+          repoPath: v.repoPath,
+          repoPaths: v.repoPaths && v.repoPaths.length > 0 ? v.repoPaths : v.repoPath ? [v.repoPath] : []
+        };
       }
       localStorage.setItem(EDITOR_STATE_STORAGE_KEY, JSON.stringify(stripped));
     } catch {

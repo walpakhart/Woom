@@ -13,7 +13,7 @@
   import InlineClaude from './editor/InlineClaude.svelte';
   import Splitter from '$lib/components/ui/Splitter.svelte';
   import SidePaneRail from '$lib/components/ui/SidePaneRail.svelte';
-  import { sessionsState, getPendingEditEvents } from '$lib/state/sessions.svelte';
+  import { sessionsState, getPendingEditEvents, editorRoots } from '$lib/state/sessions.svelte';
   import { kindForInstanceId, APP_INSTANCE_IDS, layoutState } from '$lib/state/layout.svelte';
   import { onMount, untrack } from 'svelte';
   import { fly } from 'svelte/transition';
@@ -111,6 +111,15 @@
     } else {
       slot.repoPath = repoPath;
     }
+  });
+
+  /** Ordered open-root set for this editor instance. Single-root ⇒ [repoPath].
+   *  Read from the per-instance slot so it survives reload + tracks
+   *  add/remove-root mutations made inside EditorView. */
+  const repoPaths = $derived.by(() => {
+    void sessionsState.editorInstanceState[p.instanceId]?.repoPaths;
+    void repoPath;
+    return editorRoots(p.instanceId);
   });
 
   /** Link-picker entries — one row per Claude/Cursor session that is
@@ -223,6 +232,7 @@
           <div class="se-editor-area">
             <EditorView
               bind:repoPath
+              {repoPaths}
               {agentInstances}
               {linkedAgents}
               {sidebarTab}

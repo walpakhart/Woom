@@ -72,6 +72,17 @@ fn run(mut cmd: Command) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&out.stdout).to_string())
 }
 
+/// True when `repo` has at least one commit (HEAD resolves). A freshly
+/// `git init`'d repo has an UNBORN HEAD — `rev-parse --verify HEAD` exits
+/// non-zero. We use the exit code (not a stderr string) so the probe is
+/// locale-independent. Returns false on any spawn error (git missing,
+/// not-a-repo) — callers treat that as "no history to show".
+fn has_head(repo: &str) -> bool {
+    let mut c = git(repo);
+    c.args(["rev-parse", "--verify", "--quiet", "HEAD"]);
+    c.output().map(|o| o.status.success()).unwrap_or(false)
+}
+
 pub fn status(repo: &str) -> Result<GitStatus, String> {
     // `--porcelain=v1 --branch` without `-z`: LF-separated entries, stable
     // format, one line per file. We deliberately skip `-z` because with it
@@ -469,6 +480,12 @@ pub fn pull(repo: &str) -> Result<String, String> {
 }
 
 pub fn log(repo: &str, limit: u32) -> Result<Vec<CommitEntry>, String> {
+    // Unborn HEAD (fresh repo, no commits): `git log` would exit non-zero with
+    // `fatal: your current branch '…' does not have any commits yet`, which the
+    // UI then renders verbatim. An empty history is a valid state, not an error.
+    if !has_head(repo) {
+        return Ok(Vec::new());
+    }
     let mut cmd = git(repo);
     cmd.args([
         "log",
@@ -704,9 +721,13 @@ pub fn diff(repo: &str, path: &str, staged: bool) -> Result<String, String> {
     if !out.trim().is_empty() {
         return Ok(out);
     }
-    // Untracked file path: `git diff` produces empty. Synthesize an "added"
-    // diff so the UI still has something to render.
-    if !staged {
+    // Empty `git diff` means one of two things:
+    //   • a CLEAN tracked file (no changes) → return empty so the change bar
+    //     stays blank. Synthesizing an "added" diff here would paint the whole
+    //     file green even though nothing changed (the reported bug).
+    //   • a genuinely UNTRACKED file → synthesize an all-added diff so the new
+    //     content still shows as added in the gutter.
+    if !staged && !is_tracked(repo, path) {
         let full = std::path::Path::new(repo).join(path);
         if let Ok(contents) = std::fs::read_to_string(&full) {
             let line_count = contents.lines().count();
@@ -1207,6 +1228,27 @@ mod tests {
         c.current_dir(&dir).args(["commit", "-q", "-m", "x"]);
         c.output().unwrap();
         assert!(working_dir_clean(dir.to_str().unwrap()));
+    }
+
+    #[test]
+    fn log_empty_on_unborn_head() {
+        let dir = td();
+        init_repo(&dir);
+        let s = dir.to_str().unwrap();
+        // Fresh repo: no HEAD, log must be empty (not an error).
+        assert!(!has_head(s));
+        assert_eq!(log(s, 50).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn log_returns_commits_after_commit() {
+        let dir = td();
+        init_repo(&dir);
+        let s = dir.to_str().unwrap();
+        std::fs::write(dir.join("seed.txt"), "x").unwrap();
+        commit_all_allow_empty(s, "seed").unwrap();
+        assert!(has_head(s));
+        assert_eq!(log(s, 50).unwrap().len(), 1);
     }
 
     #[test]
