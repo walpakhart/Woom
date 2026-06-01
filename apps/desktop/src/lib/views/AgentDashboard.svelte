@@ -213,9 +213,6 @@
                   <div class="ad-row-body">
                     <div class="ad-row-line1">
                       <span class="ad-row-title">{s.title || 'Untitled chat'}</span>
-                      {#if s.permissionMode === 'plan'}
-                        <span class="ad-tag ad-tag--plan mono">plan</span>
-                      {/if}
                       {#if s.worktreeBranch}
                         <span class="ad-tag ad-tag--branch mono">{s.worktreeBranch}</span>
                       {/if}
@@ -384,10 +381,6 @@
     background: var(--bg-2);
     color: var(--text-mute);
     flex-shrink: 0;
-  }
-  .ad-tag--plan {
-    color: #e0b16c;
-    border-color: color-mix(in srgb, #e0b16c 40%, var(--border));
   }
   .ad-tag--branch {
     text-transform: none;

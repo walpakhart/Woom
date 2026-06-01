@@ -107,6 +107,9 @@ export function serializeSession(s: ClaudeSession): object {
      * any persisted session without the field. Explicit boolean
      * keeps hydration deterministic. */
     fastMode: s.fastMode ?? false,
+    /* Thinking-effort default-null (= CLI default budget). Persisted
+     * so a chosen effort survives reload. */
+    thinkingEffort: s.thinkingEffort ?? null,
     /* Quota-pause state — survives reload so a paused chat doesn't
      * silently lose its countdown badge across app restarts. The
      * `resumeAt` unix-ms remains valid (or already-past, which

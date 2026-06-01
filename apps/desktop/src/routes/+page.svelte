@@ -50,7 +50,7 @@
   } from './mcpInputParse';
   import { handleCanvasOrSddMcp } from './appNavigationCanvas';
   import { handleInboxOrViewMcp } from './appNavigationInbox';
-  import { handleSlashCommand as handleSlashCommandImpl } from './handleSlashCommand';
+  import { handleSlashCommand as handleSlashCommandImpl, runDwFromSlash } from './handleSlashCommand';
   import * as _modalActions from './modalActions';
   import * as _agentDrop from './agentDrop';
   import * as _worktree from './worktreeActions';
@@ -1834,15 +1834,11 @@
    *  agent column, splices `@<externalId>` into the input, and
    *  switches the top-level view so the user lands on the chat
    *  ready to type. */
-  function sendInboxItemToAgent(
-    payload:
-      | { kind: 'github'; item: InboxItem }
-      | { kind: 'jira'; item: JiraItem }
-      | { kind: 'sentry'; item: SentryIssue },
-    kind: 'claude' | 'cursor' = 'claude'
-  ) {
+  /** Resolve (or create) the session that should receive an inbox handoff
+   *  for the given agent kind: active-in-instance → instance-bound →
+   *  unbound-of-kind (binds it) → fresh session. */
+  function resolveAgentTarget(kind: 'claude' | 'cursor'): ClaudeSession | null {
     const instanceId = kind === 'claude' ? APP_INSTANCE_IDS.claude : APP_INSTANCE_IDS.cursor;
-    const mention = mentionFromInboxPayload(payload);
     const activeId = sessionsState.activeByInstance[instanceId];
     let target = activeId ? sessionsState.list.find((s) => s.id === activeId) ?? null : null;
     if (!target) target = sessionsState.list.find((s) => s.agentInstanceId === instanceId) ?? null;
@@ -1856,6 +1852,47 @@
       const id = newClaudeSession({ agentKind: kind, agentInstanceId: instanceId });
       target = sessionsState.list.find((s) => s.id === id) ?? null;
     }
+    return target;
+  }
+
+  /** Seed a live-build Dynamic Workflow from an inbox item. Templates a
+   *  task from the item snapshot (title + body / culprit), attaches the
+   *  @id mention, then routes through the REAL `/dw` path (runDwFromSlash
+   *  → dw_create → silent build brief). */
+  async function sendInboxItemToWorkflow(
+    payload:
+      | { kind: 'github'; item: InboxItem }
+      | { kind: 'jira'; item: JiraItem }
+      | { kind: 'sentry'; item: SentryIssue }
+  ) {
+    const target = resolveAgentTarget('claude');
+    if (!target) return;
+    const mention = mentionFromInboxPayload(payload);
+    const dedup = target.mentions.filter(
+      (m) => !(m.source === mention.source && m.externalId === mention.externalId)
+    );
+    updateSession(target.id, { mentions: [...dedup, mention] });
+    setActiveSessionInInstance(APP_INSTANCE_IDS.claude, target.id);
+    view = 'claudeApp';
+    const body = mention.body ? '\n\n' + mention.body.slice(0, 4000) : '';
+    const task = `Fix ${mention.title}: @${mention.externalId}${body}`;
+    await runDwFromSlash(target, task, {
+      sendClaudeMessage,
+      scrollChatBottom,
+      runCompactSession,
+    });
+  }
+
+  function sendInboxItemToAgent(
+    payload:
+      | { kind: 'github'; item: InboxItem }
+      | { kind: 'jira'; item: JiraItem }
+      | { kind: 'sentry'; item: SentryIssue },
+    kind: 'claude' | 'cursor' = 'claude'
+  ) {
+    const instanceId = kind === 'claude' ? APP_INSTANCE_IDS.claude : APP_INSTANCE_IDS.cursor;
+    const mention = mentionFromInboxPayload(payload);
+    const target = resolveAgentTarget(kind);
     if (!target) return;
     const dedup = target.mentions.filter(
       (m) => !(m.source === mention.source && m.externalId === mention.externalId)
@@ -1897,7 +1934,7 @@
       session_id: cur.id,
       session_title: cur.title ?? 'Untitled chat',
       agent_kind: kind,
-      permission_mode: cur.permissionMode ?? 'default',
+      permission_mode: 'default',
       cost_usd: costUsd,
       context_window: {
         used_percentage: window > 0 ? Math.round((used / window) * 100) : 0,
@@ -2977,6 +3014,7 @@
           {isClickNotDrag}
           onSendToClaude={(item) => sendInboxItemToAgent({ kind: 'github', item }, 'claude')}
           onSendToCursor={(item) => sendInboxItemToAgent({ kind: 'github', item }, 'cursor')}
+          onFixWithDw={(item) => sendInboxItemToWorkflow({ kind: 'github', item })}
         />
       {/if}
 
@@ -2998,6 +3036,7 @@
           {refreshAllJiraInboxes}
           onSendToClaude={(item) => sendInboxItemToAgent({ kind: 'jira', item }, 'claude')}
           onSendToCursor={(item) => sendInboxItemToAgent({ kind: 'jira', item }, 'cursor')}
+          onFixWithDw={(item) => sendInboxItemToWorkflow({ kind: 'jira', item })}
         />
       {/if}
 
@@ -3016,6 +3055,7 @@
           {isClickNotDrag}
           onSendToClaude={(item) => sendInboxItemToAgent({ kind: 'sentry', item }, 'claude')}
           onSendToCursor={(item) => sendInboxItemToAgent({ kind: 'sentry', item }, 'cursor')}
+          onFixWithDw={(item) => sendInboxItemToWorkflow({ kind: 'sentry', item })}
         />
       {/if}
 

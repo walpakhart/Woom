@@ -6,6 +6,7 @@
 
   import { sessionsState } from '$lib/state/sessions.svelte';
   import BrandIcon from '$lib/components/ui/BrandIcon.svelte';
+  import { invoke } from '@tauri-apps/api/core';
 
   type Kind = 'claude' | 'cursor';
 
@@ -66,6 +67,42 @@
       return slash >= 0 ? `~${rest.slice(slash)}` : '~';
     }
     return path;
+  }
+
+  /* Per-turn shadow checkpoints on the worktree branch. Loaded from the
+     backend whenever the active session's worktree path changes. */
+  type Checkpoint = { sha: string; label: string; ts: number };
+  let checkpoints = $state<Checkpoint[]>([]);
+
+  async function loadCheckpoints(path: string | null | undefined) {
+    if (!path) { checkpoints = []; return; }
+    try {
+      checkpoints = await invoke<Checkpoint[]>('worktree_list_checkpoints', { worktreePath: path });
+    } catch {
+      checkpoints = [];
+    }
+  }
+
+  $effect(() => { void loadCheckpoints(activeSess?.worktreePath); });
+
+  async function restoreCheckpoint(sha: string) {
+    const path = activeSess?.worktreePath;
+    if (!path) return;
+    if (!confirm('Restore the worktree to this checkpoint? Later edits in the worktree will be discarded (your main branch is untouched).')) return;
+    try {
+      await invoke('worktree_restore', { worktreePath: path, sha });
+      await loadCheckpoints(path);
+    } catch (e) {
+      console.warn('worktree_restore failed', e);
+    }
+  }
+
+  function relTime(ts: number): string {
+    const secs = Math.max(0, Math.floor(Date.now() / 1000) - ts);
+    if (secs < 60) return `${secs}s ago`;
+    if (secs < 3600) return `${Math.floor(secs / 60)}m ago`;
+    if (secs < 86400) return `${Math.floor(secs / 3600)}h ago`;
+    return `${Math.floor(secs / 86400)}d ago`;
   }
 </script>
 
@@ -129,6 +166,21 @@
           {p.worktreeBusy === 'removing' ? 'Removing…' : 'Discard worktree'}
         </button>
       </div>
+
+      {#if checkpoints.length > 0}
+        <div class="app-label wts-section">Checkpoints</div>
+        <div class="ckpt-list">
+          {#each checkpoints as c (c.sha)}
+            <div class="ckpt-row">
+              <span class="ckpt-label" title={c.label}>{c.label || '(turn)'}</span>
+              <span class="ckpt-time mono">{relTime(c.ts)}</span>
+              <button class="ckpt-restore" title="Restore worktree to here" onclick={() => restoreCheckpoint(c.sha)}>
+                Restore
+              </button>
+            </div>
+          {/each}
+        </div>
+      {/if}
 
       <div class="app-label wts-section">Linked apps</div>
       <div class="linked-list">
@@ -293,6 +345,24 @@
   .wts-btn--primary:hover svg { color: var(--accent-fg); }
 
   .wts-section { margin: 24px 0 8px; padding: 0 4px; }
+  .ckpt-list { display: flex; flex-direction: column; gap: 2px; }
+  .ckpt-row {
+    display: flex; align-items: center; gap: 8px;
+    padding: 4px 6px; border-radius: 6px;
+  }
+  .ckpt-row:hover { background: var(--bg-2); }
+  .ckpt-label {
+    flex: 1; min-width: 0; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap;
+    font-size: 12px; color: var(--text);
+  }
+  .ckpt-time { font-size: 11px; color: var(--text-mute); flex-shrink: 0; }
+  .ckpt-restore {
+    flex-shrink: 0; font-size: 11px; padding: 2px 8px;
+    border: 1px solid var(--border); border-radius: 6px;
+    background: transparent; color: var(--text-mute); cursor: pointer;
+  }
+  .ckpt-restore:hover { color: var(--text); border-color: var(--text-mute); }
 
   .linked-list {
     display: flex; flex-direction: column; gap: 6px;

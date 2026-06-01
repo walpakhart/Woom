@@ -36,6 +36,9 @@
      *  a button over a drag gesture. Shown on each PR/issue card. */
     onSendToClaude: (item: InboxItem) => void;
     onSendToCursor: (item: InboxItem) => void;
+    /** Seed a Dynamic Workflow from this item — templates a task and
+     *  routes through the live-build DW pipeline. */
+    onFixWithDw: (item: InboxItem) => void;
   }
   let p: Props = $props();
 
@@ -115,6 +118,11 @@
         label: 'Send to Cursor',
         icon: 'M3 3l8 18 2-8 8-2z',
         onClick: () => p.onSendToCursor(it)
+      },
+      {
+        label: 'Fix with DW',
+        icon: 'M12 2v4 M12 18v4 M4.93 4.93l2.83 2.83 M16.24 16.24l2.83 2.83 M2 12h4 M18 12h4 M4.93 19.07l2.83-2.83 M16.24 7.76l2.83-2.83',
+        onClick: () => p.onFixWithDw(it)
       },
       {
         label: 'Open in browser',

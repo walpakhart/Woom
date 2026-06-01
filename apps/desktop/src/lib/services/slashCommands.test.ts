@@ -9,6 +9,7 @@ describe('parseSlashCommand', () => {
     expect(parseSlashCommand('/help')).toBe('help');
     expect(parseSlashCommand('/ps')).toBe('ps');
     expect(parseSlashCommand('/preview')).toBe('preview');
+    expect(parseSlashCommand('/remember')).toBe('remember');
   });
 
   it('is case-insensitive on the word', () => {

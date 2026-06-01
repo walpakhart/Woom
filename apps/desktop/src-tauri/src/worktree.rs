@@ -73,6 +73,120 @@ pub fn capture_diff(worktree_path: &str) -> Result<String, String> {
     run(diff)
 }
 
+/// Read-only git context for an `@git` mention. `kind`:
+/// - `"diff"` → `git diff HEAD` (tracked uncommitted changes vs HEAD)
+/// - `"head"` → `git show --stat -p HEAD`
+/// - `"sha"`  → `git show --stat -p <sha>` (sha passed as a discrete argv arg,
+///   never shell-interpolated)
+/// NEVER mutates the working tree or index (unlike `capture_diff`, which stages).
+/// Output is capped at ~200 KB so a huge diff can't blow the prompt.
+pub fn git_context(cwd: &str, kind: &str, sha: Option<&str>) -> Result<String, String> {
+    let mut cmd = git(cwd);
+    match kind {
+        "diff" => {
+            cmd.args(["diff", "HEAD"]);
+        }
+        "head" => {
+            cmd.args(["show", "--stat", "-p", "HEAD"]);
+        }
+        "sha" => {
+            let s = sha.ok_or_else(|| "missing sha".to_string())?;
+            if !s.chars().all(|c| c.is_ascii_hexdigit()) || s.len() < 4 || s.len() > 40 {
+                return Err(format!("invalid sha: {}", s));
+            }
+            cmd.args(["show", "--stat", "-p", s]);
+        }
+        other => return Err(format!("unknown git kind: {}", other)),
+    }
+    let mut out = run(cmd)?;
+    const CAP: usize = 200 * 1024;
+    if out.len() > CAP {
+        out.truncate(CAP);
+        out.push_str("\n… [truncated]");
+    }
+    Ok(out)
+}
+
+/// One per-turn shadow checkpoint commit on the session's woom branch.
+#[derive(Debug, Clone, Serialize)]
+pub struct Checkpoint {
+    pub sha: String,
+    pub label: String,
+    /// Commit time, unix seconds.
+    pub ts: i64,
+}
+
+/// Shadow-commit the worktree's current state on its (woom-managed) branch.
+/// Returns the new commit sha, or `None` when the turn changed nothing (no
+/// empty checkpoints). SAFE: commits only on the `woom/<session>` branch the
+/// worktree owns — never the user's checked-out branch or any remote.
+pub fn checkpoint(worktree_path: &str, label: &str) -> Result<Option<String>, String> {
+    let mut add = git(worktree_path);
+    add.args(["add", "-A"]);
+    run(add)?;
+    // `git diff --cached --quiet` exits 0 when nothing is staged → skip.
+    let mut diffq = git(worktree_path);
+    diffq.args(["diff", "--cached", "--quiet"]);
+    let out = diffq
+        .output()
+        .map_err(|e| format!("git diff failed to spawn: {}", e))?;
+    if out.status.success() {
+        return Ok(None);
+    }
+    let subject = format!("woom-checkpoint: {}", label.replace(['\n', '\r'], " "));
+    let mut c = git(worktree_path);
+    c.args([
+        "-c",
+        "user.name=Woom",
+        "-c",
+        "user.email=woom@local",
+        "commit",
+        "--no-gpg-sign",
+        "-m",
+        &subject,
+    ]);
+    run(c)?;
+    let mut rp = git(worktree_path);
+    rp.args(["rev-parse", "HEAD"]);
+    Ok(Some(run(rp)?.trim().to_string()))
+}
+
+/// List shadow checkpoints (newest-first) on the worktree's branch — commits
+/// whose subject carries the `woom-checkpoint:` prefix. Errors → empty list.
+pub fn list_checkpoints(worktree_path: &str) -> Vec<Checkpoint> {
+    let mut c = git(worktree_path);
+    c.args(["log", "--format=%H\u{1f}%s\u{1f}%ct", "-n", "200"]);
+    let Ok(out) = run(c) else { return Vec::new() };
+    let mut v = Vec::new();
+    for line in out.lines() {
+        let parts: Vec<&str> = line.split('\u{1f}').collect();
+        if parts.len() < 3 {
+            continue;
+        }
+        if let Some(label) = parts[1].strip_prefix("woom-checkpoint: ") {
+            v.push(Checkpoint {
+                sha: parts[0].to_string(),
+                label: label.to_string(),
+                ts: parts[2].parse().unwrap_or(0),
+            });
+        }
+    }
+    v
+}
+
+/// Reset the worktree to a checkpoint sha (`git reset --hard`). Scoped to the
+/// worktree dir / woom branch only — the user's main checkout + remote are
+/// untouched. Caller must confirm (this discards later worktree edits).
+pub fn restore(worktree_path: &str, sha: &str) -> Result<(), String> {
+    if !sha.chars().all(|c| c.is_ascii_hexdigit()) || sha.len() < 7 || sha.len() > 40 {
+        return Err(format!("invalid sha: {sha}"));
+    }
+    let mut c = git(worktree_path);
+    c.args(["reset", "--hard", sha]);
+    run(c)?;
+    Ok(())
+}
+
 /// Apply a unified-diff patch to `repo_path`'s working tree. `--3way` lets
 /// it still merge when the parent HEAD has advanced since the subagent
 /// branched; a genuine conflict (overlapping hunks from another applied
@@ -561,4 +675,55 @@ fn woom_branch(session_id: &str) -> String {
         })
         .collect();
     format!("woom/{}", safe)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_at(dir: &str, args: &[&str]) {
+        let mut c = git(dir);
+        c.args(args);
+        run(c).unwrap();
+    }
+
+    #[test]
+    fn checkpoint_list_restore_roundtrip() {
+        let base = std::env::temp_dir().join(format!("woom-ckpt-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let dir = base.to_str().unwrap();
+        run_at(dir, &["init", "-q"]);
+        run_at(dir, &["config", "user.email", "t@t"]);
+        run_at(dir, &["config", "user.name", "t"]);
+        std::fs::write(base.join("f.txt"), "v1").unwrap();
+        run_at(dir, &["add", "-A"]);
+        run_at(dir, &["commit", "--no-gpg-sign", "-q", "-m", "init"]);
+
+        // First checkpoint: file edited.
+        std::fs::write(base.join("f.txt"), "v2").unwrap();
+        let c1 = checkpoint(dir, "turn one").unwrap();
+        assert!(c1.is_some(), "expected a checkpoint sha");
+        let sha1 = c1.unwrap();
+
+        // Empty turn: no change → None.
+        assert!(checkpoint(dir, "no change").unwrap().is_none());
+
+        // Second checkpoint.
+        std::fs::write(base.join("f.txt"), "v3").unwrap();
+        assert!(checkpoint(dir, "turn two").unwrap().is_some());
+
+        let list = list_checkpoints(dir);
+        assert_eq!(list.len(), 2, "got: {list:?}");
+        assert_eq!(list[0].label, "turn two"); // newest-first
+        assert_eq!(list[1].label, "turn one");
+
+        // Restore to the first checkpoint → file is back to v2.
+        restore(dir, &sha1).unwrap();
+        assert_eq!(std::fs::read_to_string(base.join("f.txt")).unwrap(), "v2");
+
+        assert!(restore(dir, "nothex!!").is_err());
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }

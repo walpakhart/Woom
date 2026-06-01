@@ -134,6 +134,10 @@ pub fn user_skills_dir() -> Option<PathBuf> {
     dirs_next_home().map(|h| h.join(".claude").join("skills"))
 }
 
+pub fn user_commands_dir() -> Option<PathBuf> {
+    dirs_next_home().map(|h| h.join(".claude").join("commands"))
+}
+
 fn dirs_next_home() -> Option<PathBuf> {
     /* `dirs` crate is already in the workspace via reqwest's transitive
      *  deps but not direct. Use std env to stay independent. */
@@ -154,6 +158,12 @@ pub fn discover_skills(cwd: Option<&str>) -> Vec<Skill> {
             if candidate.is_dir() {
                 read_dir_for_skills(&candidate, SkillScope::Project, &mut out);
             }
+            // Flat `.claude/commands/<name>.md` files (Claude Code's
+            // project slash-commands) surface as Skills too.
+            let commands = p.join(".claude").join("commands");
+            if commands.is_dir() {
+                read_dir_for_commands(&commands, SkillScope::Project, &mut out);
+            }
             current = p.parent();
         }
     }
@@ -161,6 +171,11 @@ pub fn discover_skills(cwd: Option<&str>) -> Vec<Skill> {
     if let Some(user_dir) = user_skills_dir() {
         if user_dir.is_dir() {
             read_dir_for_skills(&user_dir, SkillScope::User, &mut out);
+        }
+    }
+    if let Some(user_cmds) = user_commands_dir() {
+        if user_cmds.is_dir() {
+            read_dir_for_commands(&user_cmds, SkillScope::User, &mut out);
         }
     }
 
@@ -186,6 +201,67 @@ fn read_dir_for_skills(dir: &Path, scope: SkillScope, out: &mut Vec<Skill>) {
             out.push(s);
         }
     }
+}
+
+/// Discover flat `.claude/commands/<name>.md` files. Unlike skills
+/// (a `<name>/SKILL.md` subdir), a command is a single markdown file
+/// whose STEM is the command name (`fix.md` → `/fix`). Optional YAML
+/// frontmatter is honored; body supports the same `$ARGUMENTS` + shell
+/// substitutions at render time.
+fn read_dir_for_commands(dir: &Path, scope: SkillScope, out: &mut Vec<Skill>) {
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    for entry in rd.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        if path.extension().and_then(|e| e.to_str()) != Some("md") {
+            continue;
+        }
+        if let Some(s) = load_command(&path, scope) {
+            out.push(s);
+        }
+    }
+}
+
+fn load_command(path: &Path, scope: SkillScope) -> Option<Skill> {
+    let raw = std::fs::read_to_string(path).ok()?;
+    let (front, body) = split_frontmatter(&raw);
+    let parsed = parse_frontmatter(front);
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("unnamed")
+        .to_string();
+    let name = parsed.get("name").cloned().unwrap_or(stem);
+    let scope_prefix = match scope {
+        SkillScope::User => "user",
+        SkillScope::Project => "project",
+    };
+    let id = format!("{scope_prefix}:{name}");
+    let allowed_tools = parsed
+        .get("allowed-tools")
+        .map(|v| parse_string_list(v))
+        .unwrap_or_default();
+    Some(Skill {
+        id,
+        name,
+        description: parsed.get("description").cloned(),
+        when_to_use: parsed
+            .get("when_to_use")
+            .or_else(|| parsed.get("when-to-use"))
+            .cloned(),
+        argument_hint: parsed
+            .get("argument-hint")
+            .or_else(|| parsed.get("argument_hint"))
+            .cloned(),
+        allowed_tools,
+        model: parsed.get("model").cloned(),
+        scope,
+        path: path.to_string_lossy().into_owned(),
+        body: body.to_string(),
+        extras: BTreeMap::new(),
+    })
 }
 
 fn load_skill(path: &Path, scope: SkillScope) -> Option<Skill> {
@@ -584,6 +660,26 @@ mod tests {
         let out = expand_shell_blocks(body, "/tmp", &mut results).await;
         assert!(out.contains("\\!`not a command`"));
         assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    fn discovers_flat_command_md() {
+        // Build a throwaway fixture: <tmp>/.claude/commands/foo.md
+        let base = std::env::temp_dir().join(format!("woom-cmd-test-{}", std::process::id()));
+        let cmd_dir = base.join(".claude").join("commands");
+        std::fs::create_dir_all(&cmd_dir).unwrap();
+        let foo = cmd_dir.join("foo.md");
+        std::fs::write(&foo, "---\ndescription: do the foo\n---\nFoo body with $ARGUMENTS").unwrap();
+
+        let skills = discover_skills(Some(base.to_str().unwrap()));
+        let found = skills.iter().find(|s| s.name == "foo");
+        assert!(found.is_some(), "command foo not discovered: {skills:?}");
+        let f = found.unwrap();
+        assert_eq!(f.id, "project:foo");
+        assert_eq!(f.description.as_deref(), Some("do the foo"));
+        assert!(f.body.contains("$ARGUMENTS"));
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[tokio::test]

@@ -332,6 +332,10 @@ pub struct AskArgs<'a> {
     /// `sdd-98a42f3bdb` Phase 1 open-question). Adjust the env-set in
     /// `spawn_claude_armed` when Anthropic stabilises the flag.
     pub fast_mode: bool,
+    /// Thinking-budget hint from the composer effort dropdown. Maps to
+    /// `MAX_THINKING_TOKENS` env in `spawn_claude_armed`. None / "auto"
+    /// → unset (CLI default). Mirrors the `fast_mode` threading.
+    pub thinking_effort: Option<&'a str>,
 }
 
 fn build_spawn_sig(args: &AskArgs<'_>) -> SpawnSig {
@@ -614,6 +618,20 @@ async fn spawn_claude_armed(args: &AskArgs<'_>) -> Result<ArmedCli, ClaudeRunErr
             }
         }
     }
+    // Thinking-effort → MAX_THINKING_TOKENS. "auto"/unknown leave it
+    // unset so the CLI keeps its default budget.
+    if let Some(eff) = args.thinking_effort {
+        let toks = match eff {
+            "low" => Some("4096"),
+            "medium" => Some("10000"),
+            "high" => Some("24000"),
+            "max" => Some("32000"),
+            _ => None,
+        };
+        if let Some(t) = toks {
+            cmd.env("MAX_THINKING_TOKENS", t);
+        }
+    }
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
     cmd.stdin(std::process::Stdio::piped());
@@ -720,12 +738,14 @@ pub async fn ask(
     image_paths: &[String],
     rtk_disabled: bool,
     fast_mode: bool,
+    thinking_effort: Option<&str>,
 ) -> Result<String, ClaudeRunError> {
     let args = AskArgs {
         session_id, cwd, claude_uuid, resume, rules, model, app_context,
         action_ipc_socket,
         rtk_disabled,
         fast_mode,
+        thinking_effort,
     };
     let target_sig = build_spawn_sig(&args);
 
@@ -1025,6 +1045,7 @@ pub async fn prewarm(
     action_ipc_socket: Option<&Path>,
     rtk_disabled: bool,
     fast_mode: bool,
+    thinking_effort: Option<&str>,
 ) -> Result<(), ClaudeRunError> {
     // Race-free single-prewarm-per-session guard. If another prewarm
     // for this same session is still in flight, this call is a
@@ -1049,6 +1070,7 @@ pub async fn prewarm(
         action_ipc_socket,
         rtk_disabled,
         fast_mode,
+        thinking_effort,
     };
     let target_sig = build_spawn_sig(&args);
 

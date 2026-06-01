@@ -197,6 +197,8 @@ export async function continueAgentTurn(sessionId: string, deps: AgentTurnDeps):
       // as the user-initiated turn — see `sendClaudeMessage.ts` for
       // rationale.
       fastMode: sess.fastMode === true,
+      // Auto-follow-up honours the same per-session thinking-effort.
+      thinkingEffort: sess.thinkingEffort ?? null,
       onAssistantDelta: deps.appendAssistantDelta,
       onAppNavigation: deps.handleAppNavigation,
     });

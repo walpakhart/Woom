@@ -265,26 +265,6 @@ export function buildAgentAppContext(callingSessionId: string): string {
     lines.push(calling.cwdSwitchRecap);
   }
 
-  // Plan-mode discipline. When the user toggled the session into plan
-  // mode (⇧⇥), the agent should READ + INVESTIGATE only — no edits,
-  // no mutating bash, no MCP calls that change remote state. End the
-  // turn with a structured plan; the user reviews and clicks
-  // "Approve & switch to default" to flip mode and continue.
-  if (calling?.permissionMode === 'plan') {
-    lines.push('');
-    lines.push('---');
-    lines.push('Plan mode ACTIVE. Do NOT call tools that:');
-    lines.push('  - write or edit files (Edit / Write / NotebookEdit)');
-    lines.push('  - run mutating bash commands (rm, mv, git commit/push, npm install, sed -i, etc.)');
-    lines.push('  - mutate remote state via MCP (mcp__github__add_comment, mcp__jira__transition_issue, mcp__sentry__update_issue, propose_*, etc.)');
-    lines.push('Read tools (Read, Grep, Glob, terminal_buffer, mcp__*__get_*, mcp__*__search_*, mcp__*__list_*) ARE allowed.');
-    lines.push('');
-    lines.push(
-      'End the turn with a clear, ordered plan the user can review. '
-        + 'The user will switch you out of plan mode to begin execution.'
-    );
-  }
-
   for (const kind of DEFAULT_PANEL_ORDER) {
     const id = APP_INSTANCE_IDS[kind];
     const meta: string[] = [`kind=${kind}`, `id=${id}`];

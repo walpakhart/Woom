@@ -49,6 +49,5 @@ These are Woom-side features the agent sees as system-prompt context, not callab
 - **Hooks** — user shell scripts run on UserPromptSubmit / Stop / SessionStart (see Settings → Hooks)
 - **Skills** — user-defined `/<name>` slash commands at `~/.claude/skills/<name>/SKILL.md`, with `$ARGUMENTS` + `` !`<cmd>` `` shell injection
 - **CLAUDE.md** — walked from cwd to repo root, prepended to system prompt each turn
-- **Plan mode** — `⇧⇥` in composer flips the session to read-only; the agent reads instructions in its system prompt
 - **`/loop <duration> <prompt>`** — recurring user message on a cadence (7-day expiry)
 - **Statusline** — user shell script piped session JSON, output rendered below composer

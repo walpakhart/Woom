@@ -583,20 +583,60 @@
 
   /** Selected from the picker — splice the display text in place of
    *  `@<query>` and append the mention payload to the session. */
-  function pickMention(s: { display: string; mention: Mention }) {
+  async function pickMention(s: { display: string; mention: Mention }) {
     if (!sess || !ta || mentionFrom < 0) return;
+    const sessId = sess.id;
     const value = ta.value ?? '';
     const caret = ta.selectionStart ?? value.length;
     const before = value.slice(0, mentionFrom);
     const after = value.slice(caret);
     const next = before + s.display + after;
     setSessionInput(sess.id, next);
+    /* `@git:*` mentions carry no body from the picker — fetch the git
+       output now (read-only) so the literal diff/show rides into the
+       prompt as the mention body (terminal-source render path). */
+    let mention = s.mention;
+    if (mention.source === 'terminal' && mention.externalId.startsWith('git:')) {
+      const rest = mention.externalId.slice('git:'.length);
+      const kind = rest === 'diff' ? 'diff' : rest === 'HEAD' ? 'head' : 'sha';
+      const cwd = sess.worktreePath ?? sess.cwd ?? null;
+      let body: string;
+      if (!cwd) {
+        body = '(git unavailable: session has no working directory)';
+      } else {
+        try {
+          body = await invoke<string>('git_context', {
+            cwd,
+            kind,
+            sha: kind === 'sha' ? rest : null
+          });
+        } catch (e) {
+          body = `(git error: ${e})`;
+        }
+      }
+      mention = { ...mention, body };
+    } else if (mention.source === 'terminal' && mention.externalId.startsWith('web:')) {
+      const url = mention.externalId.slice('web:'.length);
+      if (!url) {
+        // Hint row picked with no URL — nothing to fetch yet.
+        mention = { ...mention, body: '(type a URL: @web:https://…)' };
+      } else {
+        let body: string;
+        try {
+          body = await invoke<string>('fetch_url_md', { url });
+        } catch (e) {
+          body = `(web error: ${e})`;
+        }
+        mention = { ...mention, body };
+      }
+    }
     /* De-dupe by externalId so picking the same mention twice doesn't
        double up the context payload. */
-    const dedupedMentions = sess.mentions.filter(
-      (m) => !(m.source === s.mention.source && m.externalId === s.mention.externalId)
+    const live = sessionsState.list.find((x) => x.id === sessId);
+    const dedupedMentions = (live?.mentions ?? sess.mentions).filter(
+      (m) => !(m.source === mention.source && m.externalId === mention.externalId)
     );
-    updateSession(sess.id, { mentions: [...dedupedMentions, s.mention] });
+    updateSession(sessId, { mentions: [...dedupedMentions, mention] });
     closeMention();
     queueMicrotask(() => {
       if (!ta) return;
@@ -822,11 +862,11 @@
   }
   function setEffort(v: string | null) {
     if (!sess) return;
-    /* Stash effort on the session so future runs include it. We
-       don't have a typed slot yet, so persist on the existing
-       session shape via `updateSession` — schema already takes
-       arbitrary patches. */
-    updateSession(sess.id, { thinkingEffort: v ?? null } as never);
+    // Persist effort on the session; threaded to MAX_THINKING_TOKENS
+    // on the next spawn (see exec/claude.ts → claude_ask).
+    updateSession(sess.id, {
+      thinkingEffort: (v as 'auto' | 'low' | 'medium' | 'high' | 'max' | null) ?? null
+    });
   }
 
   /* fmtPct + pctClass moved to ./composerHelpers.ts. */
@@ -1237,7 +1277,7 @@
                 forceUp={true}
               />
               <Dropdown
-                value={(sess as unknown as { thinkingEffort?: string | null }).thinkingEffort ?? 'auto'}
+                value={sess.thinkingEffort ?? 'auto'}
                 options={claudeEffort}
                 onChange={setEffort}
                 placeholder="effort"

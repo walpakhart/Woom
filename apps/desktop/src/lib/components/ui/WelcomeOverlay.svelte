@@ -399,21 +399,6 @@
                   auto-opens an embedded webview.
                 </p>
               </div>
-              <div class="wo-cap" data-tone="approval">
-                <div class="wo-cap-h">
-                  <span class="wo-cap-icon" aria-hidden="true">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
-                  </span>
-                  <span>Plan mode</span>
-                </div>
-                <p class="wo-cap-p">
-                  <span class="mono">⇧⇥</span> in the composer flips the
-                  agent into read-only mode — no edits or mutating bash
-                  until you flip back. Useful before a big refactor: ask
-                  the agent to plan, review the plan, then approve to
-                  execute.
-                </p>
-              </div>
               <div class="wo-cap" data-tone="memory">
                 <div class="wo-cap-h">
                   <span class="wo-cap-icon" aria-hidden="true">

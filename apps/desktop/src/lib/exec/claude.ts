@@ -51,6 +51,11 @@ export interface AgentRunRequest {
    *  CLI's env so Anthropic routes the turn through their Fast endpoint
    *  (2.5× output speed, 2× cost). Sourced from `sess.fastMode`. */
   fastMode?: boolean;
+  /** Thinking-budget hint (auto/low/medium/high/max) from the composer
+   *  effort dropdown. The backend maps it to `MAX_THINKING_TOKENS` on
+   *  the spawned CLI; `auto`/null leave it unset. Sourced from
+   *  `sess.thinkingEffort`. */
+  thinkingEffort?: string | null;
   /** Called with every assistant-text delta as it streams in. */
   onAssistantDelta: (sessionId: string, delta: string) => void;
   /** Called with `thinking` deltas from reasoning models. Optional —
@@ -128,7 +133,8 @@ export async function runAgentRequest(req: AgentRunRequest): Promise<AgentRunRes
       appContext: req.appContext,
       imagePaths: req.imagePaths ?? [],
       rtkDisabled: req.rtkDisabled ?? false,
-      fastMode: req.fastMode ?? false
+      fastMode: req.fastMode ?? false,
+      thinkingEffort: req.thinkingEffort ?? null
     });
     return { reply: result.reply, sessionUuid: result.session_uuid };
   } finally {
@@ -169,6 +175,9 @@ export interface PrewarmRequest {
   /** Pool-match field — same reasoning as `rtkDisabled`. A prewarmed
    *  non-Fast CLI can't satisfy a Fast `ask` (different env).  */
   fastMode?: boolean;
+  /** Mirror of the eventual `ask`'s `thinkingEffort` so the prewarmed
+   *  CLI spawns with the same `MAX_THINKING_TOKENS` env. */
+  thinkingEffort?: string | null;
 }
 
 /** Pre-spawn a Claude CLI for `sessionId` so the cold-start cost
@@ -189,7 +198,8 @@ export async function prewarmAgent(req: PrewarmRequest): Promise<void> {
       claudeModel: req.claudeModel,
       appContext: req.appContext,
       rtkDisabled: req.rtkDisabled ?? false,
-      fastMode: req.fastMode ?? false
+      fastMode: req.fastMode ?? false,
+      thinkingEffort: req.thinkingEffort ?? null
     });
   } catch {
     // Prewarm is purely an optimization — failing to spawn (binary

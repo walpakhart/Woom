@@ -581,7 +581,10 @@ export function newClaudeSession(
       // Fast mode is opt-in per session. Default off; user toggles
       // via the FAST chip in Composer footer when the active model
       // is Opus 4.8-family. Persisted across reloads.
-      fastMode: false
+      fastMode: false,
+      // Thinking-effort opt-in; null = CLI default budget. Set via the
+      // effort dropdown in Composer footer. Persisted across reloads.
+      thinkingEffort: null
     },
     ...sessionsState.list
   ];
@@ -1144,7 +1147,7 @@ export function appendSessionMessage(id: string, msg: ClaudeMessage) {
  *  send-finally block). */
 export function enqueuePendingActionResult(
   sessionId: string,
-  result: { ok: boolean; kind: 'commit' | 'pr' | 'bash' | 'switch_cwd'; summary: string }
+  result: { ok: boolean; kind: 'commit' | 'pr' | 'bash' | 'switch_cwd' | 'memory'; summary: string }
 ) {
   const sess = sessionsState.list.find((s) => s.id === sessionId);
   if (!sess) return;

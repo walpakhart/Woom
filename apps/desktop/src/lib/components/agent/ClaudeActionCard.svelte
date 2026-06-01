@@ -40,6 +40,14 @@
         status: 'pending' | 'executing' | 'done' | 'error';
         result?: string;
         exitCode?: number;
+      }
+    | {
+        id: string;
+        kind: 'memory';
+        memKind: 'user' | 'feedback' | 'project' | 'reference';
+        content: string;
+        status: 'pending' | 'executing' | 'done' | 'error';
+        result?: string;
       };
 
   interface Props {
@@ -123,6 +131,8 @@
         Claude proposed a pull request
       {:else if action.kind === 'switch_cwd'}
         Claude wants to switch working directory
+      {:else if action.kind === 'memory'}
+        Save this to long-term memory?
       {:else}
         Claude wants to run a command
       {/if}
@@ -196,6 +206,20 @@
           value={action.command}
           oninput={(e) => onUpdate({ command: e.currentTarget.value })}
           disabled={!isEditable}
+        ></textarea>
+      </label>
+    </div>
+  {:else if action.kind === 'memory'}
+    <div class="cac-body">
+      <label class="cac-label">
+        <span>Save to <span class="cac-opt">({action.memKind} memory)</span></span>
+        <textarea
+          class="cac-input cac-textarea"
+          rows="3"
+          value={action.content}
+          oninput={(e) => onUpdate({ content: e.currentTarget.value })}
+          disabled={!isEditable}
+          placeholder="durable preference / feedback to remember"
         ></textarea>
       </label>
     </div>
@@ -286,6 +310,8 @@
           Switch to this path
         {:else if action.kind === 'bash'}
           Run
+        {:else if action.kind === 'memory'}
+          Approve & save
         {:else}
           Create PR
         {/if}

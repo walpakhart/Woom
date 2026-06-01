@@ -14,6 +14,7 @@ import {
 } from '$lib/state/sessions.svelte';
 import { APP_INSTANCE_IDS } from '$lib/state/layout.svelte';
 import { truncInline } from '$lib/format';
+import { refreshAutoMemory } from '$lib/state/autoMemory.svelte';
 import type { ClaudeAction, ClaudeSession } from '$lib/types';
 
 /** Deliver an action outcome to its destination.
@@ -39,7 +40,7 @@ import type { ClaudeAction, ClaudeSession } from '$lib/types';
  *  fixed that; the IPC path supersedes it for the common case. */
 function recordActionOutcome(
   sessionId: string,
-  kind: 'commit' | 'pr' | 'bash' | 'switch_cwd',
+  kind: 'commit' | 'pr' | 'bash' | 'switch_cwd' | 'memory',
   ok: boolean,
   summary: string,
   waitId?: string
@@ -255,6 +256,37 @@ export async function executePr(
  *  for each action kind. `onResolved` fires once the underlying execute
  *  finishes — the page-level continuation logic uses it to auto-resume
  *  the agent's turn with the result. */
+/** Write an approved distilled memory to the local store. The ONLY write
+ *  path for auto-memory capture — reached solely via the card's Approve
+ *  button, never by the distill turn itself (never silent). */
+export async function executeMemory(
+  sessionId: string,
+  actionId: string,
+  onResolved?: ActionResolvedCallback
+): Promise<void> {
+  const sess = sessionsState.list.find((x) => x.id === sessionId);
+  const action = sess?.actions.find((a) => a.id === actionId && a.kind === 'memory');
+  if (!sess || !action || action.kind !== 'memory') return;
+  updateAction(sessionId, actionId, { status: 'executing' });
+  try {
+    await invoke<number>('memory_save_local', {
+      content: action.content,
+      kind: action.memKind,
+      tags: ['auto-distill'],
+    });
+    await refreshAutoMemory();
+    updateAction(sessionId, actionId, { status: 'done', result: `Saved to ${action.memKind} memory` });
+    const summary = `Saved ${action.memKind} memory: ${truncInline(action.content, 120)}`;
+    recordActionOutcome(sessionId, 'memory', true, summary, action.waitId);
+    onResolved?.(sessionId, action, { ok: true, summary });
+    setTimeout(() => removeAction(sessionId, actionId), 4000);
+  } catch (e) {
+    const msg = asMessage(e);
+    updateAction(sessionId, actionId, { status: 'error', result: msg });
+    onResolved?.(sessionId, action, { ok: false, summary: `memory save failed: ${msg}` });
+  }
+}
+
 export function dispatchAction(
   sessionId: string,
   action: ClaudeAction,
@@ -264,4 +296,5 @@ export function dispatchAction(
   else if (action.kind === 'pr') void executePr(sessionId, action.id, onResolved);
   else if (action.kind === 'switch_cwd') void executeSwitchCwd(sessionId, action.id, onResolved);
   else if (action.kind === 'bash') void executeBash(sessionId, action.id, onResolved);
+  else if (action.kind === 'memory') void executeMemory(sessionId, action.id, onResolved);
 }

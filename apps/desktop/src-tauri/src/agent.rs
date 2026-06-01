@@ -102,6 +102,7 @@ pub async fn ask(
     image_paths: &[String],
     rtk_disabled: bool,
     fast_mode: bool,
+    thinking_effort: Option<&str>,
 ) -> Result<AgentAskResult, AgentError> {
     match kind {
         AgentKind::Claude => {
@@ -121,6 +122,7 @@ pub async fn ask(
                 image_paths,
                 rtk_disabled,
                 fast_mode,
+                thinking_effort,
             )
             .await?;
             // Claude reuses whatever UUID we handed it, so no change.

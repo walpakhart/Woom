@@ -37,6 +37,7 @@
     isClickNotDrag: (e: MouseEvent) => boolean;
     onSendToClaude: (item: InboxItem) => void;
     onSendToCursor: (item: InboxItem) => void;
+    onFixWithDw: (item: InboxItem) => void;
   }
   let p: Props = $props();
 </script>
@@ -68,6 +69,7 @@
         isClickNotDrag={p.isClickNotDrag}
         onSendToClaude={p.onSendToClaude}
         onSendToCursor={p.onSendToCursor}
+        onFixWithDw={p.onFixWithDw}
       />
     {/snippet}
     {#snippet end()}

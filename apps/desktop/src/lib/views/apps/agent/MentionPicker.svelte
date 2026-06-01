@@ -24,7 +24,7 @@
     /** Mention payload appended to `session.mentions`. */
     mention: Mention;
     /** Bucket label shown as a section header. */
-    section: 'Files' | 'Jira' | 'GitHub' | 'Sentry' | 'Sessions';
+    section: 'Files' | 'Jira' | 'GitHub' | 'Sentry' | 'Sessions' | 'Git' | 'Web';
     /** Brand-tinted dot color for the row icon. */
     tone: string;
     /** Short title shown on the row. */
@@ -340,6 +340,81 @@
     }));
   });
 
+  /* Git context mentions. `@git:diff` (uncommitted vs HEAD), `@git:HEAD`,
+     and `@git:<sha>` when the query carries a hex sha. The body is fetched
+     lazily by the composer's pick handler (invoke `git_context`) — these
+     rows only carry the externalId the handler parses kind/sha from. */
+  const gitBucket = $derived.by((): Suggestion[] => {
+    const rows: Suggestion[] = [
+      {
+        display: '@git:diff ',
+        mention: { source: 'terminal', externalId: 'git:diff', title: 'git diff (uncommitted)', body: null } as Mention,
+        section: 'Git' as const,
+        tone: 'var(--src-claude)',
+        title: 'git diff (uncommitted)',
+        sub: 'git:diff'
+      },
+      {
+        display: '@git:HEAD ',
+        mention: { source: 'terminal', externalId: 'git:HEAD', title: 'git show HEAD', body: null } as Mention,
+        section: 'Git' as const,
+        tone: 'var(--src-claude)',
+        title: 'git show HEAD',
+        sub: 'git:HEAD'
+      }
+    ];
+    const m = (p.query || '').trim().match(/^git:([0-9a-f]{4,40})$/i);
+    if (m && m[1].toLowerCase() !== 'diff' && m[1].toLowerCase() !== 'head') {
+      const sha = m[1];
+      rows.push({
+        display: '@git:' + sha + ' ',
+        mention: { source: 'terminal', externalId: 'git:' + sha, title: 'git show ' + sha, body: null } as Mention,
+        section: 'Git' as const,
+        tone: 'var(--src-claude)',
+        title: 'git show ' + sha,
+        sub: 'git:' + sha
+      });
+    }
+    return rows;
+  });
+
+  /* Web fetch mention. `@web:<url>` fetches the page (read-only) and
+     attaches readable markdown as the mention body — body is filled lazily
+     by the composer's pick handler (invoke `fetch_url_md`). A bare `web`
+     query shows a hint row so the section appears while typing. */
+  const webBucket = $derived.by((): Suggestion[] => {
+    const q = (p.query || '').trim();
+    const m = q.match(/^web:(\S+)$/i);
+    if (m) {
+      const url = m[1];
+      let host = url;
+      try { host = new URL(url).host || url; } catch { /* keep raw */ }
+      return [
+        {
+          display: '@web:' + url + ' ',
+          mention: { source: 'terminal', externalId: 'web:' + url, title: host, body: null } as Mention,
+          section: 'Web' as const,
+          tone: 'var(--src-claude)',
+          title: host,
+          sub: 'web:' + url
+        }
+      ];
+    }
+    if (/^web:?$/i.test(q)) {
+      return [
+        {
+          display: '@web:',
+          mention: { source: 'terminal', externalId: 'web:', title: 'web fetch', body: null } as Mention,
+          section: 'Web' as const,
+          tone: 'var(--src-claude)',
+          title: 'Fetch a URL — type @web:<url>',
+          sub: 'web:'
+        }
+      ];
+    }
+    return [];
+  });
+
   /** All suggestions, filtered + ranked by query. Empty query shows
    *  the first few from each bucket. Ranking: exact-prefix on title
    *  or sub > substring match. We keep the section ordering stable
@@ -351,6 +426,8 @@
        then sessions last (cross-chat references are rare). */
     const all = [
       ...filesBucket,
+      ...gitBucket,
+      ...webBucket,
       ...jiraBucket,
       ...githubBucket,
       ...sentryBucket,

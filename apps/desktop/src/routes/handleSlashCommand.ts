@@ -232,6 +232,10 @@ export async function handleSlashCommand(
   } else if (cmd === 'unloop') {
     await stopLoopFromSlash(session);
     void deps.scrollChatBottom();
+  } else if (cmd === 'remember') {
+    const { distillMemories } = await import('$lib/services/distillMemory');
+    await distillMemories(session);
+    void deps.scrollChatBottom();
   } else if (cmd === 'preview') {
     /* `/preview` with no args — just open the pane. The Composer
      * inside PreviewPane handles spawn. We rely on the AgentApp's
@@ -254,7 +258,7 @@ export async function handleSlashCommand(
  *  and appends an assistant message carrying `dwWorkflowId` — ChatThread
  *  renders <DynamicWorkflowCard> after that message. On cancel drops
  *  the workflow from state (server-side will GC the orphan entry). */
-async function runDwFromSlash(
+export async function runDwFromSlash(
   session: ClaudeSession,
   userPrompt: string,
   deps: SlashCommandDeps,

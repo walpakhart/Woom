@@ -311,6 +311,8 @@ export function createSendClaudeMessage(deps: SendClaudeMessageDeps) {
           // Fast mode — Opus 4.8 only. Backend gates on model id, so
           // sending fastMode=true on a non-Opus-4.8 model is a no-op.
           fastMode: sess?.fastMode === true,
+          // Thinking-effort dropdown → MAX_THINKING_TOKENS on spawn.
+          thinkingEffort: sess?.thinkingEffort ?? null,
           onAssistantDelta: deps.appendAssistantDelta,
           onAppNavigation: deps.handleAppNavigation,
         });
@@ -337,6 +339,15 @@ export function createSendClaudeMessage(deps: SendClaudeMessageDeps) {
         const stillPending = sessAfter?.actions.some((a) => a.status === 'pending') ?? false;
         if (stillPending) patch.awaitingApproval = true;
         updateSession(id, patch);
+        // Per-turn shadow checkpoint on the session worktree (branch-local,
+        // never touches the user's real branch). Fire-and-forget; empty
+        // turns are skipped backend-side.
+        if (sessAfter?.worktreePath) {
+          void invoke('worktree_checkpoint', {
+            worktreePath: sessAfter.worktreePath,
+            label: text.slice(0, 60),
+          }).catch(() => {});
+        }
       } catch (e) {
         const msg = typeof e === 'string' ? e : String(e);
         const cancelled = msg.toLowerCase().includes('cancelled');

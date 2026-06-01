@@ -283,6 +283,18 @@ export type ClaudeAction =
       other?: string;
       result?: string;
       waitId?: string;
+    }
+  | {
+      id: string;
+      kind: 'memory';
+      /** Memory bucket the distilled entry is saved under. */
+      memKind: 'user' | 'feedback' | 'project' | 'reference';
+      /** The durable pref/feedback text the distill turn proposed. Written
+       *  to the local memory store ONLY when the user approves the card. */
+      content: string;
+      status: 'pending' | 'executing' | 'done' | 'error';
+      result?: string;
+      waitId?: string;
     };
 
 export type ClaudeSession = {
@@ -353,14 +365,6 @@ export type ClaudeSession = {
       keeps continuity for the user without permanently inflating prompts.
       Cleared after the next turn ships. */
   cwdSwitchRecap: string | null;
-  /** Permission mode for the next turn (Claude Code parity §4). `plan`
-   *  tells the agent it may only read/inspect — no edits, no mutating
-   *  bash. `default` is the normal mode. Cycle via Shift+Tab in the
-   *  composer. The mode is appended to the system-prompt suffix so the
-   *  agent gates its own tool choice; we don't (yet) own tool dispatch
-   *  to enforce hard. Persisted per-session so a "plan mode" session
-   *  stays in plan after a window close. */
-  permissionMode?: 'default' | 'plan';
   /** Whether the RTK output-compression hook is active for this
    *  session. When false, the spawned `claude` CLI gets
    *  `WOOM_RTK_SESSION_DISABLED=1` in its environment so the
@@ -374,6 +378,10 @@ export type ClaudeSession = {
    *  Anthropic's dedicated endpoint. Default `false` (standard
    *  pricing + speed). Persisted across reloads. */
   fastMode?: boolean;
+  /** Thinking-budget hint from the composer effort dropdown. Maps to
+   *  `MAX_THINKING_TOKENS` on the spawned CLI (`auto`/null → unset =
+   *  CLI default). Persisted across reloads. */
+  thinkingEffort?: 'auto' | 'low' | 'medium' | 'high' | 'max' | null;
   /** Quota guard (Phase 2). When the 5H/7D quota tripped during an
    *  in-flight turn OR the user explicitly chose «wait» in the
    *  pre-send modal, this flag is set; `resumeAt` carries the unix-ms
@@ -458,7 +466,7 @@ export type PendingActionResult = {
   /** The action kind — used to label outcomes in the agent's prompt
       block ("commit: …", "bash: …") so the agent doesn't have to
       infer kind from prose. */
-  kind: 'commit' | 'pr' | 'bash' | 'switch_cwd';
+  kind: 'commit' | 'pr' | 'bash' | 'switch_cwd' | 'memory';
   /** Multi-line summary as built by the executor. Includes commit
       message + sha + push diagnostics, or bash command + stdout/
       stderr + exit code, or PR title + URL, etc. Free-form prose

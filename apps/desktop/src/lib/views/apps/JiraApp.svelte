@@ -28,6 +28,7 @@
     refreshAllJiraInboxes: (opts?: { silent?: boolean }) => Promise<void>;
     onSendToClaude: (item: JiraItem) => void;
     onSendToCursor: (item: JiraItem) => void;
+    onFixWithDw: (item: JiraItem) => void;
   }
   let p: Props = $props();
 </script>
@@ -58,6 +59,7 @@
         isClickNotDrag={p.isClickNotDrag}
         onSendToClaude={p.onSendToClaude}
         onSendToCursor={p.onSendToCursor}
+        onFixWithDw={p.onFixWithDw}
       />
     {/snippet}
     {#snippet end()}

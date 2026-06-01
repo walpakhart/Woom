@@ -56,6 +56,7 @@ mod terminal;
 mod terminal_bridge;
 mod updater;
 mod watch;
+mod web;
 mod worktree;
 
 use agent::{AgentAskResult, AgentKind, AgentStatus};
@@ -627,6 +628,11 @@ pub fn run() {
             worktree_cleanup_orphans,
             worktree_diff,
             worktree_apply,
+            worktree_checkpoint,
+            worktree_list_checkpoints,
+            worktree_restore,
+            git_context,
+            fetch_url_md,
             biometric_unlock,
             crash_reporting::get_telemetry_opt_out,
             crash_reporting::set_telemetry_opt_out,
@@ -1024,12 +1030,16 @@ async fn claude_ask(
     // from `sess.fastMode`. Backend env-set inside spawn_claude_armed
     // only fires when an Opus-4.8 family model is selected.
     #[allow(non_snake_case)] fastMode: Option<bool>,
+    // Thinking-effort hint (auto/low/medium/high/max) from the composer
+    // dropdown. Threaded to spawn_claude_armed → MAX_THINKING_TOKENS env.
+    #[allow(non_snake_case)] thinkingEffort: Option<String>,
 ) -> Result<AgentAskResult, String> {
     let cwd_path = cwd.as_deref().map(std::path::Path::new);
     let kind = agentKind.unwrap_or_default();
     let images = imagePaths.unwrap_or_default();
     let rtk_disabled = rtkDisabled.unwrap_or(false);
     let fast_mode = fastMode.unwrap_or(false);
+    let thinking_effort = thinkingEffort;
     let ipc_socket = ipc.inner().socket_path().to_path_buf();
     let result = agent::ask(
         kind,
@@ -1049,6 +1059,7 @@ async fn claude_ask(
         &images,
         rtk_disabled,
         fast_mode,
+        thinking_effort.as_deref(),
     )
     .await;
     // Tag resume-orphan with a stable prefix on the wire so the frontend
@@ -1084,6 +1095,7 @@ async fn claude_prewarm(
     // signature includes Fast so a non-Fast prewarm doesn't get
     // re-used by a Fast `ask` (and vice versa).
     #[allow(non_snake_case)] fastMode: Option<bool>,
+    #[allow(non_snake_case)] thinkingEffort: Option<String>,
 ) -> Result<(), String> {
     // Cursor CLI takes its prompt as a positional arg, so we have to
     // know the prompt at spawn time — pre-warming cursor-agent would
@@ -1106,6 +1118,7 @@ async fn claude_prewarm(
         Some(ipc_socket.as_path()),
         rtkDisabled.unwrap_or(false),
         fastMode.unwrap_or(false),
+        thinkingEffort.as_deref(),
     )
     .await
     .map_err(|e| e.to_string())
@@ -1984,6 +1997,35 @@ fn worktree_diff(
 #[tauri::command]
 fn worktree_apply(repo: String, session_id: String) -> Result<String, String> {
     worktree::apply(&repo, &session_id)
+}
+
+/// Read-only git context for an `@git` mention (diff / HEAD / <sha>).
+#[tauri::command]
+fn git_context(cwd: String, kind: String, sha: Option<String>) -> Result<String, String> {
+    worktree::git_context(&cwd, &kind, sha.as_deref())
+}
+
+/// Fetch a URL (http/https) and return readable markdown for an `@web:` mention.
+#[tauri::command]
+async fn fetch_url_md(url: String) -> Result<String, String> {
+    web::fetch_markdown(&url).await
+}
+
+/// Per-turn shadow checkpoint on the session worktree's woom branch.
+#[tauri::command]
+fn worktree_checkpoint(worktree_path: String, label: String) -> Result<Option<String>, String> {
+    worktree::checkpoint(&worktree_path, &label)
+}
+
+#[tauri::command]
+fn worktree_list_checkpoints(worktree_path: String) -> Vec<worktree::Checkpoint> {
+    worktree::list_checkpoints(&worktree_path)
+}
+
+/// Reset the worktree to a checkpoint (scoped to the worktree / woom branch).
+#[tauri::command]
+fn worktree_restore(worktree_path: String, sha: String) -> Result<(), String> {
+    worktree::restore(&worktree_path, &sha)
 }
 
 #[tauri::command]

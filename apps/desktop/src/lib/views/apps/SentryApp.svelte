@@ -22,6 +22,7 @@
     isClickNotDrag: (e: MouseEvent) => boolean;
     onSendToClaude: (item: SentryIssue) => void;
     onSendToCursor: (item: SentryIssue) => void;
+    onFixWithDw: (item: SentryIssue) => void;
   }
   let p: Props = $props();
 </script>
@@ -50,6 +51,7 @@
         isClickNotDrag={p.isClickNotDrag}
         onSendToClaude={p.onSendToClaude}
         onSendToCursor={p.onSendToCursor}
+        onFixWithDw={p.onFixWithDw}
       />
     {/snippet}
     {#snippet end()}

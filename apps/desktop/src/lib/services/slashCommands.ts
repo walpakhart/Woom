@@ -34,7 +34,8 @@ export type SlashCommand =
   | 'loop'
   | 'unloop'
   | 'sdd'
-  | 'dw';
+  | 'dw'
+  | 'remember';
 
 export const KNOWN_SLASH_COMMANDS: SlashCommand[] = [
   'compact',
@@ -47,7 +48,8 @@ export const KNOWN_SLASH_COMMANDS: SlashCommand[] = [
   'loop',
   'unloop',
   'sdd',
-  'dw'
+  'dw',
+  'remember'
 ];
 
 /** Commands that accept inline arguments after the slash (`/preview pnpm dev`).
@@ -70,7 +72,8 @@ export const SLASH_COMMAND_DESCRIPTIONS: Record<SlashCommand, string> = {
   loop:    'Re-send a prompt on a fixed cadence: /loop 5m check the deploy',
   unloop:  'Stop the active loop on this chat',
   sdd:     'Spec-Driven Development — agent writes spec/plan/phases into a temp workspace',
-  dw:      'Dynamic Workflow — planner → parallel subagent fan-out → verifier synthesis'
+  dw:      'Dynamic Workflow — planner → parallel subagent fan-out → verifier synthesis',
+  remember: 'Distill durable prefs/feedback from this chat into memory-save cards'
 };
 
 /** Parse a composer message; returns the matched command or null.
