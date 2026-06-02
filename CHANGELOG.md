@@ -8,6 +8,50 @@ release runbook (how this CHANGELOG feeds `latest-mac.json`) lives in
 
 ## Unreleased
 
+## 0.3.0 — 2026-06-02
+
+Bumps version 0.2.27 → 0.3.0 across `apps/desktop/package.json`,
+`apps/desktop/src-tauri/Cargo.toml`, `apps/desktop/src-tauri/tauri.conf.json`,
+`apps/desktop/src-tauri/Cargo.lock`. CHANGELOG entry added for 0.3.0.
+
+**Inline agentic editing** — the 0.3.0 anchor. The built-in editor
+becomes the place where agent edits land *and* get reviewed, so the
+separate Cursor solo is no longer needed for tight inline accept/reject.
+
+### Added
+
+- **Live buffer sync** — when the linked agent edits the file you have
+  open, the buffer now reloads from disk live (cursor + scroll preserved
+  via the existing `recordCursor` store) instead of going stale until a
+  manual reopen. Unsaved manual edits are never clobbered: a dirty buffer
+  sets an `agentEditPendingReload` flag and skips the auto-reload, and
+  the editor's own autosave echo is deduped against `savedContents`
+  (`Editor.svelte`).
+- **Inline diff overlay** — pending agent edits for the open file render
+  directly in the buffer: added/modified lines get a green line wash,
+  removed lines a struck-through ghost block widget anchored where they
+  used to be. Built on a new line-level LCS diff (`computeHunks`) and a
+  CodeMirror decoration field, sibling to the git change-bar and hand-
+  rolled like `DiffView` (no `@codemirror/merge`). New
+  `inlineHunks.ts` + 15 unit tests; wired through `EditorView` from the
+  same source as the file-level review banner.
+- **Hunk-level accept / reject** — resolve each hunk from the keyboard:
+  **Tab** accepts (content already on disk, overlay clears), **Esc**
+  rejects (that hunk's lines splice back to the pre-edit text and save to
+  disk). A `Prec.highest` keymap scopes the keys to the hunk under the
+  caret and falls through to normal indent / close-search otherwise.
+  Resolutions persist across recomputes and agent turns (non-blocking);
+  once an edit's hunks are all resolved its `EditEvent` flips to `kept`
+  or `reverted`, keeping the chat-side review in sync.
+
+### Known limitations
+
+- Rejecting one hunk of a *multi-hunk* edit can shift the remaining
+  hunks' line numbers (single-hunk and accept-all are exact) — deferred
+  to a 0.3.x pass alongside cross-hunk navigation and retiring the Cursor
+  solo. The `agentEditPendingReload` dirty-buffer guard is wired but not
+  yet surfaced in the UI.
+
 ## 0.2.27 — 2026-06-02
 
 Bumps version 0.2.26 → 0.2.27 across `apps/desktop/package.json`,

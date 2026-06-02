@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
   import { EditorView, basicSetup } from 'codemirror';
-  import { EditorState, Compartment } from '@codemirror/state';
+  import { EditorState, Compartment, Prec } from '@codemirror/state';
   import { keymap } from '@codemirror/view';
   import { invoke } from '@tauri-apps/api/core';
   import { languageFor } from '$lib/components/editor/codemirrorLang';
@@ -15,6 +15,15 @@
     parseUnifiedDiffToLineChanges,
     type LineChanges
   } from '$lib/components/editor/changeBar';
+  import {
+    inlineHunksExtension,
+    setHunks,
+    computeHunks,
+    hunkAtLine,
+    buildHunkRevert,
+    type Hunk
+  } from '$lib/components/editor/inlineHunks';
+  import { updateEditEvent } from '$lib/state/sessions.svelte';
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 
   interface Props {
@@ -78,6 +87,11 @@
      *  left-gutter change bar (HEAD vs worktree). Empty / non-git
      *  → no gutter. */
     repoPath?: string;
+    /** Pending agent edits for THIS file (already filtered to the active
+     *  path by EditorView). Each carries the full-file `oldText`/`newText`;
+     *  we diff them into hunks and render an inline overlay (adds
+     *  highlighted, deletes ghosted). Empty / omitted → no overlay. */
+    pendingEdits?: { sessionId: string; toolId: string; oldText: string; newText: string }[];
   }
   let {
     path,
@@ -88,7 +102,8 @@
     onCursorChange,
     wordWrap = false,
     onTextChange,
-    repoPath = ''
+    repoPath = '',
+    pendingEdits = []
   }: Props = $props();
 
   let editorEl: HTMLDivElement;
@@ -98,6 +113,31 @@
   let loading = $state(false);
   let error = $state<string | null>(null);
   let dirty = $state(false);
+  /* Set when the linked agent edited the open file while the buffer had
+     unsaved manual edits. We deliberately do NOT auto-reload in that case
+     (the user's in-progress text wins — see spec open-q (c)); this flag
+     lets a later phase surface a "reload / keep mine" affordance. */
+  let agentEditPendingReload = $state(false);
+  /* Bumped every time a fresh EditorView is created (initial load + each
+     reload). The inline-hunk recompute $effect reads it so the overlay is
+     re-dispatched after the view is torn down + rebuilt (e.g. P1 reload),
+     not just when `pendingEdits` changes. */
+  let viewVersion = $state(0);
+
+  /* P3 hunk resolution. resolvedHunkIds persists accept/reject decisions
+     across recomputes (hunk ids are stable for a given edit), so a resolved
+     hunk stays gone even though computeHunks would re-derive it. The version
+     counter drives the recompute $effect since the Set isn't reactive. The
+     owner maps (rebuilt each $effect run) let a hunk reach its EditEvent. */
+  const resolvedHunkIds = new Set<string>();
+  let resolvedVersion = $state(0);
+  let currentHunks: Hunk[] = [];
+  let hunkOwners = new Map<string, { sessionId: string; toolId: string }>();
+  let editHunkIds = new Map<string, string[]>();
+  const perEditRejects = new Map<string, number>();
+  /* The file `resolvedHunkIds` belongs to — cleared only on a genuine file
+     switch, NOT on a same-file reload() (which blanks lastLoadedPath). */
+  let resolvedForPath = '';
 
   /* Autosave: write dirty buffers to disk after a short idle window.
      600 ms feels right — long enough to avoid mid-token saves under
@@ -128,6 +168,15 @@
       lastLoadedPath = p;
       dirty = false;
       onDirty?.(false);
+
+      /* Genuine file switch (not a same-file reload) → drop prior hunk
+         resolutions; they belong to the file we're leaving. */
+      if (p !== resolvedForPath) {
+        resolvedHunkIds.clear();
+        perEditRejects.clear();
+        resolvedForPath = p;
+        resolvedVersion++;
+      }
 
       /* Persist the previous file's cursor before swapping to the
        * new file's. Without this, the user's last position in
@@ -183,6 +232,17 @@
             languageCompartment.of(languageFor(p)),
             wrapCompartment.of(wordWrap ? EditorView.lineWrapping : []),
             changeBarExtension(),
+            inlineHunksExtension(),
+            // Scoped hunk resolution: Tab=accept / Esc=reject the hunk under
+            // the caret. Prec.highest inspects them first, but each handler
+            // returns false (falls through to indent / close-search) when
+            // the caret isn't in a pending hunk.
+            Prec.highest(
+              keymap.of([
+                { key: 'Tab', run: acceptFocusedHunk },
+                { key: 'Escape', run: rejectFocusedHunk }
+              ])
+            ),
             keymap.of([
               { key: 'Mod-s', run: (v) => { void save(v); return true; } }
             ]),
@@ -283,6 +343,8 @@
           ]
         })
       });
+      // Signal the inline-hunk recompute $effect that a fresh view exists.
+      viewVersion++;
       /* Restore scroll position after CodeMirror has measured. The
        * raf-then-microtask dance avoids a flicker where the editor
        * mounts at scrollTop=0 then jumps; we delay the restore until
@@ -358,10 +420,44 @@
     }, AUTOSAVE_MS);
   }
 
+  /** Loose path equality for matching `fs:changed` payloads against the
+   *  open buffer. The watcher and the `path` prop are both absolute on
+   *  macOS; we normalise trailing slashes + collapse the rare duplicate
+   *  separator so a cosmetic difference doesn't miss a real match. */
+  function pathsEqual(a: string, b: string): boolean {
+    if (!a || !b) return false;
+    const norm = (p: string) => p.trim().replace(/\/+/g, '/').replace(/\/$/, '');
+    return norm(a) === norm(b);
+  }
+
   let watchUnlisten: UnlistenFn | null = null;
   onMount(async () => {
-    watchUnlisten = await listen<{ path: string }>('fs:changed', () => {
+    watchUnlisten = await listen<{ path: string }>('fs:changed', (e) => {
+      // Always refresh the git change-bar (cheap, covers sibling writes).
       scheduleChangeBar();
+
+      // Live buffer sync: only when the change is THIS open file.
+      const changed = e.payload?.path;
+      if (!changed || loading || !pathsEqual(changed, lastLoadedPath)) return;
+
+      // Unsaved manual edits win — never clobber them on an agent write.
+      if (dirty) {
+        agentEditPendingReload = true;
+        return;
+      }
+
+      // Echo-dedupe: our own autosave fires fs:changed too. Re-read and
+      // only reload when disk actually diverged from what we last saved,
+      // so a self-write is a no-op (no view-recreate flicker).
+      void (async () => {
+        try {
+          const onDisk = await invoke<string>('fs_read_file', { path: changed });
+          if (onDisk !== savedContents) await reloadFromDisk();
+        } catch {
+          /* Read failed (file vanished / perms) — leave the buffer as-is;
+             the change-bar refresh above already reflects git state. */
+        }
+      })();
     });
   });
 
@@ -374,6 +470,95 @@
     lastLoadedPath = '';
     await load(prev || path);
     if (wasFocused) view?.focus();
+  }
+
+  /** Reload the buffer from disk and clear the pending-reload flag.
+   *  Thin alias over `reload()` with a stable name later phases call
+   *  after a hunk-reject re-writes the file. Cursor + scroll round-trip
+   *  through the `recordCursor` store, so position is preserved. */
+  export async function reloadFromDisk() {
+    await reload();
+    agentEditPendingReload = false;
+  }
+
+  /* Recompute the inline-hunk overlay whenever the pending agent edits for
+     this file change OR a fresh view is created (viewVersion). Diffs each
+     edit's full-file oldText→newText into hunks and dispatches them.
+     NOTE: stacked edits are diffed independently against their own
+     old/new, so line numbers can drift when several edits target the same
+     file before review — single-edit (the common case) is exact;
+     multi-edit refinement is deferred (P4). */
+  $effect(() => {
+    // Track dependencies explicitly.
+    const edits = pendingEdits;
+    void viewVersion;
+    void resolvedVersion;
+    if (!view) return;
+    const owners = new Map<string, { sessionId: string; toolId: string }>();
+    const byEdit = new Map<string, string[]>();
+    const merged: Hunk[] = [];
+    for (const e of edits) {
+      if (e.oldText == null || e.newText == null) continue;
+      const key = `${e.sessionId}:${e.toolId}`;
+      const ids: string[] = [];
+      for (const h of computeHunks(e.oldText, e.newText)) {
+        ids.push(h.id);
+        owners.set(h.id, { sessionId: e.sessionId, toolId: e.toolId });
+        if (!resolvedHunkIds.has(h.id)) merged.push(h);
+      }
+      byEdit.set(key, ids);
+    }
+    hunkOwners = owners;
+    editHunkIds = byEdit;
+    currentHunks = merged;
+    view.dispatch({ effects: setHunks.of(merged) });
+  });
+
+  /* Finalise a hunk's resolution: drop it from the live set, and once
+     every hunk of its owning edit is resolved, flip the EditEvent's status
+     so the chat-side review (ReviewPane / EditDiffCard) agrees. All-reject
+     → 'reverted'; any accept in the mix → 'kept' (reviewed). */
+  function resolveHunk(h: Hunk, kind: 'accept' | 'reject') {
+    resolvedHunkIds.add(h.id);
+    const owner = hunkOwners.get(h.id);
+    if (owner) {
+      const key = `${owner.sessionId}:${owner.toolId}`;
+      if (kind === 'reject') perEditRejects.set(key, (perEditRejects.get(key) ?? 0) + 1);
+      const ids = editHunkIds.get(key) ?? [];
+      if (ids.length > 0 && ids.every((id) => resolvedHunkIds.has(id))) {
+        const rejects = perEditRejects.get(key) ?? 0;
+        updateEditEvent(owner.sessionId, owner.toolId, {
+          status: rejects === ids.length ? 'reverted' : 'kept'
+        });
+      }
+    }
+    resolvedVersion++; // re-runs the recompute $effect → redraws overlay
+  }
+
+  /** Tab: accept the hunk under the caret (content already on disk — just
+   *  clear it). Returns false when the caret isn't in a hunk so Tab keeps
+   *  its default (indent / fall-through). */
+  function acceptFocusedHunk(v: EditorView): boolean {
+    const line = v.state.doc.lineAt(v.state.selection.main.head).number;
+    const h = hunkAtLine(currentHunks, line);
+    if (!h) return false;
+    resolveHunk(h, 'accept');
+    return true;
+  }
+
+  /** Esc: reject the hunk under the caret — splice its lines back to the
+   *  pre-edit text in the buffer, persist to disk, clear it. Returns false
+   *  when the caret isn't in a hunk so Esc keeps its default (close
+   *  search / autocomplete). */
+  function rejectFocusedHunk(v: EditorView): boolean {
+    const line = v.state.doc.lineAt(v.state.selection.main.head).number;
+    const h = hunkAtLine(currentHunks, line);
+    if (!h) return false;
+    const change = buildHunkRevert(v.state.doc, h);
+    v.dispatch({ changes: change });
+    void save(v);
+    resolveHunk(h, 'reject');
+    return true;
   }
 
   export async function saveNow() {
@@ -536,6 +721,28 @@
     border-right: 4px solid transparent;
     border-top: 5px solid #e88264;
     margin-left: -2.5px;
+  }
+  /* Inline agentic-edit overlay (sibling to the change bar above).
+     Added/modified lines get a soft green wash across the full line;
+     removed lines render as a ghost block (struck-through, red-tinted)
+     anchored where they used to be. Tones echo the change-bar palette. */
+  .ed-surface :global(.cm-inline-hunk--add) {
+    background: rgba(111, 174, 136, 0.16);
+  }
+  .ed-surface :global(.cm-inline-hunk--del) {
+    background: rgba(232, 130, 100, 0.12);
+    border-left: 2px solid rgba(232, 130, 100, 0.55);
+    padding: 0 0 0 6px;
+    margin: 0;
+    font-family: inherit;
+    font-size: 13px;
+    white-space: pre-wrap;
+  }
+  .ed-surface :global(.cm-inline-hunk--del-line) {
+    color: var(--text-2);
+    text-decoration: line-through;
+    text-decoration-color: rgba(232, 130, 100, 0.7);
+    opacity: 0.85;
   }
   .ed-error {
     padding: 8px 14px;

@@ -545,6 +545,18 @@
     return out;
   });
 
+  /** Just the EditEvents for the active file — fed to <Editor> so it can
+   *  diff each into inline hunks. Derived from the same source as the
+   *  review banner so the inline overlay and the banner never disagree. */
+  const pendingEditEventsForEditor = $derived(
+    pendingEditsForActiveFile.map((p) => ({
+      sessionId: p.sessionId,
+      toolId: p.event.toolId,
+      oldText: p.event.oldText,
+      newText: p.event.newText
+    }))
+  );
+
   /** Aggregate label for the banner — "2 from Claude" /
    *  "3 (Claude · Cursor)". Hand-built rather than via a join because
    *  the user reads "from <agent>" as a hint for "whose changes am
@@ -1314,6 +1326,7 @@
                           {wordWrap}
                           {onDirty}
                           repoPath={repoPath ?? ''}
+                          pendingEdits={pendingEditEventsForEditor}
                           onSaved={onFileSaved}
                           onSelectionChange={(sel) => (selection = sel)}
                           onCursorChange={(info) => (cursorInfo = info)}
@@ -1337,6 +1350,7 @@
                       {wordWrap}
                       {onDirty}
                       repoPath={repoPath ?? ''}
+                      pendingEdits={pendingEditEventsForEditor}
                       onSaved={onFileSaved}
                       onSelectionChange={(sel) => (selection = sel)}
                       onCursorChange={(info) => (cursorInfo = info)}
@@ -1352,6 +1366,7 @@
                     {wordWrap}
                     {onDirty}
                     repoPath={repoPath ?? ''}
+                    pendingEdits={pendingEditEventsForEditor}
                     onSaved={onFileSaved}
                     onSelectionChange={(sel) => (selection = sel)}
                     onCursorChange={(info) => (cursorInfo = info)}
