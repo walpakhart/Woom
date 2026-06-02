@@ -76,8 +76,11 @@ export async function distillMemories(session: ClaudeSession): Promise<number> {
       appContext: null,
       imagePaths: [],
       rtkDisabled: session.rtkEnabled === false,
-      fastMode: session.fastMode === true,
-      thinkingEffort: session.thinkingEffort ?? null,
+      // Hidden background turn — never inherit the session's interactive
+      // FAST/thinking knobs. FAST would double the cost of a turn nobody
+      // watches; a thinking budget is wasted on strict-JSON extraction.
+      fastMode: false,
+      thinkingEffort: null,
       // Hidden turn — swallow stream deltas, don't touch the visible thread.
       onAssistantDelta: () => {},
     });

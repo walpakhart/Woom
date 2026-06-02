@@ -1,12 +1,18 @@
 // Per-turn system-prompt suffix builder for Claude / Cursor agent runs.
 // Pure function over `layoutState` + `sessionsState`. No DOM, no events.
 //
-// Ordering rule (matters for prompt-cache): everything static lives at
-// the top, the variable solo-layout block comes LAST. Claude's cache
-// keys off a prefix, so a stable header + tool guide on top means the
-// kilobytes of instructions get cached across turns and only the
-// trailing layout snapshot is fresh on each call. Same logic applies
-// to cursor-agent's backend caching.
+// Prompt-cache rule: this builder returns TWO strings.
+//   `system` — stable across turns (header, nav guide, discipline
+//      blocks, gated SDD section, auto-memory, CLAUDE.md). The caller
+//      passes it as `--append-system-prompt`, so it caches as a byte-
+//      stable prefix and the whole conversation reads from cache.
+//   `turn` — volatile every turn (solo-layout snapshot, one-shot
+//      cwd recap, canvas summary). The caller appends it to the USER
+//      MESSAGE. It used to live at the tail of the system prompt,
+//      which broke the cache prefix whenever the layout changed and
+//      forced the entire conversation to re-write at cache-write rate
+//      (measured ~$15–47 wasted on a heavy session). In the user
+//      message it's fresh content either way, so zero cache loss.
 
 import { layoutState, APP_INSTANCE_IDS, DEFAULT_PANEL_ORDER, kindForInstanceId } from '$lib/state/layout.svelte';
 import { sessionsState } from '$lib/state/sessions.svelte';
@@ -20,8 +26,16 @@ import { getSddPhaseForSession as sddPhaseForSession } from '$lib/state/sdd.svel
  *  editor's open path, the active agent session per kind, and any
  *  editor↔agent / terminal links. Re-derived on every turn so it's
  *  always current. */
-export function buildAgentAppContext(callingSessionId: string): string {
+export function buildAgentAppContext(callingSessionId: string): { system: string; turn: string } {
   const lines: string[] = [];
+
+  /* SDD relevance gate. The two SDD blocks below (live-log + orchestrator)
+     are only meaningful when THIS session is driving a running SDD phase.
+     Computed once here and reused for the layout-row marker later, so a
+     normal chat/editor session doesn't carry ~430 tokens of dead SDD
+     instruction in its cached prefix on every turn. */
+  const calling = sessionsState.list.find((s) => s.id === callingSessionId);
+  const callingSdd = calling ? sddPhaseForSession(calling.id) : null;
 
   // ── Static section: header + navigation tool guide. Same bytes on
   // every turn (modulo a Woom deploy) so prompt caches eat it.
@@ -176,6 +190,7 @@ export function buildAgentAppContext(callingSessionId: string): string {
   // anchor for status messages — the agent can reply with the
   // OUTCOME ("read X, found nothing relevant") instead of the
   // PROCESS, which the feed already covers.
+  if (callingSdd) {
   lines.push('');
   lines.push(
     'SDD Phase live log: when you\'re inside an SDD-managed phase '
@@ -221,12 +236,8 @@ export function buildAgentAppContext(callingSessionId: string): string {
       + 'a real sentence ("verifier flaked, retrying once") not a token '
       + '("ok").'
   );
+  }
 
-  // ── Variable section: solo layout snapshot + one-shot
-  // cwd-switch recap. Re-derived every turn so cache-busting bytes
-  // live here exclusively. Keep the section delimiter so the agent
-  // can visually parse where the current state begins.
-  const calling = sessionsState.list.find((s) => s.id === callingSessionId);
   const callingInstanceId = calling?.agentInstanceId ?? null;
 
   /* Auto-memory — long-term `user` + `feedback` entries from the
@@ -254,15 +265,22 @@ export function buildAgentAppContext(callingSessionId: string): string {
     lines.push(claudemd.content.trim());
   }
 
-  lines.push('');
-  lines.push('---');
-  lines.push('Current solo-mode layout (refreshed on every turn):');
+  // ── Volatile section: solo layout snapshot + one-shot cwd-switch
+  // recap + canvas summary. Returned SEPARATELY (as `turn`) so the
+  // caller appends it to the user-turn MESSAGE, not the cached
+  // system prompt. These bytes change every turn; keeping them out
+  // of `--append-system-prompt` makes the system prefix byte-stable,
+  // so the whole conversation cache reads instead of re-writing when
+  // the user moves around the UI. Verified ~$15–47/heavy-session of
+  // cache-write waste from the old in-system placement.
+  const turnLines: string[] = [];
+  turnLines.push('Current solo-mode layout (refreshed on every turn):');
 
   // One-shot recap if the user just switched the agent's cwd. Cleared
   // after the turn ships (in sendClaudeMessage's success path).
   if (calling?.cwdSwitchRecap) {
-    lines.push('');
-    lines.push(calling.cwdSwitchRecap);
+    turnLines.push('');
+    turnLines.push(calling.cwdSwitchRecap);
   }
 
   for (const kind of DEFAULT_PANEL_ORDER) {
@@ -333,22 +351,24 @@ export function buildAgentAppContext(callingSessionId: string): string {
       }
     }
     const isYou = id === callingInstanceId;
-    lines.push(`  - ${meta.join(', ')}${isYou ? '  ← THIS IS YOU' : ''}`);
+    turnLines.push(`  - ${meta.join(', ')}${isYou ? '  ← THIS IS YOU' : ''}`);
   }
 
   /* ── Canvas summary — only when this session is linked to a canvas.
      Gives the agent the inventory of shapes and edges plus stable ids
-     it can reference in `canvas_*` tool calls without a round-trip. */
+     it can reference in `canvas_*` tool calls without a round-trip.
+     Volatile (version bumps on every edit) so it rides the turn
+     message alongside the canvas PNG, not the cached system prompt. */
   if (calling?.linkedCanvasId) {
     const summary = buildCanvasSummary(calling.linkedCanvasId);
     if (summary) {
-      lines.push('');
-      lines.push('---');
-      lines.push(summary);
+      turnLines.push('');
+      turnLines.push('---');
+      turnLines.push(summary);
     }
   }
 
-  return lines.join('\n');
+  return { system: lines.join('\n'), turn: turnLines.join('\n') };
 }
 
 /** Cap on the number of shapes / edges we list inline. Past this we

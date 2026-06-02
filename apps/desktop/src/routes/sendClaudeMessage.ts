@@ -271,7 +271,12 @@ export function createSendClaudeMessage(deps: SendClaudeMessageDeps) {
     const cursorModel = agentKind === 'cursor' ? (sess?.cursorModel ?? null) : null;
     const claudeModel = agentKind === 'claude' ? (sess?.claudeModel ?? null) : null;
     await loadClaudeMd(sess?.worktreePath ?? sess?.cwd ?? null).catch(() => {});
-    const appContext = buildAgentAppContext(id);
+    const { system: appContext, turn: appTurnContext } = buildAgentAppContext(id);
+    // Volatile layout/canvas/cwd-recap rides the user message, NOT the
+    // cached system prompt — see agentContext.ts for the cache rationale.
+    if (appTurnContext.trim()) {
+      prompt = `${prompt}\n\n---\n\n${appTurnContext}`;
+    }
     const imagePaths = agentKind === 'claude' ? userImages.map((u) => u.path) : [];
 
     if (agentKind === 'claude' && sess?.linkedCanvasId) {

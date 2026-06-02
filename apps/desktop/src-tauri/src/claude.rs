@@ -1269,6 +1269,10 @@ pub async fn generate_commit_message(repo: &std::path::Path) -> Result<String, C
 
     let mut cmd = tokio::process::Command::new(bin);
     cmd.arg("-p").arg(&prompt);
+    // Force the cheapest model — this is a diff→one-line-subject task that
+    // needs no reasoning. Without an explicit flag the CLI rides the account
+    // default (Opus on Max), burning the 5h quota on a trivial turn.
+    cmd.arg("--model").arg("claude-haiku-4-5-20251001");
     cmd.current_dir(repo);
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());

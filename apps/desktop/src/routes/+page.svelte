@@ -108,7 +108,6 @@
   } from '$lib/state/canvas.svelte';
   import { applyLayout as canvasApplyLayout, type LayoutAlgorithm } from '$lib/services/canvasLayout';
   import { saveCanvasScreenshot } from '$lib/services/canvasScreenshot';
-  import { buildAgentAppContext } from '$lib/services/agentContext';
   import { applySessionCwd, extractCompactSummary, buildContinuationRecap } from '$lib/services/sessionCwd';
   import { buildFirstTurnPreamble, getActiveEditorFile } from '$lib/services/firstTurnContext';
   import { runCompactSession as runCompactSessionService } from '$lib/services/agentCompact';

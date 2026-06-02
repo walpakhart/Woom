@@ -8,6 +8,43 @@ release runbook (how this CHANGELOG feeds `latest-mac.json`) lives in
 
 ## Unreleased
 
+## 0.2.27 — 2026-06-02
+
+Bumps version 0.2.26 → 0.2.27 across `apps/desktop/package.json`,
+`apps/desktop/src-tauri/Cargo.toml`, `apps/desktop/src-tauri/tauri.conf.json`,
+`apps/desktop/src-tauri/Cargo.lock`. CHANGELOG entry added for 0.2.27.
+
+Claude cost & prompt-cache optimization pass. Four fixes that cut
+per-turn token spend with zero quality change: stop re-writing the
+prompt cache every turn, gate dead SDD instruction text, and route
+background/utility calls off the Max Opus default.
+
+### Changed
+
+- **Volatile context moved out of `--append-system-prompt`** — the
+  per-turn layout snapshot, canvas summary, and `cwdSwitchRecap` used
+  to live at the tail of the system prompt, which changed the cached
+  prefix every turn and forced a full cache *write* (re-billing the
+  entire conversation history each turn). They now ride in the
+  user-turn message instead, leaving the system prefix byte-stable so
+  the CLI serves cache *reads*. Largest recurring win — grows with
+  session length (`agentContext.ts`, `+page.svelte`, `agentTurn.ts`,
+  `sendClaudeMessage.ts`).
+- **SDD instruction blocks gated behind active phase** — the SDD
+  live-log + orchestrator blocks (~429 tok/turn) were emitted on every
+  turn but are only relevant inside an SDD-managed phase. Now wrapped
+  in `if (callingSdd)`, so the ~90% of sessions with no SDD workflow
+  stop paying for them (`agentContext.ts`).
+- **Commit-message generation → Haiku** — was issued with no `--model`,
+  riding the Max Opus default for a single-line subject. Pinned to
+  `claude-haiku-4-5-20251001` (`claude.rs`). ~84% cheaper per commit
+  and frees the 5h Opus quota.
+- **Memory distill forced off fast/thinking** — `/remember`'s background
+  distill pass inherited `session.fastMode` + thinking effort, so a user
+  who enabled FAST for interactive turns silently paid 2× on an
+  unwatched background call. Now hardcoded `fastMode: false`,
+  `thinkingEffort: null` (`distillMemory.ts`).
+
 ## 0.1.4 — 2026-05-25
 
 Bumps version 0.1.3 → 0.1.4 across `package.json`, `apps/desktop/package.json`,

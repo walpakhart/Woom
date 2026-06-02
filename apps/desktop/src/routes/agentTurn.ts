@@ -156,7 +156,7 @@ export async function continueAgentTurn(sessionId: string, deps: AgentTurnDeps):
     continuationInFlight.delete(sessionId);
     return;
   }
-  const prompt = formatActionResultsForPrompt(drained);
+  let prompt = formatActionResultsForPrompt(drained);
   const kind = (sess.agentKind ?? 'claude') as 'claude' | 'cursor';
   updateSession(sessionId, { sending: true });
   appendSessionMessage(sessionId, {
@@ -175,7 +175,12 @@ export async function continueAgentTurn(sessionId: string, deps: AgentTurnDeps):
   const agentKind = sess.agentKind;
   const cursorModel = agentKind === 'cursor' ? sess.cursorModel : null;
   const claudeModel = agentKind === 'claude' ? sess.claudeModel : null;
-  const appContext = buildAgentAppContext(sessionId);
+  const { system: appContext, turn: appTurnContext } = buildAgentAppContext(sessionId);
+  // Volatile layout/canvas/cwd-recap rides the turn message, not the
+  // cached system prompt — see agentContext.ts for the cache rationale.
+  if (appTurnContext.trim()) {
+    prompt = `${prompt}\n\n---\n\n${appTurnContext}`;
+  }
 
   try {
     const result = await runAgentRequest({
