@@ -482,31 +482,49 @@
   }
 
   /* Recompute the inline-hunk overlay whenever the pending agent edits for
-     this file change OR a fresh view is created (viewVersion). Diffs each
-     edit's full-file oldText→newText into hunks and dispatches them.
-     NOTE: stacked edits are diffed independently against their own
-     old/new, so line numbers can drift when several edits target the same
-     file before review — single-edit (the common case) is exact;
-     multi-edit refinement is deferred (P4). */
+     this file change OR a fresh view is created (viewVersion) OR a hunk was
+     just resolved (resolvedVersion). For a SINGLE pending edit (the common
+     case) we diff its `oldText` against the LIVE buffer rather than the
+     edit's frozen `newText`: a reject splices lines back to disk and shrinks/
+     grows the doc, so re-diffing against the live text keeps every remaining
+     hunk's line numbers exact (sequential multi-hunk reject no longer drifts).
+     Accepted hunks still differ from `oldText`, so they're suppressed by
+     `resolvedHunkIds` (ids are old-anchored ⇒ stable across the recompute).
+     With STACKED edits there's no single coherent new-side, so we fall back
+     to each edit's own frozen newText — multi-edit refinement is deferred
+     (P4) and already documented as approximate. */
   $effect(() => {
     // Track dependencies explicitly.
     const edits = pendingEdits;
     void viewVersion;
     void resolvedVersion;
     if (!view) return;
+    const singleEdit = edits.length === 1;
+    const liveText = view.state.doc.toString();
     const owners = new Map<string, { sessionId: string; toolId: string }>();
     const byEdit = new Map<string, string[]>();
     const merged: Hunk[] = [];
     for (const e of edits) {
       if (e.oldText == null || e.newText == null) continue;
       const key = `${e.sessionId}:${e.toolId}`;
+      /* Roster + owners come from the FROZEN edit (oldText→newText) so the
+         per-edit id set stays complete as hunks resolve — the all-rejected→
+         'reverted' vs any-accepted→'kept' tally in resolveHunk depends on it.
+         Old-anchored ids make these match the live-diff ids below. */
       const ids: string[] = [];
       for (const h of computeHunks(e.oldText, e.newText)) {
         ids.push(h.id);
         owners.set(h.id, { sessionId: e.sessionId, toolId: e.toolId });
-        if (!resolvedHunkIds.has(h.id)) merged.push(h);
       }
       byEdit.set(key, ids);
+      /* Geometry to render + revert: for a single edit, diff against the live
+         buffer so a prior reject's line-count change is reflected exactly;
+         resolved hunks are filtered out (rejected ones also drop from the
+         live diff naturally, accepted ones are suppressed here). */
+      const newSide = singleEdit ? liveText : e.newText;
+      for (const h of computeHunks(e.oldText, newSide)) {
+        if (!resolvedHunkIds.has(h.id)) merged.push(h);
+      }
     }
     hunkOwners = owners;
     editHunkIds = byEdit;

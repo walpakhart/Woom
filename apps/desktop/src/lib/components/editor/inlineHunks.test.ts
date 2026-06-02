@@ -89,6 +89,54 @@ describe('hunkAtLine', () => {
   });
 });
 
+/* Reject one hunk against the LIVE doc: recompute hunks from oldText→the
+   current doc, pick the one anchored at `oldStart`, splice it back. Mirrors
+   the fixed Editor flow (recompute vs live buffer after each reject) so the
+   remaining hunks' line numbers stay correct even when a prior reject changed
+   the doc's line count. */
+function rejectByOldStart(docText: string, oldText: string, oldStart: number): string {
+  const hunks = computeHunks(oldText, docText);
+  const h = hunks.find((x) => x.oldStart === oldStart);
+  if (!h) throw new Error(`no hunk at oldStart=${oldStart}`);
+  const doc = Text.of(docText.split('\n'));
+  return applyChange(doc, buildHunkRevert(doc, h));
+}
+
+describe('sequential multi-hunk reject (live-doc recompute)', () => {
+  // Hunks of UNEQUAL added/removed length shift later hunks' line numbers.
+  // old: a b c d  → new: a [X Y] b c [Z] d  (insert X,Y at 2; insert Z at 6)
+  const oldT = 'a\nb\nc\nd';
+  const newT = 'a\nX\nY\nb\nc\nZ\nd';
+
+  it('round-trips to old rejecting first-then-last', () => {
+    let doc = newT;
+    doc = rejectByOldStart(doc, oldT, 2); // the X,Y insertion (old anchor line 2)
+    doc = rejectByOldStart(doc, oldT, 4); // the Z insertion (old anchor line 4)
+    expect(doc).toBe(oldT);
+  });
+
+  it('round-trips to old rejecting last-then-first', () => {
+    let doc = newT;
+    doc = rejectByOldStart(doc, oldT, 4);
+    doc = rejectByOldStart(doc, oldT, 2);
+    expect(doc).toBe(oldT);
+  });
+
+  it('rejecting only the first hunk keeps the second intact', () => {
+    const doc = rejectByOldStart(newT, oldT, 2);
+    expect(doc).toBe('a\nb\nc\nZ\nd');
+  });
+
+  it('hunk ids are stable across a recompute against a changed doc', () => {
+    const before = computeHunks(oldT, newT);
+    const z = before.find((h) => h.added.includes('Z'))!;
+    // Reject the X,Y hunk → doc shrinks by two lines; recompute.
+    const after = computeHunks(oldT, 'a\nb\nc\nZ\nd');
+    const zAfter = after.find((h) => h.added.includes('Z'))!;
+    expect(zAfter.id).toBe(z.id); // same logical hunk ⇒ same id
+  });
+});
+
 describe('buildHunkRevert round-trips old↔new per hunk', () => {
   const cases: Array<[string, string, string]> = [
     ['addition', 'a\nb\nc', 'a\nb\nX\nc'],

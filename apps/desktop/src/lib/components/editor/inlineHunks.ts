@@ -52,14 +52,19 @@ export function computeHunks(oldText: string, newText: string): Hunk[] {
 
   const hunks: Hunk[] = [];
   let cur: Hunk | null = null;
-  let seq = 0;
   let i = 0;
   let j = 0;
 
   const open = () => {
     if (!cur) {
+      // Identity is anchored on the OLD side only (`oldStart`). The old text
+      // never changes during a review, and hunks within one diff have unique,
+      // strictly-increasing oldStarts (each pair is separated by ≥1 unchanged
+      // line), so this id stays stable when the overlay is recomputed against
+      // a doc whose line count shifted — e.g. after rejecting a sibling hunk.
+      // A new-side anchor would drift and break accept/reject suppression.
       cur = {
-        id: `h${seq++}_${i + 1}_${j + 1}`,
+        id: `h_o${i + 1}`,
         oldStart: i + 1,
         oldCount: 0,
         newStart: j + 1,
@@ -142,8 +147,10 @@ export interface DocChange {
  *  splice the hunk's added lines out and its removed lines back in, at the
  *  hunk's new-side position. Whole-doc replace (vs a tight range edit)
  *  sidesteps trailing-newline bookkeeping — correctness over minimal diff.
- *  NOTE: line numbers are relative to the CURRENT doc, so rejecting one
- *  hunk of a multi-hunk edit shifts the others (known MVP drift). */
+ *  `h` MUST be diffed against the CURRENT doc (the caller recomputes the
+ *  overlay from the live buffer after every resolution), so sequential
+ *  rejects of a multi-hunk edit stay exact even when an earlier reject
+ *  changed the line count. */
 export function buildHunkRevert(doc: Text, h: Hunk): DocChange {
   const lines = doc.toString().split('\n');
   const start = Math.max(0, h.newStart - 1); // 0-based index of first added line

@@ -8,6 +8,21 @@ release runbook (how this CHANGELOG feeds `latest-mac.json`) lives in
 
 ## Unreleased
 
+### Fixed
+
+- **Multi-hunk reject no longer drifts** — rejecting one hunk of a
+  multi-hunk agent edit kept the *other* hunks' line numbers frozen at
+  their original positions, so a second reject (or the inline overlay)
+  landed on the wrong lines once an earlier reject changed the buffer's
+  line count. The overlay now recomputes from the **live buffer** after
+  every accept/reject (single-edit case), and hunk ids are anchored on the
+  old side so they stay stable across recomputes — sequential rejects in
+  any order now round-trip exactly. The per-edit roster that drives the
+  `kept`/`reverted` status flip is still taken from the frozen edit, so
+  the all-rejected tally stays correct as hunks drop out of the live diff.
+  (`inlineHunks.ts`, `Editor.svelte`; +4 unit tests.) This was the 0.3.0
+  multi-hunk known limitation.
+
 ## 0.3.0 — 2026-06-02
 
 Bumps version 0.2.27 → 0.3.0 across `apps/desktop/package.json`,
