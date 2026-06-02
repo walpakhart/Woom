@@ -18,8 +18,10 @@
   import {
     inlineHunksExtension,
     setHunks,
+    setFocusedHunks,
     computeHunks,
     hunkAtLine,
+    hunkNewRange,
     buildHunkRevert,
     type Hunk
   } from '$lib/components/editor/inlineHunks';
@@ -92,6 +94,15 @@
      *  we diff them into hunks and render an inline overlay (adds
      *  highlighted, deletes ghosted). Empty / omitted → no overlay. */
     pendingEdits?: { sessionId: string; toolId: string; oldText: string; newText: string }[];
+    /** Fires once `load()` has read the file and built the view, with the
+     *  loaded path. Lets the parent drive a post-load `goToLine` (e.g. the
+     *  Review pane scrolling to an edit's first hunk) without racing the
+     *  async load. */
+    onLoaded?: (path: string) => void;
+    /** The agent edit currently selected in the ReviewPane (`sessionId:toolId`).
+     *  When set, the overlay scrolls to + emphasises that edit's hunks so the
+     *  reviewer sees exactly which chunk the row points at. */
+    selectedEditKey?: string | null;
   }
   let {
     path,
@@ -103,7 +114,9 @@
     wordWrap = false,
     onTextChange,
     repoPath = '',
-    pendingEdits = []
+    pendingEdits = [],
+    onLoaded,
+    selectedEditKey = null
   }: Props = $props();
 
   let editorEl: HTMLDivElement;
@@ -131,7 +144,7 @@
      owner maps (rebuilt each $effect run) let a hunk reach its EditEvent. */
   const resolvedHunkIds = new Set<string>();
   let resolvedVersion = $state(0);
-  let currentHunks: Hunk[] = [];
+  let currentHunks = $state<Hunk[]>([]);
   let hunkOwners = new Map<string, { sessionId: string; toolId: string }>();
   let editHunkIds = new Map<string, string[]>();
   const perEditRejects = new Map<string, number>();
@@ -356,6 +369,9 @@
         });
       }
       void refreshChangeBar();
+      /* View + lastLoadedPath are live here — safe for the parent to fire
+         a goToLine in response (e.g. Review-pane scroll-to-hunk). */
+      onLoaded?.(p);
     } catch (e: unknown) {
       error = e instanceof Error ? e.message : String(e);
     } finally {
@@ -496,6 +512,7 @@
   $effect(() => {
     // Track dependencies explicitly.
     const edits = pendingEdits;
+    const selKey = selectedEditKey; // re-filter the overlay when selection changes
     void viewVersion;
     void resolvedVersion;
     if (!view) return;
@@ -510,11 +527,15 @@
       /* Roster + owners come from the FROZEN edit (oldText→newText) so the
          per-edit id set stays complete as hunks resolve — the all-rejected→
          'reverted' vs any-accepted→'kept' tally in resolveHunk depends on it.
-         Old-anchored ids make these match the live-diff ids below. */
+         Ids are NAMESPACED by edit key (`key#oldId`): old-anchored ids alone
+         collide when several edits stack on one file (two edits both anchor a
+         hunk at old line 5), which cross-assigned owners and piled overlapping
+         decorations. Namespacing keeps each edit's hunks distinct + stable. */
       const ids: string[] = [];
       for (const h of computeHunks(e.oldText, e.newText)) {
-        ids.push(h.id);
-        owners.set(h.id, { sessionId: e.sessionId, toolId: e.toolId });
+        const nid = `${key}#${h.id}`;
+        ids.push(nid);
+        owners.set(nid, { sessionId: e.sessionId, toolId: e.toolId });
       }
       byEdit.set(key, ids);
       /* Geometry to render + revert: for a single edit, diff against the live
@@ -523,13 +544,50 @@
          live diff naturally, accepted ones are suppressed here). */
       const newSide = singleEdit ? liveText : e.newText;
       for (const h of computeHunks(e.oldText, newSide)) {
-        if (!resolvedHunkIds.has(h.id)) merged.push(h);
+        const nid = `${key}#${h.id}`;
+        if (!resolvedHunkIds.has(nid)) merged.push({ ...h, id: nid });
       }
     }
     hunkOwners = owners;
     editHunkIds = byEdit;
-    currentHunks = merged;
-    view.dispatch({ effects: setHunks.of(merged) });
+    /* When the reviewer has picked an edit that lives in THIS file, show only
+       that edit's hunks — stacked edits on one file otherwise pile overlapping
+       overlays ("наслоения"). A stale selection for another file (`!byEdit.has`)
+       falls through to showing all, so opening a file normally still works. */
+    const displayed = selKey && byEdit.has(selKey)
+      ? merged.filter((h) => h.id.startsWith(selKey + '#'))
+      : merged;
+    currentHunks = displayed;
+    view.dispatch({ effects: setHunks.of(displayed) });
+  });
+
+  /* Emphasise + scroll to the hunks of the edit selected in the ReviewPane.
+     Reactive on `selectedEditKey` AND `currentHunks` so it fires once the
+     overlay is (re)computed — e.g. right after the file opens and the
+     recompute effect populates `currentHunks`. We scroll only when the
+     SELECTION changes (not on every recompute), so reviewing in the editor
+     doesn't yank the viewport. */
+  let lastFocusScrollKey: string | null = null;
+  $effect(() => {
+    const key = selectedEditKey;
+    const hunks = currentHunks; // reactive dependency
+    if (!view) return;
+    if (!key) {
+      view.dispatch({ effects: setFocusedHunks.of([]) });
+      lastFocusScrollKey = null;
+      return;
+    }
+    const ids = new Set(editHunkIds.get(key) ?? []);
+    const present = hunks.filter((h) => ids.has(h.id));
+    view.dispatch({ effects: setFocusedHunks.of(present.map((h) => h.id)) });
+    if (present.length > 0 && key !== lastFocusScrollKey) {
+      lastFocusScrollKey = key;
+      const firstLine = Math.min(...present.map((h) => hunkNewRange(h).fromLine));
+      /* Defer past load()'s scroll-restore rAF (which sets scrollDOM.scrollTop
+         back to the saved position) — otherwise our jump-to-hunk is clobbered
+         the same frame and the editor never scrolls to the selected edit. */
+      requestAnimationFrame(() => goToLine(firstLine));
+    }
   });
 
   /* Finalise a hunk's resolution: drop it from the live set, and once
@@ -761,6 +819,17 @@
     text-decoration: line-through;
     text-decoration-color: rgba(232, 130, 100, 0.7);
     opacity: 0.85;
+  }
+  /* Focused edit — the hunks of the row selected in the ReviewPane. Brighter
+     wash + a left accent rail so the reviewer's eye lands on exactly that
+     edit's chunk amongst stacked overlays. */
+  .ed-surface :global(.cm-inline-hunk--add.cm-inline-hunk--focus) {
+    background: rgba(111, 174, 136, 0.32);
+    box-shadow: inset 2px 0 0 var(--accent, #c9784f);
+  }
+  .ed-surface :global(.cm-inline-hunk--del.cm-inline-hunk--focus) {
+    background: rgba(232, 130, 100, 0.22);
+    border-left-color: var(--accent, #c9784f);
   }
   .ed-error {
     padding: 8px 14px;

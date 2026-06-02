@@ -887,6 +887,20 @@
     persistTabs();
   }
 
+  /* The agent edit selected in the ReviewPane (`sessionId:toolId`), passed to
+     <Editor> so the overlay scrolls to + emphasises exactly that edit's hunks
+     — computed against the live buffer, so it's correct even when several
+     edits stack on one file. */
+  let selectedEditKey = $state<string | null>(null);
+
+  /** Open an edit's file and mark it selected so the editor highlights that
+   *  specific chunk. Reactive: when the file (re)opens, the Editor's overlay
+   *  recompute repopulates and the focus effect scrolls there. */
+  function selectReviewEdit(filePath: string, sessionId: string, toolId: string) {
+    selectedEditKey = `${sessionId}:${toolId}`;
+    openFile(filePath);
+  }
+
   /** Pull `pendingOpenFile` off the instance's slot whenever it appears
    *  and route through `openFile`. Lets external code (mention pills,
    *  diff cards, MCP open requests) drive the editor without reaching
@@ -1218,6 +1232,7 @@
                 linkedAgents={linkedAgents}
                 instanceId={instanceId}
                 repoPath={repoPath}
+                onSelectEdit={(filePath, sessionId, toolId) => selectReviewEdit(filePath, sessionId, toolId)}
               />
             {:else if sidebarTab === 'debug'}
               <div class="ev-sidebar-pane">
@@ -1331,6 +1346,7 @@
                           onSelectionChange={(sel) => (selection = sel)}
                           onCursorChange={(info) => (cursorInfo = info)}
                           onTextChange={(t) => (liveBuffer = t)}
+                          selectedEditKey={selectedEditKey}
                         />
                       {/key}
                     </div>
@@ -1354,6 +1370,7 @@
                       onSaved={onFileSaved}
                       onSelectionChange={(sel) => (selection = sel)}
                       onCursorChange={(info) => (cursorInfo = info)}
+                      selectedEditKey={selectedEditKey}
                     />
                   {/key}
                 {/if}
@@ -1370,6 +1387,7 @@
                     onSaved={onFileSaved}
                     onSelectionChange={(sel) => (selection = sel)}
                     onCursorChange={(info) => (cursorInfo = info)}
+                    selectedEditKey={selectedEditKey}
                   />
                 {/key}
               {/if}

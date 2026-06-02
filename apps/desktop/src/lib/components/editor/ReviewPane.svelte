@@ -5,46 +5,27 @@
      (`MessageEvent { kind: 'edit' }`) that's been written to disk and
      is awaiting the user's verdict.
 
-     What ends up here:
-       - Every `applied` edit event from every Claude / Cursor session
-         linked to THIS editor instance. We read sessions via
-         `linkedAgents` (passed in from EditorView) so the pane doesn't
-         have to know about the link store.
-       - Grouped first by file path, then ordered chat-time within a
-         file. Multiple agents can stack edits on the same file — each
-         row carries the source agent badge so the user always knows
-         who wrote which change.
-
-     What the user can do here:
-       - Open the file at the change (sets `pendingOpenFile` via the
-         existing editor-open signal).
-       - Keep / Revert per edit — same Tauri dispatch as the (planned)
-         in-chat card; reuses `revertEditEvent` from `diffActions.ts`
-         so the per-card and bulk-bar paths can never drift apart.
-       - "Refine this hunk" — drops a primed `@<file>:start-end` mention
-         + draft text into the source agent's composer and pings the
-         InlineClaude expand signal so the user lands typing in the
-         right session.
-       - Top bar: Keep all / Revert all (delegates to the existing
-         bulk helpers in `diffActions.ts`).
+     This is a COMPACT NAVIGATOR: one quiet line per edit, grouped under
+     collapsible file headers. No diff renders here — selecting a row
+     drives the editor to open the file scrolled to the edit's first
+     hunk, where the inline overlay (the app's single diff surface)
+     shows adds/deletes and Tab/Esc resolve per hunk. The row also
+     offers Keep / Revert / Refine; either path flips the EditEvent
+     status and the list updates reactively.
 
      Keyboard:
-       - j / ArrowDown, k / ArrowUp — move selection between rows.
+       - j / ArrowDown, k / ArrowUp — move selection (auto-opens in editor).
        - Enter / o — open the selected file at the change.
        - a — Keep the selected edit.
        - r — Revert / Restore the selected edit.
-       - e — Refine the selected edit (focus its source session,
-              prime the composer).
-
-     Why a sidebar tab and not a separate solo: every other "review"
-     surface in the app already lives next to the file tree (Search,
-     Git). Putting Review there too means the user reviews + reads the
-     file in the same screen, no rail jump needed. */
+       - e — Refine the selected edit (focus its source session).
+       - space — fold / unfold the selected row's file group. */
   import { sessionsState, requestEditorOpenFile, setSessionInput } from '$lib/state/sessions.svelte';
   import { revertEditEvent } from '$lib/services/diffActions';
   import { keepAllPendingEdits, revertAllPendingEdits } from '$lib/services/diffActions';
   import { updateEditEvent, getPendingEditEvents } from '$lib/state/sessions.svelte';
   import { notify, notifyError } from '$lib/state/toaster.svelte';
+  import { editStats } from '$lib/components/editor/reviewStats';
   import type { MessageEvent } from '$lib/types';
 
   type EditEvent = Extract<MessageEvent, { kind: 'edit' }>;
@@ -57,34 +38,28 @@
   }
 
   interface Props {
-    /** Sessions linked to the editor this pane belongs to. Pulled from
-     *  EditorView so the pane shares one source of truth with the
-     *  rest of the editor's link UI — agents shown here, agents
-     *  receiving "Apply to" mentions, and agents whose chat the
-     *  Refine button reaches into are all the same set. */
+    /** Sessions linked to the editor this pane belongs to. Shared source
+     *  of truth with the rest of the editor's link UI. */
     linkedAgents: LinkedAgent[];
-    /** Editor instance id — passed straight through to
-     *  `requestEditorOpenFile` so file opens land in this editor and
-     *  not the primary singleton when the user has more than one
-     *  Editor instance open. */
+    /** Editor instance id — so file opens land in THIS editor. */
     instanceId: string;
-    /** Repo root for shortening paths in the row label. Optional —
-     *  when missing the row falls back to the absolute path. */
+    /** Repo root for shortening paths in the file header. */
     repoPath: string;
+    /** Select an agent edit: opens its file in the editor and highlights +
+     *  scrolls to exactly that edit's hunks (the editor is the only diff
+     *  surface). Wired by EditorView. */
+    onSelectEdit?: (filePath: string, sessionId: string, toolId: string) => void;
   }
   let p: Props = $props();
 
   type Row = {
-    /** `${sessionId}::${toolId}` — stable across re-renders so j/k
-     *  keeps its place even when a Keep/Revert removes a row above. */
+    /** `${sessionId}::${toolId}` — stable across re-renders so j/k keeps
+     *  its place even when a Keep/Revert removes a row above. */
     key: string;
     sessionId: string;
     sessionTitle: string;
     sessionKind: 'claude' | 'cursor';
     event: EditEvent;
-    /** Pre-computed for the head row (so the template doesn't recompute
-     *  diffStats four times per render — once for the header, once for
-     *  the diff body when expanded). */
     stats: { add: number; rem: number };
   };
 
@@ -96,83 +71,6 @@
     remTotal: number;
   };
 
-  /* ── Diff utilities (vendored from ChatThread.svelte to keep this
-     pane self-contained — both implementations are copies of the same
-     LCS body, the chat one will be folded into a shared util in a
-     follow-up). Kept inside the component so the chat copy keeps its
-     own collapse heuristics tuned for an inline bubble. */
-  type DiffRow = { kind: 'add' | 'rem' | 'ctx'; oldNo?: number; newNo?: number; text: string };
-
-  const DIFF_LINE_CAP = 400;
-
-  function computeDiffRows(oldText: string, newText: string): DiffRow[] {
-    const a = oldText.split('\n');
-    const b = newText.split('\n');
-    const aTrim = a.length > DIFF_LINE_CAP ? a.slice(0, DIFF_LINE_CAP) : a;
-    const bTrim = b.length > DIFF_LINE_CAP ? b.slice(0, DIFF_LINE_CAP) : b;
-    const m = aTrim.length, n = bTrim.length;
-    const dp: number[][] = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
-    for (let i = 1; i <= m; i++) {
-      for (let j = 1; j <= n; j++) {
-        if (aTrim[i - 1] === bTrim[j - 1]) dp[i][j] = dp[i - 1][j - 1] + 1;
-        else dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
-      }
-    }
-    const rows: DiffRow[] = [];
-    let i = m, j = n;
-    while (i > 0 && j > 0) {
-      if (aTrim[i - 1] === bTrim[j - 1]) {
-        rows.push({ kind: 'ctx', oldNo: i, newNo: j, text: aTrim[i - 1] });
-        i--; j--;
-      } else if (dp[i - 1][j] >= dp[i][j - 1]) {
-        rows.push({ kind: 'rem', oldNo: i, text: aTrim[i - 1] });
-        i--;
-      } else {
-        rows.push({ kind: 'add', newNo: j, text: bTrim[j - 1] });
-        j--;
-      }
-    }
-    while (i > 0) { rows.push({ kind: 'rem', oldNo: i, text: aTrim[i - 1] }); i--; }
-    while (j > 0) { rows.push({ kind: 'add', newNo: j, text: bTrim[j - 1] }); j--; }
-    rows.reverse();
-    return collapseContext(rows, 2);
-  }
-
-  function collapseContext(rows: DiffRow[], pad: number): DiffRow[] {
-    const out: DiffRow[] = [];
-    const n = rows.length;
-    for (let i = 0; i < n; i++) {
-      const r = rows[i];
-      if (r.kind !== 'ctx') { out.push(r); continue; }
-      let next = i;
-      while (next < n && rows[next].kind === 'ctx') next++;
-      const runLen = next - i;
-      const isHead = out.length === 0;
-      const isTail = next >= n;
-      const head = isHead ? 0 : pad;
-      const tail = isTail ? 0 : pad;
-      if (runLen <= head + tail + 1) {
-        for (let k = i; k < next; k++) out.push(rows[k]);
-      } else {
-        for (let k = i; k < i + head; k++) out.push(rows[k]);
-        out.push({ kind: 'ctx', text: `··· ${runLen - head - tail} unchanged lines ···` });
-        for (let k = next - tail; k < next; k++) out.push(rows[k]);
-      }
-      i = next - 1;
-    }
-    return out;
-  }
-
-  function diffStats(oldText: string, newText: string): { add: number; rem: number } {
-    const rows = computeDiffRows(oldText ?? '', newText ?? '');
-    let add = 0, rem = 0;
-    for (const r of rows) {
-      if (r.kind === 'add') add++;
-      else if (r.kind === 'rem') rem++;
-    }
-    return { add, rem };
-  }
-
   function relTo(repo: string, path: string): string {
     if (!repo) return path;
     const root = repo.replace(/\/$/, '');
@@ -181,9 +79,18 @@
     return path;
   }
 
-  /* ── Reactive list of pending edits across every linked agent. We
-     touch sessionsState.list inside the derived so $derived re-runs on
-     any session mutation (new edit appended, status flipped, etc.). */
+  /** Split a path into its directory and filename so the file header can show
+   *  a bold name with a muted, left-truncated directory beside it. */
+  function splitPath(rel: string): { dir: string; name: string } {
+    const i = rel.lastIndexOf('/');
+    return i < 0 ? { dir: '', name: rel } : { dir: rel.slice(0, i), name: rel.slice(i + 1) };
+  }
+
+  /* ── Reactive list of pending edits across every linked agent. Touch
+     sessionsState.list inside the derive so it re-runs on any session
+     mutation (new edit appended, status flipped, etc.). Counts come from
+     `editStats` — the SAME engine the editor overlay uses (no second
+     diff impl lives here anymore). */
   const allRows = $derived.by<Row[]>(() => {
     void sessionsState.list;
     const out: Row[] = [];
@@ -196,7 +103,7 @@
           sessionTitle: la.name || (la.kind === 'claude' ? 'Claude' : 'Cursor'),
           sessionKind: la.kind,
           event: ev,
-          stats: diffStats(ev.oldText ?? '', ev.newText ?? '')
+          stats: editStats(ev.oldText ?? '', ev.newText ?? '')
         });
       }
     }
@@ -204,27 +111,19 @@
   });
 
   /** Row count surfaced via `getReviewCount` so EditorView's badge
-   *  reactively follows. Needed because Svelte 5 modules can't export
-   *  $derived values, hence the function below. */
+   *  reactively follows (Svelte 5 modules can't export $derived). */
   function rowCount(): number {
     return allRows.length;
   }
 
-  /* Group by file path. Order of files = order of first appearance in
-     `allRows` (chat-time). Inside a file: chat-time order too. */
+  /* Group by file path. File order = first appearance (chat-time). */
   const groups = $derived.by<FileGroup[]>(() => {
     const map = new Map<string, FileGroup>();
     for (const r of allRows) {
       const key = r.event.filePath;
       let g = map.get(key);
       if (!g) {
-        g = {
-          filePath: key,
-          relPath: relTo(p.repoPath, key),
-          rows: [],
-          addTotal: 0,
-          remTotal: 0
-        };
+        g = { filePath: key, relPath: relTo(p.repoPath, key), rows: [], addTotal: 0, remTotal: 0 };
         map.set(key, g);
       }
       g.rows.push(r);
@@ -240,18 +139,11 @@
     return { add, rem, count: allRows.length };
   });
 
-  /* ── Selection (j/k/Enter). The selection is a row key so add/remove
-     events from above don't shift it; if the selected key disappears
-     (Keep / Revert), we reset to the first row. Expanded set lives
-     parallel — closing a row should NOT collapse if the same row is
-     re-selected by keyboard.  */
+  /* ── Selection (j/k/Enter). Keyed by row key so add/remove above doesn't
+     shift it; if the selected key disappears (Keep/Revert), reset to the
+     first row. */
   let selectedKey = $state<string | null>(null);
-  let expandedKeys = $state<Set<string>>(new Set());
 
-  /* When the row list changes, repair selection: keep selectedKey if
-     still present, else collapse to the first row, else null. Expanded
-     keys are pruned to what still exists so a Set replacement triggers
-     reactivity downstream. */
   $effect(() => {
     const keys = new Set(allRows.map((r) => r.key));
     if (selectedKey && !keys.has(selectedKey)) {
@@ -260,40 +152,34 @@
     if (selectedKey === null && allRows.length > 0) {
       selectedKey = allRows[0].key;
     }
-    let needsRebuild = false;
-    for (const k of expandedKeys) if (!keys.has(k)) { needsRebuild = true; break; }
-    if (needsRebuild) {
-      const next = new Set<string>();
-      for (const k of expandedKeys) if (keys.has(k)) next.add(k);
-      expandedKeys = next;
-    }
   });
+
+  /* ── Collapsible file groups. A collapsed file hides its rows but keeps
+     the summed +N −M visible on the header. */
+  let collapsedFiles = $state<Set<string>>(new Set());
+  function toggleFile(filePath: string) {
+    const next = new Set(collapsedFiles);
+    if (next.has(filePath)) next.delete(filePath);
+    else next.add(filePath);
+    collapsedFiles = next;
+  }
 
   function selectIndex(delta: number) {
     if (allRows.length === 0) return;
     const idx = Math.max(0, allRows.findIndex((r) => r.key === selectedKey));
     const next = (idx + delta + allRows.length) % allRows.length;
-    selectedKey = allRows[next].key;
-    /* Scroll the new selection into view. The row's DOM node carries
-       data-row-key so we can address it without a per-row binding. */
+    const row = allRows[next];
+    selectedKey = row.key;
+    openSelected(row);
     queueMicrotask(() => {
-      const el = paneEl?.querySelector<HTMLElement>(`[data-row-key="${cssEscape(allRows[next].key)}"]`);
+      const el = paneEl?.querySelector<HTMLElement>(`[data-row-key="${cssEscape(row.key)}"]`);
       el?.scrollIntoView({ block: 'nearest', behavior: 'instant' });
     });
   }
 
   function cssEscape(s: string): string {
-    /* Defensive — toolIds and sessionIds are uuids/short ids so this
-       is mostly a no-op, but a stray `:` would break the selector. */
     if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') return CSS.escape(s);
     return s.replace(/([^\w-])/g, '\\$1');
-  }
-
-  function toggleExpanded(key: string) {
-    const next = new Set(expandedKeys);
-    if (next.has(key)) next.delete(key);
-    else next.add(key);
-    expandedKeys = next;
   }
 
   let busyKeys = $state<Set<string>>(new Set());
@@ -306,14 +192,19 @@
     busyKeys = next;
   }
 
-  async function openAt(row: Row) {
-    requestEditorOpenFile(p.instanceId, row.event.filePath);
+  /** Open the row's file in the editor and highlight + scroll to exactly this
+   *  edit's hunks — the editor's inline overlay is the only diff surface. */
+  function openSelected(row: Row) {
+    if (p.onSelectEdit) p.onSelectEdit(row.event.filePath, row.sessionId, row.event.toolId);
+    else requestEditorOpenFile(p.instanceId, row.event.filePath);
+  }
+
+  function clickRow(row: Row) {
+    selectedKey = row.key;
+    openSelected(row);
   }
 
   function keepRow(row: Row) {
-    /* Disk untouched — flip status only. Mirror of `keepAllPendingEdits`
-       per single row so the per-row affordance stays in sync with the
-       bulk one. */
     updateEditEvent(row.sessionId, row.event.toolId, { status: 'kept', note: undefined });
   }
 
@@ -323,25 +214,13 @@
     const r = await revertEditEvent(row.sessionId, row.event);
     setBusy(row.key, false);
     if (!r.ok) {
-      /* `revertEditEvent` already stamps `status: 'error'` and the
-         `note` on the event itself; surface the toast so the user
-         doesn't have to expand the row to see why. */
       notifyError(r.error, { title: `Couldn't revert ${row.event.filePath}` });
     }
   }
 
   function refineRow(row: Row) {
-    /* Drop a primed prompt into the source session's composer + ping
-       the InlineClaude expand signal so the user lands typing in the
-       right place. We don't auto-send — refining is the user's
-       opportunity to say "do this differently", so the agent should
-       see the user's words, not a templated form. */
     const rel = relTo(p.repoPath, row.event.filePath);
-    const verb = row.event.isCreate
-      ? 'just created'
-      : row.event.isDelete
-      ? 'just deleted'
-      : 'just changed';
+    const verb = row.event.isCreate ? 'just created' : row.event.isDelete ? 'just deleted' : 'just changed';
     const draft = `Refine the edit you ${verb} in @${rel}: `;
     setSessionInput(row.sessionId, draft);
     sessionsState.requestInlineExpandFor = row.sessionId;
@@ -351,9 +230,6 @@
     if (bulkBusy || allRows.length === 0) return;
     bulkBusy = true;
     let kept = 0;
-    /* Bulk Keep is per-session because `keepAllPendingEdits` reads
-       state for one session at a time. With one editor linked to two
-       agents we run it once per agent and sum. */
     const seen = new Set<string>();
     for (const r of allRows) {
       if (seen.has(r.sessionId)) continue;
@@ -389,56 +265,29 @@
     }
   }
 
-  /* ── Keyboard. The pane only listens when the user has actually
-     focused something inside it — otherwise typing j in the editor
-     would jump rows here. The wrapping `<section>` is `tabindex={0}`
-     so it can be focused by clicking the empty area or arrowing in
-     from the row list. */
+  /* ── Keyboard. Only listens when focus is inside the pane; ignores
+     keystrokes inside inputs. */
   let paneEl: HTMLElement | null = $state(null);
   function onKey(e: KeyboardEvent) {
     if (allRows.length === 0) return;
-    /* Don't intercept keystrokes inside an input/textarea/contenteditable. */
     const t = e.target as HTMLElement | null;
     if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
     if (e.key === 'j' || e.key === 'ArrowDown') { e.preventDefault(); selectIndex(1); return; }
     if (e.key === 'k' || e.key === 'ArrowUp')   { e.preventDefault(); selectIndex(-1); return; }
     const row = allRows.find((r) => r.key === selectedKey);
     if (!row) return;
-    if (e.key === 'Enter' || e.key === 'o') { e.preventDefault(); void openAt(row); return; }
+    if (e.key === 'Enter' || e.key === 'o') { e.preventDefault(); openSelected(row); return; }
     if (e.key === 'a') { e.preventDefault(); keepRow(row); return; }
     if (e.key === 'r') { e.preventDefault(); void revertRow(row); return; }
     if (e.key === 'e') { e.preventDefault(); refineRow(row); return; }
-    if (e.key === ' ') { e.preventDefault(); toggleExpanded(row.key); return; }
+    if (e.key === ' ') { e.preventDefault(); toggleFile(row.event.filePath); return; }
   }
 
-  /* Re-export for the parent badge — EditorView reads this via a
-     `bind:reviewCount` shape. Keeping it as an export-able function
-     instead of an output prop avoids prop ping-pong on every selection
-     change (which wouldn't affect the count anyway). */
   export { rowCount };
-
-  /* Full-screen mode — overlays the whole window with the same pane
-     so the user can read diffs at full width without the rail / sidebar
-     fighting for pixels. Esc closes; F toggles. */
-  let fullscreen = $state(false);
-  function toggleFullscreen() { fullscreen = !fullscreen; }
-  function onKeyGlobal(e: KeyboardEvent) {
-    if (e.key === 'Escape' && fullscreen) {
-      e.preventDefault();
-      fullscreen = false;
-    }
-  }
-  $effect(() => {
-    if (fullscreen) {
-      window.addEventListener('keydown', onKeyGlobal);
-      return () => window.removeEventListener('keydown', onKeyGlobal);
-    }
-  });
 </script>
 
 <section
   class="rp"
-  class:rp--full={fullscreen}
   bind:this={paneEl}
   tabindex="0"
   onkeydown={onKey}
@@ -461,87 +310,78 @@
           {#each p.linkedAgents as la, i (la.sessionId)}
             <span class="rp-empty-agent">{la.name || (la.kind === 'claude' ? 'Claude' : 'Cursor')}</span>{i < p.linkedAgents.length - 1 ? ', ' : ''}
           {/each}
-          land here grouped by file. Keep, revert, or refine without
-          leaving the editor.
+          land here grouped by file. Select one to review it in the editor.
         {/if}
       </p>
     </div>
   {:else}
     <header class="rp-bar">
-      <span class="rp-bar-count mono">
-        {totals.count} edit{totals.count === 1 ? '' : 's'}
-      </span>
+      <span class="rp-bar-count mono">{totals.count} edit{totals.count === 1 ? '' : 's'}</span>
       <span class="rp-bar-stats mono">
         <span class="rp-add">+{totals.add}</span>
         <span class="rp-rem">−{totals.rem}</span>
       </span>
       <span class="rp-bar-spacer"></span>
       <button
-        class="rp-bar-btn rp-bar-btn--icon"
-        onclick={toggleFullscreen}
-        title={fullscreen ? 'Exit full screen (Esc)' : 'Open in full screen'}
-        aria-label={fullscreen ? 'Exit full screen' : 'Open in full screen'}
-      >
-        {#if fullscreen}
-          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/>
-          </svg>
-        {:else}
-          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>
-          </svg>
-        {/if}
-      </button>
-      <button
         class="rp-bar-btn"
         disabled={bulkBusy}
         onclick={() => void onRevertAll()}
-        title="Revert every applied edit (newest first). Each revert checks the file is still in the agent-written state — out-of-sync edits surface as warnings."
+        title="Revert every applied edit (newest first)."
       >Revert all</button>
       <button
         class="rp-bar-btn rp-bar-btn--primary"
         disabled={bulkBusy}
         onclick={() => void onKeepAll()}
-        title="Mark every applied edit as kept. Disk is untouched; this just records your verdict so the per-row affordance flips."
+        title="Mark every applied edit as kept. Disk untouched."
       >Keep all</button>
     </header>
 
     <div class="rp-list" role="listbox" aria-label="Pending agent edits">
       {#each groups as g (g.filePath)}
-        <div class="rp-group">
+        {@const collapsed = collapsedFiles.has(g.filePath)}
+        {@const parts = splitPath(g.relPath)}
+        <div class="rp-group" class:rp-group--collapsed={collapsed}>
           <button
             class="rp-group-head mono"
-            onclick={() => void requestEditorOpenFile(p.instanceId, g.filePath)}
-            title="Open {g.relPath}"
+            class:rp-group-head--collapsed={collapsed}
+            onclick={() => toggleFile(g.filePath)}
+            title="{collapsed ? 'Expand' : 'Collapse'} {g.relPath}"
           >
-            <span class="rp-group-name">{g.relPath}</span>
-            <span class="rp-group-stats">
-              <span class="rp-add">+{g.addTotal}</span>
-              <span class="rp-rem">−{g.remTotal}</span>
+            <span class="rp-group-caret" aria-hidden="true" class:rp-group-caret--open={!collapsed}>
+              <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg>
+            </span>
+            <span class="rp-group-file">
+              <span class="rp-group-name">{parts.name}</span>
+              {#if parts.dir}<span class="rp-group-dir">{parts.dir}</span>{/if}
+            </span>
+            <span class="rp-group-meta">
+              <span class="rp-group-n" title="{g.rows.length} edit{g.rows.length === 1 ? '' : 's'}">{g.rows.length}</span>
+              <span class="rp-group-stats">
+                <span class="rp-add">+{g.addTotal}</span>
+                <span class="rp-rem">−{g.remTotal}</span>
+              </span>
             </span>
           </button>
 
-          {#each g.rows as row (row.key)}
-            {@const expanded = expandedKeys.has(row.key)}
-            {@const selected = selectedKey === row.key}
-            {@const busy = busyKeys.has(row.key)}
-            <div
-              class="rp-row"
-              class:rp-row--selected={selected}
-              class:rp-row--expanded={expanded}
-              data-row-key={row.key}
-              role="option"
-              aria-selected={selected}
-              onclick={() => { selectedKey = row.key; }}
-            >
-              <button
-                class="rp-row-head"
-                onclick={(e) => { e.stopPropagation(); selectedKey = row.key; toggleExpanded(row.key); }}
-                title="Toggle diff"
+          {#if !collapsed}
+            {#each g.rows as row (row.key)}
+              {@const selected = selectedKey === row.key}
+              {@const busy = busyKeys.has(row.key)}
+              <div
+                class="rp-row"
+                class:rp-row--selected={selected}
+                data-row-key={row.key}
+                role="option"
+                aria-selected={selected}
+                tabindex="-1"
+                onclick={() => clickRow(row)}
+                onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); clickRow(row); } }}
               >
-                <span class="rp-row-caret" aria-hidden="true" class:rp-row-caret--open={expanded}>
-                  <svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg>
-                </span>
+                <span
+                  class="rp-dot rp-dot--{row.event.status}"
+                  title="{row.event.status}"
+                  aria-hidden="true"
+                ></span>
                 <span class="rp-row-tag rp-row-tag--{row.event.isCreate ? 'add' : row.event.isDelete ? 'rem' : 'edit'}">
                   {#if row.event.isCreate}Create
                   {:else if row.event.isDelete}Delete
@@ -551,61 +391,23 @@
                 <span class="rp-row-agent rp-row-agent--{row.sessionKind}" title="From {row.sessionTitle}">
                   {row.sessionKind === 'claude' ? 'C' : 'X'}
                 </span>
+                {#if row.event.status === 'loading'}
+                  <span class="rp-row-streaming mono">streaming…</span>
+                {/if}
+                <span class="rp-row-spacer"></span>
                 <span class="rp-row-stats mono">
                   <span class="rp-add">+{row.stats.add}</span>
                   <span class="rp-rem">−{row.stats.rem}</span>
                 </span>
-                <span class="rp-row-spacer"></span>
-                {#if row.event.status === 'loading'}
-                  <span class="rp-row-status rp-row-status--loading mono">streaming…</span>
-                {/if}
-              </button>
-
-              <div class="rp-row-actions">
-                <button
-                  class="rp-act"
-                  onclick={(e) => { e.stopPropagation(); void openAt(row); }}
-                  title="Open file (Enter / o)"
-                >Open</button>
-                <button
-                  class="rp-act"
-                  onclick={(e) => { e.stopPropagation(); refineRow(row); }}
-                  title="Type a follow-up to {row.sessionTitle} (e)"
-                >Refine</button>
-                <button
-                  class="rp-act"
-                  disabled={busy}
-                  onclick={(e) => { e.stopPropagation(); void revertRow(row); }}
-                  title={row.event.isDelete ? 'Restore (r)' : 'Revert (r)'}
-                >{row.event.isDelete ? 'Restore' : 'Revert'}</button>
-                <button
-                  class="rp-act rp-act--primary"
-                  disabled={busy}
-                  onclick={(e) => { e.stopPropagation(); keepRow(row); }}
-                  title="Keep (a)"
-                >Keep</button>
+                <span class="rp-row-actions">
+                  <button class="rp-act" onclick={(e) => { e.stopPropagation(); openSelected(row); }} title="Open (Enter / o)">Open</button>
+                  <button class="rp-act" onclick={(e) => { e.stopPropagation(); refineRow(row); }} title="Refine (e)">Refine</button>
+                  <button class="rp-act" disabled={busy} onclick={(e) => { e.stopPropagation(); void revertRow(row); }} title={row.event.isDelete ? 'Restore (r)' : 'Revert (r)'}>{row.event.isDelete ? 'Restore' : 'Revert'}</button>
+                  <button class="rp-act rp-act--primary" disabled={busy} onclick={(e) => { e.stopPropagation(); keepRow(row); }} title="Keep (a)">Keep</button>
+                </span>
               </div>
-
-              {#if expanded}
-                <div class="rp-row-body">
-                  {#if row.event.status === 'loading'}
-                    <div class="rp-row-loading mono">Waiting for the agent to finish writing…</div>
-                  {:else}
-                    <div class="rp-diff" role="presentation">
-                      {#each computeDiffRows(row.event.oldText ?? '', row.event.newText ?? '') as drow, di (di)}
-                        <div class="rp-diff-row rp-diff-row--{drow.kind}">
-                          <span class="rp-diff-no mono">{drow.oldNo ?? ''}</span>
-                          <span class="rp-diff-no mono">{drow.newNo ?? ''}</span>
-                          <span class="rp-diff-glyph mono">{drow.kind === 'add' ? '+' : drow.kind === 'rem' ? '−' : ' '}</span>
-                          <span class="rp-diff-text mono">{drow.text}</span>
-                        </div>
-                      {/each}
-                    </div>
-                  {/if}
-                </div>
-              {/if}
-            </div>
-          {/each}
+            {/each}
+          {/if}
         </div>
       {/each}
     </div>
@@ -616,7 +418,7 @@
       <kbd>r</kbd> revert
       <kbd>e</kbd> refine
       <kbd>↵</kbd> open
-      <kbd>space</kbd> diff
+      <kbd>space</kbd> fold
     </footer>
   {/if}
 </section>
@@ -630,39 +432,8 @@
     background: var(--bg-1);
   }
   .rp:focus-visible { box-shadow: inset 0 0 0 1px var(--border-accent-2); }
-  /* Full-screen overlay — fixed cover above rail/sidebar (rail uses
-     up to z-index 9999 for popovers — sit above with 10000). */
-  .rp.rp--full {
-    position: fixed;
-    inset: 0;
-    z-index: 10000;
-    background: var(--bg-0);
-    box-shadow: 0 0 0 1px var(--border-neutral), 0 20px 60px rgba(0, 0, 0, 0.5);
-    padding: 0;
-  }
-  /* Inner list gets breathing room + can't run under viewport edges. */
-  .rp--full :global(.rp-list) {
-    padding: 12px 24px 24px;
-    max-width: 1280px;
-    margin: 0 auto;
-    width: 100%;
-  }
-  .rp--full :global(.rp-bar) {
-    padding: 10px 24px;
-  }
-  .rp--full :global(.rp-row) { margin-left: 0; margin-right: 0; }
-  .rp--full :global(.rp-diff) { font-size: 13px; }
-  /* Brighten the line-number column when fullscreen — it's the
-     primary navigation aid and `--text-mute` reads as nearly black
-     on the dark overlay bg. */
-  .rp--full :global(.rp-diff-no) { color: var(--text-1); }
-  .rp-bar-btn--icon {
-    padding: 4px 6px;
-    display: inline-flex; align-items: center; justify-content: center;
-  }
 
-  /* Empty state — same vocabulary as the Debug / Tests placeholders
-     in EditorView so the sidebar feels uniform across tabs. */
+  /* Empty state — same vocabulary as the Debug / Tests placeholders. */
   .rp-empty {
     flex: 1; min-height: 0;
     display: flex; flex-direction: column; align-items: center; justify-content: center;
@@ -687,10 +458,7 @@
     font-size: 12px;
   }
 
-  /* Top bar — sticky so Keep/Revert all stay visible while the user
-     scrolls a long list. Mirrors the chat composer's "pending" bar
-     styling so the affordance reads the same regardless of where the
-     user reviews from. */
+  /* Top bar — sticky count + bulk actions. */
   .rp-bar {
     position: sticky; top: 0; z-index: 2;
     display: flex; align-items: center; gap: 10px;
@@ -723,65 +491,108 @@
   .rp-list {
     flex: 1; min-height: 0;
     overflow-y: auto;
-    padding: 4px 0 8px;
+    padding: 6px;
+    display: flex; flex-direction: column; gap: 8px;
   }
 
-  .rp-group { padding: 8px 0 4px; }
+  /* File group — a distinct card so files read as separate buckets. */
+  .rp-group {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg-2);
+    overflow: hidden;
+  }
+  .rp-group--collapsed { background: var(--bg-1); }
+
+  /* File header — banded, sticky-ish, bold name + muted dir + meta. */
   .rp-group-head {
     width: 100%;
     display: flex; align-items: center; gap: 8px;
-    padding: 4px 12px;
-    background: transparent; border: 0; cursor: pointer;
+    padding: 7px 10px;
+    background: var(--bg-3, var(--bg-2));
+    border: 0;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
     color: var(--text-1);
     font-size: 11.5px;
     text-align: left;
+    min-width: 0;
+    overflow: hidden;
   }
-  .rp-group-head:hover { color: var(--text-0); }
+  .rp-group-head--collapsed { border-bottom-color: transparent; }
+  .rp-group-head:hover { background: var(--bg-3, var(--bg-2)); color: var(--text-0); }
+  .rp-group-caret {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 13px; height: 13px; flex: 0 0 auto;
+    color: var(--text-2);
+    transform: rotate(-90deg);
+    transition: transform 140ms;
+  }
+  .rp-group-caret--open { transform: rotate(0deg); }
+  .rp-group-file {
+    flex: 1 1 auto; min-width: 0;
+    display: flex; align-items: baseline; gap: 6px;
+    overflow: hidden;
+  }
+  /* Filename keeps priority — it shrinks slowly (shrink 1) and only after the
+     directory (shrink 1000) has fully collapsed to an ellipsis. */
   .rp-group-name {
-    flex: 1; min-width: 0;
+    flex: 0 1 auto;
+    min-width: 2ch;
+    color: var(--text-0);
+    font-weight: 700;
     white-space: nowrap; text-overflow: ellipsis; overflow: hidden;
+  }
+  .rp-group-dir {
+    flex: 1 1000 auto;
+    min-width: 0;
+    color: var(--text-mute);
+    font-size: 10.5px;
+    white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .rp-group-meta { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+  .rp-group-n {
+    min-width: 16px; height: 16px;
+    padding: 0 5px;
+    display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 8px;
+    background: var(--bg-1);
+    border: 1px solid var(--border);
+    color: var(--text-1);
+    font-size: 10px; font-weight: 700;
   }
   .rp-group-stats { display: flex; gap: 6px; font-size: 10.5px; flex: 0 0 auto; }
 
+  /* Row — one compact line, nested under its file header. Separated by
+     hairlines; actions hidden until hover / selection. */
   .rp-row {
-    margin: 4px 8px;
-    border: 1px solid var(--border-neutral, var(--border));
-    border-radius: 7px;
-    background: var(--bg-2);
-    transition: border-color 120ms, background 120ms;
-    cursor: default;
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 10px 6px 12px;
+    border-left: 2px solid transparent;
+    border-top: 1px solid var(--border);
+    cursor: pointer;
+    transition: background 120ms, border-color 120ms;
+    outline: none;
   }
-  .rp-row:hover {
-    border-color: var(--border-neutral-hi, var(--border));
-    background: var(--bg-3, var(--bg-2));
-  }
+  .rp-row:first-of-type { border-top: 0; }
+  .rp-row:hover { background: var(--bg-3, var(--bg-1)); }
   .rp-row--selected {
-    border-color: var(--accent);
-    background: linear-gradient(180deg, var(--accent-soft), var(--bg-2));
-    box-shadow: 0 0 0 1px var(--accent) inset;
-  }
-  .rp-row--expanded {
-    background: var(--bg-3, var(--bg-1));
-    border-color: var(--border-neutral-hi, var(--border));
+    border-left-color: var(--accent);
+    background: linear-gradient(90deg, var(--accent-soft), transparent 70%);
   }
 
-  .rp-row-head {
-    width: 100%;
-    display: flex; align-items: center; gap: 8px;
-    padding: 6px 8px;
-    background: transparent; border: 0; cursor: pointer;
-    color: var(--text-1);
-    font-size: 11.5px;
-    text-align: left;
+  .rp-dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    flex: 0 0 auto;
+    background: var(--text-mute);
   }
-  .rp-row-head:hover { color: var(--text-0); }
-  .rp-row-caret {
-    display: inline-flex; align-items: center; justify-content: center;
-    width: 12px; height: 12px;
-    color: var(--text-mute);
-    transition: transform 140ms;
-  }
-  .rp-row-caret--open { transform: rotate(180deg); }
+  .rp-dot--applied { background: var(--accent); }
+  .rp-dot--kept { background: var(--diff-add); }
+  .rp-dot--reverted { background: var(--text-mute); }
+  .rp-dot--error { background: var(--diff-rem); }
+  .rp-dot--loading { background: var(--accent-bright); }
+
   .rp-row-tag {
     font-family: 'JetBrains Mono', monospace;
     font-size: 10px; font-weight: 700;
@@ -791,15 +602,12 @@
     color: var(--accent-bright);
     text-transform: uppercase;
     letter-spacing: 0.04em;
+    flex: 0 0 auto;
   }
-  .rp-row-tag--add {
-    background: color-mix(in srgb, var(--diff-add) 28%, transparent);
-    color: var(--text-0);
-  }
-  .rp-row-tag--rem {
-    background: color-mix(in srgb, var(--diff-rem) 28%, transparent);
-    color: var(--text-0);
-  }
+  .rp-row-tag--add { background: color-mix(in srgb, var(--diff-add) 28%, transparent); color: var(--text-0); }
+  .rp-row-tag--rem { background: color-mix(in srgb, var(--diff-rem) 28%, transparent); color: var(--text-0); }
+
+  /* Per-source brand accent — KEEP distinct (Claude rust, Cursor tone). */
   .rp-row-agent {
     width: 16px; height: 16px;
     display: grid; place-items: center;
@@ -811,93 +619,43 @@
   }
   .rp-row-agent--claude { background: var(--src-claude); }
   .rp-row-agent--cursor { background: var(--src-cursor); }
-  .rp-row-stats { display: flex; gap: 6px; font-size: 10.5px; }
-  .rp-row-spacer { flex: 1; }
-  .rp-row-status { font-size: 10px; color: var(--text-mute); }
-  .rp-row-status--loading { color: var(--accent-bright); }
 
+  .rp-row-streaming { font-size: 10px; color: var(--accent-bright); flex: 0 0 auto; }
+  .rp-row-spacer { flex: 1; }
+  .rp-row-stats { display: flex; gap: 6px; font-size: 10.5px; flex: 0 0 auto; }
   .rp-add { color: var(--diff-add); }
   .rp-rem { color: var(--diff-rem); }
 
   .rp-row-actions {
-    display: flex; gap: 6px;
-    padding: 0 10px 8px 30px;
+    display: flex; gap: 5px;
+    flex: 0 0 auto;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 120ms;
+  }
+  .rp-row:hover .rp-row-actions,
+  .rp-row--selected .rp-row-actions {
     opacity: 1;
     pointer-events: auto;
   }
   .rp-act {
-    padding: 3px 10px;
+    padding: 2px 8px;
     background: var(--bg-1);
     border: 1px solid var(--border-neutral-hi, var(--border));
     color: var(--text-0);
-    border-radius: 5px;
-    font-size: 11px;
+    border-radius: 4px;
+    font-size: 10.5px;
     cursor: pointer;
     transition: color 120ms, border-color 120ms, background 120ms;
   }
-  .rp-act:hover {
-    color: var(--text-0);
-    border-color: var(--accent);
-    background: var(--bg-3, var(--bg-2));
-  }
+  .rp-act:hover { border-color: var(--accent); background: var(--bg-3, var(--bg-2)); }
   .rp-act:disabled { opacity: 0.45; cursor: not-allowed; }
   .rp-act--primary {
     color: var(--accent-bright);
     border-color: var(--accent);
     background: var(--accent-soft);
   }
-  .rp-act--primary:hover {
-    color: var(--text-0);
-    background: var(--accent);
-    border-color: var(--accent);
-  }
-
-  .rp-row-body { padding: 0 8px 8px 30px; }
-  .rp-row-loading {
-    padding: 6px 8px;
-    color: var(--text-mute);
-    font-size: 11px;
-    background: var(--bg-2);
-    border-radius: 4px;
-  }
-  .rp-diff {
-    border-radius: 4px;
-    border: 1px solid var(--border);
-    background: var(--bg-0);
-    overflow-x: auto;
-  }
-  .rp-diff-row {
-    display: grid;
-    grid-template-columns: 28px 28px 12px 1fr;
-    gap: 0;
-    align-items: baseline;
-    padding: 0 6px;
-    font-size: 11.5px;
-    line-height: 1.45;
-    white-space: pre;
-  }
-  .rp-diff-row--add {
-    background: color-mix(in srgb, var(--diff-add) 26%, transparent);
-    color: var(--text-0);
-    font-weight: 500;
-  }
-  .rp-diff-row--rem {
-    background: color-mix(in srgb, var(--diff-rem) 26%, transparent);
-    color: var(--text-0);
-    font-weight: 500;
-  }
-  .rp-diff-row--ctx { color: var(--text-1); }
-  .rp-diff-no {
-    color: var(--text-2);
-    text-align: right; padding-right: 4px;
-    font-size: 10.5px;
-    font-weight: 500;
-  }
-  .rp-diff-glyph { color: inherit; opacity: 0.7; }
-  .rp-diff-text {
-    overflow: hidden; text-overflow: ellipsis;
-    color: inherit;
-  }
+  .rp-act--primary:hover { color: var(--text-0); background: var(--accent); border-color: var(--accent); }
 
   .rp-foot {
     padding: 6px 12px;

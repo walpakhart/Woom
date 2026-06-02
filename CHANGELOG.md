@@ -8,6 +8,34 @@ release runbook (how this CHANGELOG feeds `latest-mac.json`) lives in
 
 ## Unreleased
 
+## 0.3.1 — 2026-06-02
+
+Bumps version 0.3.0 → 0.3.1 across `apps/desktop/package.json`,
+`apps/desktop/src-tauri/Cargo.toml`, `apps/desktop/src-tauri/tauri.conf.json`,
+`apps/desktop/src-tauri/Cargo.lock`.
+
+**ReviewPane v2** — the AGENT EDITS panel is now a compact navigator and the
+editor is the single diff surface.
+
+### Changed
+
+- **Compact ReviewPane** — dropped the panel's vendored inline-diff (LCS) and
+  the fullscreen overlay. Each edit is one quiet line (status dot · tag ·
+  source chip · `+N −M`) under collapsible per-file cards; `+N −M` now derives
+  from the shared `computeHunks` engine via a new `reviewStats.ts` (+12 unit
+  tests). (`ReviewPane.svelte` 919→~620 lines.)
+- **Review sidebar legibility** — file headers show a bold filename + muted
+  directory (filename keeps priority, directory truncates first), an edit-count
+  badge, and summed `+N −M`; rows nest under their file card with hairline
+  separators.
+
+### Added
+
+- **Select-to-focus an edit** — selecting a row (click or `j`/`k`) opens the
+  edit's file and scrolls to + highlights *that edit's* hunks in the editor
+  overlay (`cm-inline-hunk--focus` accent rail), via a new `selectedEditKey`
+  wired ReviewPane → EditorView → Editor.
+
 ### Fixed
 
 - **Multi-hunk reject no longer drifts** — rejecting one hunk of a
@@ -22,6 +50,14 @@ release runbook (how this CHANGELOG feeds `latest-mac.json`) lives in
   the all-rejected tally stays correct as hunks drop out of the live diff.
   (`inlineHunks.ts`, `Editor.svelte`; +4 unit tests.) This was the 0.3.0
   multi-hunk known limitation.
+- **Stacked-edit overlay collisions** — hunk ids are now namespaced per edit
+  (`sessionId:toolId#oldId`); previously old-anchored ids collided when several
+  edits stacked on one file, cross-assigning owners and piling overlapping
+  overlays. The overlay also renders only the selected edit's hunks.
+  (`Editor.svelte`)
+- **Scroll-to-hunk clobbered on open** — `load()`'s saved-scroll restore (rAF)
+  overrode the jump-to-hunk in the same frame, so the editor never moved to the
+  selected edit; the jump now defers past the restore. (`Editor.svelte`)
 
 ## 0.3.0 — 2026-06-02
 

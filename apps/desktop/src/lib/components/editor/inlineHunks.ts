@@ -161,15 +161,19 @@ export function buildHunkRevert(doc: Text, h: Hunk): DocChange {
 /* ── CodeMirror decoration layer ─────────────────────────────────────── */
 
 class GhostLinesWidget extends WidgetType {
-  constructor(readonly lines: string[], readonly hunkId: string) {
+  constructor(readonly lines: string[], readonly hunkId: string, readonly focused: boolean) {
     super();
   }
   eq(other: GhostLinesWidget): boolean {
-    return other.hunkId === this.hunkId && other.lines.length === this.lines.length;
+    return (
+      other.hunkId === this.hunkId &&
+      other.lines.length === this.lines.length &&
+      other.focused === this.focused
+    );
   }
   toDOM(): HTMLElement {
     const wrap = document.createElement('div');
-    wrap.className = 'cm-inline-hunk--del';
+    wrap.className = this.focused ? 'cm-inline-hunk--del cm-inline-hunk--focus' : 'cm-inline-hunk--del';
     wrap.setAttribute('data-hunk', this.hunkId);
     for (const ln of this.lines) {
       const row = document.createElement('div');
@@ -186,26 +190,30 @@ class GhostLinesWidget extends WidgetType {
   }
 }
 
-const addLineDeco = (id: string) =>
-  Decoration.line({ class: 'cm-inline-hunk--add', attributes: { 'data-hunk': id } });
+const addLineDeco = (id: string, focused: boolean) =>
+  Decoration.line({
+    class: focused ? 'cm-inline-hunk--add cm-inline-hunk--focus' : 'cm-inline-hunk--add',
+    attributes: { 'data-hunk': id }
+  });
 
-function buildDecorations(hunks: Hunk[], doc: Text): DecorationSet {
+function buildDecorations(hunks: Hunk[], doc: Text, focused: Set<string>): DecorationSet {
   if (hunks.length === 0) return Decoration.none;
   const ranges = [];
   const totalLines = doc.lines;
 
   for (const h of hunks) {
+    const isFocused = focused.has(h.id);
     // Added/modified lines — real lines in the current (post-edit) doc.
     for (let k = 0; k < h.added.length; k++) {
       const lineNo = h.newStart + k;
       if (lineNo < 1 || lineNo > totalLines) continue;
       const line = doc.line(lineNo);
-      ranges.push(addLineDeco(h.id).range(line.from));
+      ranges.push(addLineDeco(h.id, isFocused).range(line.from));
     }
     // Removed lines — gone from disk, shown as a ghost block above the
     // anchor line. Clamp; deletion at EOF anchors after the last line.
     if (h.removed.length > 0) {
-      const widget = new GhostLinesWidget(h.removed, h.id);
+      const widget = new GhostLinesWidget(h.removed, h.id, isFocused);
       if (h.newStart > totalLines) {
         const last = doc.line(totalLines);
         ranges.push(
@@ -226,17 +234,36 @@ function buildDecorations(hunks: Hunk[], doc: Text): DecorationSet {
 }
 
 export const setHunks = StateEffect.define<Hunk[]>();
+/** Emphasise a subset of hunks (by id) — the edit currently selected in the
+ *  ReviewPane. Drives the `cm-inline-hunk--focus` ring so the reviewer sees
+ *  exactly which chunk belongs to the row they picked. */
+export const setFocusedHunks = StateEffect.define<string[]>();
 
-const pendingHunksField = StateField.define<DecorationSet>({
-  create: () => Decoration.none,
-  update(value: DecorationSet, tr: Transaction): DecorationSet {
+interface HunkState {
+  hunks: Hunk[];
+  focused: Set<string>;
+  deco: DecorationSet;
+}
+
+const pendingHunksField = StateField.define<HunkState>({
+  create: () => ({ hunks: [], focused: new Set<string>(), deco: Decoration.none }),
+  update(value: HunkState, tr: Transaction): HunkState {
+    let hunks = value.hunks;
+    let focused = value.focused;
+    let rebuild = false;
     for (const e of tr.effects) {
-      if (e.is(setHunks)) return buildDecorations(e.value, tr.state.doc);
+      if (e.is(setHunks)) { hunks = e.value; rebuild = true; }
+      if (e.is(setFocusedHunks)) { focused = new Set(e.value); rebuild = true; }
     }
-    if (tr.docChanged) return value.map(tr.changes);
+    if (rebuild) {
+      return { hunks, focused, deco: buildDecorations(hunks, tr.state.doc, focused) };
+    }
+    if (tr.docChanged) {
+      return { ...value, deco: value.deco.map(tr.changes) };
+    }
     return value;
   },
-  provide: (f) => EditorView.decorations.from(f)
+  provide: (f) => EditorView.decorations.from(f, (s) => s.deco)
 });
 
 export function inlineHunksExtension(): Extension {
