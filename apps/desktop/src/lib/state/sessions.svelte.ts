@@ -368,6 +368,8 @@ function hydrateSession(s: ClaudeSession): ClaudeSession {
       (s as { cwdUuids?: Record<string, string> }).cwdUuids ?? {},
     awaitingApproval:
       Boolean((s as { awaitingApproval?: boolean }).awaitingApproval),
+    archived: Boolean((s as { archived?: boolean }).archived),
+    archivedAt: (s as { archivedAt?: number | null }).archivedAt ?? undefined,
     pendingActionResults:
       (s as { pendingActionResults?: PendingActionResult[] }).pendingActionResults ?? [],
     /* pendingTurn from disk means the prior process died mid-turn.
@@ -661,24 +663,17 @@ export function newClaudeSession(
   return id;
 }
 
-export function deleteClaudeSession(id: string) {
-  const doomed = sessionsState.list.find((s) => s.id === id);
-  /* Auto-distill: before the session disappears, snapshot the first
-     user message + last assistant message into long-term memory so a
-     future chat can find what this session was about via memory_search.
-     Sessions with very little content (only the auto-created empty
-     state) skip the distill — nothing meaningful to preserve. The
-     save is fire-and-forget; deletion proceeds regardless of whether
-     it succeeds (toast surfaces an error if it does fail). */
-  if (doomed) {
-    void autoDistillSession(doomed);
-  }
-  const rest = sessionsState.list.filter((s) => s.id !== id);
-  sessionsState.list = rest;
-  const kind = doomed?.agentKind ?? 'claude';
-  // Every per-instance pointer that was on this session jumps to the next
-  // visible session of the same kind (or null if none remain).
-  const fallback = rest.find((s) => s.agentKind === kind)?.id ?? null;
+/** Move active pointers off `id` to the next VISIBLE (non-archived)
+ *  session of `kind`, and auto-create a fresh empty Claude chat if the
+ *  visible list of that kind is now empty (keeps the chat surface off a
+ *  permanent empty state). Shared by archive + purge. `visible` is the
+ *  post-removal list of sessions that should still show in the sidebar. */
+function reassignPointersAfterRemoval(
+  id: string,
+  kind: 'claude' | 'cursor',
+  visible: ClaudeSession[]
+) {
+  const fallback = visible.find((s) => s.agentKind === kind)?.id ?? null;
   for (const k of Object.keys(sessionsState.activeByInstance)) {
     if (sessionsState.activeByInstance[k] === id) {
       sessionsState.activeByInstance[k] = fallback;
@@ -689,11 +684,47 @@ export function deleteClaudeSession(id: string) {
     sessionsState.activeClaudeId =
       fallback ?? sessionsState.activeIds[kind === 'claude' ? 'cursor' : 'claude'];
   }
-  // Auto-create a fresh Claude chat if the user emptied the list — keeps
-  // the chat surface from sitting on a permanent empty state.
-  if (rest.filter((s) => s.agentKind === 'claude').length === 0) {
+  if (visible.filter((s) => s.agentKind === 'claude').length === 0) {
     newClaudeSession({ agentKind: 'claude' });
   }
+}
+
+/** Soft-delete a chat → the Archive. The session stays in `list` + on
+ *  disk (so it can be restored or permanently deleted later), but is
+ *  marked `archived` so the sidebar hides it and pointer/auto-create
+ *  logic skips it. Still runs the memory auto-distill so a future chat
+ *  can recall what this one was about via `memory_search`. This is what
+ *  the sidebar's "Delete chat" / X now does — nothing is lost. */
+export function deleteClaudeSession(id: string) {
+  const doomed = sessionsState.list.find((s) => s.id === id);
+  if (!doomed || doomed.archived) return;
+  /* Fire-and-forget snapshot — archiving proceeds regardless of whether
+     the distill save succeeds (toast surfaces an error if it fails). */
+  void autoDistillSession(doomed);
+  updateSession(id, { archived: true, archivedAt: Date.now(), sending: false });
+  const kind = doomed.agentKind ?? 'claude';
+  const visible = sessionsState.list.filter((s) => s.id !== id && !s.archived);
+  reassignPointersAfterRemoval(id, kind, visible);
+}
+
+/** Restore an archived chat back into the active sidebar list. */
+export function restoreClaudeSession(id: string) {
+  const s = sessionsState.list.find((x) => x.id === id);
+  if (!s || !s.archived) return;
+  updateSession(id, { archived: false, archivedAt: undefined });
+}
+
+/** Permanently delete a chat — no recovery. Removes it from `list`
+ *  entirely and reassigns pointers. Reachable only from the Archive's
+ *  "Delete forever" action; the memory snapshot (if any) was already
+ *  captured at archive time. */
+export function purgeClaudeSession(id: string) {
+  const doomed = sessionsState.list.find((s) => s.id === id);
+  const rest = sessionsState.list.filter((s) => s.id !== id);
+  sessionsState.list = rest;
+  const kind = doomed?.agentKind ?? 'claude';
+  const visible = rest.filter((s) => !s.archived);
+  reassignPointersAfterRemoval(id, kind, visible);
 }
 
 /** Snapshot a soon-to-be-deleted session into long-term memory. Picks

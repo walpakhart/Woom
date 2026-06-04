@@ -15,6 +15,7 @@ import {
   replaceLastAssistant,
   sessionsState,
   setAwaitingResume,
+  clearResumeState,
   updateSession,
 } from '$lib/state/sessions.svelte';
 import { quotaState, nextResetAt } from '$lib/state/quota.svelte';
@@ -113,7 +114,11 @@ export function onActionResolved(
  *  uses, so the agent sees identical "since-last-turn outcomes"
  *  formatting whether it picks up automatically or after the user
  *  types something. */
-export async function continueAgentTurn(sessionId: string, deps: AgentTurnDeps): Promise<void> {
+export async function continueAgentTurn(
+  sessionId: string,
+  deps: AgentTurnDeps,
+  ignoreQuota = false
+): Promise<void> {
   const sess = sessionsState.list.find((s) => s.id === sessionId);
   if (!sess || sess.sending) {
     continuationInFlight.delete(sessionId);
@@ -129,7 +134,7 @@ export async function continueAgentTurn(sessionId: string, deps: AgentTurnDeps):
    * to awaitingResume — onResumeAfterQuota / the watchdog re-fire the
    * continuation once quota recovers. */
   const guardKind = (sess.agentKind ?? 'claude') as 'claude' | 'cursor';
-  if (guardKind === 'claude') {
+  if (guardKind === 'claude' && !ignoreQuota) {
     const pct5h = quotaState.usage?.five_hour?.utilization ?? 0;
     const pct7d = quotaState.usage?.seven_day?.utilization ?? 0;
     if (pct5h >= 95 || pct7d >= 95) {
@@ -143,11 +148,26 @@ export async function continueAgentTurn(sessionId: string, deps: AgentTurnDeps):
         updateSession(sessionId, { messages: msgs });
       }
       setAwaitingResume(sessionId, resumeAt, 'quota');
-      void openQuotaPauseModal({
+      /* Await the choice: «force» re-enters the continuation with the
+         quota guard bypassed (clearing the interrupted/awaiting marker
+         we just set); «wait»/«cancel» leave the session parked for the
+         watchdog / ResumePill. */
+      const action = await openQuotaPauseModal({
         pct: tripped5h ? pct5h : pct7d,
         bucketLabel: tripped5h ? '5H' : '7D',
         resumeAt,
       });
+      if (action === 'force') {
+        const cur = sessionsState.list.find((s) => s.id === sessionId);
+        const lastCur = cur?.messages[cur.messages.length - 1];
+        if (cur && lastCur && lastCur.role === 'assistant' && lastCur.interrupted === 'quota') {
+          const msgs = [...cur.messages];
+          msgs[msgs.length - 1] = { ...lastCur, interrupted: undefined };
+          updateSession(sessionId, { messages: msgs });
+        }
+        clearResumeState(sessionId);
+        void continueAgentTurn(sessionId, deps, true);
+      }
       return;
     }
   }

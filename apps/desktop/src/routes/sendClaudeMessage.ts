@@ -133,9 +133,16 @@ export function createSendClaudeMessage(deps: SendClaudeMessageDeps) {
           const nextQueue = [...(s.pendingQueue ?? []), entry];
           updateSession(s.id, { input: '', mentions: [], pendingQueue: nextQueue });
           setAwaitingResume(s.id, resumeAt, 'quota');
+          return;
         }
-        /* «cancel» — leave s.input untouched so user can edit / retry. */
-        return;
+        if (action !== 'force') {
+          /* «cancel» — leave s.input untouched so user can edit / retry. */
+          return;
+        }
+        /* «force» — user chose to send anyway, ignore the limit. Fall
+           through to the normal send path below. The turn may get cut
+           off mid-stream if the bucket crosses 100%, but that's the
+           user's explicit call. */
       }
     }
     if (!opts.silent) {

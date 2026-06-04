@@ -96,6 +96,8 @@ export function serializeSession(s: ClaudeSession): object {
     cwdSwitchRecap: s.cwdSwitchRecap,
     cwdUuids: s.cwdUuids,
     awaitingApproval: s.awaitingApproval,
+    archived: s.archived ?? false,
+    archivedAt: s.archivedAt ?? null,
     pendingActionResults: s.pendingActionResults,
     pendingTurn: s.pendingTurn ?? null,
     // Persist RTK toggle so a "RTK off for diagnostics" decision

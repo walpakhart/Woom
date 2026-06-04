@@ -417,6 +417,16 @@ export type ClaudeSession = {
       shows a "waiting for your approval" hint instead of the idle
       input prompt so the user knows the agent is paused on them. */
   awaitingApproval: boolean;
+  /** Soft-delete: when the user "deletes" a chat it's moved to the
+      Archive (set true + `archivedAt`) instead of being purged, so it
+      can be restored or permanently deleted later. Archived sessions
+      are hidden from the normal sidebar list and skipped by
+      active-pointer / auto-create logic, but stay in `sessionsState.list`
+      and on disk. */
+  archived?: boolean;
+  /** Unix-ms when the session was archived. Drives the Archive list's
+      sort + "archived N ago" label. */
+  archivedAt?: number;
   /** Outcomes from action cards (commit / PR / bash / switch_cwd) that
       have run since the agent's last turn. Two consumers:
         1. UI: each outcome gets appended to `messages` as an action-

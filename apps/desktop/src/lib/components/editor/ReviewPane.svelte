@@ -495,8 +495,12 @@
     display: flex; flex-direction: column; gap: 8px;
   }
 
-  /* File group — a distinct card so files read as separate buckets. */
+  /* File group — a distinct card so files read as separate buckets.
+     flex:0 0 auto keeps each card at its natural height inside the
+     column-flex list; without it the cards shrink to fit and rows
+     overlap instead of the list scrolling. */
   .rp-group {
+    flex: 0 0 auto;
     border: 1px solid var(--border);
     border-radius: 8px;
     background: var(--bg-2);

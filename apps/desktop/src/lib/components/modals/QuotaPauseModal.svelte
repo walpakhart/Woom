@@ -22,7 +22,7 @@
 
   const remaining = $derived(m ? Math.max(0, m.resumeAt - now) : 0);
 
-  function finish(action: 'wait' | 'cancel') {
+  function finish(action: 'wait' | 'cancel' | 'force') {
     const cur = m;
     closeModal('quotaPause');
     cur?.resolve?.(action);
@@ -61,6 +61,9 @@
         <button class="btn-secondary" onclick={() => finish('cancel')}>
           Отмена
         </button>
+        <button class="btn-ghost" onclick={() => finish('force')}>
+          Отправить всё равно
+        </button>
         <button class="btn-primary" onclick={() => finish('wait')}>
           Подождать сброса
         </button>
@@ -86,14 +89,29 @@
     border-top: 1px solid var(--border);
   }
   .btn-primary,
-  .btn-secondary {
+  .btn-secondary,
+  .btn-ghost {
     padding: 7px 14px;
     border-radius: 6px;
     font-size: 12.5px;
     font-weight: 600;
     cursor: pointer;
-    transition: background 120ms, border-color 120ms;
+    transition: background 120ms, border-color 120ms, color 120ms;
   }
+  /* Send-anyway: deliberately understated — allowed but not encouraged.
+     Transparent until hover so «Подождать сброса» stays the default eye-pull. */
+  .btn-ghost {
+    background: transparent;
+    color: var(--text-2);
+    border: 1px solid transparent;
+  }
+  .btn-ghost:hover {
+    color: var(--text-0);
+    background: var(--bg-2);
+    border-color: var(--border);
+  }
+  /* Push «Отмена» to the far left; force + wait sit on the right. */
+  .modal-actions .btn-secondary { margin-right: auto; }
   .btn-primary {
     background: var(--accent);
     color: var(--accent-fg);

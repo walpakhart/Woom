@@ -8,6 +8,51 @@ release runbook (how this CHANGELOG feeds `latest-mac.json`) lives in
 
 ## Unreleased
 
+## 0.3.2 — 2026-06-04
+
+Bumps version 0.3.1 → 0.3.2 across `apps/desktop/package.json`,
+`apps/desktop/src-tauri/Cargo.toml`, `apps/desktop/src-tauri/tauri.conf.json`,
+`apps/desktop/src-tauri/Cargo.lock`.
+
+Multi-editor context fixes, a force-send escape hatch for the quota
+guard, and chat archiving.
+
+### Added
+
+- **Send anyway on the quota pause** — the 5H/7D ≥95% pause modal now
+  offers a third action, «Отправить всё равно», alongside wait/cancel.
+  Pre-send (`sendClaudeMessage`) falls straight through to the send;
+  the mid-turn auto-continuation guard (`agentTurn`) clears the
+  interrupted/awaiting marker and re-enters with the quota check
+  bypassed. The turn may get cut off if the bucket crosses 100%, but
+  that's now the user's explicit call. (`QuotaPauseModal.svelte`,
+  `modals.svelte.ts`, `sendClaudeMessage.ts`, `agentTurn.ts`.)
+- **Chat archive** — deleting a chat now moves it to an Archive
+  instead of hard-deleting. The sidebar "Delete chat" / X soft-deletes
+  (reversible, no confirm; still auto-distills a memory snapshot); a
+  collapsible **Archived** section lists archived chats with Restore
+  and Delete-forever. New `archived` / `archivedAt` on `ClaudeSession`
+  (persisted), plus `restoreClaudeSession` / `purgeClaudeSession`.
+  (`types.ts`, `sessions.svelte.ts`, `sessions_serialize.ts`,
+  `SessionsSidebar.svelte`.)
+
+### Fixed
+
+- **Agent now sees every editor, not just the primary** — the per-turn
+  layout snapshot emitted one row per kind via the singleton id, so
+  with multiple editor (or canvas / terminal) instances open the agent
+  only saw the primary column and its repo — it read the wrong folder
+  when its linked session lived in a secondary editor. The snapshot now
+  emits one row per instance with each instance's own `repo_path` /
+  `open_file` / `linked_agents`, and a session's `linked_to_editor`
+  names the specific instance (name + id) instead of the bare kind.
+  (`agentContext.ts`.)
+- **ReviewPane file groups no longer overlap** — the review sidebar's
+  column-flex list shrank each file card below its content height
+  instead of scrolling, piling rows on top of each other. File cards
+  are pinned to `flex: 0 0 auto` so the list overflows and scrolls.
+  (`ReviewPane.svelte`.)
+
 ## 0.3.1 — 2026-06-02
 
 Bumps version 0.3.0 → 0.3.1 across `apps/desktop/package.json`,

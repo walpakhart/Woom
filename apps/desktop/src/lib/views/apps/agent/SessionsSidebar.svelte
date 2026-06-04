@@ -11,6 +11,8 @@
     setActiveSessionInInstance,
     newClaudeSession,
     deleteClaudeSession,
+    restoreClaudeSession,
+    purgeClaudeSession,
     updateSession
   } from '$lib/state/sessions.svelte';
   import { relativeTime } from '$lib/data';
@@ -34,7 +36,7 @@
   type Session = (typeof sessionsState.list)[number];
 
   const groups = $derived.by(() => {
-    const items = sessionsState.list.filter((s) => s.agentKind === kind);
+    const items = sessionsState.list.filter((s) => s.agentKind === kind && !s.archived);
     const dayMs = 24 * 60 * 60 * 1000;
     const sessTime = (s: Session) => {
       const last = s.messages[s.messages.length - 1]?.at;
@@ -66,8 +68,18 @@
   });
 
   const totalCount = $derived(
-    sessionsState.list.filter((s) => s.agentKind === kind).length
+    sessionsState.list.filter((s) => s.agentKind === kind && !s.archived).length
   );
+
+  /* Archived chats of this kind — newest-archived first. Rendered in a
+     collapsible section at the bottom of the list; restore brings one
+     back, "delete forever" purges it for good. */
+  const archivedItems = $derived.by(() =>
+    sessionsState.list
+      .filter((s) => s.agentKind === kind && s.archived)
+      .sort((a, b) => (b.archivedAt ?? 0) - (a.archivedAt ?? 0))
+  );
+  let showArchived = $state(false);
 
   /* Per-session memory presence. Keyed by the 8-char id prefix the
      auto-distill / paste-trap / right-click-save flows write into
@@ -188,17 +200,34 @@
       }
     });
     items.push({
-      label: 'Delete chat',
-      icon: 'M3 6h18 M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6 M10 11v6 M14 11v6',
+      label: 'Archive chat',
+      icon: 'M21 8v13H3V8 M1 3h22v5H1z M10 12h4',
       danger: true,
       onClick: () => {
-        if (window.confirm(`Delete "${s.title || 'Untitled'}"? Auto-distill saves a memory snapshot first.`)) {
-          deleteClaudeSession(s.id);
-        }
+        /* Soft-delete → Archive. Recoverable from the Archived section;
+           a memory snapshot is auto-distilled first. No confirm needed —
+           it's reversible. */
+        deleteClaudeSession(s.id);
+        notify({ kind: 'success', title: 'Chat archived', ttlMs: 2000 });
       }
     });
     return items;
   });
+
+  function restoreSession(sessId: string, e: MouseEvent) {
+    e.stopPropagation();
+    e.preventDefault();
+    restoreClaudeSession(sessId);
+  }
+
+  function purgeSession(sessId: string, sessTitle: string, e: MouseEvent) {
+    e.stopPropagation();
+    e.preventDefault();
+    if (!confirm(`Permanently delete "${sessTitle || 'Untitled chat'}"? This can't be undone.`)) {
+      return;
+    }
+    purgeClaudeSession(sessId);
+  }
 
   function pickSession(sessId: string) {
     setActiveSessionInInstance(instanceId, sessId);
@@ -209,15 +238,15 @@
     newClaudeSession({ agentKind: kind, agentInstanceId: instanceId });
   }
 
-  function deleteSession(sessId: string, sessTitle: string, e: MouseEvent) {
-    /* Stop the delete-icon click from also bubbling to the row's
-       click-to-activate handler. */
+  function deleteSession(sessId: string, _sessTitle: string, e: MouseEvent) {
+    /* Stop the archive-icon click from also bubbling to the row's
+       click-to-activate handler. Soft-delete → Archive (reversible),
+       so no confirm dialog — the user can restore from the Archived
+       section below. */
     e.stopPropagation();
     e.preventDefault();
-    if (!confirm(`Delete chat "${sessTitle || 'Untitled chat'}"? This can't be undone.`)) {
-      return;
-    }
     deleteClaudeSession(sessId);
+    notify({ kind: 'success', title: 'Chat archived', ttlMs: 2000 });
   }
 
   function shortTime(at: string | undefined): string {
@@ -305,15 +334,67 @@
             </div>
             <button
               class="ssb-del"
-              title="Delete chat"
-              aria-label="Delete chat"
+              title="Archive chat"
+              aria-label="Archive chat"
               onclick={(e) => deleteSession(sess.id, sess.title, e)}
             >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8v13H3V8M1 3h22v5H1zM10 12h4"/></svg>
             </button>
           </div>
         {/each}
       {/each}
+    {/if}
+
+    {#if archivedItems.length > 0}
+      <button
+        class="ssb-arch-toggle"
+        onclick={() => (showArchived = !showArchived)}
+        aria-expanded={showArchived}
+      >
+        <svg
+          class="ssb-arch-caret"
+          class:open={showArchived}
+          viewBox="0 0 24 24" width="11" height="11"
+          fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+        ><path d="M9 6l6 6-6 6"/></svg>
+        <span>Archived</span>
+        <span class="ssb-arch-count mono">{archivedItems.length}</span>
+      </button>
+      {#if showArchived}
+        {#each archivedItems as sess (sess.id)}
+          <div class="ssb-row ssb-row--archived">
+            <div class="ssb-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8v13H3V8M1 3h22v5H1zM10 12h4"/></svg>
+            </div>
+            <div class="ssb-body">
+              <div class="ssb-title">{sess.title || 'Untitled chat'}</div>
+              <div class="ssb-meta">
+                <span>{sess.messages.length} msgs</span>
+                {#if sess.archivedAt}
+                  <span class="ssb-dot">·</span>
+                  <span class="mono">archived {relativeTime(new Date(sess.archivedAt).toISOString(), now)}</span>
+                {/if}
+              </div>
+            </div>
+            <button
+              class="ssb-arch-act"
+              title="Restore chat"
+              aria-label="Restore chat"
+              onclick={(e) => restoreSession(sess.id, e)}
+            >
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v6h6M3 13a9 9 0 1 0 3-7.7L3 8"/></svg>
+            </button>
+            <button
+              class="ssb-arch-act ssb-arch-act--danger"
+              title="Delete forever"
+              aria-label="Delete forever"
+              onclick={(e) => purgeSession(sess.id, sess.title, e)}
+            >
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M3 6h18M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6M10 11v6M14 11v6"/></svg>
+            </button>
+          </div>
+        {/each}
+      {/if}
     {/if}
 
     <button class="ssb-new" onclick={createNew}>
@@ -498,6 +579,55 @@
     color: var(--error);
     background: rgba(232, 130, 100, 0.10);
   }
+
+  /* Archived section — collapsed by default, muted so it reads as a
+     secondary shelf below the live chats. */
+  .ssb-arch-toggle {
+    display: flex; align-items: center; gap: 7px;
+    width: calc(100% - 8px);
+    margin: 10px 4px 2px;
+    padding: 7px 10px;
+    background: transparent;
+    border: 0;
+    border-top: 1px solid var(--border);
+    border-radius: 0;
+    color: var(--text-mute);
+    font-size: 9.5px; font-weight: 700;
+    letter-spacing: 0.10em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: color 120ms;
+  }
+  .ssb-arch-toggle:hover { color: var(--text-1); }
+  .ssb-arch-caret { transition: transform 140ms; flex-shrink: 0; }
+  .ssb-arch-caret.open { transform: rotate(90deg); }
+  .ssb-arch-count {
+    margin-left: auto;
+    font-size: 10px;
+    color: var(--text-mute);
+    background: var(--bg-3);
+    border-radius: 8px;
+    padding: 0 6px;
+  }
+  .ssb-row--archived { opacity: 0.72; cursor: default; }
+  .ssb-row--archived:hover { opacity: 1; background: var(--bg-2); }
+  .ssb-row--archived .ssb-icon { color: var(--text-mute); }
+  .ssb-arch-act {
+    flex-shrink: 0;
+    width: 24px; height: 24px;
+    display: grid; place-items: center;
+    border-radius: 5px;
+    background: transparent;
+    border: 0;
+    color: var(--text-mute);
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 100ms, background 100ms, color 100ms;
+  }
+  .ssb-row--archived:hover .ssb-arch-act,
+  .ssb-row--archived:focus-within .ssb-arch-act { opacity: 0.85; }
+  .ssb-arch-act:hover { opacity: 1; color: var(--text-0); background: var(--bg-3); }
+  .ssb-arch-act--danger:hover { color: var(--error); background: rgba(232, 130, 100, 0.10); }
 
   .ssb-new {
     margin: 8px 4px;

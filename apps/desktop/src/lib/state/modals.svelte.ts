@@ -179,11 +179,12 @@ export interface QuotaPauseModalState {
   bucketLabel: '5H' | '7D';
   /** Unix-ms of the bucket's next reset. Modal renders live countdown. */
   resumeAt: number;
-  /** Deferred resolver — the modal calls `resolve('wait' | 'cancel')`
-   *  to close itself + signal the caller. The promise lives in
-   *  `openQuotaPauseModal`'s closure; the state-side ref is non-
-   *  serializable so a reload mid-pause just dismisses the modal. */
-  resolve: ((action: 'wait' | 'cancel') => void) | null;
+  /** Deferred resolver — the modal calls `resolve('wait' | 'cancel' | 'force')`
+   *  to close itself + signal the caller. `'force'` means "send anyway,
+   *  ignore the limit". The promise lives in `openQuotaPauseModal`'s
+   *  closure; the state-side ref is non-serializable so a reload
+   *  mid-pause just dismisses the modal. */
+  resolve: ((action: 'wait' | 'cancel' | 'force') => void) | null;
 }
 
 // --- Aggregate registry ------------------------------------------------------
@@ -242,7 +243,8 @@ export function closeModal<K extends ModalKey>(key: K): void {
  *  dismiss. */
 /** Open the quota-pause modal + await the user's choice. Returns
  *  `'wait'` when the user asks to queue the send and resume on
- *  reset, `'cancel'` when they bail (we drop the input). The modal
+ *  reset, `'cancel'` when they bail (we drop the input), `'force'`
+ *  when they choose to send anyway and ignore the limit. The modal
  *  component is responsible for calling the resolver before
  *  closing itself; this helper just sets the state + holds the
  *  deferred. */
@@ -250,7 +252,7 @@ export function openQuotaPauseModal(args: {
   pct: number;
   bucketLabel: '5H' | '7D';
   resumeAt: number;
-}): Promise<'wait' | 'cancel'> {
+}): Promise<'wait' | 'cancel' | 'force'> {
   return new Promise((resolve) => {
     modalsState.quotaPause = {
       pct: args.pct,

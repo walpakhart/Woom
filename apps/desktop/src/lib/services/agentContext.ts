@@ -14,7 +14,7 @@
 //      (measured ~$15–47 wasted on a heavy session). In the user
 //      message it's fresh content either way, so zero cache loss.
 
-import { layoutState, APP_INSTANCE_IDS, DEFAULT_PANEL_ORDER, kindForInstanceId } from '$lib/state/layout.svelte';
+import { layoutState, APP_INSTANCE_IDS, DEFAULT_PANEL_ORDER, MULTI_INSTANCE_KINDS, kindForInstanceId } from '$lib/state/layout.svelte';
 import { sessionsState } from '$lib/state/sessions.svelte';
 import { canvasState, ensureCanvasLoaded, type Shape, type Edge } from '$lib/state/canvas.svelte';
 import { getCachedClaudeMd } from '$lib/state/claudemd.svelte';
@@ -42,9 +42,12 @@ export function buildAgentAppContext(callingSessionId: string): { system: string
   lines.push(
     'You are running inside Woom, a desktop app organised as solo '
       + 'modes — one full-screen surface per source (Jira / GitHub / '
-      + 'Sentry / Claude / Cursor / Editor / Canvas / Terminal). Each '
-      + 'kind has exactly one singleton you can address by id (see the '
-      + 'layout snapshot below). Navigate the UI via `mcp__app__*` tools.'
+      + 'Sentry / Claude / Cursor / Editor / Canvas / Terminal). Source '
+      + 'and agent kinds are singletons; editor / canvas / terminal can '
+      + 'have MULTIPLE instances open at once — each is listed separately '
+      + 'below with its own id + name (e.g. an editor named "Vermeer" '
+      + 'open on repo A and "Klimt" on repo B are two distinct rows). '
+      + 'Address any of them by id. Navigate the UI via `mcp__app__*` tools.'
   );
   lines.push('');
   lines.push(
@@ -284,74 +287,94 @@ export function buildAgentAppContext(callingSessionId: string): { system: string
   }
 
   for (const kind of DEFAULT_PANEL_ORDER) {
-    const id = APP_INSTANCE_IDS[kind];
-    const meta: string[] = [`kind=${kind}`, `id=${id}`];
-    /* Multi-instance kinds (editor/canvas/terminal) carry a curated
-       display name (e.g. "Vermeer") that MCP tools use as the
-       agent-facing handle. Surface it next to the id so the agent
-       picks the readable form. */
-    if (kind === 'editor' || kind === 'canvas' || kind === 'terminal') {
-      const primaryName = layoutState.instances[kind].find((i) => i.id === id)?.name;
-      if (primaryName) meta.push(`name=${primaryName}`);
-    }
-    if (kind === 'editor') {
-      const path = sessionsState.editorInstanceState[id]?.repoPath ?? layoutState.active.editor.repoPath ?? '';
-      meta.push(`repo_path=${path || '(none)'}`);
-      /* Currently-open file in this editor instance. EditorView mirrors
-         `activePath` into localStorage under `woom:editor:active:<id>`
-         on every change. Reading that here means the agent's per-turn
-         layout snapshot always reflects what the user is actually
-         looking at, so requests like "fix this" can be grounded
-         without a separate question / tool call. */
-      try {
-        const openFile = localStorage.getItem(`woom:editor:active:${id}`);
-        if (openFile && openFile.trim()) meta.push(`open_file=${openFile}`);
-      } catch { /* localStorage access denied — non-essential */ }
-      const linked = sessionsState.list
-        .filter((s) => s.linkedToEditor && s.linkedToEditorInstanceId === id)
-        .map((s) => s.title || s.id.slice(0, 6));
-      if (linked.length) meta.push(`linked_agents=[${linked.join(', ')}]`);
-    }
-    if (kind === 'claude' || kind === 'cursor') {
-      const sessId = sessionsState.activeByInstance[id] ?? null;
-      const sess = sessId ? sessionsState.list.find((s) => s.id === sessId) : null;
-      if (sess) {
-        const effCwd = sess.worktreePath || sess.cwd
-          || (sess.linkedToEditor && sess.linkedToEditorInstanceId
-            ? sessionsState.editorInstanceState[sess.linkedToEditorInstanceId]?.repoPath
-            : null)
-          || '(inherits from editor or no cwd)';
-        meta.push(`session=${sess.title || sess.id.slice(0, 6)}`);
-        meta.push(`cwd=${effCwd}`);
-        if (sess.linkedToEditor && sess.linkedToEditorInstanceId) {
-          const linkKind = kindForInstanceId(sess.linkedToEditorInstanceId);
-          if (linkKind) meta.push(`linked_to_editor=${linkKind}`);
-        }
-        if (sess.linkedTerminalInstanceId) {
-          /* Surface the linked terminal's instance ID + display name so
-             the agent can call `terminal_run` / `terminal_buffer` with
-             the column's art-name directly (e.g. "Vermeer") instead
-             of paying a round-trip to `terminal_list`. */
-          const termInst = layoutState.instances.terminal.find(
-            (i) => i.id === sess.linkedTerminalInstanceId
-          );
-          if (termInst) {
-            meta.push(`linked_to_terminal=${termInst.name} (id=${termInst.id})`);
+    /* Multi-instance kinds (editor/canvas/terminal) can have several
+       columns open at once — emit ONE row per instance so the agent
+       sees every editor + every open repo, not just the primary. Source
+       and agent kinds stay singletons (one row at the legacy id). */
+    const instances = MULTI_INSTANCE_KINDS.has(kind)
+      ? layoutState.instances[kind]
+      : [{ id: APP_INSTANCE_IDS[kind], name: undefined as string | undefined }];
+
+    for (const inst of instances) {
+      const id = inst.id;
+      const meta: string[] = [`kind=${kind}`, `id=${id}`];
+      /* Multi-instance kinds carry a curated display name (e.g.
+         "Vermeer") that MCP tools use as the agent-facing handle.
+         Surface it next to the id so the agent picks the readable form. */
+      if (MULTI_INSTANCE_KINDS.has(kind) && inst.name) meta.push(`name=${inst.name}`);
+
+      if (kind === 'editor') {
+        /* Per-instance repo. Fall back to the global active-editor repo
+           only for the primary instance (legacy single-editor state). */
+        const path = sessionsState.editorInstanceState[id]?.repoPath
+          ?? (id === APP_INSTANCE_IDS.editor ? layoutState.active.editor.repoPath : null)
+          ?? '';
+        meta.push(`repo_path=${path || '(none)'}`);
+        /* Currently-open file in THIS editor instance. EditorView mirrors
+           `activePath` into localStorage under `woom:editor:active:<id>`
+           on every change, keyed per instance — so each editor row
+           reflects what the user is actually looking at in that column. */
+        try {
+          const openFile = localStorage.getItem(`woom:editor:active:${id}`);
+          if (openFile && openFile.trim()) meta.push(`open_file=${openFile}`);
+        } catch { /* localStorage access denied — non-essential */ }
+        const linked = sessionsState.list
+          .filter((s) => s.linkedToEditor && s.linkedToEditorInstanceId === id && !s.archived)
+          .map((s) => s.title || s.id.slice(0, 6));
+        if (linked.length) meta.push(`linked_agents=[${linked.join(', ')}]`);
+      }
+
+      if (kind === 'claude' || kind === 'cursor') {
+        const sessId = sessionsState.activeByInstance[id] ?? null;
+        const sess = sessId ? sessionsState.list.find((s) => s.id === sessId) : null;
+        if (sess) {
+          const effCwd = sess.worktreePath || sess.cwd
+            || (sess.linkedToEditor && sess.linkedToEditorInstanceId
+              ? sessionsState.editorInstanceState[sess.linkedToEditorInstanceId]?.repoPath
+              : null)
+            || '(inherits from editor or no cwd)';
+          meta.push(`session=${sess.title || sess.id.slice(0, 6)}`);
+          meta.push(`cwd=${effCwd}`);
+          if (sess.linkedToEditor && sess.linkedToEditorInstanceId) {
+            const linkKind = kindForInstanceId(sess.linkedToEditorInstanceId);
+            /* Name the SPECIFIC linked editor instance (id + name), not
+               just its kind — with multiple editors open, "linked_to_editor=editor"
+               alone was ambiguous and made the agent read the wrong column. */
+            const linkInst = layoutState.instances.editor.find(
+              (i) => i.id === sess.linkedToEditorInstanceId
+            );
+            if (linkInst) {
+              meta.push(`linked_to_editor=${linkInst.name} (id=${linkInst.id})`);
+            } else if (linkKind) {
+              meta.push(`linked_to_editor=${linkKind} (id=${sess.linkedToEditorInstanceId})`);
+            }
+          }
+          if (sess.linkedTerminalInstanceId) {
+            /* Surface the linked terminal's instance ID + display name so
+               the agent can call `terminal_run` / `terminal_buffer` with
+               the column's art-name directly (e.g. "Vermeer") instead
+               of paying a round-trip to `terminal_list`. */
+            const termInst = layoutState.instances.terminal.find(
+              (i) => i.id === sess.linkedTerminalInstanceId
+            );
+            if (termInst) {
+              meta.push(`linked_to_terminal=${termInst.name} (id=${termInst.id})`);
+            }
+          }
+          /* SDD phase link — only stamped when the session has an SDD
+             workspace currently in `phase_running`. The marker lets the
+             agent know its tool-use stream is being mirrored into a
+             live feed, so the "Long-wait / SDD Phase live log"
+             discipline above kicks in. */
+          const sddPhase = sddPhaseForSession(sess.id);
+          if (sddPhase) {
+            meta.push(`linked_to_sdd_phase=${sddPhase.workspaceId}:phase-${sddPhase.phase}`);
           }
         }
-        /* SDD phase link — only stamped when the session has an SDD
-           workspace currently in `phase_running`. The marker lets the
-           agent know its tool-use stream is being mirrored into a
-           live feed, so the "Long-wait / SDD Phase live log"
-           discipline above kicks in. */
-        const sddPhase = sddPhaseForSession(sess.id);
-        if (sddPhase) {
-          meta.push(`linked_to_sdd_phase=${sddPhase.workspaceId}:phase-${sddPhase.phase}`);
-        }
       }
+      const isYou = id === callingInstanceId;
+      turnLines.push(`  - ${meta.join(', ')}${isYou ? '  ← THIS IS YOU' : ''}`);
     }
-    const isYou = id === callingInstanceId;
-    turnLines.push(`  - ${meta.join(', ')}${isYou ? '  ← THIS IS YOU' : ''}`);
   }
 
   /* ── Canvas summary — only when this session is linked to a canvas.
