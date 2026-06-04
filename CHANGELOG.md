@@ -8,6 +8,22 @@ release runbook (how this CHANGELOG feeds `latest-mac.json`) lives in
 
 ## Unreleased
 
+## 0.3.3 — 2026-06-04
+
+Bumps version 0.3.2 → 0.3.3 across `apps/desktop/package.json`,
+`apps/desktop/src-tauri/Cargo.toml`, `apps/desktop/src-tauri/tauri.conf.json`,
+`apps/desktop/src-tauri/Cargo.lock`.
+
+### Fixed
+
+- **Multi-root editors surface every open folder** — 0.3.2 gave the
+  agent one row per editor *instance*, but still showed only a single
+  `repo_path` per instance, so an editor with multiple roots open (a
+  multi-root workspace) hid every root but the first. The layout
+  snapshot now lists all of an instance's roots as `repo_roots=[a, b]`
+  (and keeps `repo_path=a` for the common single-root case), via
+  `editorRoots()`. (`agentContext.ts`.)
+
 ## 0.3.2 — 2026-06-04
 
 Bumps version 0.3.1 → 0.3.2 across `apps/desktop/package.json`,

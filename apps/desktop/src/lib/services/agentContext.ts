@@ -15,7 +15,7 @@
 //      message it's fresh content either way, so zero cache loss.
 
 import { layoutState, APP_INSTANCE_IDS, DEFAULT_PANEL_ORDER, MULTI_INSTANCE_KINDS, kindForInstanceId } from '$lib/state/layout.svelte';
-import { sessionsState } from '$lib/state/sessions.svelte';
+import { sessionsState, editorRoots } from '$lib/state/sessions.svelte';
 import { canvasState, ensureCanvasLoaded, type Shape, type Edge } from '$lib/state/canvas.svelte';
 import { getCachedClaudeMd } from '$lib/state/claudemd.svelte';
 import { getCachedAutoMemoryBlock } from '$lib/state/autoMemory.svelte';
@@ -304,12 +304,21 @@ export function buildAgentAppContext(callingSessionId: string): { system: string
       if (MULTI_INSTANCE_KINDS.has(kind) && inst.name) meta.push(`name=${inst.name}`);
 
       if (kind === 'editor') {
-        /* Per-instance repo. Fall back to the global active-editor repo
-           only for the primary instance (legacy single-editor state). */
-        const path = sessionsState.editorInstanceState[id]?.repoPath
-          ?? (id === APP_INSTANCE_IDS.editor ? layoutState.active.editor.repoPath : null)
-          ?? '';
-        meta.push(`repo_path=${path || '(none)'}`);
+        /* An editor instance can hold MULTIPLE open roots (multi-root
+           workspace, like VS Code's "Open Folder" stacking). Surface
+           ALL of them — `repo_roots=[a, b]` when >1, `repo_path=a` for
+           the common single-root case. Falls back to the global
+           active-editor repo only for the primary instance (legacy
+           single-editor state with no per-instance root set). */
+        const roots = editorRoots(id);
+        if (roots.length > 1) {
+          meta.push(`repo_roots=[${roots.join(', ')}]`);
+        } else {
+          const path = roots[0]
+            ?? (id === APP_INSTANCE_IDS.editor ? layoutState.active.editor.repoPath : null)
+            ?? '';
+          meta.push(`repo_path=${path || '(none)'}`);
+        }
         /* Currently-open file in THIS editor instance. EditorView mirrors
            `activePath` into localStorage under `woom:editor:active:<id>`
            on every change, keyed per instance — so each editor row
