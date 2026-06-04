@@ -8,6 +8,31 @@ release runbook (how this CHANGELOG feeds `latest-mac.json`) lives in
 
 ## Unreleased
 
+## 0.3.4 — 2026-06-04
+
+Bumps version 0.3.3 → 0.3.4 across `apps/desktop/package.json`,
+`apps/desktop/src-tauri/Cargo.toml`, `apps/desktop/src-tauri/tauri.conf.json`,
+`apps/desktop/src-tauri/Cargo.lock`.
+
+### Fixed
+
+- **Composer attach button works again — files _and_ folders** — the
+  paperclip had no click handler (dead button). It now opens a small
+  Files… / Folder… menu backed by the native picker
+  (`@tauri-apps/plugin-dialog`); picked paths route through the same
+  `attachPathsToSession` pipeline as drag-drop. `attachPathsToSession`
+  gained an `asDir` flag so attached folders carry `isDir` + a
+  trailing-slash `@`-mention token (previously every path was forced
+  to `isDir: false`). (`Composer.svelte`, `sessions.svelte.ts`.)
+
+### Known limitations
+
+- **Dragging files/folders from Finder still doesn't attach** (images
+  do, because they're read as bytes). External OS drops need the
+  native Tauri drag-drop event — `dragDropEnabled` is currently off so
+  the WebView never sees real paths. Deferred to a focused pass that
+  can verify the global drag-drop flip live.
+
 ## 0.3.3 — 2026-06-04
 
 Bumps version 0.3.2 → 0.3.3 across `apps/desktop/package.json`,

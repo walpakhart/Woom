@@ -1132,26 +1132,41 @@ export function pruneMentionsByInput(sessionId: string, input: string) {
         contain spaces without breaking the inline @-parser.
       • Anything else: mention + `@token` in input. Token is the cwd-relative
         path when inside cwd, otherwise just the basename. */
-export function attachPathsToSession(sessionId: string, paths: string[]): number {
+export function attachPathsToSession(
+  sessionId: string,
+  paths: string[],
+  asDir = false
+): number {
   const s = sessionsState.list.find((x) => x.id === sessionId);
   if (!s || paths.length === 0) return 0;
   const existing = new Set(s.mentions.map((m) => m.externalId));
   const fresh: Mention[] = [];
   let input = s.input;
   for (const p of paths) {
-    const rel =
-      s.cwd && p.startsWith(s.cwd + '/') ? p.slice(s.cwd.length + 1) : null;
     const trimmed = p.endsWith('/') ? p.slice(0, -1) : p;
+    const rel =
+      s.cwd && trimmed.startsWith(s.cwd + '/') ? trimmed.slice(s.cwd.length + 1) : null;
     const slash = trimmed.lastIndexOf('/');
     const name = slash >= 0 ? trimmed.slice(slash + 1) : trimmed;
-    const isImage = isImagePath(p);
+    /* Folders are never images; a folder mention's token carries a
+       trailing `/` so the agent reads it as a directory (matches the
+       internal editor-tree drag in agentDrop). */
+    const isImage = !asDir && isImagePath(p);
     // For images, externalId is the absolute path so two drops of the same
     // file dedupe even when basenames collide across folders. The chip
     // strip uses the path directly via convertFileSrc anyway.
-    const token = isImage ? p : (rel ?? name);
+    let token = isImage ? p : (rel ?? name);
+    if (asDir) token = token + '/';
     if (existing.has(token)) continue;
     existing.add(token);
-    fresh.push({ source: 'file', externalId: token, title: name, body: p, isDir: false, attached: true });
+    fresh.push({
+      source: 'file',
+      externalId: token,
+      title: name,
+      body: trimmed,
+      isDir: asDir,
+      attached: true
+    });
     if (!isImage) {
       const sep = input && !input.endsWith(' ') ? ' ' : '';
       input = input + sep + '@' + token + ' ';

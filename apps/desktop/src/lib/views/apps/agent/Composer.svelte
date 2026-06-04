@@ -7,10 +7,11 @@
      viewport), inline @ autocomplete (sessions / Jira / GH / Sentry)
      anchored to the textarea, and OS / Editor drag drops accepted
      into the input as @-mentions. */
-  import { sessionsState, setSessionInput, updateSession } from '$lib/state/sessions.svelte';
+  import { sessionsState, setSessionInput, updateSession, attachPathsToSession } from '$lib/state/sessions.svelte';
   import { quotaState, refreshPlanUsage } from '$lib/state/quota.svelte';
   import { isImagePath } from '$lib/format';
   import { convertFileSrc, invoke } from '@tauri-apps/api/core';
+  import { open as openDialog } from '@tauri-apps/plugin-dialog';
   import { notify } from '$lib/state/toaster.svelte';
   import Dropdown from '$lib/components/ui/Dropdown.svelte';
   import MentionPicker from './MentionPicker.svelte';
@@ -164,6 +165,27 @@
     } else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
       doSend();
+    }
+  }
+
+  /* Attach button → native file / folder picker. macOS' NSOpenPanel
+     can't offer files AND directories in one panel, so the paperclip
+     opens a tiny two-item menu. Picked paths route through the same
+     `attachPathsToSession` pipeline as drag-drop (folders get
+     `asDir=true` so they're @-mentioned with a trailing slash). */
+  let attachMenu = $state(false);
+
+  async function pickAttachments(asDir: boolean) {
+    attachMenu = false;
+    if (!sess) return;
+    try {
+      const picked = await openDialog({ multiple: true, directory: asDir });
+      if (!picked) return;
+      const paths = Array.isArray(picked) ? picked : [picked];
+      const n = attachPathsToSession(sess.id, paths, asDir);
+      if (n > 0) queueMicrotask(autoGrow);
+    } catch (err) {
+      notify({ kind: 'error', title: 'Could not attach', body: String(err) });
     }
   }
 
@@ -1072,9 +1094,35 @@
 
       <div class="cmp-row">
         <div class="cmp-prefix">
-          <button class="cmp-iconbtn" title="Attach file">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M21.44 11.05 12.25 20.24a6 6 0 1 1-8.49-8.49l9.19-9.19a4 4 0 1 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.49"/></svg>
-          </button>
+          <div class="cmp-attach-wrap">
+            <button
+              class="cmp-iconbtn"
+              class:active={attachMenu}
+              title="Attach files or folders"
+              aria-haspopup="menu"
+              aria-expanded={attachMenu}
+              onclick={() => (attachMenu = !attachMenu)}
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M21.44 11.05 12.25 20.24a6 6 0 1 1-8.49-8.49l9.19-9.19a4 4 0 1 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.49"/></svg>
+            </button>
+            {#if attachMenu}
+              <button
+                class="cmp-attach-backdrop"
+                aria-label="Close attach menu"
+                onclick={() => (attachMenu = false)}
+              ></button>
+              <div class="cmp-attach-menu" role="menu">
+                <button class="cmp-attach-item" role="menuitem" onclick={() => void pickAttachments(false)}>
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
+                  Files…
+                </button>
+                <button class="cmp-attach-item" role="menuitem" onclick={() => void pickAttachments(true)}>
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 3h8a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+                  Folder…
+                </button>
+              </div>
+            {/if}
+          </div>
           <button class="cmp-iconbtn" title="@ mention" onclick={clickMention}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="4"/><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.92 7.94"/></svg>
           </button>
@@ -1703,7 +1751,38 @@
     transition: all 120ms;
   }
   .cmp-iconbtn:hover { background: var(--bg-3); color: var(--text-0); }
+  .cmp-iconbtn.active { background: var(--bg-3); color: var(--text-0); }
   .cmp-iconbtn svg { width: 14px; height: 14px; }
+
+  /* Attach menu — small popover anchored above the paperclip. */
+  .cmp-attach-wrap { position: relative; display: inline-flex; }
+  .cmp-attach-backdrop {
+    position: fixed; inset: 0; z-index: 40;
+    background: transparent; border: 0; padding: 0; cursor: default;
+  }
+  .cmp-attach-menu {
+    position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 41;
+    min-width: 150px;
+    display: flex; flex-direction: column;
+    padding: 4px;
+    background: var(--bg-1);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.28);
+  }
+  .cmp-attach-item {
+    display: flex; align-items: center; gap: 8px;
+    padding: 7px 9px;
+    border: 0; border-radius: 6px;
+    background: transparent;
+    color: var(--text-1);
+    font-size: 12.5px;
+    text-align: left;
+    cursor: pointer;
+    transition: background 120ms, color 120ms;
+  }
+  .cmp-attach-item:hover { background: var(--bg-2); color: var(--text-0); }
+  .cmp-attach-item svg { color: var(--text-mute); flex-shrink: 0; }
 
   /* Textarea + highlighted backdrop overlay. The backdrop renders the
      same text as the textarea but with `@token` runs wrapped in tinted
