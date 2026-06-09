@@ -9,6 +9,9 @@
  *  through to the 200K Sonnet/Haiku default for unknown ids. */
 export function modelContextLimit(model: string | null | undefined): number {
   if (!model) return 200_000;
+  /* Fable/Mythos 5 — long-horizon tier, 1M window (no exact cap
+     published; "focused across millions of tokens"). */
+  if (model.startsWith('claude-fable-5') || model.startsWith('claude-mythos-5')) return 1_000_000;
   /* Opus 4.8 default tier dropped to 200K; the dedicated 1M variant
      carries an explicit `[1m]` suffix. Check the 1M-variant first
      because `startsWith('claude-opus-4-8')` matches both. */
@@ -44,6 +47,11 @@ export function pctClass(b: { utilization: number | null } | null): string {
 /* Real Claude model ids only — Claude CLI rejects the run with
    "model does not exist" if we pass anything it can't resolve. */
 export const claudeModels: { value: string; label: string }[] = [
+  /* Fable 5 / Mythos 5 (2026-06) sit above Opus 4.8. Mythos = same
+     model with safeguards lifted, gated to Project Glasswing — listed
+     here too since the CLI resolves the id for authorized accounts. */
+  { value: 'claude-fable-5', label: 'Fable 5' },
+  { value: 'claude-mythos-5', label: 'Mythos 5' },
   /* Opus 4.8 launched 2026-05-28 at $5/$25 per 1M (was $15/$75 on
      4.7). The 1M-context variant is a separate model id with the
      `[1m]` suffix — exposed as its own dropdown entry. Fast mode

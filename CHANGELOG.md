@@ -8,6 +8,21 @@ release runbook (how this CHANGELOG feeds `latest-mac.json`) lives in
 
 ## Unreleased
 
+## 0.3.5 — 2026-06-09
+
+Bumps version 0.3.4 → 0.3.5 across `apps/desktop/package.json`,
+`apps/desktop/src-tauri/Cargo.toml`, `apps/desktop/src-tauri/tauri.conf.json`,
+`apps/desktop/src-tauri/Cargo.lock`.
+
+### Added
+
+- **Claude Fable 5 + Mythos 5 models** — new top tier above Opus 4.8,
+  surfaced in the Composer model picker. Both bill at $10/$50 per 1M
+  (cache write/read at the standard 1.25× / 0.1× of base) and carry a
+  1M-token context window. Mythos 5 is the safeguard-lifted variant
+  (Project Glasswing, gated) — listed since the CLI resolves the id for
+  authorized accounts. (`usage.ts`, `composerHelpers.ts`.)
+
 ## 0.3.4 — 2026-06-04
 
 Bumps version 0.3.3 → 0.3.4 across `apps/desktop/package.json`,
