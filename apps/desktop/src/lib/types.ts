@@ -381,7 +381,7 @@ export type ClaudeSession = {
   /** Thinking-budget hint from the composer effort dropdown. Maps to
    *  `MAX_THINKING_TOKENS` on the spawned CLI (`auto`/null → unset =
    *  CLI default). Persisted across reloads. */
-  thinkingEffort?: 'auto' | 'low' | 'medium' | 'high' | 'max' | null;
+  thinkingEffort?: 'auto' | 'low' | 'medium' | 'high' | 'max' | 'ultracode' | null;
   /** Quota guard (Phase 2). When the 5H/7D quota tripped during an
    *  in-flight turn OR the user explicitly chose «wait» in the
    *  pre-send modal, this flag is set; `resumeAt` carries the unix-ms

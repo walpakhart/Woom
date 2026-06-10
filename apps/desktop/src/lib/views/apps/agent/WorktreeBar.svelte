@@ -3,7 +3,7 @@
      cwd chip + clear button + editor-link chip / picker + worktree
      menu. Effectively the standalone successor to the old cwd-bar
      that used to live inside AgentApp. */
-  import { sessionsState, focusSession } from '$lib/state/sessions.svelte';
+  import { sessionsState, focusSession, editorRoots } from '$lib/state/sessions.svelte';
   import { APP_INSTANCE_IDS, layoutState } from '$lib/state/layout.svelte';
   import { canvasState } from '$lib/state/canvas.svelte';
   import Dropdown from '$lib/components/ui/Dropdown.svelte';
@@ -73,6 +73,16 @@
     return slash >= 0 ? trimmed.slice(slash + 1) : trimmed;
   }
 
+  /** Compact folder label for an editor instance's open-root set. One
+   *  root ⇒ its basename; many ⇒ "<first> +N" so a multi-root workspace
+   *  reads at a glance without the chip overflowing on long repo names. */
+  function rootsLabel(instanceId: string): string {
+    const rs = editorRoots(instanceId);
+    if (rs.length === 0) return '';
+    if (rs.length === 1) return folderName(rs[0]);
+    return `${folderName(rs[0])} +${rs.length - 1}`;
+  }
+
   /** All editor instances currently open — pulled live from
    *  `layoutState` so the picker reflects every Vermeer / Rothko
    *  spawned via the rail's long-press menu. Each entry carries the
@@ -82,7 +92,7 @@
   const editorInstances = $derived(
     layoutState.instances.editor.map((i) => {
       const repoPath = sessionsState.editorInstanceState[i.id]?.repoPath ?? '';
-      return { id: i.id, name: i.name, repoPath, folder: folderName(repoPath) };
+      return { id: i.id, name: i.name, repoPath, folder: rootsLabel(i.id) };
     })
   );
 
@@ -96,7 +106,14 @@
     );
     if (!inst) return null;
     const repoPath = sessionsState.editorInstanceState[inst.id]?.repoPath ?? '';
-    return { id: inst.id, name: inst.name, repoPath, folder: folderName(repoPath) };
+    const allRoots = editorRoots(inst.id);
+    return {
+      id: inst.id,
+      name: inst.name,
+      repoPath,
+      folder: rootsLabel(inst.id),
+      rootsTitle: allRoots.join('\n')
+    };
   });
 
   /** Active agent's "owned" folder — worktree wins over cwd. This is
@@ -221,8 +238,8 @@
       <button
         class="wb-link"
         onclick={() => { focusLocal(); p.onToggleEditorLink(); }}
-        title={linkedEditor.repoPath
-          ? `Linked to ${linkedEditor.name} — ${linkedEditor.repoPath}\nClick to unlink`
+        title={linkedEditor.rootsTitle
+          ? `Linked to ${linkedEditor.name} —\n${linkedEditor.rootsTitle}\nClick to unlink`
           : `Linked to ${linkedEditor.name} — click to unlink`}
       >
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M16 18l6-6-6-6M8 6l-6 6 6 6"/></svg>
@@ -412,6 +429,12 @@
     color: color-mix(in srgb, var(--accent-bright) 65%, var(--text-mute));
     font-size: 10.5px;
     opacity: 0.85;
+    display: inline-block;
+    max-width: 140px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    vertical-align: bottom;
   }
 
   /* "Folder mismatch" button — orange, pulsing so it stands out among

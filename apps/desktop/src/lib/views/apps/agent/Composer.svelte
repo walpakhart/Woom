@@ -14,6 +14,7 @@
   import { open as openDialog } from '@tauri-apps/plugin-dialog';
   import { notify } from '$lib/state/toaster.svelte';
   import Dropdown from '$lib/components/ui/Dropdown.svelte';
+  import ModelEngine from './ModelEngine.svelte';
   import MentionPicker from './MentionPicker.svelte';
   import { onMount } from 'svelte';
   import type { Mention } from '$lib/types';
@@ -887,7 +888,7 @@
     // Persist effort on the session; threaded to MAX_THINKING_TOKENS
     // on the next spawn (see exec/claude.ts → claude_ask).
     updateSession(sess.id, {
-      thinkingEffort: (v as 'auto' | 'low' | 'medium' | 'high' | 'max' | null) ?? null
+      thinkingEffort: (v as 'auto' | 'low' | 'medium' | 'high' | 'max' | 'ultracode' | null) ?? null
     });
   }
 
@@ -1155,6 +1156,8 @@
         </div>
 
         <div class="cmp-suffix">
+          <!-- Group 1 · usage — context ring + quota pills (read-at-a-glance). -->
+          <span class="cmp-grp">
           <span class="cmp-ctx" title="Context window: {contextTokens.toLocaleString()} / {tokenLimit.toLocaleString()} tokens">
             <svg class="cmp-ring" viewBox="0 0 20 20" aria-hidden="true">
               <circle class="cmp-ring-bg" cx="10" cy="10" r="8"/>
@@ -1200,7 +1203,18 @@
               {/if}
             </span>
           {/if}
+          </span>
 
+          <span class="cmp-divider" aria-hidden="true"></span>
+
+          <!-- Group 2 · launchers + toggles. Two semantic sub-clusters:
+               launchers (/sdd /dw) are one-shot slash-command shortcuts —
+               styled as mono command chips with a leading slash so it's
+               obvious they just type a command. Toggles (RTK/FAST) are
+               persistent session modes — styled as on/off pills with a
+               status dot. -->
+          <span class="cmp-grp">
+          <span class="cmp-launchers">
           <!-- SDD button — prefills `/sdd ` into the composer so the
                user can type their ask + hit Enter. Same code path as
                typing the slash command manually (`startSddFromSlash`
@@ -1223,7 +1237,7 @@
             aria-label="Start a Spec-Driven Development workflow"
             title="SDD — agent writes spec/plan/phases to a temp folder and executes them step-by-step. Won't touch your repo until you approve."
           >
-            <span class="cmp-sdd-glyph">SDD</span>
+            <span class="cmp-sdd-glyph">/sdd</span>
           </button>
 
           <!-- DW button — prefills `/dw ` into the composer, mirroring
@@ -1248,7 +1262,7 @@
               aria-label="Start a Dynamic Workflow"
               title="DW — planner fans out parallel subagents (each in its own git worktree), then a verifier synthesises one answer. Shows a cost estimate before it runs."
             >
-              <span class="cmp-dw-glyph">DW</span>
+              <span class="cmp-dw-glyph">/dw</span>
             </button>
           {/if}
 
@@ -1257,6 +1271,9 @@
                "I thought history would be where memory is in the
                header so it opens a menu". -->
 
+
+          </span><!-- /cmp-launchers -->
+          <span class="cmp-toggles">
 
           <!-- RTK output-compression pill. On by default for every new
                Claude session (`newClaudeSession` sets `rtkEnabled: true`).
@@ -1283,10 +1300,8 @@
                   ? 'RTK rewrites bash commands to compact output. ~80% token savings on git/test/ls. Click to disable for this session.'
                   : 'RTK disabled for this session — bash output passes through raw. Click to re-enable. (Applies to next spawn.)'}
             >
+              <span class="cmp-tg-dot" aria-hidden="true"></span>
               <span class="cmp-rtk-pill-glyph" aria-hidden="true">RTK</span>
-              {#if rtkUiState === 'off'}
-                <span class="cmp-rtk-pill-label">off</span>
-              {/if}
             </button>
           {/if}
 
@@ -1310,27 +1325,25 @@
                 ? 'Fast mode ON — Opus 4.8 streams 2.5× faster at 2× cost. Click to disable. (Applies to next spawn.)'
                 : 'Fast mode OFF — click to enable. Opus 4.8 will stream 2.5× faster at 2× cost. Same model, dedicated endpoint.'}
             >
+              <span class="cmp-tg-dot" aria-hidden="true"></span>
               <span class="cmp-fast-chip-glyph" aria-hidden="true">FAST</span>
             </button>
           {/if}
+          </span><!-- /cmp-toggles -->
+          </span>
 
+          <span class="cmp-divider" aria-hidden="true"></span>
+
+          <!-- Group 3 · model config — model picker + effort slider. -->
           <span class="cmp-model">
             {#if p.kind === 'claude'}
-              <Dropdown
-                value={sess.claudeModel ?? 'claude-sonnet-4-6'}
-                options={claudeModels}
-                onChange={setModel}
-                placeholder="model"
-                ariaLabel="Claude model"
-                forceUp={true}
-              />
-              <Dropdown
-                value={sess.thinkingEffort ?? 'auto'}
-                options={claudeEffort}
-                onChange={setEffort}
-                placeholder="effort"
-                ariaLabel="Thinking effort"
-                forceUp={true}
+              <ModelEngine
+                model={sess.claudeModel ?? 'claude-sonnet-4-6'}
+                modelOptions={claudeModels}
+                effort={sess.thinkingEffort ?? 'auto'}
+                effortOptions={claudeEffort}
+                onModelChange={setModel}
+                onEffortChange={setEffort}
               />
             {:else}
               <Dropdown
@@ -1610,7 +1623,7 @@
     width: 100%;
     background: var(--bg-1);
     border: 1px solid var(--border-hi);
-    border-radius: 12px;
+    border-radius: var(--r-card);
     /* Symmetric horizontal padding so the @-icons on the left and
        the Send button on the right have the same breathing room. */
     padding: 8px 12px;
@@ -1973,7 +1986,41 @@
   .cmp-area:disabled { opacity: 0.5; cursor: not-allowed; }
 
   .cmp-suffix {
-    display: flex; align-items: center; gap: 8px;
+    display: flex; align-items: center; gap: 10px;
+  }
+  /* Three semantic clusters — usage · launchers · model — so the row
+     reads as grouped intent instead of one flat run of chips. Tight
+     intra-group gap; the hairline divider carries inter-group
+     separation. */
+  .cmp-grp {
+    display: inline-flex; align-items: center; gap: 5px;
+    min-width: 0;
+  }
+  .cmp-divider {
+    width: 1px; height: 16px;
+    background: var(--border);
+    flex-shrink: 0;
+  }
+  /* Two sub-clusters inside the launchers+toggles group. Launchers
+     (/sdd /dw) and toggles (RTK/FAST) sit a hair apart so the
+     "command shortcut" pair reads distinctly from the "session mode"
+     pair without a hard divider between them. */
+  .cmp-launchers, .cmp-toggles {
+    display: inline-flex; align-items: center; gap: 4px;
+  }
+  .cmp-toggles:empty { display: none; }
+  /* Status dot on the mode toggles — filled = ON, hollow ring = OFF.
+     Inherits the pill's current text color, so each mode keeps its own
+     hue (RTK sage, FAST amber). */
+  .cmp-tg-dot {
+    width: 5px; height: 5px; border-radius: 50%;
+    background: currentColor;
+    flex-shrink: 0;
+  }
+  .cmp-rtk-pill--off .cmp-tg-dot,
+  .cmp-fast-chip:not(.cmp-fast-chip--on) .cmp-tg-dot {
+    background: transparent;
+    box-shadow: inset 0 0 0 1.4px currentColor;
   }
 
   .cmp-ctx {
@@ -2089,9 +2136,9 @@
   }
   .cmp-sdd-glyph {
     font-family: 'JetBrains Mono', monospace;
-    font-size: 9.5px;
-    font-weight: 700;
-    letter-spacing: 0.14em;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
   }
 
   /* DW button — same one-shot-launcher chassis as SDD, but tinted
@@ -2117,9 +2164,9 @@
   }
   .cmp-dw-glyph {
     font-family: 'JetBrains Mono', monospace;
-    font-size: 9.5px;
-    font-weight: 700;
-    letter-spacing: 0.14em;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
   }
 
   /* RTK output-compression toggle. Three visual states — on
@@ -2175,13 +2222,6 @@
     font-weight: 700;
     letter-spacing: 0.14em;
   }
-  .cmp-rtk-pill-label {
-    font-size: 9px;
-    font-weight: 700;
-    letter-spacing: 0.08em;
-    text-transform: lowercase;
-    opacity: 0.85;
-  }
   @media (prefers-reduced-motion: reduce) {
     .cmp-rtk-pill { transition: none; }
   }
@@ -2191,6 +2231,7 @@
      compression». Visible only when an Opus 4.8 model is active. */
   .cmp-fast-chip {
     display: inline-flex; align-items: center;
+    gap: 5px;
     padding: 3px 7px;
     border-radius: 5px;
     border: 1px solid var(--border);

@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="iconic">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Woom · Header — cleaned (model out, DW/SDD → settings)</title>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+:root{
+  --bg-0:#0E1112;--bg-1:#14181A;--bg-2:#1B2125;--bg-3:#232A2F;
+  --t0:#EBEFEC;--t1:#C5CDC9;--t2:#8C9692;--tm:#5C6663;
+  --accent:#8FB5A4;--accent-bright:#B0DCC8;--glow:rgba(176,220,200,.4);--soft:rgba(176,220,200,.1);
+  --warm:#E0B16C;--err:#E08264;
+  --border:rgba(235,240,238,.07);--border-hi:rgba(235,240,238,.14);
+  --shadow:0 18px 50px -18px rgba(0,0,0,.7);
+}
+[data-theme="light"]{
+  --bg-0:#F4F6F4;--bg-1:#EDF0EE;--bg-2:#E3E8E5;--bg-3:#D7DEDA;
+  --t0:#1B2320;--t1:#3A4540;--t2:#6A7670;--tm:#97A29C;
+  --accent:#5E8C77;--accent-bright:#3F7359;--glow:rgba(63,115,89,.28);--soft:rgba(63,115,89,.08);
+  --border:rgba(20,30,25,.09);--border-hi:rgba(20,30,25,.16);
+  --shadow:0 18px 50px -22px rgba(40,60,50,.4);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{min-height:100vh;background:
+  radial-gradient(900px 500px at 70% -10%,var(--soft),transparent 60%),var(--bg-0);
+  color:var(--t0);font-family:'Geist',system-ui,sans-serif;font-size:14px;-webkit-font-smoothing:antialiased;
+  display:flex;flex-direction:column;align-items:center;gap:20px;padding:44px 28px}
+.mono{font-family:'Geist Mono',monospace}
+.toolbar{display:flex;gap:10px;flex-wrap:wrap;justify-content:center}
+.tb{padding:6px 12px;border-radius:8px;background:var(--bg-2);border:1px solid var(--border-hi);
+  color:var(--t1);font-size:12px;cursor:pointer;transition:all .15s}
+.tb:hover{color:var(--t0);border-color:var(--accent)}
+.label{font-size:11px;color:var(--tm);letter-spacing:.08em;text-transform:uppercase;align-self:flex-start;margin:12px 0 -6px 4px}
+.win{width:920px;max-width:100%;border-radius:16px;overflow:hidden;border:1px solid var(--border-hi);
+  box-shadow:var(--shadow);background:var(--bg-1)}
+.body-stub{height:80px;display:grid;place-items:center;color:var(--tm);font-size:12px}
+.note{font-size:12px;color:var(--t2);max-width:920px;line-height:1.65}
+.note b{color:var(--t1);font-weight:600}
+
+/* ════════ C · SESSION VITALS — header IS a live EKG of the conversation ════════ */
+.C{position:relative;height:62px;border-bottom:1px solid var(--border);overflow:hidden;
+  background:linear-gradient(180deg,var(--bg-2),var(--bg-0))}
+.C canvas{position:absolute;inset:0;width:100%;height:100%}
+.C-overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:space-between;
+  padding:0 22px;pointer-events:none;z-index:2}
+.C-name{font-size:16px;font-weight:600;letter-spacing:-.015em;color:var(--t0);
+  text-shadow:0 1px 8px var(--bg-0);max-width:55%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.C-vit{display:flex;align-items:baseline;gap:14px;font-size:12px;color:var(--t2)}
+.C-vit b{color:var(--t0);font-weight:600}
+.C-vit .usd{color:var(--accent-bright);font-weight:600}
+.C-vit .mem{display:inline-flex;align-items:center;gap:5px;pointer-events:auto;cursor:pointer}
+.C-vit .mem svg{width:12px;height:12px;stroke:currentColor;fill:none;stroke-width:1.7;opacity:.8}
+.C.hot .C-vit .usd{color:var(--warm)}
+
+/* ════════ D · SESSION AS SENTENCE — header reads like a line of prose ════════ */
+.D{height:60px;display:flex;align-items:center;padding:0 24px;border-bottom:1px solid var(--border);
+  background:linear-gradient(180deg,var(--bg-2),var(--bg-1));gap:0}
+.D-line{font-size:15px;color:var(--t2);font-weight:400;letter-spacing:-.005em;line-height:1.3;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.D-line .k{color:var(--t0);font-weight:600;cursor:pointer;border-bottom:1px dashed transparent;transition:border-color .14s}
+.D-line .k:hover{border-color:var(--tm)}
+.D-line .usd{color:var(--t1);font-weight:600}
+.D.hot .D-line .usd{color:var(--warm)}
+.D-pip{display:none;width:7px;height:7px;border-radius:50%;background:var(--accent-bright);
+  box-shadow:0 0 8px var(--glow);margin-right:9px;flex-shrink:0;animation:pulse 1.4s infinite}
+.D.live .D-pip{display:inline-block}
+@keyframes pulse{0%,100%{opacity:.45;transform:scale(.85)}50%{opacity:1;transform:scale(1.15)}}
+
+/* ════════ E · TIMELINE RIBBON — header tells the session's STORY ════════ */
+.E{height:64px;display:flex;align-items:stretch;border-bottom:1px solid var(--border);
+  background:linear-gradient(180deg,var(--bg-2),var(--bg-1))}
+.E-head{flex-shrink:0;display:flex;flex-direction:column;justify-content:center;padding:0 16px 0 22px;
+  border-right:1px solid var(--border);min-width:0;max-width:300px}
+.E-name{font-size:14px;font-weight:600;color:var(--t0);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.E-sub{font-size:11px;color:var(--tm);margin-top:2px}
+.E-sub .usd{color:var(--accent-bright);font-weight:600}
+.E.hot .E-sub .usd{color:var(--warm)}
+.E-ribbon{flex:1;min-width:0;display:flex;align-items:flex-end;gap:2px;padding:10px 16px 12px;overflow:hidden;position:relative}
+.E-turn{flex:1;min-width:3px;max-width:14px;background:color-mix(in srgb,var(--accent) 45%,transparent);
+  border-radius:2px 2px 0 0;cursor:pointer;transition:background .14s,transform .14s;transform-origin:bottom;position:relative}
+.E-turn:hover{background:var(--accent-bright);transform:scaleY(1.06)}
+.E-turn.tool::after{content:"";position:absolute;top:-5px;left:50%;transform:translateX(-50%);
+  width:3px;height:3px;border-radius:50%;background:var(--warm)}
+.E-turn.live{background:var(--accent-bright);animation:grow 1.2s ease-in-out infinite alternate}
+@keyframes grow{from{opacity:.6}to{opacity:1}}
+.E-now{flex-shrink:0;display:flex;align-items:center;gap:7px;padding:0 18px 0 14px;border-left:1px solid var(--border);
+  font-size:11.5px;color:var(--t2)}
+.E-now .idle-only{display:inline-flex}.E-now .live-only{display:none}
+.E.live .E-now .idle-only{display:none}.E.live .E-now .live-only{display:inline-flex}
+.E-now .mem{display:inline-flex;align-items:center;gap:5px;cursor:pointer}
+.E-now .mem svg{width:12px;height:12px;stroke:currentColor;fill:none;stroke-width:1.7;opacity:.8}
+.E-now .pip{width:6px;height:6px;border-radius:50%;background:var(--accent-bright);box-shadow:0 0 7px var(--glow);animation:pulse 1.4s infinite}
+.E-stop{display:grid;place-items:center;width:26px;height:26px;border-radius:7px;background:color-mix(in srgb,var(--err) 12%,transparent);
+  border:0;color:var(--err);cursor:pointer}
+.E-stop svg{width:11px;height:11px;fill:currentColor}
+
+/* ════════ SETTINGS — where DW + SDD relocate, living nicely ════════ */
+.set{padding:8px 0 14px}
+.set-grp{padding:18px 22px;border-bottom:1px solid var(--border)}
+.set-grp:last-child{border-bottom:0}
+.set-grp-h{display:flex;align-items:center;gap:8px;margin-bottom:4px}
+.set-grp-h svg{width:15px;height:15px;stroke:var(--accent);fill:none;stroke-width:1.7}
+.set-grp-h .t{font-size:13px;font-weight:600;color:var(--t0)}
+.set-grp-h .c{margin-left:auto;font-size:11px;color:var(--tm);background:var(--bg-2);
+  padding:2px 8px;border-radius:999px;border:1px solid var(--border)}
+.set-grp-d{font-size:11.5px;color:var(--tm);margin-bottom:12px}
+.rows{display:flex;flex-direction:column;gap:1px}
+.row{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;cursor:pointer;transition:background .12s}
+.row:hover{background:var(--bg-2)}
+.row .stage{flex-shrink:0;font-size:10px;font-family:'Geist Mono',monospace;min-width:96px;color:var(--tm)}
+.row .stage.live{color:#66d39a}.row .stage.ok{color:var(--accent-bright)}.row .stage.warn{color:var(--warm)}
+.row .ask{flex:1;min-width:0;font-size:12.5px;color:var(--t1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .prog{flex-shrink:0;font-size:10px;font-family:'Geist Mono',monospace;color:var(--tm)}
+.row .cost{flex-shrink:0;font-size:11px;font-family:'Geist Mono',monospace;color:var(--accent-bright)}
+.row .st{flex-shrink:0;font-size:9px;text-transform:uppercase;letter-spacing:.05em;font-family:'Geist Mono',monospace}
+.row .st.done{color:#66d39a}.row .st.run{color:var(--accent-bright)}.row .st.fail{color:var(--err)}
+</style>
+</head>
+<body>
+<div class="toolbar">
+  <button class="tb" onclick="document.documentElement.dataset.theme=document.documentElement.dataset.theme==='iconic'?'light':'iconic'">☀ / 🌙 theme</button>
+  <button class="tb" id="bLive">toggle live turn</button>
+  <button class="tb" id="bHot">toggle hot $</button>
+</div>
+
+<span class="label">C · Session vitals — model gone, only title · turns · $ · tok · memory</span>
+<div class="win">
+  <header class="C" id="C">
+    <canvas id="ekg"></canvas>
+    <div class="C-overlay">
+      <span class="C-name">внедрить новые модели Fable 5 / Mythos 5</span>
+      <span class="C-vit"><span><b>27</b> turns</span><span class="usd mono">$27.66</span><span><b>11.6k</b> tok</span><span class="mem"><svg viewBox="0 0 24 24"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" stroke-linejoin="round"/></svg>5</span></span>
+    </div>
+  </header>
+  <div class="body-stub">chat thread ↓</div>
+</div>
+
+<span class="label">D · Sentence — model dropped from prose</span>
+<div class="win">
+  <header class="D" id="D">
+    <span class="D-pip"></span>
+    <span class="D-line">
+      <span class="k">внедрить новые модели</span> in <span class="k">woom</span> —
+      <span class="k">27</span> turns, <span class="usd">$27.66</span>, <span class="k">11.6k</span> tok · <span class="k">5 memories</span>
+    </span>
+  </header>
+  <div class="body-stub">chat thread ↓</div>
+</div>
+
+<span class="label">E · Timeline ribbon — right side: memory only (no model)</span>
+<div class="win">
+  <header class="E" id="E">
+    <div class="E-head">
+      <span class="E-name">внедрить новые модели</span>
+      <span class="E-sub">27 turns · <span class="usd mono">$27.66</span> · 11.6k tok</span>
+    </div>
+    <div class="E-ribbon" id="ribbon"></div>
+    <div class="E-now">
+      <span class="idle-only mem"><svg viewBox="0 0 24 24"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" stroke-linejoin="round"/></svg>5</span>
+      <span class="live-only" style="gap:7px;align-items:center"><span class="pip"></span><span class="mono">1m 04s</span><button class="E-stop" title="Stop"><svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg></button></span>
+    </div>
+  </header>
+  <div class="body-stub">chat thread ↓</div>
+</div>
+
+<span class="label">Settings → Workflows — DW + SDD relocated here</span>
+<div class="win">
+  <div class="set">
+    <div class="set-grp">
+      <div class="set-grp-h">
+        <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
+        <span class="t">SDD workspaces</span>
+        <span class="c">3 specs</span>
+      </div>
+      <div class="set-grp-d">Spec-driven runs. Click to reopen in the active chat · trash to discard.</div>
+      <div class="rows">
+        <div class="row"><span class="stage ok mono">complete</span><span class="ask">calm-premium polish layer на sage-бренде</span><span class="prog mono">4/4</span></div>
+        <div class="row"><span class="stage live mono">phase 2 running</span><span class="ask">unified model × effort reactor control</span><span class="prog mono">1/3</span></div>
+        <div class="row"><span class="stage warn mono">plan review</span><span class="ask">header redesign — session vitals</span><span class="prog mono">0/2</span></div>
+      </div>
+    </div>
+    <div class="set-grp">
+      <div class="set-grp-h">
+        <svg viewBox="0 0 24 24"><path d="M4 4h16v6H4zM4 14h10v6H4z"/></svg>
+        <span class="t">Dynamic Workflows</span>
+        <span class="c">3 runs</span>
+      </div>
+      <div class="set-grp-d">Fan-out workflows run across sessions. History + per-run cost.</div>
+      <div class="rows">
+        <div class="row"><span class="st done">done</span><span class="ask">рефактор composer suffix-row в 3 кластера</span><span class="cost mono">$1.42</span></div>
+        <div class="row"><span class="st run">running</span><span class="ask">портировать ModelEngine во все ветки</span><span class="cost mono">$0.31</span></div>
+        <div class="row"><span class="st fail">failed</span><span class="ask">мигрировать EffortSlider → tokens</span><span class="cost mono">$0.08</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<p class="note">
+  Из хедера убран <b>вывод модели</b> (живёт в композере — ModelEngine) и чипы <b>DW + SDD</b>. Хедер теперь несёт только: <b>тайтл · turns · $ · tokens · memory</b>.
+  <br><br>
+  <b>DW + SDD переехали в Settings → Workflows</b> — две группы: SDD workspaces (stage · ask · progress, клик = reopen) и Dynamic Workflows (status · ask · cost). Полноширинные строки, дышат, не зажаты в поповер. Память осталась в хедере — она про контекст активного чата, не про настройки.
+  <br><br>
+  Тогл live / hot / theme. Какой из C/D/E финалим?
+</p>
+
+<script>
+let live=false,hot=false;
+document.getElementById('bLive').onclick=()=>{live=!live;document.querySelectorAll('#C,#D,#E').forEach(e=>e.classList.toggle('live',live));ribLive()};
+document.getElementById('bHot').onclick=()=>{hot=!hot;document.querySelectorAll('#C,#D,#E').forEach(e=>e.classList.toggle('hot',hot))};
+const A=()=>getComputedStyle(document.body).getPropertyValue('--accent-bright').trim()||'#B0DCC8';
+const Aa=()=>getComputedStyle(document.body).getPropertyValue('--accent').trim()||'#8FB5A4';
+
+const turns=Array.from({length:27},()=>({h:18+Math.random()*70,tool:Math.random()>.62}));
+const rib=document.getElementById('ribbon');
+turns.forEach((t,i)=>{const b=document.createElement('div');b.className='E-turn'+(t.tool?' tool':'');
+  b.style.height=t.h+'%';b.title=`turn ${i+1} · $${(t.h/100*2).toFixed(2)}`+(t.tool?' · tools':'');rib.appendChild(b)});
+function ribLive(){[...rib.children].forEach((b,i)=>b.classList.toggle('live',live&&i===turns.length-1))}
+
+const cv=document.getElementById('ekg'),cx=cv.getContext('2d');
+let W,H,dpr=Math.min(devicePixelRatio||1,2);
+function size(){W=cv.clientWidth;H=cv.clientHeight;cv.width=W*dpr;cv.height=H*dpr;cx.setTransform(dpr,0,0,dpr,0,0)}
+const spikes=Array.from({length:27},(_,i)=>({x:i/26,amp:.2+Math.random()*.8}));
+let t=0,raf;
+function draw(){raf=requestAnimationFrame(draw);t+=live?2.2:.5;
+  const a=A(),aa=Aa();cx.clearRect(0,0,W,H);const mid=H*.62;
+  cx.strokeStyle=aa;cx.globalAlpha=.16;cx.lineWidth=1;cx.beginPath();cx.moveTo(0,mid);cx.lineTo(W,mid);cx.stroke();
+  cx.globalAlpha=.9;cx.strokeStyle=a;cx.lineWidth=1.6;cx.beginPath();
+  for(let px=0;px<=W;px+=2){const fx=px/W;let y=mid;
+    spikes.forEach(s=>{const d=fx-s.x;const g=Math.exp(-(d*d)/0.00035);
+      y-=g*s.amp*H*.42*Math.sin((fx*40)+s.x*9);});
+    y+=Math.sin(fx*60+t*.02)*1.5;
+    px?cx.lineTo(px,y):cx.moveTo(px,y)}
+  cx.stroke();
+  if(live){const hx=(t*3)%W;cx.globalAlpha=1;cx.fillStyle=a;
+    cx.beginPath();cx.arc(hx,mid-Math.sin(t*.3)*H*.28,2.6,0,7);cx.fill();
+    cx.globalAlpha=.25;cx.fillRect(hx-1,0,2,H)}
+  cx.globalAlpha=1;
+}
+function start(){size();cancelAnimationFrame(raf);draw()}
+addEventListener('resize',start);start();
+</script>
+</body>
+</html>

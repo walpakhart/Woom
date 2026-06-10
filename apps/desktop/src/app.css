@@ -138,9 +138,10 @@
   /* Modal & popover backdrop — cool noir glass. */
   --backdrop: rgba(6, 8, 9, 0.74);
 
-  /* Radii. */
-  --r-card: 12px;
-  --r-pane: 14px;
+  /* Radii. Calm-premium bump: card 12→14, pane 14→16 (softer, more
+     spacious). Conservative starting values — single-token retune. */
+  --r-card: 14px;
+  --r-pane: 16px;
   --r-modal: 16px;
   --r-chip: 6px;
   --r-btn:  8px;
@@ -2206,6 +2207,54 @@ img.chat-avatar { padding: 0; }
 @keyframes slideDown {
   from { opacity: 0; transform: translateY(-8px) scale(0.99); }
   to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* ---- Calm-premium polish primitives (phase 1) ----
+ * Reusable motion + interaction helpers consumed by the Rail / Home /
+ * Composer polish phases. Token-only (work in both `iconic` + `light`).
+ * The global prefers-reduced-motion reset above neutralises all of these
+ * automatically — no per-rule guard needed. */
+
+/* Staggered reveal: add `.stagger-reveal` to a container; its DIRECT
+ * children rise + fade in sequence on mount. Delay caps at the 8th child
+ * so long lists don't animate forever. Opt-in only — never apply to the
+ * virtualized chat message list. */
+@keyframes rise {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: none; }
+}
+.stagger-reveal > * {
+  animation: rise var(--dur-slow) var(--ease-out) both;
+}
+.stagger-reveal > *:nth-child(1) { animation-delay: 0ms; }
+.stagger-reveal > *:nth-child(2) { animation-delay: 40ms; }
+.stagger-reveal > *:nth-child(3) { animation-delay: 80ms; }
+.stagger-reveal > *:nth-child(4) { animation-delay: 120ms; }
+.stagger-reveal > *:nth-child(5) { animation-delay: 160ms; }
+.stagger-reveal > *:nth-child(6) { animation-delay: 200ms; }
+.stagger-reveal > *:nth-child(7) { animation-delay: 240ms; }
+.stagger-reveal > *:nth-child(8) { animation-delay: 280ms; }
+.stagger-reveal > *:nth-child(n+9) { animation-delay: 320ms; }
+
+/* Hover lift: add `.lift` to a card/row for a springy raise on hover.
+ * Transform + shadow only — no layout shift of siblings. */
+.lift {
+  transition: transform var(--dur-quick) var(--ease-spring),
+              box-shadow var(--dur-base) var(--ease-out);
+}
+.lift:hover { transform: translateY(-2px); box-shadow: var(--shadow-2); }
+
+/* Text shimmer: add `.shimmer` to the agent "thinking" label for a
+ * left-to-right sheen. Clips a moving gradient to the text. */
+@keyframes text-shimmer { to { background-position: -200% 0; } }
+.shimmer {
+  background: linear-gradient(90deg,
+    var(--text-mute) 30%, var(--accent-bright) 50%, var(--text-mute) 70%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: text-shimmer 1.8s linear infinite;
 }
 
 

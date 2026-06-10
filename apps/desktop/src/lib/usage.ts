@@ -184,6 +184,32 @@ export function sessionUsageTotals(sess: ClaudeSession | null): {
   return acc;
 }
 
+/** Per-turn series for the ChatHeader timeline ribbon. One entry per
+ *  assistant message that carries a usage snapshot (= one completed
+ *  turn), oldest → newest. `costUsd` drives the bar height; `hasTool`
+ *  marks turns that invoked tools (any `trace` event) so the ribbon can
+ *  dot them. Pure — the header maps this straight into bar elements. */
+export function sessionTurnSeries(sess: ClaudeSession | null): {
+  costUsd: number;
+  tokens: number;
+  hasTool: boolean;
+}[] {
+  if (!sess) return [];
+  const out: { costUsd: number; tokens: number; hasTool: boolean }[] = [];
+  for (const m of sess.messages) {
+    if (m.role !== 'assistant') continue;
+    const u = m.usage;
+    if (!u) continue;
+    const hasTool = !!m.events?.some((ev) => ev.kind === 'trace');
+    out.push({
+      costUsd: costForUsage(u),
+      tokens: (u.inputTokens || 0) + (u.outputTokens || 0),
+      hasTool,
+    });
+  }
+  return out;
+}
+
 /** Heuristic estimate of tokens + USD saved by RTK output-compression
  *  in this session. Source signal: bash tool-use traces (Claude CLI
  *  emits each Bash invocation as a segment starting with `Bash(` in

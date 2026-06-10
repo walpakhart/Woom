@@ -94,6 +94,7 @@ export const claudeEffort: { value: string; label: string }[] = [
   { value: 'medium', label: 'Effort · medium' },
   { value: 'high', label: 'Effort · high' },
   { value: 'max', label: 'Effort · max' },
+  { value: 'ultracode', label: 'Effort · ultracode' },
 ];
 
 /** Trigger detector for the `/` slash-command + `@` mention pickers.

@@ -515,11 +515,13 @@
     background: transparent;
     cursor: pointer;
     overflow: hidden;
-    transition: background 140ms;
+    transition: background var(--dur-quick),
+                transform var(--dur-quick) var(--ease-spring);
   }
   .rail-sigil:hover {
     background: color-mix(in srgb, var(--accent) 10%, transparent);
   }
+  .rail-sigil:not(.active):hover { transform: translateY(-1px); }
   .rail-sigil.active {
     background: color-mix(in srgb, var(--accent) 16%, transparent);
     box-shadow:

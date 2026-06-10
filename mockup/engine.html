@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="iconic">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Woom · Engine v2 — animated-bg model panel + fixed chip + ribbon</title>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+:root{
+  --bg-0:#0E1112;--bg-1:#14181A;--bg-2:#1B2125;--bg-3:#232A2F;
+  --t0:#EBEFEC;--t1:#C5CDC9;--t2:#8C9692;--tm:#5C6663;
+  --accent:#8FB5A4;--accent-bright:#B0DCC8;--glow:rgba(176,220,200,.4);--soft:rgba(176,220,200,.1);
+  --warm:#E0B16C;
+  --border:rgba(235,240,238,.07);--border-hi:rgba(235,240,238,.14);
+  --shadow:0 24px 60px -20px rgba(0,0,0,.7);
+}
+[data-theme="light"]{
+  --bg-0:#F4F6F4;--bg-1:#EDF0EE;--bg-2:#E3E8E5;--bg-3:#D7DEDA;
+  --t0:#1B2320;--t1:#3A4540;--t2:#6A7670;--tm:#97A29C;
+  --accent:#5E8C77;--accent-bright:#3F7359;--glow:rgba(63,115,89,.28);--soft:rgba(63,115,89,.08);
+  --border:rgba(20,30,25,.09);--border-hi:rgba(20,30,25,.16);--warm:#B07A2E;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{min-height:100vh;display:flex;flex-direction:column;align-items:center;gap:26px;padding:46px 28px;
+  background:radial-gradient(800px 460px at 50% 120%,var(--soft),transparent 60%),var(--bg-0);
+  color:var(--t0);font-family:'Geist',system-ui,sans-serif;font-size:14px;-webkit-font-smoothing:antialiased}
+.mono{font-family:'Geist Mono',monospace}
+.toolbar{display:flex;gap:10px}
+.tb{padding:6px 12px;border-radius:8px;background:var(--bg-2);border:1px solid var(--border-hi);color:var(--t1);font-size:12px;cursor:pointer}
+.tb:hover{border-color:var(--accent);color:var(--t0)}
+.label{font-size:11px;color:var(--tm);letter-spacing:.08em;text-transform:uppercase}
+.note{font-size:12px;color:var(--t2);max-width:640px;line-height:1.65;text-align:center}
+.note b{color:var(--t1)}
+
+/* ── CHIP — FULL animated signature background, text overlaid, centered ── */
+.engine{position:relative;display:inline-flex;align-items:center;gap:9px;padding:6px 11px 6px 12px;
+  border-radius:11px;border:1px solid var(--border-hi);cursor:pointer;overflow:hidden;
+  background:var(--bg-0);min-width:170px;
+  transition:border-color .2s,box-shadow .3s}
+.engine.hot{border-color:color-mix(in srgb,var(--accent-bright) 50%,var(--border));box-shadow:0 0 18px -4px var(--glow)}
+.eng-bg{position:absolute;inset:0;width:100%;height:100%;z-index:0}
+.eng-scrim{position:absolute;inset:0;z-index:1;pointer-events:none;
+  background:radial-gradient(120% 140% at 50% 50%,color-mix(in srgb,var(--bg-0) 20%,transparent),color-mix(in srgb,var(--bg-0) 55%,transparent))}
+.eng-meta{position:relative;z-index:2;flex:1;display:flex;flex-direction:column;align-items:center;line-height:1.18}
+.eng-model{font-size:12.5px;font-weight:600;letter-spacing:-.01em;white-space:nowrap;text-shadow:0 1px 6px var(--bg-0)}
+.eng-eff{font-size:10px;color:var(--t2);white-space:nowrap;text-shadow:0 1px 6px var(--bg-0)}
+.engine.hot .eng-eff{color:var(--accent-bright)}
+.cay{position:relative;z-index:2;width:11px;height:11px;margin-left:1px;fill:none;stroke:var(--t2);stroke-width:2;transition:transform .2s;flex-shrink:0}
+.engine.open .cay{transform:rotate(180deg)}
+
+/* ── PANEL — original layout: top reactor + models + slider on solid bg ── */
+.panel{position:absolute;bottom:calc(100% + 10px);left:50%;transform:translateX(-50%) translateY(8px);
+  width:300px;border-radius:16px;box-shadow:var(--shadow);overflow:hidden;z-index:40;
+  background:var(--bg-1);border:1px solid var(--border-hi);
+  opacity:0;visibility:hidden;transition:opacity .16s,transform .16s,visibility .16s}
+.engine.open .panel{opacity:1;visibility:visible;transform:translateX(-50%) translateY(0)}
+.reactor{position:relative;height:80px;background:var(--bg-0);border-bottom:1px solid var(--border);overflow:hidden}
+.reactor canvas{position:absolute;inset:0;width:100%;height:100%}
+.p-head{position:absolute;inset:0;z-index:2;display:flex;align-items:baseline;justify-content:space-between;padding:10px 14px;pointer-events:none}
+.p-name{font-size:13px;font-weight:600;color:var(--t0)}
+.p-vibe{font-size:10.5px;color:var(--t2)}
+.p-vibe b{color:var(--accent-bright);font-weight:600}
+.models{display:flex;flex-wrap:wrap;gap:6px;padding:12px 13px}
+.mp{display:inline-flex;align-items:center;gap:6px;padding:5px 10px;border-radius:9px;cursor:pointer;font-size:12px;
+  color:var(--t2);background:var(--bg-2);border:1px solid var(--border);transition:all .14s}
+.mp:hover{color:var(--t0);border-color:var(--border-hi)}
+.mp.on{color:var(--accent-bright);background:color-mix(in srgb,var(--accent) 14%,transparent);border-color:color-mix(in srgb,var(--accent-bright) 40%,var(--border))}
+.eff{padding:2px 14px 14px}
+.ends{display:flex;justify-content:space-between;font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--tm);margin-bottom:6px}
+.track{position:relative;height:24px;border-radius:8px;cursor:pointer;
+  background:var(--bg-2);border:1px solid var(--border)}
+.fill{position:absolute;inset:0 auto 0 0;border-radius:8px 0 0 8px;pointer-events:none;
+  background:linear-gradient(90deg,color-mix(in srgb,var(--accent) 32%,transparent),color-mix(in srgb,var(--accent-bright) 60%,transparent));transition:width .25s cubic-bezier(.22,1,.36,1)}
+.stops{position:absolute;inset:0;display:flex;justify-content:space-between;align-items:center;padding:0 9px}
+.stop{width:4px;height:4px;border-radius:50%;background:var(--tm)}
+.stop.p{background:color-mix(in srgb,var(--accent-bright) 85%,#fff)}
+.stop.a{transform:scale(2.1)}
+.knob{position:absolute;top:50%;width:16px;height:16px;border-radius:50%;transform:translate(-50%,-50%);
+  background:var(--accent-bright);box-shadow:0 0 0 2px var(--bg-1),0 0 12px -1px var(--glow);transition:left .25s cubic-bezier(.22,1,.36,1);pointer-events:none}
+
+/* ── RIBBON demo — REAL bars (the dots bug = % height with no parent height; fixed via definite height) ── */
+.hdr{width:560px;max-width:100%;height:58px;display:flex;align-items:stretch;border:1px solid var(--border-hi);
+  border-radius:12px;overflow:hidden;background:linear-gradient(180deg,var(--bg-2),var(--bg-1))}
+.hdr-head{flex-shrink:0;display:flex;flex-direction:column;justify-content:center;gap:2px;padding:0 14px 0 16px;border-right:1px solid var(--border);max-width:200px}
+.hdr-name{font-size:13px;font-weight:600;color:var(--t0);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hdr-sub{font-size:10.5px;color:var(--tm)}
+.hdr-sub .usd{color:var(--accent-bright);font-weight:600}
+.rib-wrap{position:relative;flex:1;min-width:0;align-self:stretch;display:flex;align-items:flex-end}
+.rib{flex:1;min-width:0;height:100%;display:flex;align-items:flex-end;gap:2px;padding:11px 14px 12px}  /* height:100% = bars resolve */
+.bar{flex:1 1 auto;min-width:2px;max-width:13px;border-radius:2px 2px 0 0;cursor:pointer;position:relative;
+  transition:filter .14s,transform .14s,box-shadow .14s;transform-origin:bottom}
+.bar.lo{background:color-mix(in srgb,var(--accent) 26%,transparent)}
+.bar.mid{background:color-mix(in srgb,var(--accent) 55%,transparent)}
+.bar.hi{background:var(--accent-bright)}
+.bar:hover{transform:scaleY(1.06);filter:brightness(1.18);box-shadow:0 0 8px -2px var(--accent-bright)}
+.bar.tool::after{content:"";position:absolute;top:-5px;left:50%;transform:translateX(-50%);width:3px;height:3px;border-radius:50%;background:var(--warm)}
+.readout{position:absolute;top:4px;left:14px;z-index:3;display:inline-flex;align-items:baseline;gap:8px;padding:2px 8px;
+  background:color-mix(in srgb,var(--bg-3) 94%,transparent);border:1px solid var(--border-hi);border-radius:6px;font-size:10.5px;color:var(--t2);pointer-events:none}
+.readout .n{color:var(--t1);font-weight:600}.readout .u{color:var(--accent-bright);font-weight:600}.readout .tk{color:var(--tm)}
+</style>
+</head>
+<body>
+<div class="toolbar">
+  <button class="tb" onclick="document.documentElement.dataset.theme=document.documentElement.dataset.theme==='iconic'?'light':'iconic'">☀ / 🌙</button>
+</div>
+
+<span class="label">Chip + panel (click chip) — effort CENTERED · animated signature = panel background</span>
+<div class="engine open" id="eng">
+  <canvas class="eng-bg" id="chip"></canvas>
+  <div class="eng-scrim"></div>
+  <span class="eng-meta"><span class="eng-model" id="lM">Opus 4.8 · 1M</span><span class="eng-eff" id="lE">Ultracode</span></span>
+  <svg class="cay" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
+  <div class="panel" id="panel" onclick="event.stopPropagation()">
+    <div class="reactor">
+      <canvas id="bg"></canvas>
+      <div class="p-head"><span class="p-name" id="pN">Opus 4.8 · 1M</span><span class="p-vibe" id="pV"></span></div>
+    </div>
+    <div class="models" id="models"></div>
+    <div class="eff">
+      <div class="ends"><span>Faster · shallower</span><span>Deeper</span></div>
+      <div class="track" id="track"><div class="fill" id="fill"></div><div class="stops" id="stops"></div><div class="knob" id="knob"></div></div>
+    </div>
+  </div>
+</div>
+
+<span class="label">Ribbon — REAL bars (not dots), tiers by cost, hover readout</span>
+<div class="hdr">
+  <div class="hdr-head"><span class="hdr-name">внедрить новые модели</span><span class="hdr-sub">27 turns · <span class="usd mono">$27.66</span></span></div>
+  <div class="rib-wrap"><div class="readout" id="ro" style="display:none"></div><div class="rib" id="rib" onmouseleave="hideRO()"></div></div>
+</div>
+
+<p class="note"><b>Чип:</b> модель + effort центрированы стопкой, без пустого места. <b>Панель:</b> сигнатура анимируется фоном за моделями (scrim для читаемости). <b>Ribbon:</b> бары реальной высоты (фикс «точек» = height:100% на контейнере) — оттенок по cost-tier, hover = readout.</p>
+
+<script>
+const A=()=>getComputedStyle(document.body).getPropertyValue('--accent-bright').trim()||'#B0DCC8';
+const Aa=()=>getComputedStyle(document.body).getPropertyValue('--accent').trim()||'#8FB5A4';
+const MODELS=[{n:'Fable 5',k:'rain'},{n:'Mythos 5',k:'glitch'},{n:'Opus 4.8 · 1M',k:'orbit'},{n:'Sonnet 4.6',k:'waves'},{n:'Haiku 4.5',k:'pulse'}];
+const EFF=['Auto','Low','Medium','High','Max','Ultracode'];
+let mi=2,ei=5;
+const eng=document.getElementById('eng');
+eng.addEventListener('click',()=>eng.classList.toggle('open'));
+document.addEventListener('click',e=>{if(!eng.contains(e.target))eng.classList.remove('open')});
+const modelsEl=document.getElementById('models');
+MODELS.forEach((m,i)=>{const b=document.createElement('button');b.className='mp';b.textContent=m.n;b.onclick=e=>{e.stopPropagation();mi=i;render()};modelsEl.appendChild(b)});
+const stopsEl=document.getElementById('stops');
+EFF.forEach((_,i)=>{const s=document.createElement('div');s.className='stop';s.onclick=e=>{e.stopPropagation();ei=i;render()};stopsEl.appendChild(s)});
+const track=document.getElementById('track');let drag=false;
+const eiX=x=>{const r=track.getBoundingClientRect();return Math.round(Math.max(0,Math.min(1,(x-r.left)/r.width))*(EFF.length-1))};
+track.addEventListener('pointerdown',e=>{drag=true;track.setPointerCapture(e.pointerId);ei=eiX(e.clientX);render()});
+track.addEventListener('pointermove',e=>{if(drag){ei=eiX(e.clientX);render()}});
+track.addEventListener('pointerup',()=>drag=false);
+const ef=()=>ei/(EFF.length-1),speed=()=>1.7-1.25*ef(),depth=()=>.22+.78*ef();
+const fill=document.getElementById('fill'),knob=document.getElementById('knob');
+function vibe(){const e=ef();if(e<=.2)return'fastest · shallow';if(e<.45)return'quick · light';if(e<.7)return'balanced';if(e<.92)return'deep · careful';return'deepest · deliberate'}
+function render(){const m=MODELS[mi];document.getElementById('lM').textContent=m.n;document.getElementById('lE').textContent=EFF[ei];
+  document.getElementById('pN').textContent=m.n;document.getElementById('pV').innerHTML=`<b>${EFF[ei]}</b> · ${vibe()}`;
+  eng.classList.toggle('hot',ef()>=.9);[...modelsEl.children].forEach((el,i)=>el.classList.toggle('on',i===mi));
+  const pct=ef()*100;fill.style.width=pct+'%';knob.style.left=pct+'%';
+  [...stopsEl.children].forEach((s,i)=>{s.classList.toggle('p',i<=ei);s.classList.toggle('a',i===ei)})}
+
+// signatures
+const cc=document.getElementById('chip'),cx=cc.getContext('2d');
+const bc=document.getElementById('bg'),bx=bc.getContext('2d');
+let cW,cH,bW,bH,dpr=Math.min(devicePixelRatio||1,2),clock=0,raf,last=0;
+let drops=[],orbits=[];
+function size(){cW=cc.clientWidth||26;cH=cc.clientHeight||26;cc.width=cW*dpr;cc.height=cH*dpr;cx.setTransform(dpr,0,0,dpr,0,0);
+  bW=bc.clientWidth||300;bH=bc.clientHeight||230;bc.width=bW*dpr;bc.height=bH*dpr;bx.setTransform(dpr,0,0,dpr,0,0);
+  drops=new Array(Math.max(1,Math.floor(bW/9))).fill(0).map(()=>Math.random()*-bH);
+  orbits=new Array(16).fill(0).map((_,i)=>({a:Math.random()*7,r:10+i*4,sp:.4+Math.random()*.5}))}
+const G='ｱｲｳｴｵｶｷｸｹｺ0123456789<>=/$';
+function paint(ctx,w,h,k,d,sm){const a=A();ctx.clearRect(0,0,w,h);
+  if(k==='rain'){ctx.fillStyle='rgba(0,0,0,.18)';ctx.fillRect(0,0,w,h);ctx.font=(sm?8:12)+'px ui-monospace,monospace';
+    const step=sm?9:12,cols=Math.max(1,Math.floor(w/step)),vis=Math.ceil(cols*(.3+.7*d));
+    for(let i=0;i<vis;i++){const x=i*step+1,y=drops[i%drops.length];ctx.globalAlpha=.9;ctx.fillStyle=a;ctx.fillText(G[Math.random()*G.length|0],x,y);ctx.globalAlpha=.3;ctx.fillText(G[Math.random()*G.length|0],x,y-(sm?8:12))}ctx.globalAlpha=1;
+  }else if(k==='glitch'){ctx.fillStyle='rgba(0,0,0,.24)';ctx.fillRect(0,0,w,h);const n=Math.round((sm?4:48)*(.3+.7*d));ctx.fillStyle=a;
+    for(let i=0;i<n;i++){if(Math.random()>.45)continue;ctx.globalAlpha=.2+Math.random()*.7;ctx.fillRect(Math.random()*w,Math.random()*h,2+Math.random()*10,2)}ctx.globalAlpha=1;
+  }else if(k==='orbit'){ctx.save();ctx.translate(w/2,h/2);const cnt=Math.round((sm?5:18)*(.35+.65*d));const pts=[];
+    for(let i=0;i<cnt;i++){const o=orbits[i%orbits.length];const r=sm?o.r*.4:o.r;const x=Math.cos(o.a)*r,y=Math.sin(o.a)*r*.7;pts.push([x,y]);ctx.globalAlpha=.8;ctx.fillStyle=a;ctx.beginPath();ctx.arc(x,y,sm?1:2,0,7);ctx.fill()}
+    if(d>.6&&!sm){ctx.globalAlpha=.16*(d-.6)/.4;ctx.strokeStyle=a;ctx.lineWidth=.8;for(let i=0;i<pts.length;i++)for(let j=i+1;j<pts.length;j++){const dx=pts[i][0]-pts[j][0],dy=pts[i][1]-pts[j][1];if(dx*dx+dy*dy<900){ctx.beginPath();ctx.moveTo(...pts[i]);ctx.lineTo(...pts[j]);ctx.stroke()}}}ctx.restore();ctx.globalAlpha=1;
+  }else if(k==='waves'){const layers=Math.round((sm?2:5)*(.5+.5*d));for(let l=0;l<layers;l++){ctx.beginPath();ctx.strokeStyle=a;ctx.globalAlpha=.12+l*.06;ctx.lineWidth=sm?1:1.4;const amp=(sm?3:20)*(.5+.5*d)-l*(sm?.6:3);for(let x=0;x<=w;x+=sm?3:6){const y=h/2+Math.sin(x/(sm?9:34)+clock/420+l)*amp;x?ctx.lineTo(x,y):ctx.moveTo(x,y)}ctx.stroke()}ctx.globalAlpha=1;
+  }else{ctx.save();ctx.translate(w/2,h/2);const rings=sm?2:4;for(let l=0;l<rings;l++){const ph=((clock/600)+l/rings)%1;const r=ph*(sm?9:Math.max(w,h)*.5)*(.6+.4*d);ctx.globalAlpha=(1-ph)*.5;ctx.strokeStyle=a;ctx.lineWidth=sm?1:1.6;ctx.beginPath();ctx.arc(0,0,r,0,7);ctx.stroke()}ctx.restore();ctx.globalAlpha=1}}
+function step(ts){raf=requestAnimationFrame(step);const dt=ts-last;if(dt<40)return;last=ts;clock+=dt*speed();
+  const fall=4+8*speed();for(let i=0;i<drops.length;i++)drops[i]=drops[i]>bH+20?-12:drops[i]+fall;orbits.forEach(o=>o.a+=.02*o.sp*speed()*2);
+  const m=MODELS[mi],d=depth();paint(cx,cW,cH,m.k,d,false);paint(bx,bW,bH,m.k,d,false)}
+function start(){size();cancelAnimationFrame(raf);last=0;raf=requestAnimationFrame(step)}
+addEventListener('resize',start);render();start();
+
+// ribbon
+const turns=Array.from({length:27},()=>{const c=Math.random();return{c,tool:Math.random()>.6,usd:(c*2).toFixed(2),tok:(8+c*20).toFixed(1)}});
+const rib=document.getElementById('rib'),ro=document.getElementById('ro');
+turns.forEach((t,i)=>{const b=document.createElement('div');const tier=t.c>.66?'hi':t.c>.33?'mid':'lo';b.className='bar '+tier+(t.tool?' tool':'');
+  b.style.height=Math.max(22,Math.round(t.c*100))+'%';
+  b.onmouseenter=()=>{ro.style.display='inline-flex';ro.innerHTML=`<span class="n">turn ${i+1}</span><span class="u">$${t.usd}</span><span class="tk">${t.tok}k tok</span>`+(t.tool?'<span style="color:var(--warm);font-size:9px;text-transform:uppercase">tools</span>':'')};
+  rib.appendChild(b)});
+function hideRO(){ro.style.display='none'}
+</script>
+</body>
+</html>

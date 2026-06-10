@@ -334,11 +334,55 @@
      tight enough that "I scrolled up to re-read" actually wins. */
   const STICK_PX = 80;
   let stickToBottom = true;
+  /* Set true for the single onscroll event our own `scrollTop` write
+     fires, so the position-based handler doesn't treat the programmatic
+     pin-to-bottom as a user gesture (it always reads ~0px-from-bottom
+     and would otherwise re-arm stick even right after the user broke
+     away). Without this the per-delta write during streaming kept
+     yanking the user back down — they could never escape the bottom. */
+  let programmaticScroll = false;
+  /* rAF-throttle the layout read. During streaming the DOM mutates every
+     frame, so reading scrollHeight/scrollTop synchronously on each native
+     onscroll event (trackpads fire 60-120/s) forced a full reflow per
+     event → the visible scroll jank. One read per frame is plenty. */
+  let scrollReadPending = false;
 
-  function onChatScroll() {
+  function recomputeStick() {
     if (!chatEl) return;
     const distanceFromBottom = chatEl.scrollHeight - chatEl.scrollTop - chatEl.clientHeight;
     stickToBottom = distanceFromBottom < STICK_PX;
+  }
+
+  function onChatScroll() {
+    if (programmaticScroll) {
+      programmaticScroll = false;
+      return;
+    }
+    if (scrollReadPending) return;
+    scrollReadPending = true;
+    requestAnimationFrame(() => {
+      scrollReadPending = false;
+      recomputeStick();
+    });
+  }
+
+  /* Upward intent breaks the bottom-lock IMMEDIATELY — before the next
+     streaming delta's rAF can re-pin. Position alone can't win that race
+     because the programmatic write resets scrollTop every frame; an
+     explicit user gesture is the authoritative "let me read history"
+     signal. Re-engaging stick is left to recomputeStick once the user
+     scrolls back within STICK_PX of the bottom. */
+  function onChatWheel(e: WheelEvent) {
+    if (e.deltaY < 0) stickToBottom = false;
+  }
+  let touchY = 0;
+  function onChatTouchStart(e: TouchEvent) {
+    touchY = e.touches[0]?.clientY ?? 0;
+  }
+  function onChatTouchMove(e: TouchEvent) {
+    const y = e.touches[0]?.clientY ?? 0;
+    if (y > touchY + 2) stickToBottom = false; // finger drags down = content moves up = reading history
+    touchY = y;
   }
 
   $effect(() => {
@@ -355,6 +399,7 @@
     requestAnimationFrame(() => {
       scrollPending = false;
       if (!chatEl || !stickToBottom) return;
+      programmaticScroll = true;
       chatEl.scrollTop = chatEl.scrollHeight;
     });
   });
@@ -429,7 +474,17 @@
     <p class="ct-empty-p">Pick a session from the sidebar or create a new one.</p>
   </div>
 {:else}
-  <div class="ct" bind:this={chatEl} onscroll={onChatScroll}>
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <!-- wheel/touch handlers are passive scroll-intent detectors (break the
+       stick-to-bottom lock when the user scrolls up), not interactions. -->
+  <div
+    class="ct"
+    bind:this={chatEl}
+    onscroll={onChatScroll}
+    onwheel={onChatWheel}
+    ontouchstart={onChatTouchStart}
+    ontouchmove={onChatTouchMove}
+  >
     {#if sess.messages.length === 0 && sess.actions.length === 0}
       <div class="ct-welcome">
         <p class="ct-welcome-h serif">Ask {p.kind === 'claude' ? 'Claude' : 'Cursor'} anything</p>
@@ -821,7 +876,7 @@
                   <span class="dot"></span>
                   <span class="dot"></span>
                 </span>
-                <span>thinking{elapsed ? ` · ${elapsed}` : ''}</span>
+                <span class="shimmer">thinking{elapsed ? ` · ${elapsed}` : ''}</span>
               </div>
             {/if}
             {#if msg.usage}

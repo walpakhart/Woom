@@ -145,6 +145,16 @@
     repoPaths.length > 0 ? repoPaths : repoPath ? [repoPath] : []
   );
 
+  /** Header label for the open-root set. One root ⇒ its basename; many ⇒
+      "<first> +N" so two-or-more repos read at a glance without overflowing.
+      Full list lives in the title attr. */
+  const rootLabel = $derived(
+    roots.length <= 1
+      ? fileName(repoPath)
+      : `${fileName(roots[0])} +${roots.length - 1}`
+  );
+  const rootTitle = $derived(roots.length > 1 ? roots.join('\n') : repoPath);
+
   /** Owning root for an absolute path — longest matching root prefix, else
       the primary root. Lets tabs / relative labels work across roots. */
   function rootForPath(abs: string): string {
@@ -1052,7 +1062,7 @@
               {#if instanceLabel}
                 <span class="ev-instance-label" title="Editor instance · {instanceLabel}">{instanceLabel}</span>
               {/if}
-              <span class="ev-root-name" title={repoPath}>{fileName(repoPath)}</span>
+              <span class="ev-root-name" title={rootTitle}>{rootLabel}</span>
             </div>
             {#if onLinkToAgent && agentInstances.length > 0}
               <div class="ev-link-wrap">

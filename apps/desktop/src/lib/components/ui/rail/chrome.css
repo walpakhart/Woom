@@ -14,7 +14,9 @@
   border-radius: 11px;
   cursor: pointer;
   padding: 0;
-  transition: color 140ms, background 140ms, box-shadow 220ms;
+  transition: color var(--dur-quick), background var(--dur-quick),
+              box-shadow var(--dur-slow),
+              transform var(--dur-quick) var(--ease-spring);
   --rail-tone: var(--accent-bright);
   --rail-glow: var(--accent-glow);
 }
@@ -54,6 +56,9 @@
   color: var(--rail-tone);
   background: color-mix(in srgb, var(--rail-tone) 10%, transparent);
 }
+/* Springy hover-lift — gated to non-active so the current solo's button
+ * (already signalled by ring + dot + halo) stays planted. */
+.rail-btn:not(.active):hover { transform: translateY(-1px); }
 .rail-btn.active {
   color: var(--rail-tone);
   background: linear-gradient(180deg,

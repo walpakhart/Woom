@@ -362,7 +362,7 @@
        a counter-wash bottom-right to keep the page from reading flat. -->
   <div class="ho-aurora" aria-hidden="true"></div>
 
-  <div class="ho-scroll">
+  <div class="ho-scroll stagger-reveal">
     <!-- HERO ----------------------------------------------------- -->
     <header class="ho-hero">
       <div class="ho-hero-left">
@@ -916,7 +916,7 @@
     padding: 16px 18px;
     display: flex; flex-direction: column; gap: 8px;
     cursor: pointer;
-    transition: border-color 160ms, transform 160ms, box-shadow 160ms;
+    transition: border-color var(--dur-base), transform var(--dur-base) var(--ease-spring), box-shadow var(--dur-base);
     isolation: isolate;
   }
   .ho-stat:hover { transform: translateY(-2px); }
@@ -1074,7 +1074,7 @@
     border: 1px solid transparent;
     text-align: left;
     cursor: pointer;
-    transition: border-color 160ms, background 160ms, transform 160ms;
+    transition: border-color var(--dur-base), background var(--dur-base), transform var(--dur-base) var(--ease-spring);
   }
   .ho-chat-row::before {
     content: '';
@@ -1281,7 +1281,7 @@
     border: 1px solid var(--border);
     cursor: pointer;
     text-align: left;
-    transition: border-color 160ms, background 160ms, transform 160ms, box-shadow 160ms;
+    transition: border-color var(--dur-base), background var(--dur-base), transform var(--dur-base) var(--ease-spring), box-shadow var(--dur-base);
   }
   .ho-quick-card:hover {
     transform: translateY(-2px);

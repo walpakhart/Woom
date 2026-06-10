@@ -626,6 +626,7 @@ async fn spawn_claude_armed(args: &AskArgs<'_>) -> Result<ArmedCli, ClaudeRunErr
             "medium" => Some("10000"),
             "high" => Some("24000"),
             "max" => Some("32000"),
+            "ultracode" => Some("64000"),
             _ => None,
         };
         if let Some(t) = toks {
