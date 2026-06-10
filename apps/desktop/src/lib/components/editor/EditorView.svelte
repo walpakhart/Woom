@@ -33,8 +33,16 @@
   function rootKey(id: string): string {
     return `woom:editor:root:${id}`;
   }
-  function tabsKey(id: string): string {
-    return `woom:editor:tabs:${id}`;
+  /* Tabs persist PER-REPO (not per-instance) so the editor behaves like
+     VS Code: each folder remembers which files were open. Opening repo X
+     in any editor restores X's last tabs; a brand-new editor with no repo
+     is empty; switching repos swaps the tab set instead of carrying stale
+     files from the previous repo. Key = sorted root set joined by '|'. */
+  function repoKeyFor(rs: string[]): string {
+    return rs.length ? [...rs].sort().join('|') : '';
+  }
+  function tabsKey(repoKey: string): string {
+    return `woom:editor:tabs:${repoKey}`;
   }
   /* The currently-focused buffer for this editor instance. Lives in
      localStorage (not in `editorInstanceState`) because we only read
@@ -718,15 +726,12 @@
       try {
         const exists = await invoke<boolean>('fs_path_exists', { path: rootToLoad });
         if (exists) {
-          if (!repoPath) await setRoot(rootToLoad);
-          else await startWatch();
-          const savedTabs = JSON.parse(localStorage.getItem(tabsKey(instanceId)) || '[]');
-          if (Array.isArray(savedTabs)) {
-            for (const p of savedTabs) {
-              const ok = await invoke<boolean>('fs_path_exists', { path: p });
-              if (ok) tabs = [...tabs, p];
-            }
-            if (tabs.length) activePath = tabs[0];
+          if (!repoPath) {
+            // setRoot → openRoots loads this repo's remembered tabs.
+            await setRoot(rootToLoad);
+          } else {
+            await startWatch();
+            await loadTabsForRoots(roots);
           }
         }
       } catch {/* ignore */}
@@ -846,10 +851,16 @@
     error = null;
     const resolved: string[] = [];
     for (const p of paths) resolved.push(await resolveRoot(p));
+    /* Save the OUTGOING repo's tabs before switching so it keeps its
+       memory, then swap to the incoming repo's remembered tabs. This is
+       the "Open folder(s)" replace path — i.e. switching repos. */
+    const prevRoots = roots;
+    if (repoKeyFor(prevRoots) !== repoKeyFor(resolved)) saveTabsForRoots(prevRoots);
     setEditorRoots(instanceId, resolved);
     repoPath = resolved[0] ?? '';
     if (repoPath) localStorage.setItem(rootKey(instanceId), repoPath);
     await startWatch();
+    if (repoKeyFor(prevRoots) !== repoKeyFor(resolved)) await loadTabsForRoots(resolved);
   }
 
   async function setRoot(path: string) {
@@ -988,7 +999,42 @@
   }
 
   function persistTabs() {
-    localStorage.setItem(tabsKey(instanceId), JSON.stringify(tabs));
+    saveTabsForRoots(roots);
+  }
+
+  /** Persist the current open-tab set under a given root set's key. Used
+   *  both on every tab mutation (current roots) and right before a repo
+   *  switch (outgoing roots) so the old repo keeps its tab memory. */
+  function saveTabsForRoots(rs: string[]) {
+    const key = repoKeyFor(rs);
+    if (key) localStorage.setItem(tabsKey(key), JSON.stringify(tabs));
+  }
+
+  /** Replace the visible tab set with the one remembered for `rs`. Clears
+   *  first (so stale files from the previous repo vanish), then restores
+   *  only paths that still exist AND live under one of the given roots. */
+  async function loadTabsForRoots(rs: string[]) {
+    tabs = [];
+    activePath = '';
+    dirtyByPath = {};
+    const key = repoKeyFor(rs);
+    if (!key) return;
+    let saved: unknown = [];
+    try {
+      saved = JSON.parse(localStorage.getItem(tabsKey(key)) || '[]');
+    } catch {
+      saved = [];
+    }
+    if (!Array.isArray(saved)) return;
+    const next: string[] = [];
+    for (const p of saved) {
+      if (typeof p !== 'string') continue;
+      if (!rs.some((r) => p === r || p.startsWith(r + '/'))) continue;
+      const ok = await invoke<boolean>('fs_path_exists', { path: p }).catch(() => false);
+      if (ok) next.push(p);
+    }
+    tabs = next;
+    activePath = next[0] ?? '';
   }
 
   /* Mirror the active path into localStorage so the agent's @-mention

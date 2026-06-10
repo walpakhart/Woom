@@ -264,6 +264,7 @@
       <div class="se-editor-area">
         <EditorView
           bind:repoPath
+          {repoPaths}
           {agentInstances}
           {linkedAgents}
           {sidebarTab}

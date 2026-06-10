@@ -292,7 +292,13 @@ export function addInstance(kind: AppKind): AppInstance | null {
     for (const inst of list) taken.push(inst.name);
   }
   const name = pickInstanceName(taken);
-  const id = `${kind}:${nameToSlug(name)}`;
+  /* The id carries a random suffix so it NEVER recycles: a curated name
+     (Vermeer, Klimt…) frees up when its instance is removed, and without
+     the suffix the next spawn would reuse `editor:klimt` and inherit the
+     dead instance's localStorage tabs / repoPath + lingering session
+     links — a "new" editor would open pre-populated. The suffix makes
+     every spawn a clean slate. Existing persisted ids stay valid. */
+  const id = `${kind}:${nameToSlug(name)}-${Math.random().toString(36).slice(2, 8)}`;
   /* Guard against the slim chance two clicks within the same tick
      produced the same id — bail rather than silently dedupe. */
   if (layoutState.instances[kind].some((i) => i.id === id)) return null;
