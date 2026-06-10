@@ -9,7 +9,7 @@
 
   import EditorView from '$lib/components/editor/EditorView.svelte';
   import ActivityBar from './editor/ActivityBar.svelte';
-  import InlineClaude from './editor/InlineClaude.svelte';
+  import AgentDock, { type DockHandlers } from './editor/AgentDock.svelte';
   import Splitter from '$lib/components/ui/Splitter.svelte';
   import SidePaneRail from '$lib/components/ui/SidePaneRail.svelte';
   import { sessionsState, getPendingEditEvents, editorRoots } from '$lib/state/sessions.svelte';
@@ -40,24 +40,33 @@
     /** Activate a specific linked session AND switch the top-level
      *  view to its agent app. Per-row "Open" affordance. */
     onOpenSession: (sessionId: string, agentInstanceId: string) => void;
+    /** Agent CLI connection flags — forwarded to AgentDock so it can
+     *  render a "Connect first" stub instead of a dead chat body when
+     *  the docked session's kind isn't connected. */
+    connectedClaude?: boolean;
+    connectedCursor?: boolean;
+    /** Agent callback bundle for the docked ChatThread + Composer. */
+    dock: DockHandlers;
   }
   let p: Props = $props();
 
   let activityTab = $state<ActivityTab>('explorer');
 
-  /** Inline-Claude pane open state. Persisted per editor instance —
-   *  Vermeer/Hopper/etc remember whether the user prefers the pane
-   *  hidden (more chrome for code) or shown (one-glance to chat).
-   *  Default = true so first-run users discover the pane exists. */
+  /** Agent-dock open state. Persisted per editor instance —
+   *  Vermeer/Hokusai/etc remember whether the user prefers the dock
+   *  hidden (more chrome for code) or shown (code + chat side by side).
+   *  Default = true so first-run users discover the dock exists.
+   *  Keeps the legacy `editor-claude-side-open:<id>` key so users who
+   *  had the old Inline-agents pane open get the dock open too. */
   // svelte-ignore state_referenced_locally
   const sideStorageKey = `editor-claude-side-open:${p.instanceId}`;
-  let claudeSideOpen = $state(true);
+  let dockOpen = $state(true);
   onMount(() => {
     const v = localStorage.getItem(sideStorageKey);
-    if (v === '0' || v === '1') claudeSideOpen = v === '1';
+    if (v === '0' || v === '1') dockOpen = v === '1';
   });
   $effect(() => {
-    localStorage.setItem(sideStorageKey, claudeSideOpen ? '1' : '0');
+    localStorage.setItem(sideStorageKey, dockOpen ? '1' : '0');
   });
 
   const sidebarTab = $derived<SidebarTab>(activityTab);
@@ -76,6 +85,14 @@
                 ⇧⌘G is already taken by Source Control. */
   onMount(() => {
     function handler(e: KeyboardEvent) {
+      /* ⌘L toggles the agent dock. Checked FIRST and allowed from text
+         inputs / CodeMirror — toggling the dock mid-typing is the
+         Cursor muscle memory, unlike ⇧⌘R which bails on inputs. */
+      if ((e.metaKey || e.ctrlKey) && (e.key === 'l' || e.key === 'L') && !e.shiftKey && !e.altKey) {
+        e.preventDefault();
+        dockOpen = !dockOpen;
+        return;
+      }
       const t = e.target as HTMLElement | null;
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'R' || e.key === 'r') && !e.altKey) {
@@ -199,8 +216,16 @@
 
 <section
   class="app-shell se-shell"
-  class:se-shell--with-side={claudeSideOpen}
+  class:se-shell--with-side={dockOpen}
   style="--app-tone: var(--src-editor); --app-glow: rgba(204,120,92,0.42);"
+  ontransitionend={(e) => {
+    /* Nudge CodeMirror to re-measure once the dock open/close column
+       animation settles — without it a freshly-revealed editor can
+       leave a ghost gutter until the next manual interaction. */
+    if (e.propertyName === 'grid-template-columns') {
+      window.dispatchEvent(new Event('resize'));
+    }
+  }}
 >
   <div class="app-pane se-activity">
     <ActivityBar
@@ -210,21 +235,24 @@
       {gitCount}
       {problemsCount}
       {reviewCount}
+      dockOpen={dockOpen}
+      onToggleDock={() => (dockOpen = !dockOpen)}
     />
   </div>
 
-  {#if claudeSideOpen}
-    <!-- Splitter between the editor center and the InlineClaude pane.
+  {#if dockOpen}
+    <!-- Splitter between the editor center and the AgentDock.
          User-resizable; width persists per-instance under
-         `editor-inline:<instanceId>` so each Vermeer / Rothko keeps
-         its own preferred reading layout across reloads. -->
+         `editor-dock:<instanceId>` so each Vermeer / Hokusai keeps
+         its own preferred split across reloads. Wider range than the
+         old Inline-agents pane — a full chat needs room. -->
     <Splitter
       direction="horizontal"
       fixedSide="end"
-      persistKey="editor-inline:{p.instanceId}"
-      initial={320}
-      min={240}
-      max={560}
+      persistKey="editor-dock:{p.instanceId}"
+      initial={440}
+      min={340}
+      max={760}
     >
       {#snippet start()}
         <section class="app-pane se-center">
@@ -247,13 +275,16 @@
       {/snippet}
       {#snippet end()}
         <aside class="app-pane se-inline" in:fly={{ x: 24, duration: 220, easing: cubicOut }}>
-          <InlineClaude
+          <AgentDock
             instanceId={p.instanceId}
-            linkKind="editor"
-            onClose={() => (claudeSideOpen = false)}
-            onOpenClaude={p.onOpenClaude}
-            onQuickSend={p.onQuickSend}
+            {linkedAgents}
+            {agentInstances}
+            connectedClaude={p.connectedClaude ?? true}
+            connectedCursor={p.connectedCursor ?? true}
+            onClose={() => (dockOpen = false)}
             onOpenSession={p.onOpenSession}
+            onLinkToAgent={p.onLinkToAgent}
+            dock={p.dock}
           />
         </aside>
       {/snippet}
@@ -289,7 +320,7 @@
         title: la.name
       }))}
       {reviewCount}
-      onExpand={() => (claudeSideOpen = true)}
+      onExpand={() => (dockOpen = true)}
     />
   {/if}
 </section>

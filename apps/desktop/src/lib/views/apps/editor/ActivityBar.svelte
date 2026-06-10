@@ -27,6 +27,11 @@
      *  wrote something I haven't looked at yet" without opening the
      *  pane. */
     reviewCount?: number;
+    /** Agent-dock open state — drives the panel-right toggle's active
+     *  tint. Optional so the bar still renders in standalone previews. */
+    dockOpen?: boolean;
+    /** Toggle the editor↔agent dock (mirrors ⌘L). */
+    onToggleDock?: () => void;
   }
   let p: Props = $props();
 </script>
@@ -65,6 +70,22 @@
     {#if p.problemsCount && p.problemsCount > 0}<span class="ab-badge ab-badge--err">{p.problemsCount}</span>{/if}
   </button>
   <span class="ab-spacer"></span>
+  {#if p.onToggleDock}
+    <button
+      class="ab-btn"
+      class:active={p.dockOpen}
+      onclick={() => p.onToggleDock?.()}
+      title="Agent dock · ⌘L"
+      aria-label="Toggle agent dock"
+      aria-pressed={p.dockOpen}
+    >
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="4" width="18" height="16" rx="2"/>
+        <line x1="15" y1="4" x2="15" y2="20"/>
+        <rect x="15" y="4" width="6" height="16" rx="0" fill="currentColor" stroke="none" opacity="0.32"/>
+      </svg>
+    </button>
+  {/if}
   <button
     class="ab-btn"
     title="Settings · ⌘,"

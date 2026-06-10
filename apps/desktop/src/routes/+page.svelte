@@ -3209,6 +3209,28 @@
       {#key layoutState.activeInstance.editor}
         <EditorApp
           instanceId={layoutState.activeInstance.editor}
+          {connectedClaude}
+          {connectedCursor}
+          dock={{
+            now,
+            thinkingStartedAt,
+            thinkingTick,
+            onSend: (k) => void sendClaudeMessage({ kind: k }),
+            onStop: (k) => void stopAgentForKind(k),
+            onPasteImages: (iid, k, blobs) => pasteImagesIntoColumn(iid, k, blobs),
+            onDragOver: (iid, k, e) => onAgentDragOver(iid, k, e),
+            onDrop: (iid, k, e) => onAgentDrop(iid, k, e),
+            onDragLeave: (iid) => onAgentDragLeave(iid),
+            onStartEditMessage: startEditMessage,
+            onResendMessage: resendMessage,
+            onUpdateAction: updateAction,
+            onRemoveAction: dismissAction,
+            onExecuteAction: executeAction,
+            onOpenPrInWoom: openPrUrlInWoom,
+            onSddAdvance,
+            onDwVerify,
+            onResumeAfterQuota
+          }}
           onLinkToAgent={(agentId, sessionId) => linkEditorToAgent(layoutState.activeInstance.editor, agentId, sessionId)}
           onOpenClaude={() => (view = 'claudeApp')}
           onOpenSettings={() => (view = 'settings')}
