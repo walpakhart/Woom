@@ -1099,10 +1099,8 @@
     <Splitter direction="horizontal" persistKey="editor-main" initial={300} min={180} max={520}>
       {#snippet start()}
         <aside class="ev-left">
-          <!-- Top row: editorial repo name + actions. The "Chat 1 / Chat 2"
-               linked-session pills that used to live here now sit in their
-               own subtle row below — keeping the head uncluttered like the
-               v7 mockup. -->
+          <!-- Top row: repo name + actions. Linked-session pills sit in
+               their own subtle row below to keep the head uncluttered. -->
           <div class="ev-left-head">
             <div class="ev-root-stack">
               {#if instanceLabel}
@@ -1574,10 +1572,8 @@
           </div>
 
           <!-- Status bar: language · cursor position · encoding · line
-               endings   ✓ no problems · git branch. Same shape as the
-               v8 mockup; wraps as a single horizontal strip pinned to
-               the bottom of the editor pane. Hidden when nothing is
-               open (empty state has its own card). -->
+               endings · git branch. Single horizontal strip pinned to the
+               bottom of the editor pane. Hidden when nothing is open. -->
           {#if activePath || diffTarget}
             <div class="ev-statusbar mono">
               <span class="ev-status-seg">{languageLabel(diffTarget?.path ?? activePath)}</span>

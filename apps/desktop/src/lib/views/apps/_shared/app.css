@@ -1,5 +1,5 @@
 /* ============================================================
-   Woom · Apps — shared chassis (matches mockup/v7.html)
+   Woom · Apps — shared chassis
    ============================================================
    Each App view sets its own --app-tone / --app-glow + a
    `grid-template-columns` (via inline style) — this file owns

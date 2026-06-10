@@ -1,7 +1,6 @@
 <script lang="ts">
   /* EditorApp — VS Code-class workspace.
-     Layout (mockup v6):
-       [activity 44] [editor (flex)] [inline-claude 280]
+     Layout: [activity 44] [editor (flex)] [inline-claude 280]
 
      Center editor reuses the existing <EditorView> — a low-level
      CodeMirror wrapper (file tree + tabs + code) — for ~900 lines of
