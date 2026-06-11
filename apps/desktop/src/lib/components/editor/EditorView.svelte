@@ -1045,11 +1045,24 @@
   /* Mirror the active path into localStorage so the agent's @-mention
      picker can pin "current" first without subscribing to reactive
      state. Cleared when the editor has no open file so a stale path
-     doesn't survive across "close all tabs". */
+     doesn't survive across "close all tabs".
+
+     `armed` gate: the effect's first run happens while activePath is
+     still '' — onMount's tab restore is parked on an await at that
+     point and hasn't read activeKey yet. An unconditional removeItem
+     here erased the stored value before loadTabsForRoots could use
+     it, so returning to the editor always landed on tabs[0] instead
+     of the last-focused file. Only allow removal after at least one
+     real write, i.e. once a genuine "close all tabs" is possible. */
+  let activeMirrorArmed = false;
   $effect(() => {
     try {
-      if (activePath) localStorage.setItem(activeKey(instanceId), activePath);
-      else localStorage.removeItem(activeKey(instanceId));
+      if (activePath) {
+        localStorage.setItem(activeKey(instanceId), activePath);
+        activeMirrorArmed = true;
+      } else if (activeMirrorArmed) {
+        localStorage.removeItem(activeKey(instanceId));
+      }
     } catch { /* ignore quota errors — non-essential */ }
   });
 
