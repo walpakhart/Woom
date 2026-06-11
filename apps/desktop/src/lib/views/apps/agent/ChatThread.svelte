@@ -1509,6 +1509,26 @@
     background: transparent;
     margin-top: 4px;
   }
+  /* Always-visible scrollbars — the macOS overlay default stays hidden
+     until a scroll gesture, which reads as "no scrollbar at all" on a
+     clipped diff. Mirrors the editor's cm-scroller styling. */
+  .edit-card-body::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  .edit-card-body::-webkit-scrollbar-track,
+  .edit-card-body::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+  .edit-card-body::-webkit-scrollbar-thumb {
+    background: color-mix(in srgb, var(--text-mute) 26%, transparent);
+    background-clip: padding-box;
+    border: 3px solid transparent;
+    border-radius: 7px;
+  }
+  .edit-card-body::-webkit-scrollbar-thumb:hover {
+    background-color: color-mix(in srgb, var(--text-mute) 42%, transparent);
+  }
   .diff {
     display: block;
     font-family: 'JetBrains Mono', monospace;

@@ -135,7 +135,8 @@
     APP_INSTANCE_IDS,
     MULTI_INSTANCE_KINDS,
     addInstance as addLayoutInstance,
-    kindForInstanceId
+    kindForInstanceId,
+    setActiveInstance
   } from '$lib/state/layout.svelte';
   import {
     sessionsState,
@@ -1996,6 +1997,29 @@
   const toggleSessionCanvasLink = () => _sessionLinks.toggleSessionCanvasLink(_linkDeps());
   const linkEditorToAgent = (eid: string, aid: string, sid?: string) => _sessionLinks.linkEditorToAgent(eid, aid, sid);
 
+  /** File-path click in a chat edit-card → open that file in the right
+   *  editor and bring the editor solo up. Resolution order: the active
+   *  session's linked editor, else any editor whose roots contain the
+   *  path, else the rail's active editor instance. */
+  const openChatFileInEditor = (path: string) => {
+    if (!path) return;
+    const sess = sessionsState.list.find((x) => x.id === sessionsState.activeIds.claude);
+    let eid = sess?.linkedToEditor ? (sess.linkedToEditorInstanceId ?? '') : '';
+    if (!eid) {
+      for (const [iid, slot] of Object.entries(sessionsState.editorInstanceState)) {
+        const roots = slot.repoPaths?.length ? slot.repoPaths : slot.repoPath ? [slot.repoPath] : [];
+        if (roots.some((r) => path === r || path.startsWith(r + '/'))) {
+          eid = iid;
+          break;
+        }
+      }
+    }
+    if (!eid) eid = layoutState.activeInstance.editor;
+    openFileInEditor(path, { preferInstanceId: eid });
+    setActiveInstance('editor', eid);
+    view = 'editorApp';
+  };
+
   // ---- Worktree management for the active Claude session ----
   let worktreeBusy = $state<'creating' | 'removing' | null>(null);
   let worktreeMenuOpen = $state(false);
@@ -3106,6 +3130,7 @@
           onSddAdvance={onSddAdvance}
           onDwVerify={onDwVerify}
           onResumeAfterQuota={onResumeAfterQuota}
+          onOpenFile={openChatFileInEditor}
         />
       {/if}
 
@@ -3136,7 +3161,11 @@
             onOpenPrInWoom: openPrUrlInWoom,
             onSddAdvance,
             onDwVerify,
-            onResumeAfterQuota
+            onResumeAfterQuota,
+            /* Dock lives inside the editor already — open in the hosting
+               instance, no view switch. */
+            onOpenFile: (path) =>
+              openFileInEditor(path, { preferInstanceId: layoutState.activeInstance.editor })
           }}
           onLinkToAgent={(agentId, sessionId) => linkEditorToAgent(layoutState.activeInstance.editor, agentId, sessionId)}
           onOpenClaude={() => (view = 'claudeApp')}
