@@ -62,9 +62,12 @@ export function contextWindowFor(
 ): number {
   if (agentKind === 'cursor') return 200_000;
   if (!model) return 200_000;
-  /* Fable/Mythos 5 are the long-horizon tier ("focused across millions
-   * of tokens"); Anthropic gave no exact cap so we use the 1M window. */
-  if (model.startsWith('claude-fable-5') || model.startsWith('claude-mythos-5')) return 1_000_000;
+  /* Fable/Mythos 5: marketing says "focused across millions of tokens"
+   * but the shipped window is 200K — Claude Code auto-compacts these
+   * sessions at ~155K, the standard 77.5% threshold of a 200K window.
+   * The earlier 1M cap made the ring show ~15% while the CLI was
+   * already compacting (observed live 2026-06-11). */
+  if (model.startsWith('claude-fable-5') || model.startsWith('claude-mythos-5')) return 200_000;
   if (model.startsWith('claude-opus-4-7')) return 1_000_000;
   /* Opus 4.8 default tier dropped to 200K; the dedicated 1M variant
    * carries an explicit `[1m]` suffix in the model id. Order matters —

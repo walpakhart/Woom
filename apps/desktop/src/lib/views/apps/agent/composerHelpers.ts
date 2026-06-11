@@ -9,9 +9,10 @@
  *  through to the 200K Sonnet/Haiku default for unknown ids. */
 export function modelContextLimit(model: string | null | undefined): number {
   if (!model) return 200_000;
-  /* Fable/Mythos 5 — long-horizon tier, 1M window (no exact cap
-     published; "focused across millions of tokens"). */
-  if (model.startsWith('claude-fable-5') || model.startsWith('claude-mythos-5')) return 1_000_000;
+  /* Fable/Mythos 5 — shipped window is 200K despite the "millions of
+     tokens" marketing: Claude Code auto-compacts at ~155K (= 77.5% of
+     200K). 1M here under-reported the ring 5×. See usage.ts. */
+  if (model.startsWith('claude-fable-5') || model.startsWith('claude-mythos-5')) return 200_000;
   /* Opus 4.8 default tier dropped to 200K; the dedicated 1M variant
      carries an explicit `[1m]` suffix. Check the 1M-variant first
      because `startsWith('claude-opus-4-8')` matches both. */

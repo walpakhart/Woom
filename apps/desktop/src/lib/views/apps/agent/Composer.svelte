@@ -1207,6 +1207,25 @@
                 </button>
               {/if}
             </span>
+          {:else if p.kind === 'claude' && quotaState.error}
+            <!-- Plan-usage endpoint failed (e.g. /api/oauth/usage 403s
+                 token-wide on team-plan / session-scoped OAuth tokens).
+                 Show an explicit n/a pill instead of silently dropping
+                 the quota chips — the user notices "плашки пропали"
+                 long before they'd find the error in a tooltip-less UI. -->
+            <span class="cmp-quotas">
+              <button
+                type="button"
+                class="cmp-q cmp-q--na"
+                class:cmp-q--refreshing={refreshSpin5h}
+                title="Plan usage unavailable — {quotaState.error}. The OAuth usage endpoint rejects team-plan / re-scoped tokens (HTTP 403). Click to retry."
+                onclick={() => forceRefreshQuota('5h')}
+                aria-label="Retry plan-usage fetch"
+              >
+                <span class="cmp-q-tag mono">quota</span>
+                <span class="cmp-q-val mono">n/a</span>
+              </button>
+            </span>
           {/if}
           </span>
 
@@ -2127,6 +2146,10 @@
     letter-spacing: 0.06em;
   }
   .cmp-q-val { color: var(--text-0); }
+  /* Endpoint-down fallback pill — dashed border + muted text reads as
+     "no data" rather than "0% used". */
+  .cmp-q.cmp-q--na { border-style: dashed; color: var(--text-mute); }
+  .cmp-q.cmp-q--na .cmp-q-val { color: var(--text-mute); }
   .cmp-q.cmp-q--warn {
     background: rgba(217, 184, 110, 0.10);
     border-color: rgba(217, 184, 110, 0.32);

@@ -80,12 +80,14 @@
         { keys: `${mod} F`, label: 'Find in current buffer' },
         { keys: `${mod}${shift} F`, label: 'Find in files — project-wide grep' },
         { keys: `${mod}${shift} R`, label: 'Review pane — accept / reject every agent edit (j / k · a · r · e)' },
-        { keys: `${mod}${shift} B`, label: 'New git branch — opens GitPanel branch picker with the create input focused' }
+        { keys: `${mod}${shift} B`, label: 'New git branch — opens GitPanel branch picker with the create input focused' },
+        { keys: `${mod} W`, label: 'Close active tab (diff overlay closes first) — the window stays open' }
       ]
     },
     {
       title: 'Agent (Claude / Cursor)',
       rows: [
+        { keys: 'model · effort', label: 'Composer footer picker — Fable 5 / Mythos 5 / Opus 4.8 (+1M) / Opus 4.7 / Sonnet 4.6 / Haiku 4.5, plus the thinking-effort dial' },
         { keys: 'Enter', label: 'Send message' },
         { keys: `${shift} Enter`, label: 'Newline in composer' },
         { keys: '↑ / ↓', label: 'Cycle through previously-sent prompts in this session' },
@@ -211,10 +213,27 @@
       title: 'Editor',
       rows: [
         { keys: 'left-gutter stripe', label: 'Per-line git change bar: green = added, ochre = modified, red hairline = deletion' },
+        { keys: 'scrollbar ruler', label: 'Diff marks tint the scrollbar track (VS Code-style overview ruler) — jump to changes at a glance' },
+        { keys: 'multi-root', label: 'One editor can hold several repo roots — file tabs and tree state are kept per repo' },
         { keys: 'tree state', label: 'Expanded folders persist per-repo across reloads (localStorage)' },
         { keys: 'tab strip', label: 'Drag a file from the tree to pin it; ⌘W closes; middle-click closes' },
         { keys: 'Diff view ⛶', label: 'Click expand icon in the diff header to open full-screen; Esc closes' },
         { keys: 'Review pane ⛶', label: 'Sidebar review tab also opens full-screen for wide-format diff reading' }
+      ]
+    },
+    {
+      title: 'Editor ⇄ Agent (docked chat)',
+      rows: [
+        { keys: 'Link chip', label: 'Editor header → Link picker docks a Claude / Cursor chat beside the buffer (Cursor-style split)' },
+        { keys: 'auto-follow', label: 'Linked sessions track the editor\'s repo — switching the folder re-points their cwd in lockstep' },
+        { keys: 'Unlink', label: 'Chip ✕ in the editor header detaches the session; the chat itself survives in its solo' }
+      ]
+    },
+    {
+      title: 'Terminal',
+      rows: [
+        { keys: 'persistent PTY', label: 'Shell sessions survive solo switches — leave and come back, the buffer replays' },
+        { keys: 'rail popover', label: 'Multiple terminal instances — click the rail icon\'s popover to add / switch' }
       ]
     },
     {

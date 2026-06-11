@@ -194,6 +194,7 @@ export function appendSlashHelp(session: ClaudeSession): void {
     '- `/sdd <ask>` — spec → plan → phases workflow in a temp workspace (no git pollution)',
     '- `/dw <ask>` — Dynamic Workflow: planner fans out parallel subagents → verifier synthesises',
     '- `/loop <duration> <prompt>` / `/unloop` — re-send a prompt on a cadence',
+    '- `/remember` — distill durable prefs / feedback from this chat into memory-save cards',
     '- `/help` — show this list'
   ];
   appendSessionMessage(session.id, {
