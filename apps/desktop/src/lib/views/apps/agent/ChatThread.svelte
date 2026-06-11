@@ -22,6 +22,7 @@
   import type { ClaudeAction, ClaudeMessage } from '$lib/types';
   import { parseToolHint, parseTraceSegment, type ToolHint, type ToolKind } from './chatTraceParse';
   import { computeDiffRows, diffStats, type DiffRow } from './chatDiff';
+  import { shortenFsPath } from '$lib/format';
 
   type Kind = 'claude';
 
@@ -135,6 +136,15 @@
   });
 
   const repoCwd = $derived(sess?.worktreePath ?? sess?.cwd ?? null);
+
+  /** Edit-card path label: repo-relative when the file lives under the
+   *  session's cwd/worktree (the linked editor's repo in practice),
+   *  `~/…`-shortened otherwise. Full path stays in the tooltip + the
+   *  onOpenFile payload — this is display-only. */
+  function displayEditPath(p: string): string {
+    if (repoCwd && p.startsWith(repoCwd + '/')) return p.slice(repoCwd.length + 1);
+    return shortenFsPath(p);
+  }
 
   /* Viewport-based lazy mount. Long chats (100+ messages with rich
      Markdown + many trace events per assistant turn) used to render
@@ -849,15 +859,15 @@
                         <button
                           type="button"
                           class="edit-path mono"
-                          title="Open in editor"
+                          title={`Open in editor — ${ev.filePath}`}
                           onclick={(e) => {
                             e.preventDefault();
                             e.stopPropagation();
                             p.onOpenFile?.(ev.filePath);
                           }}
-                        >{ev.filePath}</button>
+                        >{displayEditPath(ev.filePath)}</button>
                       {:else}
-                        <span class="edit-path mono">{ev.filePath}</span>
+                        <span class="edit-path mono" title={ev.filePath}>{displayEditPath(ev.filePath)}</span>
                       {/if}
                       <span class="edit-stats mono">
                         <span class="add">+{stats.add}</span>
