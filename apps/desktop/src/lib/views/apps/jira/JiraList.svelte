@@ -34,11 +34,10 @@
     onDragEnd: () => void;
     onCardMouseDown: (e: MouseEvent) => void;
     isClickNotDrag: (e: MouseEvent) => boolean;
-    /** One-click handoff to Claude / Cursor — equivalent to dragging
-     *  the row onto the matching rail icon, but for users who prefer
+    /** One-click handoff to Claude — equivalent to dragging
+     *  the row onto the rail icon, but for users who prefer
      *  a button over a drag gesture. Shown on each ticket card. */
     onSendToClaude: (item: JiraItem) => void;
-    onSendToCursor: (item: JiraItem) => void;
     /** Seed a Dynamic Workflow from this ticket via the live-build pipeline. */
     onFixWithDw: (item: JiraItem) => void;
   }
@@ -47,10 +46,6 @@
   function clickSendToClaude(it: JiraItem, e: MouseEvent) {
     e.stopPropagation();
     p.onSendToClaude(it);
-  }
-  function clickSendToCursor(it: JiraItem, e: MouseEvent) {
-    e.stopPropagation();
-    p.onSendToCursor(it);
   }
 
   const items = $derived(jiraItemsFor(p.instanceId));
@@ -357,11 +352,6 @@
         onClick: () => p.onSendToClaude(it)
       },
       {
-        label: 'Send to Cursor',
-        icon: 'M3 3l8 18 2-8 8-2z',
-        onClick: () => p.onSendToCursor(it)
-      },
-      {
         label: 'Fix with DW',
         icon: 'M12 2v4 M12 18v4 M4.93 4.93l2.83 2.83 M16.24 16.24l2.83 2.83 M2 12h4 M18 12h4 M4.93 19.07l2.83-2.83 M16.24 7.76l2.83-2.83',
         onClick: () => p.onFixWithDw(it)
@@ -595,19 +585,6 @@
               >
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="m22 2-7 20-4-9-9-4 20-7z"/></svg>
                 <span>Claude</span>
-              </span>
-              <span
-                class="jl-card-send jl-card-send--cursor"
-                role="button"
-                tabindex="0"
-                onclick={(e) => clickSendToCursor(it, e)}
-                onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); clickSendToCursor(it, e as unknown as MouseEvent); } }}
-                onpointerdown={(e) => e.stopPropagation()}
-                title="Send to Cursor"
-                aria-label="Send to Cursor"
-              >
-                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 3l8 18 2-8 8-2z"/></svg>
-                <span>Cursor</span>
               </span>
             </span>
           </button>
@@ -921,8 +898,8 @@
   }
   .label-more { font-size: 10px; color: var(--text-mute); }
 
-  /* Send-to-{Claude,Cursor} chips — appear on hover/active in the
-     top-right of the card. Two role="button" spans (a real <button>
+  /* Send-to-Claude chip — appears on hover/active in the
+     top-right of the card. role="button" span (a real <button>
      would be invalid HTML inside the row's <button>). */
   .jl-card-sends {
     position: absolute;
@@ -954,16 +931,6 @@
   .jl-card-send--claude:hover {
     background: color-mix(in srgb, var(--src-claude) 22%, transparent);
     color: var(--accent-bright);
-    transform: translateY(-1px);
-  }
-  .jl-card-send--cursor {
-    color: var(--src-cursor, var(--text-1));
-    background: color-mix(in srgb, var(--src-cursor, var(--text-1)) 14%, transparent);
-    border: 1px solid color-mix(in srgb, var(--src-cursor, var(--text-1)) 32%, transparent);
-  }
-  .jl-card-send--cursor:hover {
-    background: color-mix(in srgb, var(--src-cursor, var(--text-1)) 24%, transparent);
-    color: var(--text-0);
     transform: translateY(-1px);
   }
   .jl-card-send:active { transform: translateY(0); }

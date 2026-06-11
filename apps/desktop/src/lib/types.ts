@@ -6,7 +6,7 @@
 /** One of the solo-mode kinds. There is exactly one app of each kind in
  *  the running shell; per-kind state slots are keyed by the matching
  *  `APP_INSTANCE_IDS[kind]` from `$lib/state/layout.svelte`. */
-export type PanelKind = 'github' | 'jira' | 'sentry' | 'claude' | 'cursor' | 'editor' | 'canvas' | 'terminal';
+export type PanelKind = 'github' | 'jira' | 'sentry' | 'claude' | 'editor' | 'canvas' | 'terminal';
 
 /** Ordered chunk that makes up an assistant message's body. The stream
     parser appends events as they arrive, merging consecutive same-kind
@@ -23,7 +23,7 @@ export type MessageEvent =
    *  as a collapsed file pill that expands to a unified diff with Keep /
    *  Revert (or Restore for deletions) buttons — same UX pattern as
    *  Cursor's chat. We intercept the tool call *after* the agent has
-   *  already mutated the file (Claude/cursor-agent CLIs don't expose a
+   *  already mutated the file (the Claude CLI doesn't expose a
    *  pre-tool hook), so the visual state always starts at `applied`.
    *  The status flips to `reverted` if the user undoes the change, or
    *  `error` if the revert itself failed (e.g. the file moved).
@@ -34,8 +34,8 @@ export type MessageEvent =
    *    - `isCreate=true`: Write created a brand-new file. `oldText` is
    *      empty and Revert deletes the file.
    *    - `isDelete=true`: file was deleted. `oldText` is the captured
-   *      prior contents (from cursor's `prevContent` or `git show
-   *      HEAD:`), `newText` is empty, and "Revert" is rendered as
+   *      prior contents (from `git show HEAD:`), `newText` is empty,
+   *      and "Revert" is rendered as
    *      "Restore" — it re-creates the file. Mutually exclusive with
    *      `isCreate`. */
   | {
@@ -149,8 +149,8 @@ export type ClaudeMessage = {
       final answer. Surfaced as a collapsed "Thinking ✓" pill in the UI
       that the user can expand to read. Only set on assistant messages
       from thinking-capable models (Claude with `*-thinking-*` model
-      family, Cursor with reasoning models). Persisted alongside the
-      session so a reload still shows the same pill. */
+      family). Persisted alongside the session so a reload still shows
+      the same pill. */
   thinking?: string;
   /** LEGACY — concatenated `formatToolUse` lines (one big string with
       `\n\n` separators). Kept so old persisted messages still render.
@@ -317,8 +317,6 @@ export type ClaudeSession = {
   actions: ClaudeAction[];
   claudeUuid: string;
   claudeResumable: boolean;
-  agentKind: 'claude' | 'cursor';
-  cursorModel: string | null;
   /** Model id passed to `claude --model`. Null = let the CLI pick (which on
       a Pro/Max subscription means Opus 4.7 — the default that burns the
       5h quota fastest). New sessions default to `claude-sonnet-4-6`; users
@@ -354,12 +352,12 @@ export type ClaudeSession = {
    *  cwd on next spawn — see `linkSessionToTerminal` in
    *  `sessions.svelte.ts`. */
   linkedTerminalInstanceId: string | null;
-  /** Which agent-app instance (Claude or Cursor) this session lives in.
-      Null means the session "floats" and will reattach to the first
-      matching-kind app instance it encounters. */
+  /** Which agent-app instance this session lives in. Null means the
+      session "floats" and will reattach to the first matching-kind app
+      instance it encounters. */
   agentInstanceId: string | null;
   /** One-shot recap to inject into the system prompt on the NEXT turn. Set
-      whenever cwd changes — Claude / cursor-agent scope conversations by
+      whenever cwd changes — Claude scopes conversations by
       project, so a cwd switch starts a fresh CLI conversation that doesn't
       remember prior turns. Stuffing the last few UI-side messages back in
       keeps continuity for the user without permanently inflating prompts.
@@ -407,8 +405,7 @@ export type ClaudeSession = {
       back to a previously-visited cwd, instead of starting fresh every
       time. Populated as we leave each cwd (we stash the current uuid
       under the cwd we're leaving), consulted on entry to a cwd we have
-      a record of. CLI-kind specific — cleared on switchAgentKind since
-      a cursor-agent chat id can't resume in claude and vice versa. */
+      a record of. */
   cwdUuids: Record<string, string>;
   /** True when the agent's last turn ended with one or more pending
       action cards (commit / PR / bash / switch_cwd) that block the

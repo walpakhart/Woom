@@ -33,7 +33,7 @@ export interface StatusLinePayload {
   cwd: string | null;
   session_id: string;
   session_title: string;
-  agent_kind: 'claude' | 'cursor';
+  agent_kind: 'claude';
   permission_mode: 'default' | 'plan' | string;
   /** Cumulative cost across the session, USD. */
   cost_usd: number;

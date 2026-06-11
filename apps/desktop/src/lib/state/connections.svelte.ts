@@ -13,7 +13,6 @@ import {
   type AgentStatus,
   type ClaudeStatus,
   type ConnectionStatus,
-  type CursorStatus,
   type JiraStatus,
   type SentryStatus
 } from '$lib/data';
@@ -28,7 +27,6 @@ export const connectionsState = $state<{
   jira: JiraStatus;
   sentry: SentryStatus;
   claude: ClaudeStatus | null;
-  cursor: CursorStatus | null;
   statusLoading: boolean;
   /** `true` while a per-source test is in flight. Drives the spinner
    *  on the `Test` button in `ConnectionsView`. */
@@ -46,21 +44,18 @@ export const connectionsState = $state<{
   jira: { kind: 'disconnected' },
   sentry: { kind: 'disconnected' },
   claude: null,
-  cursor: null,
   statusLoading: true,
   testing: {
     github: false,
     jira: false,
     sentry: false,
-    claude: false,
-    cursor: false
+    claude: false
   },
   retrying: {
     github: false,
     jira: false,
     sentry: false,
-    claude: false,
-    cursor: false
+    claude: false
   }
 });
 
@@ -174,17 +169,13 @@ export async function refreshClaudeStatus() {
       ),
     ]);
     connectionsState.claude = agentStatus.claude;
-    connectionsState.cursor = agentStatus.cursor;
     const latencyMs = Math.round(performance.now() - start);
     recordAgentEvent('claude', agentStatus.claude, latencyMs);
-    recordAgentEvent('cursor', agentStatus.cursor, latencyMs);
   } catch (e) {
     console.error('agent_status', e);
     connectionsState.claude = null;
-    connectionsState.cursor = null;
     const latencyMs = Math.round(performance.now() - start);
     recordConnectionEvent('claude', 'error', { latencyMs, message: stringifyError(e) });
-    recordConnectionEvent('cursor', 'error', { latencyMs, message: stringifyError(e) });
   }
 }
 
@@ -248,19 +239,14 @@ export async function refreshAgentsOnBoot(): Promise<void> {
   await refreshAgentsWithBootRetry();
 }
 
-/** Claude + Cursor share a single Tauri call (`agent_status`), so the
- *  retry loop has to look at *both* sources' last events to decide
- *  whether to keep going. We retry while either is still erroring. */
 async function refreshAgentsWithBootRetry(): Promise<void> {
   for (let attempt = 0; attempt < BOOT_RETRY_DELAYS_MS.length; attempt++) {
     if (attempt > 0) {
       connectionsState.retrying.claude = true;
-      connectionsState.retrying.cursor = true;
       await delay(BOOT_RETRY_DELAYS_MS[attempt]);
     }
     await refreshClaudeStatus();
     const claudeLast = lastEventForSource('claude');
-    const cursorLast = lastEventForSource('cursor');
     /* Retry on plain errors AND on the "binary detected, but
      *  `--version` returned None within the 2 s timeout" path —
      *  cold-launch on macOS routinely needs 1–3 s for the first
@@ -274,17 +260,10 @@ async function refreshAgentsWithBootRetry(): Promise<void> {
       connectionsState.claude?.detected === true &&
       connectionsState.claude.version === null &&
       connectionsState.claude.ready === false;
-    const cursorColdMiss =
-      connectionsState.cursor?.detected === true &&
-      connectionsState.cursor.version === null &&
-      connectionsState.cursor.ready === false;
-    const stillErroring =
-      (claudeLast?.kind === 'error') || (cursorLast?.kind === 'error') ||
-      claudeColdMiss || cursorColdMiss;
+    const stillErroring = (claudeLast?.kind === 'error') || claudeColdMiss;
     if (!stillErroring) break;
   }
   connectionsState.retrying.claude = false;
-  connectionsState.retrying.cursor = false;
 }
 
 function delay(ms: number): Promise<void> {
@@ -293,17 +272,10 @@ function delay(ms: number): Promise<void> {
 
 /** Manual "Test connection" trigger. Functionally identical to a refresh
  *  but flips `connectionsState.testing[source]` so the per-card button
- *  can render a spinner — and groups Claude+Cursor under one call so
- *  hitting "Test" on either card animates both (they share the IPC). */
+ *  can render a spinner. */
 export async function testConnection(source: ConnectionEventSource): Promise<void> {
   if (connectionsState.testing[source]) return;
   connectionsState.testing[source] = true;
-  if (source === 'claude' || source === 'cursor') {
-    /* Claude and Cursor share `agent_status`; mark both busy so the
-     *  spinner is consistent regardless of which card the user clicked. */
-    connectionsState.testing.claude = true;
-    connectionsState.testing.cursor = true;
-  }
   try {
     switch (source) {
       case 'github':
@@ -316,22 +288,17 @@ export async function testConnection(source: ConnectionEventSource): Promise<voi
         await refreshSentryStatus();
         break;
       case 'claude':
-      case 'cursor':
         await refreshClaudeStatus();
         break;
     }
   } finally {
     connectionsState.testing[source] = false;
-    if (source === 'claude' || source === 'cursor') {
-      connectionsState.testing.claude = false;
-      connectionsState.testing.cursor = false;
-    }
   }
 }
 
 function recordAgentEvent(
-  source: 'claude' | 'cursor',
-  status: ClaudeStatus | CursorStatus | null,
+  source: 'claude',
+  status: ClaudeStatus | null,
   latencyMs: number
 ): void {
   if (status?.ready) {

@@ -2,7 +2,7 @@
   /* First-launch welcome flow (`docs/ROADMAP_1.0.md §1.5`).
    *
    * Three steps: theme → first source → first agent. The agent step
-   * is genuinely diagnostic ("is `claude` / `cursor-agent` on PATH?")
+   * is genuinely diagnostic ("is `claude` on PATH?")
    * — the user can keep going either way. Source step pops the
    * regular connect modal, so the actual auth UX stays in one place.
    *
@@ -132,11 +132,11 @@
       {:else}
         <h3 class="welcome-step-title">Pick an agent</h3>
         <p class="welcome-step-desc">
-          Woom drives Claude Code or Cursor as a CLI subprocess. Install at least one to enable agent columns. We won't store any credentials — they auth to their own services.
+          Woom drives Claude Code as a CLI subprocess. Install it to enable agent columns. We won't store any credentials — it auths to its own service.
         </p>
         <div class="welcome-sources">
           {#each implementedSources.filter((s) => s.kind === 'agent') as conn (conn.id)}
-            {@const ready = (conn.id === 'claude' ? connectionsState.claude : connectionsState.cursor)?.ready ?? false}
+            {@const ready = connectionsState.claude?.ready ?? false}
             <button
               class="welcome-source"
               class:connected={ready}

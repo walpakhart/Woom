@@ -40,11 +40,10 @@
     /** Activate a specific linked session AND switch the top-level
      *  view to its agent app. Per-row "Open" affordance. */
     onOpenSession: (sessionId: string, agentInstanceId: string) => void;
-    /** Agent CLI connection flags — forwarded to AgentDock so it can
+    /** Agent CLI connection flag — forwarded to AgentDock so it can
      *  render a "Connect first" stub instead of a dead chat body when
-     *  the docked session's kind isn't connected. */
+     *  Claude isn't connected. */
     connectedClaude?: boolean;
-    connectedCursor?: boolean;
     /** Agent callback bundle for the docked ChatThread + Composer. */
     dock: DockHandlers;
   }
@@ -138,33 +137,28 @@
     return editorRoots(p.instanceId);
   });
 
-  /** Link-picker entries — one row per Claude/Cursor session that is
+  /** Link-picker entries — one row per Claude session that is
    *  not already linked to this editor. The label is the session
    *  title so the user knows exactly which chat they're linking; if
-   *  the agent has no sessions yet we still surface a single row with
-   *  the kind name so the user can spawn-and-link in one click. */
+   *  the agent has no sessions yet we still surface a single row so
+   *  the user can spawn-and-link in one click. */
   const agentInstances = $derived.by(() => {
-    const out: { id: string; kind: 'claude' | 'cursor'; name: string; sessionId?: string }[] = [];
-    /* Sessions, sorted: most-recently-active first per kind. */
+    const out: { id: string; kind: 'claude'; name: string; sessionId?: string }[] = [];
     const sortByActivity = (a: typeof sessionsState.list[number], b: typeof sessionsState.list[number]) => {
       const ta = a.messages[a.messages.length - 1]?.at ?? '';
       const tb = b.messages[b.messages.length - 1]?.at ?? '';
       return tb.localeCompare(ta);
     };
-    for (const kind of ['claude', 'cursor'] as const) {
-      const colId = kind === 'claude' ? APP_INSTANCE_IDS.claude : APP_INSTANCE_IDS.cursor;
-      const sessions = sessionsState.list
-        .filter((s) => s.agentKind === kind)
-        .sort(sortByActivity);
-      if (sessions.length === 0) {
-        out.push({ id: colId, kind, name: kind === 'claude' ? 'Claude' : 'Cursor' });
-      } else {
-        for (const s of sessions) {
-          /* Skip sessions that already point at this editor — listing
-             them would mean "link the linked", which is a no-op. */
-          if (s.linkedToEditor && s.linkedToEditorInstanceId === p.instanceId) continue;
-          out.push({ id: colId, kind, name: s.title || 'Untitled chat', sessionId: s.id });
-        }
+    const colId = APP_INSTANCE_IDS.claude;
+    const sessions = [...sessionsState.list].sort(sortByActivity);
+    if (sessions.length === 0) {
+      out.push({ id: colId, kind: 'claude', name: 'Claude' });
+    } else {
+      for (const s of sessions) {
+        /* Skip sessions that already point at this editor — listing
+           them would mean "link the linked", which is a no-op. */
+        if (s.linkedToEditor && s.linkedToEditorInstanceId === p.instanceId) continue;
+        out.push({ id: colId, kind: 'claude', name: s.title || 'Untitled chat', sessionId: s.id });
       }
     }
     return out;
@@ -172,14 +166,13 @@
 
   /** Sessions linked TO this editor (для Link chips в EditorView header). */
   const linkedAgents = $derived.by(() => {
-    const out: { sessionId: string; agentInstanceId: string; kind: 'claude' | 'cursor'; name: string }[] = [];
+    const out: { sessionId: string; agentInstanceId: string; kind: 'claude'; name: string }[] = [];
     for (const s of sessionsState.list) {
       if (!s.linkedToEditor) continue;
       if (s.linkedToEditorInstanceId !== p.instanceId) continue;
       if (!s.agentInstanceId) continue;
-      const kind = kindForInstanceId(s.agentInstanceId);
-      if (kind !== 'claude' && kind !== 'cursor') continue;
-      out.push({ sessionId: s.id, agentInstanceId: s.agentInstanceId, kind, name: s.title });
+      if (kindForInstanceId(s.agentInstanceId) !== 'claude') continue;
+      out.push({ sessionId: s.id, agentInstanceId: s.agentInstanceId, kind: 'claude', name: s.title });
     }
     return out;
   });
@@ -280,7 +273,6 @@
             {linkedAgents}
             {agentInstances}
             connectedClaude={p.connectedClaude ?? true}
-            connectedCursor={p.connectedCursor ?? true}
             onClose={() => (dockOpen = false)}
             onOpenSession={p.onOpenSession}
             onLinkToAgent={p.onLinkToAgent}

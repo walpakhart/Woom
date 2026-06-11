@@ -1,14 +1,14 @@
 // Modal-action helpers extracted from `+page.svelte` in wave-34.
 // Covers the GitHub inline-detail actions (comment / review / merge /
 // state flip), connection-modal openers + submits (PAT / Jira /
-// Sentry / Claude / Cursor), and the create-new-issue / create-PR
+// Sentry / Claude), and the create-new-issue / create-PR
 // flows that gate the inbox columns.
 //
 // Each helper takes a `deps` carrying the route's local setters
 // (`setView`, `setActionBusy`, `reloadDetailAndLists`,
-// `refreshClaudeModal` / `refreshCursorModal` for the secondary
-// statuses, plus accessors for the agent-status derived values
-// since these can't be passed by reference from a Svelte 5 `$state`).
+// `refreshClaudeModal` for the secondary statuses, plus accessors
+// for the agent-status derived values since these can't be passed
+// by reference from a Svelte 5 `$state`).
 
 import { invoke } from '@tauri-apps/api/core';
 import { connectionsState, refreshGithubStatus, refreshJiraStatus, refreshSentryStatus, refreshClaudeStatus } from '$lib/state/connections.svelte';
@@ -57,7 +57,6 @@ export interface ModalActionDeps {
    *  these are `$derived` values that can't be referenced cross-
    *  module by handle. */
   getClaudeStatus(): ClaudeStatus | null;
-  getCursorStatus(): ClaudeStatus | null;
 }
 
 // ---- GitHub focus-item actions ----
@@ -175,9 +174,6 @@ export function openConnectModal(conn: ConnectionMeta, deps: ModalActionDeps) {
   } else if (conn.id === 'claude') {
     openModal('claudeStatus', { status: deps.getClaudeStatus(), loading: false });
     void refreshClaudeModal(deps);
-  } else if (conn.id === 'cursor') {
-    openModal('cursorStatus', { status: deps.getCursorStatus(), loading: false });
-    void refreshCursorModal(deps);
   }
 }
 
@@ -190,18 +186,6 @@ export async function refreshClaudeModal(deps: ModalActionDeps) {
   }
 }
 
-export async function refreshCursorModal(deps: ModalActionDeps) {
-  if (!modalsState.cursorStatus) return;
-  patchModal('cursorStatus', { loading: true });
-  // refreshClaudeStatus() actually refreshes BOTH agents (cursor + claude) —
-  // see `agent_status` Tauri command. Reuse so we don't double-poll.
-  await refreshClaudeStatus();
-  if (modalsState.cursorStatus) {
-    patchModal('cursorStatus', { status: deps.getCursorStatus(), loading: false });
-  }
-}
-
-export const cursorInstallUrl = () => 'https://cursor.com/docs/cli/installation';
 export const claudeInstallUrl = () => 'https://docs.claude.com/en/docs/claude-code/overview';
 export const jiraTokenUrl = () => 'https://id.atlassian.com/manage-profile/security/api-tokens';
 export function githubTokenUrl(): string {

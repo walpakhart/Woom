@@ -10,13 +10,12 @@
     now: number;
     onClose: () => void;
     onStatusChange?: () => void;
-    /** Hand the focused ticket off to Claude / Cursor. Optional so
-     *  any existing call site that doesn't wire them up still
-     *  compiles — each header button is hidden when undefined. */
+    /** Hand the focused ticket off to Claude. Optional so
+     *  any existing call site that doesn't wire it up still
+     *  compiles — the header button is hidden when undefined. */
     onSendToClaude?: () => void;
-    onSendToCursor?: () => void;
   }
-  let { issueKey, now, onClose, onStatusChange, onSendToClaude, onSendToCursor }: Props = $props();
+  let { issueKey, now, onClose, onStatusChange, onSendToClaude }: Props = $props();
 
   let detail = $state<JiraDetail | null>(null);
   let loading = $state(false);
@@ -326,12 +325,6 @@
       <button class="jdp-btn jdp-btn--claude" onclick={onSendToClaude} disabled={!detail} title="Send this ticket to Claude">
         <svg class="i i-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="m22 2-7 20-4-9-9-4 20-7z"/></svg>
         Send to Claude
-      </button>
-    {/if}
-    {#if onSendToCursor}
-      <button class="jdp-btn jdp-btn--cursor" onclick={onSendToCursor} disabled={!detail} title="Send this ticket to Cursor">
-        <svg class="i i-sm" viewBox="0 0 24 24" fill="currentColor"><path d="M3 3l8 18 2-8 8-2z"/></svg>
-        Send to Cursor
       </button>
     {/if}
     <button class="jdp-btn" onclick={() => detail && openUrl(detail.url)} disabled={!detail} title="Open on Jira">
@@ -700,16 +693,6 @@
     background: color-mix(in srgb, var(--src-claude) 18%, transparent);
     color: var(--accent-bright);
     border-color: color-mix(in srgb, var(--src-claude) 50%, transparent);
-  }
-  .jdp-btn--cursor {
-    color: var(--src-cursor, var(--text-1));
-    background: color-mix(in srgb, var(--src-cursor, var(--text-1)) 10%, transparent);
-    border-color: color-mix(in srgb, var(--src-cursor, var(--text-1)) 32%, transparent);
-  }
-  .jdp-btn--cursor:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--src-cursor, var(--text-1)) 22%, transparent);
-    color: var(--text-0);
-    border-color: color-mix(in srgb, var(--src-cursor, var(--text-1)) 50%, transparent);
   }
 
   .jdp-state { padding: 40px; text-align: center; color: var(--text-2); }

@@ -23,7 +23,7 @@
   import { parseToolHint, parseTraceSegment, type ToolHint, type ToolKind } from './chatTraceParse';
   import { computeDiffRows, diffStats, type DiffRow } from './chatDiff';
 
-  type Kind = 'claude' | 'cursor';
+  type Kind = 'claude';
 
   interface Props {
     kind: Kind;
@@ -225,7 +225,6 @@
       messageIndex: index,
       snapshot: {
         role: msg.role,
-        agentKind: sess.agentKind,
         sessionTitle: sess.title || 'Untitled chat',
         excerpt,
         at: msg.at
@@ -239,11 +238,10 @@
     e.dataTransfer.effectAllowed = 'copy';
     /* Custom drag chip — same compact pill the inbox sources use, so
        dropping a chat message reads as "this is what I'm moving",
-       not "the entire article is following the cursor". Kind picked
-       by agent so tint matches the source's brand accent. */
-    const role = msg.role === 'user' ? '@you' : sess.agentKind;
+       not "the entire article is following the cursor". */
+    const role = msg.role === 'user' ? '@you' : 'claude';
     const label = `${role} · ${excerpt.slice(0, 60)}${excerpt.length > 60 ? '…' : ''}`;
-    attachDragChip(e, sess.agentKind === 'cursor' ? 'cursor' : 'claude', label);
+    attachDragChip(e, 'claude', label);
   }
   function onMsgDragEnd(): void {
     setDragPayload(null);
@@ -491,7 +489,7 @@
   >
     {#if sess.messages.length === 0 && sess.actions.length === 0}
       <div class="ct-welcome">
-        <p class="ct-welcome-h serif">Ask {p.kind === 'claude' ? 'Claude' : 'Cursor'} anything</p>
+        <p class="ct-welcome-h serif">Ask Claude anything</p>
         <p class="ct-welcome-p">Drop a Jira ticket / PR / file on the composer below to attach context. Use <span class="mono">/</span> for slash commands, <span class="mono">@</span> for files.</p>
       </div>
     {/if}

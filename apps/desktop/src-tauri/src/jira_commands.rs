@@ -2,13 +2,8 @@
 //! command pulls Jira creds (workspace URL + email + token) via the
 //! shared `jira_creds()` helper, calls into `crate::jira::*`, and maps
 //! errors to the `String` shape Tauri serializes back to the frontend.
-//!
-//! `jira_connect` / `jira_status` / `jira_disconnect` are the
-//! connection-lifecycle trio — they also fan out to
-//! `crate::cursor_mcp::sync()` so `~/.cursor/mcp.json` mirrors the
-//! current keychain state.
 
-use crate::{cursor_mcp, jira, keychain, JiraStatus, JIRA_KEY};
+use crate::{jira, keychain, JiraStatus, JIRA_KEY};
 use jira::{
     JiraBoard, JiraComment, JiraCredentials, JiraDetail, JiraIssueType, JiraItem, JiraProject,
     JiraSprint, JiraStatus as JiraWorkflowStatus, JiraUser, JiraUserSummary, JiraWorklog,
@@ -37,7 +32,6 @@ pub async fn jira_connect(
     let user = jira::fetch_myself(&creds).await.map_err(|e| e.to_string())?;
     let payload = serde_json::to_string(&creds).map_err(|e| e.to_string())?;
     keychain::set(JIRA_KEY, &payload).map_err(|e| e.to_string())?;
-    let _ = cursor_mcp::sync();
     Ok(user)
 }
 
@@ -66,7 +60,6 @@ pub async fn jira_status() -> Result<JiraStatus, String> {
 #[tauri::command]
 pub fn jira_disconnect() -> Result<(), String> {
     keychain::delete(JIRA_KEY).map_err(|e| e.to_string())?;
-    let _ = cursor_mcp::sync();
     Ok(())
 }
 

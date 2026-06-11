@@ -230,7 +230,7 @@ async function handleFix(
    *      deviations.
    *   2. `not_started` / `running` WITH a non-zero fixAttempt
    *      counter AND a verify.json with deviations on disk. This
-   *      is the "Cursor agent crashed mid-fix and reset the phase
+   *      is the "agent crashed mid-fix and reset the phase
    *      to pending" path the user reported — the fix iteration
    *      already started, the disk still has the deviation list,
    *      we should let them re-fire the fix prompt without forcing

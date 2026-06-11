@@ -2,7 +2,7 @@
 // be a true singleton; for editor / canvas / terminal we now allow
 // multiple instances (each with its own curated name from
 // `instanceNames.ts`). Source apps (github / jira / sentry) and
-// agent columns (claude / cursor) stay single-instance because their
+// the agent column (claude) stay single-instance because their
 // per-kind state stores assume that — multi-instance there is a
 // future milestone.
 //
@@ -34,7 +34,6 @@ export const APP_INSTANCE_IDS: Record<AppKind, string> = {
   jira: 'jira-solo',
   sentry: 'sentry-solo',
   claude: 'claude-solo',
-  cursor: 'cursor-solo',
   editor: 'editor-solo',
   canvas: 'canvas-solo',
   terminal: 'terminal-solo'
@@ -66,7 +65,6 @@ const DEFAULT_INSTANCE_NAMES: Record<AppKind, string> = {
   jira: 'Jira',
   sentry: 'Sentry',
   claude: 'Claude',
-  cursor: 'Cursor',
   editor: 'Editor',
   canvas: 'Canvas',
   terminal: 'Terminal'
@@ -340,7 +338,7 @@ export function setActiveInstance(kind: AppKind, id: string): void {
  *  context builder, settings panels, and any bookkeeping that needs a
  *  stable kind list. */
 export const DEFAULT_PANEL_ORDER: AppKind[] = [
-  'github', 'jira', 'sentry', 'claude', 'cursor', 'editor', 'canvas', 'terminal'
+  'github', 'jira', 'sentry', 'claude', 'editor', 'canvas', 'terminal'
 ];
 
 // ---- Hook for sessions store -----------------------------------------

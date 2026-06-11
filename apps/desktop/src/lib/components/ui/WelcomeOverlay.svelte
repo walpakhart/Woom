@@ -175,7 +175,7 @@
           <section class="wo-sec" data-section="overview">
             <h3 class="wo-sec-h">What is Woom</h3>
             <p class="wo-sec-lead">
-              One desktop app where you talk to AI agents (Claude, Cursor),
+              One desktop app where you talk to Claude,
               read your code, run terminals, draw on a canvas, and triage
               Jira / GitHub / Sentry — without flipping between five tools.
               Everything is keyboard-first; nothing is hidden behind menus.
@@ -186,8 +186,8 @@
                 <div class="wo-tile-glyph">⏵</div>
                 <h4 class="wo-tile-h">Agents that act</h4>
                 <p class="wo-tile-p">
-                  Claude and Cursor edit files, run terminals, search Jira
-                  and GitHub, and stream their reasoning live. Every action
+                  Claude edits files, runs terminals, searches Jira
+                  and GitHub, and streams its reasoning live. Every action
                   is visible; risky ones queue an Approval card.
                 </p>
               </div>
@@ -229,11 +229,6 @@
                 <BrandIcon kind="claude" size={18} />
                 <span class="wo-link-label">Claude</span>
                 <span class="wo-link-key mono">{mod} 4</span>
-              </button>
-              <button class="wo-link" data-tone="agent" onclick={() => go('cursorApp')}>
-                <BrandIcon kind="cursor" size={18} />
-                <span class="wo-link-label">Cursor</span>
-                <span class="wo-link-key mono">{mod} 5</span>
               </button>
               <button class="wo-link" data-tone="editor" onclick={() => go('editorApp')}>
                 <span class="wo-link-svg">
@@ -391,8 +386,8 @@
                 </div>
                 <p class="wo-cap-p">
                   Spawn dev servers, watchers, test loops without leaving
-                  the chat. Right-side collapsible rail on the Claude /
-                  Cursor solo. <span class="mono">/preview pnpm dev</span>
+                  the chat. Right-side collapsible rail on the Claude
+                  solo. <span class="mono">/preview pnpm dev</span>
                   starts a tracked task; agents can react to its output
                   via the <span class="mono">bg_wait_line</span> tool.
                   Detected <span class="mono">http://localhost:PORT</span>
@@ -472,10 +467,6 @@
               <button class="wo-go" onclick={() => go('claudeApp')}>
                 <BrandIcon kind="claude" size={14} />
                 Open Claude
-              </button>
-              <button class="wo-go" onclick={() => go('cursorApp')}>
-                <BrandIcon kind="cursor" size={14} />
-                Open Cursor
               </button>
               <button class="wo-go" onclick={() => go('rules')}>
                 <span class="wo-go-svg">

@@ -6,7 +6,6 @@
   import type {
     ClaudeStatus,
     ConnectionStatus,
-    CursorStatus,
     JiraStatus,
     SentryStatus
   } from '$lib/data';
@@ -16,7 +15,6 @@
     jiraStatus?: JiraStatus;
     sentryStatus?: SentryStatus;
     claudeStatus?: ClaudeStatus | null;
-    cursorStatus?: CursorStatus | null;
   }
   let p: Props = $props();
 
@@ -29,7 +27,7 @@
 
   function agentRow(
     label: string,
-    s: ClaudeStatus | CursorStatus | null | undefined
+    s: ClaudeStatus | null | undefined
   ): IdentityRow {
     if (!s || !s.ready) {
       return { label, value: '—', connected: false };
@@ -77,7 +75,6 @@
       rows.push({ label: 'Sentry', value: '—', connected: false });
     }
     rows.push(agentRow('Claude', p.claudeStatus));
-    rows.push(agentRow('Cursor', p.cursorStatus));
     return rows;
   });
 </script>

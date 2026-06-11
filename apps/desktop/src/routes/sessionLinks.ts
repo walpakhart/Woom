@@ -125,7 +125,7 @@ export function linkSessionToTerminal(terminalInstanceId: string, sessionId: str
      their card AND surface "Apply to <agent>" — both consumers
      require a non-null id to resolve which app to route into. */
   const patch: Partial<typeof sess> = { linkedTerminalInstanceId: terminalInstanceId };
-  if (!sess.agentInstanceId) patch.agentInstanceId = APP_INSTANCE_IDS[sess.agentKind];
+  if (!sess.agentInstanceId) patch.agentInstanceId = APP_INSTANCE_IDS.claude;
   updateSession(sessionId, patch);
   /* Eager-spawn the PTY so the agent's `mcp__app__terminal_*` calls
      hit a live session immediately — previously the PTY only spawned
@@ -168,7 +168,7 @@ export function linkEditorToAgent(
   const editorPath = sessionsState.editorInstanceState[editorInstanceId]?.repoPath || '';
   if (!editorPath) return;
   const kind = kindForInstanceId(agentInstanceId);
-  if (kind !== 'claude' && kind !== 'cursor') return;
+  if (kind !== 'claude') return;
   const explicit = sessionId
     ? sessionsState.list.find((s) => s.id === sessionId) ?? null
     : null;
@@ -194,7 +194,6 @@ export function linkEditorToAgent(
     updateSession(current.id, patchForLink(current));
   } else {
     newClaudeSession({
-      agentKind: kind,
       cwd: editorPath,
       linkedToEditor: true,
       linkedToEditorInstanceId: editorInstanceId,

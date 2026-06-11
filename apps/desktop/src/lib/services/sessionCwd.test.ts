@@ -28,8 +28,6 @@ function fakeSession(messages: ClaudeSession['messages']): ClaudeSession {
     actions: [],
     claudeUuid: 'uuid-1',
     claudeResumable: false,
-    agentKind: 'claude',
-    cursorModel: null,
     claudeModel: null,
     lastContextSize: 0,
     linkedToEditor: false,

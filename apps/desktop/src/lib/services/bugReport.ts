@@ -94,7 +94,6 @@ function formatConnectionsState(): string {
   lines.push(`- Jira: ${c.jira.kind === 'connected' ? `connected as ${c.jira.user.display_name} (${c.jira.user.workspace})` : c.jira.kind}`);
   lines.push(`- Sentry: ${c.sentry.kind === 'connected' ? `connected (${c.sentry.user.organization_slug} on ${c.sentry.user.host})` : c.sentry.kind}`);
   lines.push(`- Claude: ${c.claude?.ready ? `ready (v${c.claude.version ?? '?'})` : 'not detected'}`);
-  lines.push(`- Cursor: ${c.cursor?.ready ? `ready (v${c.cursor.version ?? '?'})` : 'not detected'}`);
   return lines.join('\n');
 }
 

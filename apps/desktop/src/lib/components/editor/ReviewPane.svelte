@@ -33,7 +33,7 @@
   interface LinkedAgent {
     sessionId: string;
     agentInstanceId: string;
-    kind: 'claude' | 'cursor';
+    kind: 'claude';
     name: string;
   }
 
@@ -58,7 +58,7 @@
     key: string;
     sessionId: string;
     sessionTitle: string;
-    sessionKind: 'claude' | 'cursor';
+    sessionKind: 'claude';
     event: EditEvent;
     stats: { add: number; rem: number };
   };
@@ -100,7 +100,7 @@
         out.push({
           key: `${la.sessionId}::${ev.toolId}`,
           sessionId: la.sessionId,
-          sessionTitle: la.name || (la.kind === 'claude' ? 'Claude' : 'Cursor'),
+          sessionTitle: la.name || 'Claude',
           sessionKind: la.kind,
           event: ev,
           stats: editStats(ev.oldText ?? '', ev.newText ?? '')
@@ -303,12 +303,12 @@
       <p class="rp-empty-h serif">Nothing to review</p>
       <p class="rp-empty-p">
         {#if p.linkedAgents.length === 0}
-          Link a Claude or Cursor session to this editor and the agent's
+          Link a Claude session to this editor and the agent's
           edits will show up here as soon as it touches a file.
         {:else}
           Edits from
           {#each p.linkedAgents as la, i (la.sessionId)}
-            <span class="rp-empty-agent">{la.name || (la.kind === 'claude' ? 'Claude' : 'Cursor')}</span>{i < p.linkedAgents.length - 1 ? ', ' : ''}
+            <span class="rp-empty-agent">{la.name || 'Claude'}</span>{i < p.linkedAgents.length - 1 ? ', ' : ''}
           {/each}
           land here grouped by file. Select one to review it in the editor.
         {/if}
@@ -388,8 +388,8 @@
                   {:else if row.event.wholeFile}Write
                   {:else}Edit{/if}
                 </span>
-                <span class="rp-row-agent rp-row-agent--{row.sessionKind}" title="From {row.sessionTitle}">
-                  {row.sessionKind === 'claude' ? 'C' : 'X'}
+                <span class="rp-row-agent rp-row-agent--claude" title="From {row.sessionTitle}">
+                  C
                 </span>
                 {#if row.event.status === 'loading'}
                   <span class="rp-row-streaming mono">streaming…</span>
@@ -611,7 +611,6 @@
   .rp-row-tag--add { background: color-mix(in srgb, var(--diff-add) 28%, transparent); color: var(--text-0); }
   .rp-row-tag--rem { background: color-mix(in srgb, var(--diff-rem) 28%, transparent); color: var(--text-0); }
 
-  /* Per-source brand accent — KEEP distinct (Claude rust, Cursor tone). */
   .rp-row-agent {
     width: 16px; height: 16px;
     display: grid; place-items: center;
@@ -622,7 +621,6 @@
     flex: 0 0 auto;
   }
   .rp-row-agent--claude { background: var(--src-claude); }
-  .rp-row-agent--cursor { background: var(--src-cursor); }
 
   .rp-row-streaming { font-size: 10px; color: var(--accent-bright); flex: 0 0 auto; }
   .rp-row-spacer { flex: 1; }

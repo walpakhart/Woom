@@ -1,4 +1,4 @@
-// Claude + Cursor chat session state. Owns the session list, per-app-instance
+// Claude chat session state. Owns the session list, per-app-instance
 // active-session pointers, the cross-instance "currently focused" pointer,
 // per-instance scroll containers, and user-authored rules. Persists sessions
 // to disk (~/Library/Application Support/Woom/sessions/) via Tauri
@@ -241,7 +241,6 @@ function loadStoredSessions(): {
 }
 
 const __initial = loadStoredSessions();
-const __legacy = __initial.sessions.find((s) => s.id === __initial.activeId);
 
 /** Reactive singleton. Imported by +page.svelte and any chat-aware
  *  component. Per-app-instance active pointers live in `activeByInstance`;
@@ -251,7 +250,7 @@ export const sessionsState = $state<{
   list: ClaudeSession[];
   // Per-agent-kind active session — fallback pointer for floating sessions
   // (agentInstanceId === null). Usually shadowed by per-instance pointers.
-  activeIds: Record<'claude' | 'cursor', string | null>;
+  activeIds: Record<'claude', string | null>;
   // Per-app-instance active session. Key = PanelInstance.id. Each agent
   // app instance owns one entry; two Claude instances can focus different
   // sessions at the same time without stepping on each other.
@@ -288,8 +287,7 @@ export const sessionsState = $state<{
 }>({
   list: __initial.sessions,
   activeIds: {
-    claude: __legacy?.agentKind === 'cursor' ? null : __initial.activeId,
-    cursor: __legacy?.agentKind === 'cursor' ? __initial.activeId : null
+    claude: __initial.activeId
   },
   activeByInstance: {},
   activeClaudeId: __initial.activeId,
@@ -340,10 +338,17 @@ function hydrateSession(s: ClaudeSession): ClaudeSession {
     actions: (s.actions || []).filter(
       (a: ClaudeAction) => a.status === 'pending' || a.status === 'error'
     ),
-    claudeUuid: (s as { claudeUuid?: string }).claudeUuid || genUuid(),
-    claudeResumable: Boolean((s as { claudeResumable?: boolean }).claudeResumable),
-    agentKind: ((s as { agentKind?: 'claude' | 'cursor' }).agentKind ?? 'claude'),
-    cursorModel: (s as { cursorModel?: string | null }).cursorModel ?? null,
+    /* Legacy Cursor sessions (agentKind='cursor' on disk, integration
+       removed 2026-06): keep the chat history but rotate the CLI uuid —
+       a cursor-agent chat id can't resume in claude. */
+    claudeUuid:
+      (s as { agentKind?: string }).agentKind === 'cursor'
+        ? genUuid()
+        : (s as { claudeUuid?: string }).claudeUuid || genUuid(),
+    claudeResumable:
+      (s as { agentKind?: string }).agentKind === 'cursor'
+        ? false
+        : Boolean((s as { claudeResumable?: boolean }).claudeResumable),
     claudeModel: (s as { claudeModel?: string | null }).claudeModel ?? null,
     lastContextSize: (s as { lastContextSize?: number }).lastContextSize ?? 0,
     linkedToEditor: Boolean((s as { linkedToEditor?: boolean }).linkedToEditor),
@@ -448,7 +453,7 @@ export async function initSessionsFromDisk(appDataDir: string): Promise<void> {
       sessionsState.list = sessions;
       sessionsState.activeClaudeId = index.activeId ?? sessions[0]?.id ?? null;
       const active = sessions.find((s) => s.id === sessionsState.activeClaudeId);
-      if (active) sessionsState.activeIds[active.agentKind] = active.id;
+      if (active) sessionsState.activeIds.claude = active.id;
       /* Seed the disk module's "last written" snapshot so the first
        *  post-init scheduleDiskWrite doesn't think every session is
        *  new and redundantly rewrite all files. */
@@ -596,7 +601,6 @@ export function consumeEditorOpenFile(instanceId: string): string | undefined {
 export function newClaudeSession(
   opts: {
     title?: string;
-    agentKind?: 'claude' | 'cursor';
     cwd?: string | null;
     linkedToEditor?: boolean;
     linkedToEditorInstanceId?: string | null;
@@ -604,8 +608,7 @@ export function newClaudeSession(
   } = {}
 ): string {
   const id = genId();
-  const agentKind = opts.agentKind ?? 'claude';
-  const n = sessionsState.list.filter((s) => s.agentKind === agentKind).length + 1;
+  const n = sessionsState.list.length + 1;
   const title = opts.title ?? `Chat ${n}`;
   const agentInstanceId = opts.agentInstanceId ?? null;
   sessionsState.list = [
@@ -616,9 +619,7 @@ export function newClaudeSession(
       actions: [],
       claudeUuid: genUuid(),
       claudeResumable: false,
-      agentKind,
-      cursorModel: null,
-      // Default new Claude sessions to Opus 4.8. Anthropic dropped
+      // Default new sessions to Opus 4.8. Anthropic dropped
       // Opus 4.8's standard rate to $5/$25 per 1M (was $15/$75 on
       // 4.7) on 2026-05-28 — now within striking distance of Sonnet
       // 4.6 ($3/$15) but with materially better reasoning. The user
@@ -626,7 +627,7 @@ export function newClaudeSession(
       // when budget matters more than quality. NOTE: this only
       // affects NEW sessions; persisted sessions on the old default
       // keep their model — no auto-migration.
-      claudeModel: agentKind === 'claude' ? 'claude-opus-4-8' : null,
+      claudeModel: 'claude-opus-4-8',
       lastContextSize: 0,
       linkedToEditor: !!opts.linkedToEditor,
       linkedToEditorInstanceId: opts.linkedToEditorInstanceId ?? null,
@@ -656,7 +657,7 @@ export function newClaudeSession(
     ...sessionsState.list
   ];
   sessionsState.activeClaudeId = id;
-  sessionsState.activeIds[agentKind] = id;
+  sessionsState.activeIds.claude = id;
   if (agentInstanceId) {
     sessionsState.activeByInstance[agentInstanceId] = id;
   }
@@ -664,28 +665,26 @@ export function newClaudeSession(
 }
 
 /** Move active pointers off `id` to the next VISIBLE (non-archived)
- *  session of `kind`, and auto-create a fresh empty Claude chat if the
- *  visible list of that kind is now empty (keeps the chat surface off a
- *  permanent empty state). Shared by archive + purge. `visible` is the
- *  post-removal list of sessions that should still show in the sidebar. */
+ *  session, and auto-create a fresh empty chat if the visible list is
+ *  now empty (keeps the chat surface off a permanent empty state).
+ *  Shared by archive + purge. `visible` is the post-removal list of
+ *  sessions that should still show in the sidebar. */
 function reassignPointersAfterRemoval(
   id: string,
-  kind: 'claude' | 'cursor',
   visible: ClaudeSession[]
 ) {
-  const fallback = visible.find((s) => s.agentKind === kind)?.id ?? null;
+  const fallback = visible[0]?.id ?? null;
   for (const k of Object.keys(sessionsState.activeByInstance)) {
     if (sessionsState.activeByInstance[k] === id) {
       sessionsState.activeByInstance[k] = fallback;
     }
   }
-  if (sessionsState.activeIds[kind] === id) sessionsState.activeIds[kind] = fallback;
+  if (sessionsState.activeIds.claude === id) sessionsState.activeIds.claude = fallback;
   if (sessionsState.activeClaudeId === id) {
-    sessionsState.activeClaudeId =
-      fallback ?? sessionsState.activeIds[kind === 'claude' ? 'cursor' : 'claude'];
+    sessionsState.activeClaudeId = fallback;
   }
-  if (visible.filter((s) => s.agentKind === 'claude').length === 0) {
-    newClaudeSession({ agentKind: 'claude' });
+  if (visible.length === 0) {
+    newClaudeSession();
   }
 }
 
@@ -702,9 +701,8 @@ export function deleteClaudeSession(id: string) {
      the distill save succeeds (toast surfaces an error if it fails). */
   void autoDistillSession(doomed);
   updateSession(id, { archived: true, archivedAt: Date.now(), sending: false });
-  const kind = doomed.agentKind ?? 'claude';
   const visible = sessionsState.list.filter((s) => s.id !== id && !s.archived);
-  reassignPointersAfterRemoval(id, kind, visible);
+  reassignPointersAfterRemoval(id, visible);
 }
 
 /** Restore an archived chat back into the active sidebar list. */
@@ -719,12 +717,10 @@ export function restoreClaudeSession(id: string) {
  *  "Delete forever" action; the memory snapshot (if any) was already
  *  captured at archive time. */
 export function purgeClaudeSession(id: string) {
-  const doomed = sessionsState.list.find((s) => s.id === id);
   const rest = sessionsState.list.filter((s) => s.id !== id);
   sessionsState.list = rest;
-  const kind = doomed?.agentKind ?? 'claude';
   const visible = rest.filter((s) => !s.archived);
-  reassignPointersAfterRemoval(id, kind, visible);
+  reassignPointersAfterRemoval(id, visible);
 }
 
 /** Snapshot a soon-to-be-deleted session into long-term memory. Picks
@@ -809,7 +805,7 @@ export function setActiveSessionInInstance(instanceId: string, sessionId: string
   sessionsState.activeByInstance[instanceId] = sessionId;
   const sess = sessionsState.list.find((s) => s.id === sessionId);
   if (sess) {
-    sessionsState.activeIds[sess.agentKind] = sessionId;
+    sessionsState.activeIds.claude = sessionId;
     sessionsState.activeClaudeId = sessionId;
     // Track "last shown in" for telemetry/UX-niceties only — does NOT
     // affect what's visible in other instances.
@@ -1080,7 +1076,7 @@ export function attachTerminalSelectionMention(
  *       are empty (the placeholder is wired to `mentions.length`).
  *    2. The next `sendAgent` snapshots the still-present mentions
  *       and bakes them into the prompt as `Referenced file: @…`,
- *       so e.g. Cursor receives "Привет, what about resolve-
+ *       so e.g. the agent receives "Привет, what about resolve-
  *       components.js?" even though the user just typed "ку".
  *
  *  Image mentions are kept regardless: they live as thumbnail chips
@@ -1185,35 +1181,28 @@ export function attachPathsToSession(
 export function focusSession(id: string) {
   const sess = sessionsState.list.find((s) => s.id === id);
   if (!sess) return;
-  sessionsState.activeIds[sess.agentKind] = id;
+  sessionsState.activeIds.claude = id;
   sessionsState.activeClaudeId = id;
   if (sess.agentInstanceId) {
     sessionsState.activeByInstance[sess.agentInstanceId] = id;
   }
 }
 
-/** Sessions that should render in a given app instance. The chat list is
- *  **global per agent-kind** — every Claude instance sees every Claude
- *  chat, every Cursor instance sees every Cursor chat. The instance is
- *  just a viewing window with its own "currently open" pointer;
+/** Sessions that should render in a given app instance. The chat list
+ *  is **global** — every agent instance sees every chat. The instance
+ *  is just a viewing window with its own "currently open" pointer;
  *  `agentInstanceId` on a session is informational ("last shown here"). */
-export function sessionsForInstance(
-  _instanceId: string,
-  kind: 'claude' | 'cursor'
-): ClaudeSession[] {
-  return sessionsState.list.filter((s) => s.agentKind === kind);
+export function sessionsForInstance(_instanceId: string): ClaudeSession[] {
+  return sessionsState.list;
 }
 
 /** Return the session active in a given app instance. Each instance owns
  *  its own active pointer so two instances can show different chats; the
- *  list itself is shared. Falls back to the most-recent session of the
- *  same kind when the instance hasn't picked one yet (fresh instance =
- *  shows newest chat instead of an empty pane). */
-export function activeSessionInInstance(
-  instanceId: string,
-  kind: 'claude' | 'cursor'
-): ClaudeSession | null {
-  const visible = sessionsState.list.filter((s) => s.agentKind === kind);
+ *  list itself is shared. Falls back to the most-recent session when the
+ *  instance hasn't picked one yet (fresh instance = shows newest chat
+ *  instead of an empty pane). */
+export function activeSessionInInstance(instanceId: string): ClaudeSession | null {
+  const visible = sessionsState.list;
   const pinned = sessionsState.activeByInstance[instanceId];
   if (pinned) {
     const found = visible.find((s) => s.id === pinned);
@@ -1349,25 +1338,6 @@ export function formatActionResultsForPrompt(results: PendingActionResult[]): st
   lines.push('');
   lines.push('Continue from where you were.');
   return lines.join('\n');
-}
-
-/** Swap the agent CLI for a session. Rotates `claudeUuid` and resets the
-    resumable flag because each CLI keeps its own session store — resuming
-    a Claude id against cursor-agent (or vice versa) would fail. Also
-    drops the per-cwd uuid map: those ids are CLI-specific (a saved
-    claudeUuid wouldn't resume in cursor-agent), so carrying the map
-    across a CLI swap would only mislead future cwd switches. The UI
-    history in Woom is retained but neither CLI will remember
-    earlier turns on the new side. */
-export function switchAgentKind(sessionId: string, kind: 'claude' | 'cursor') {
-  const sess = sessionsState.list.find((s) => s.id === sessionId);
-  if (!sess || sess.agentKind === kind) return;
-  updateSession(sessionId, {
-    agentKind: kind,
-    claudeUuid: genUuid(),
-    claudeResumable: false,
-    cwdUuids: {}
-  });
 }
 
 // ---- Low-level message / action mutators ----
@@ -1539,9 +1509,8 @@ export function updateLastAssistantUsage(sessionId: string, usage: ClaudeUsage) 
      * tripped `looksCumulative` and had its usage DROPPED, freezing the
      * turn counter + cost total. Prefer the session model; fall back to
      * the CLI id only when the session has none. */
-    const sessionModel = s.agentKind === 'claude' ? s.claudeModel : s.cursorModel;
-    const effectiveModel = sessionModel ?? usage.model;
-    const cap = contextWindowFor(effectiveModel, s.agentKind);
+    const effectiveModel = s.claudeModel ?? usage.model;
+    const cap = contextWindowFor(effectiveModel);
     const looksCumulative = usage.contextSize > cap + 8_192;
     if (looksCumulative) {
       // Drop the inflated usage entirely — keep whatever the last
@@ -1612,8 +1581,8 @@ export function replaceLastAssistant(sessionId: string, content: string) {
  *
  *  No-op when the last message isn't an assistant turn (defensive: stream
  *  events should only fire after the assistant message starts, but that
- *  ordering depends on cursor-agent / claude correctly emitting
- *  `assistant` before `tool_call`). */
+ *  ordering depends on the CLI correctly emitting `assistant` before
+ *  `tool_call`). */
 export function appendEditEvent(
   sessionId: string,
   ev: {

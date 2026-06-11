@@ -37,7 +37,7 @@
     now: number;
     onNavigate: (v: View) => void;
     onOpenSession: (sessionId: string, agentInstanceId: string) => void;
-    onNewChat: (kind: 'claude' | 'cursor') => void;
+    onNewChat: () => void;
     /** Opens the long-form Welcome / Help overlay. Surfaced as a
      *  small "Take the tour" pill in the hero so first-time users
      *  have a discoverable entry point that doesn't require knowing
@@ -74,7 +74,7 @@
   type ChatRow = {
     id: string;
     title: string;
-    kind: 'claude' | 'cursor';
+    kind: 'claude';
     agentInstanceId: string;
     sending: boolean;
     queueLen: number;
@@ -88,8 +88,7 @@
     const out: ChatRow[] = [];
     const dayStart = p.now - 24 * 60 * 60 * 1000;
     for (const s of sessionsState.list) {
-      if (s.agentKind !== 'claude' && s.agentKind !== 'cursor') continue;
-      const agentInstanceId = s.agentInstanceId ?? APP_INSTANCE_IDS[s.agentKind];
+      const agentInstanceId = s.agentInstanceId ?? APP_INSTANCE_IDS.claude;
       if (!kindForInstanceId(agentInstanceId)) continue;
       const last = s.messages[s.messages.length - 1];
       const snippet = (() => {
@@ -110,7 +109,7 @@
       out.push({
         id: s.id,
         title: s.title || 'Untitled chat',
-        kind: s.agentKind,
+        kind: 'claude',
         agentInstanceId,
         sending: s.sending,
         queueLen: s.pendingQueue?.length ?? 0,
@@ -157,7 +156,6 @@
     ).getTime();
     const heatmapStart = todayMidnight - (HEATMAP_DAYS - 1) * 24 * 60 * 60 * 1000;
     for (const s of sessionsState.list) {
-      if (s.agentKind !== 'claude' && s.agentKind !== 'cursor') continue;
       totalChats += 1;
       if (s.sending) runningChats += 1;
       for (const m of s.messages) {
@@ -503,16 +501,12 @@
           <div class="ho-empty">
             <p class="ho-empty-h">No chats yet</p>
             <p class="ho-empty-p">
-              Start a Claude or Cursor session to bring agents into your workflow.
+              Start a Claude session to bring agents into your workflow.
             </p>
             <div class="ho-empty-row">
-              <button class="ho-cta ho-cta--claude" onclick={() => p.onNewChat('claude')}>
+              <button class="ho-cta ho-cta--claude" onclick={() => p.onNewChat()}>
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
                 New Claude chat
-              </button>
-              <button class="ho-cta ho-cta--cursor" onclick={() => p.onNewChat('cursor')}>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
-                New Cursor chat
               </button>
             </div>
           </div>
@@ -642,23 +636,13 @@
     <section class="ho-quick">
       <h2 class="ho-quick-h">Jump in</h2>
       <div class="ho-quick-grid">
-        <button class="ho-quick-card" data-agent="claude" onclick={() => p.onNewChat('claude')}>
+        <button class="ho-quick-card" data-agent="claude" onclick={() => p.onNewChat()}>
           <span class="ho-quick-icon" data-agent="claude">
             <BrandIcon kind="claude" size={20} />
           </span>
           <span class="ho-quick-body">
             <span class="ho-quick-title">New Claude chat</span>
             <span class="ho-quick-sub">spawn a fresh agent session</span>
-          </span>
-        </button>
-
-        <button class="ho-quick-card" data-agent="cursor" onclick={() => p.onNewChat('cursor')}>
-          <span class="ho-quick-icon" data-agent="cursor">
-            <BrandIcon kind="cursor" size={20} />
-          </span>
-          <span class="ho-quick-body">
-            <span class="ho-quick-title">New Cursor chat</span>
-            <span class="ho-quick-sub">cursor-agent CLI session</span>
           </span>
         </button>
 
@@ -1057,12 +1041,10 @@
   }
   .ho-cta:hover { background: var(--bg-3); }
   .ho-cta--claude { color: var(--src-claude); border-color: color-mix(in srgb, var(--src-claude) 30%, transparent); }
-  .ho-cta--cursor { color: var(--src-cursor); border-color: color-mix(in srgb, var(--src-cursor) 30%, transparent); }
   .ho-cta svg { width: 11px; height: 11px; }
 
-  /* Active conversations rows. Brand-colour left border on hover so
-     the row reads as a "claude row" or a "cursor row" without
-     putting a chip on every line. */
+  /* Active conversations rows. Brand-colour left border on hover
+     without putting a chip on every line. */
   .ho-chat-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
   .ho-chat-row {
     position: relative;
@@ -1086,7 +1068,6 @@
     transition: background 160ms;
   }
   .ho-chat-row[data-agent="claude"]::before { background: color-mix(in srgb, var(--src-claude) 30%, transparent); }
-  .ho-chat-row[data-agent="cursor"]::before { background: color-mix(in srgb, var(--src-cursor) 30%, transparent); }
   .ho-chat-row:hover {
     background: var(--bg-3);
     transform: translateX(2px);
@@ -1094,11 +1075,7 @@
   .ho-chat-row[data-agent="claude"]:hover {
     border-color: color-mix(in srgb, var(--src-claude) 38%, transparent);
   }
-  .ho-chat-row[data-agent="cursor"]:hover {
-    border-color: color-mix(in srgb, var(--src-cursor) 38%, transparent);
-  }
   .ho-chat-row[data-agent="claude"]:hover::before { background: var(--src-claude); }
-  .ho-chat-row[data-agent="cursor"]:hover::before { background: var(--src-cursor); }
   .ho-chat-icon {
     width: 32px; height: 32px;
     display: grid; place-items: center;
@@ -1109,10 +1086,6 @@
   .ho-chat-icon[data-agent="claude"] {
     background: color-mix(in srgb, var(--src-claude) 14%, var(--bg-3));
     color: var(--src-claude);
-  }
-  .ho-chat-icon[data-agent="cursor"] {
-    background: color-mix(in srgb, var(--src-cursor) 14%, var(--bg-3));
-    color: var(--src-cursor);
   }
   /* BrandIcon sets its own width/height — no per-svg sizing needed. */
   .ho-chat-body { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
@@ -1153,15 +1126,6 @@
   .ho-chip--running[data-agent="claude"] .ho-chip-dot {
     background: var(--src-claude);
     box-shadow: 0 0 6px color-mix(in srgb, var(--src-claude) 70%, transparent);
-  }
-  .ho-chip--running[data-agent="cursor"] {
-    color: var(--src-cursor);
-    background: color-mix(in srgb, var(--src-cursor) 14%, transparent);
-    border-color: color-mix(in srgb, var(--src-cursor) 30%, transparent);
-  }
-  .ho-chip--running[data-agent="cursor"] .ho-chip-dot {
-    background: var(--src-cursor);
-    box-shadow: 0 0 6px color-mix(in srgb, var(--src-cursor) 70%, transparent);
   }
   .ho-chip--queued {
     color: var(--accent-bright);
@@ -1291,10 +1255,6 @@
     border-color: color-mix(in srgb, var(--src-claude) 38%, transparent);
     box-shadow: 0 8px 22px -14px var(--src-claude);
   }
-  .ho-quick-card[data-agent="cursor"]:hover {
-    border-color: color-mix(in srgb, var(--src-cursor) 38%, transparent);
-    box-shadow: 0 8px 22px -14px var(--src-cursor);
-  }
   .ho-quick-card:not([data-agent]):hover {
     border-color: color-mix(in srgb, var(--accent) 38%, transparent);
     box-shadow: 0 8px 22px -14px var(--accent-glow);
@@ -1313,13 +1273,6 @@
       var(--bg-3);
     color: var(--src-claude);
     box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--src-claude) 32%, transparent);
-  }
-  .ho-quick-icon[data-agent="cursor"] {
-    background:
-      linear-gradient(160deg, color-mix(in srgb, var(--src-cursor) 22%, transparent), color-mix(in srgb, var(--src-cursor) 6%, transparent)),
-      var(--bg-3);
-    color: var(--src-cursor);
-    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--src-cursor) 32%, transparent);
   }
   .ho-quick-icon--mint {
     background:

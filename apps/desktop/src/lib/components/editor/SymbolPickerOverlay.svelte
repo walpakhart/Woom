@@ -380,7 +380,7 @@
   .sp-kind--function { background: color-mix(in srgb, var(--accent) 30%, var(--bg-3)); color: var(--accent-bright); }
   .sp-kind--method   { background: color-mix(in srgb, var(--accent) 22%, var(--bg-3)); color: var(--accent-bright); }
   .sp-kind--class    { background: color-mix(in srgb, var(--src-claude) 30%, var(--bg-3)); color: var(--src-claude); }
-  .sp-kind--interface{ background: color-mix(in srgb, var(--src-cursor) 30%, var(--bg-3)); color: var(--text-0); }
+  .sp-kind--interface{ background: color-mix(in srgb, var(--text-2) 30%, var(--bg-3)); color: var(--text-0); }
   .sp-kind--struct   { background: color-mix(in srgb, var(--src-claude) 24%, var(--bg-3)); color: var(--src-claude); }
   .sp-kind--trait    { background: color-mix(in srgb, var(--accent) 22%, var(--bg-3)); color: var(--text-0); }
   .sp-kind--enum     { background: color-mix(in srgb, var(--diff-add) 24%, var(--bg-3)); color: var(--diff-add-stroke); }

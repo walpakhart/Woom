@@ -9,8 +9,8 @@
 
 import type { ClaudeMessage, ClaudeSession, MessageEvent } from '$lib/types';
 
-/* Per-event byte cap. Tool-use traces (especially Cursor's `edit` events
- * with full `oldText`/`newText` payloads) used to balloon to 240KB+ each;
+/* Per-event byte cap. Tool-use traces (especially `edit` events with
+ * full `oldText`/`newText` payloads) used to balloon to 240KB+ each;
  * a long agent run accumulated 100MB+ across the session list and froze
  * the app at boot (JSON.parse + Svelte reactivity choked on the deep
  * tree). 64KB is plenty for a sane Edit diff — anything bigger is a
@@ -84,8 +84,6 @@ export function serializeSession(s: ClaudeSession): object {
     actions: s.actions,
     claudeUuid: s.claudeUuid,
     claudeResumable: s.claudeResumable,
-    agentKind: s.agentKind,
-    cursorModel: s.cursorModel,
     claudeModel: s.claudeModel,
     lastContextSize: s.lastContextSize,
     linkedToEditor: s.linkedToEditor,

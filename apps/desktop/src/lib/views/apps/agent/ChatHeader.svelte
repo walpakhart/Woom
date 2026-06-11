@@ -21,7 +21,7 @@
   import { notify } from '$lib/state/toaster.svelte';
   import { tick, untrack } from 'svelte';
 
-  type Kind = 'claude' | 'cursor';
+  type Kind = 'claude';
 
   interface Props {
     kind: Kind;
@@ -46,8 +46,8 @@
 
   /* Per-turn series → ribbon bars. Height normalises to the costliest
    *  turn so the tallest bar always fills; when no turn carries a USD
-   *  cost (Cursor sessions don't), fall back to token counts so the
-   *  ribbon still reads as relative effort instead of flatlining. */
+   *  cost, fall back to token counts so the ribbon still reads as
+   *  relative effort instead of flatlining. */
   const turns = $derived(sessionTurnSeries(sess));
   const ribbon = $derived.by(() => {
     const maxCost = Math.max(0, ...turns.map((t) => t.costUsd));

@@ -99,7 +99,7 @@
   let dragHoverTimer: ReturnType<typeof setTimeout> | null = null;
   /** True while a drop-acceptable payload hovers the primary icon. Drives
    *  the `rail-dropping` highlight so the user sees Canvas (etc.) is a
-   *  valid drop target — same vocabulary the Claude / Cursor rail uses. */
+   *  valid drop target — same vocabulary the Claude rail button uses. */
   let dropOver = $state(false);
 
   /** WebKit hides `application/x-woom-*` mimes during dragover; mirror
@@ -122,7 +122,7 @@
 
   /** Map kind → `data-view` value the parent Rail's CSS uses to scope
    *  drag-pulse + active-halo selectors. Mirrors the literals on the
-   *  singleton rail buttons (Claude / Cursor / Editor / etc.). */
+   *  singleton rail buttons (Claude / Editor / etc.). */
   function viewForKind(kind: AppKind): string {
     return `${kind}App`;
   }

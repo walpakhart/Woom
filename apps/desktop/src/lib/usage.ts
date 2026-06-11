@@ -7,11 +7,9 @@ import type { ClaudeSession, ClaudeUsage } from '$lib/types';
 /** USD per million tokens, by model id. Keys are the exact `model` strings
  *  Claude CLI returns in stream-json (e.g. `claude-sonnet-4-6`).
  *  Unknown / null models fall through to a 0-cost result rather than a
- *  guessed-rate one — Cursor turns don't carry a model id on their
- *  `result.usage` event and Cursor's pricing is subscription-credit
- *  based anyway, so showing a fabricated USD figure for those would
- *  mislead. The badge checks `cost > 0` to decide whether to render
- *  the cost span at all. */
+ *  guessed-rate one — showing a fabricated USD figure would mislead.
+ *  The badge checks `cost > 0` to decide whether to render the cost
+ *  span at all. */
 const RATE_TABLE: Record<
   string,
   { input: number; output: number; cacheWrite: number; cacheRead: number }
@@ -43,28 +41,10 @@ const RATE_TABLE: Record<
   'claude-haiku-4-5-20251001': { input: 0.8, output: 4, cacheWrite: 1, cacheRead: 0.08 }
 };
 
-/** Effective context-window size in tokens. The cap depends on **both**
- *  the model id and the surface the session is running on, because:
- *
- *    • Claude Code (Anthropic SDK) on Max plan: Opus 4.7 ships a 1M
- *      variant; Sonnet/Haiku stay at 200k.
- *    • cursor-agent (Cursor CLI): even Opus 4.7 is capped at 200k under
- *      the standard subscription. Cursor's "Max mode" toggle is about
- *      tool/think budget, NOT context size — observed live as
- *      "70.4% · 140.9K / 200K context used" with Max enabled, so the
- *      Woom ring was over-reporting "23%" when the user was
- *      actually past 70% headed into auto-summary territory.
- *
- *  Defaults `agentKind = 'claude'` so existing call sites without the
- *  arg keep their 1M-for-Opus behavior; Cursor sessions explicitly
- *  pass `'cursor'` and get the safe 200k cap. If we later add a
- *  per-session "Cursor Ultra plan" toggle (or detect it from
- *  cursor-agent's status payload), this is the single switch. */
-export function contextWindowFor(
-  model: string | null,
-  agentKind: 'claude' | 'cursor' = 'claude'
-): number {
-  if (agentKind === 'cursor') return 200_000;
+/** Effective context-window size in tokens, by model id. Claude Code
+ *  (Anthropic SDK) on Max plan: Opus 4.7 ships a 1M variant;
+ *  Sonnet/Haiku stay at 200k. */
+export function contextWindowFor(model: string | null): number {
   if (!model) return 200_000;
   /* Fable/Mythos 5: the default tier ships a 200K window — Claude Code
    * auto-compacts these sessions at ~155K, the standard 77.5% threshold
@@ -89,8 +69,7 @@ export function contextWindowFor(
  *  for. Returns 0 when:
  *    - every counter is 0 (pre-usage messages)
  *    - or the model id isn't in the rate table (unknown / null —
- *      typical for Cursor turns; Cursor uses subscription credits,
- *      not per-token billing, so a guessed USD number would mislead). */
+ *      a guessed USD number would mislead). */
 export function costForUsage(usage: ClaudeUsage): number {
   if (!usage.model) return 0;
   /* Fast-mode keying: append `:fast` to the model id when the session
@@ -136,17 +115,9 @@ export function formatCostUsd(usd: number): string {
 }
 
 /** What share of the context window did this turn fill? Used by the
- *  ring indicator in AgentApp's header. Returns 0..1, clamped.
- *
- *  Pass `agentKind` so we use the correct surface-specific cap (Cursor
- *  sessions are 200k regardless of model — see `contextWindowFor`).
- *  Defaults to `'claude'` for back-compat with call sites that haven't
- *  been threaded through yet. */
-export function contextPct(
-  usage: ClaudeUsage,
-  agentKind: 'claude' | 'cursor' = 'claude'
-): number {
-  const cap = contextWindowFor(usage.model, agentKind);
+ *  ring indicator in AgentApp's header. Returns 0..1, clamped. */
+export function contextPct(usage: ClaudeUsage): number {
+  const cap = contextWindowFor(usage.model);
   if (cap <= 0) return 0;
   return Math.min(1, Math.max(0, usage.contextSize / cap));
 }

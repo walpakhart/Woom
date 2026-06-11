@@ -22,9 +22,8 @@ export function exportSessionMarkdown(session: ClaudeSession): string {
   const title = session.title || `Session ${session.id.slice(0, 6)}`;
   header.push(`# ${title}`);
   header.push('');
-  header.push(`- Agent: \`${session.agentKind}\``);
+  header.push('- Agent: `claude`');
   if (session.claudeModel) header.push(`- Model: \`${session.claudeModel}\``);
-  if (session.cursorModel) header.push(`- Model: \`${session.cursorModel}\``);
   if (session.cwd) header.push(`- Cwd: \`${session.cwd}\``);
   header.push(`- Session id: \`${session.id}\``);
   header.push(`- Messages: ${session.messages.length}`);
@@ -53,10 +52,8 @@ export function exportSessionJson(session: ClaudeSession): string {
   const out = {
     id: session.id,
     title: session.title,
-    agentKind: session.agentKind,
     cwd: session.cwd,
     claudeModel: session.claudeModel,
-    cursorModel: session.cursorModel,
     claudeUuid: session.claudeUuid,
     agentInstanceId: session.agentInstanceId,
     linkedToEditor: session.linkedToEditor,

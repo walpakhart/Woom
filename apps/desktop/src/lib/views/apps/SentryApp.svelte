@@ -21,7 +21,6 @@
     onCardMouseDown: (e: MouseEvent) => void;
     isClickNotDrag: (e: MouseEvent) => boolean;
     onSendToClaude: (item: SentryIssue) => void;
-    onSendToCursor: (item: SentryIssue) => void;
     onFixWithDw: (item: SentryIssue) => void;
   }
   let p: Props = $props();
@@ -50,7 +49,6 @@
         onCardMouseDown={p.onCardMouseDown}
         isClickNotDrag={p.isClickNotDrag}
         onSendToClaude={p.onSendToClaude}
-        onSendToCursor={p.onSendToCursor}
         onFixWithDw={p.onFixWithDw}
       />
     {/snippet}
@@ -68,12 +66,6 @@
               const it = items.find((x) => x.id === focusId)
                 ?? Object.values(inboxState.sentryItemsByInstance).flat().find((x) => x.id === focusId);
               if (it) p.onSendToClaude(it);
-            }}
-            onSendToCursor={() => {
-              const items = inboxState.sentryItemsByInstance[p.instanceId] ?? [];
-              const it = items.find((x) => x.id === focusId)
-                ?? Object.values(inboxState.sentryItemsByInstance).flat().find((x) => x.id === focusId);
-              if (it) p.onSendToCursor(it);
             }}
           />
         {:else}

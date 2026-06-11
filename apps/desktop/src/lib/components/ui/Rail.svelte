@@ -4,7 +4,7 @@
    *   - RailTooltip       floating tooltip (escapes ancestor clip)
    *   - RailActiveHalo    active-button outer-glow overlay
    *   - RailIdentityAvatar avatar + identity popover
-   *   - RailSourceButton  Jira / GitHub / Sentry / Claude / Cursor
+   *   - RailSourceButton  Jira / GitHub / Sentry / Claude
    *   - RailSystemButton  Connections / Rules / Library / Settings
    *   - RailAppButton     editor / canvas / terminal multi-instance stacks
    * Shared chrome CSS (`.rail-btn` + states) imported globally from
@@ -18,15 +18,14 @@
   import RailSourceButton from './rail/RailSourceButton.svelte';
   import RailSystemButton from './rail/RailSystemButton.svelte';
   /* Reuse brand SVGs that ConnectionsView renders so the rail's
-   * vocabulary matches Connections. Claude / Cursor use curated PNGs
-   * because their official marks are rich gradients that don't
+   * vocabulary matches Connections. Claude uses a curated PNG
+   * because its official mark is a rich gradient that doesn't
    * distill cleanly to a single mono <path>. */
   import { SVG_GITHUB, SVG_JIRA, SVG_SENTRY } from '$lib/data';
   import { dragState, requestCanvasRailDrop } from '$lib/state/drag.svelte';
   import type {
     ClaudeStatus,
     ConnectionStatus,
-    CursorStatus,
     JiraStatus,
     SentryStatus
   } from '$lib/data';
@@ -37,7 +36,6 @@
     | 'githubApp'
     | 'sentryApp'
     | 'claudeApp'
-    | 'cursorApp'
     | 'editorApp'
     | 'canvasApp'
     | 'terminalApp'
@@ -55,14 +53,12 @@
     jiraStatus?: JiraStatus;
     sentryStatus?: SentryStatus;
     claudeStatus?: ClaudeStatus | null;
-    cursorStatus?: CursorStatus | null;
     githubBadge?: number;
     jiraBadge?: number;
     sentryBadge?: number;
     dragActive?: boolean;
     claudeBusy?: boolean;
-    cursorBusy?: boolean;
-    onAgentDrop?: (kind: 'claude' | 'cursor', e: DragEvent) => void;
+    onAgentDrop?: (e: DragEvent) => void;
   }
 
   let {
@@ -74,20 +70,18 @@
     jiraStatus,
     sentryStatus,
     claudeStatus,
-    cursorStatus,
     githubBadge = 0,
     jiraBadge = 0,
     sentryBadge = 0,
     dragActive = false,
     claudeBusy = false,
-    cursorBusy = false,
     onAgentDrop
   }: Props = $props();
 
-  /* Highlight Claude / Cursor rail button while a payload is dragging
+  /* Highlight the Claude rail button while a payload is dragging
    * over it. Cleared on `dragleave` (when cursor truly leaves the
    * button) and on `drop`. */
-  let dropOverKind = $state<'claude' | 'cursor' | null>(null);
+  let dropOverKind = $state<'claude' | null>(null);
 
   /* WebKit hides custom `application/x-woom-*` mimes during dragover
    * (only standard mimes are exposed until `drop`), so we accept
@@ -108,12 +102,12 @@
     );
   }
 
-  function railDragEnter(kind: 'claude' | 'cursor', e: DragEvent) {
+  function railDragEnter(kind: 'claude', e: DragEvent) {
     if (!hasDropPayload(e)) return;
     e.preventDefault();
     dropOverKind = kind;
   }
-  function railDragOver(kind: 'claude' | 'cursor', e: DragEvent) {
+  function railDragOver(kind: 'claude', e: DragEvent) {
     if (!hasDropPayload(e)) return;
     e.preventDefault();
     if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
@@ -125,12 +119,12 @@
      * highlight, so brief flicker on inner elements is acceptable. */
     dropOverKind = null;
   }
-  function railDrop(kind: 'claude' | 'cursor', e: DragEvent) {
+  function railDrop(_kind: 'claude', e: DragEvent) {
     dropOverKind = null;
     if (!onAgentDrop) return;
     e.preventDefault();
-    view = kind === 'claude' ? 'claudeApp' : 'cursorApp';
-    onAgentDrop(kind, e);
+    view = 'claudeApp';
+    onAgentDrop(e);
   }
 
   /* Canvas rail drop. The Canvas surface isn't in the DOM while user
@@ -302,27 +296,6 @@
       {/snippet}
     </RailSourceButton>
 
-    <RailSourceButton
-      view="cursorApp"
-      label="Cursor"
-      tooltip="Cursor · ⌘5 — drop to attach"
-      tone="var(--src-cursor)"
-      glow="rgba(220,220,220,0.32)"
-      active={view === 'cursorApp'}
-      busy={cursorBusy}
-      dragKind="cursor"
-      dropOver={dropOverKind === 'cursor'}
-      onclick={() => (view = 'cursorApp')}
-      onDragEnter={railDragEnter}
-      onDragOver={railDragOver}
-      onDragLeave={railDragLeave}
-      onDrop={railDrop}
-    >
-      {#snippet icon()}
-        <img class="rail-brand-img rail-brand-img--cursor" src="/brand-cursor.png" alt="" aria-hidden="true" draggable="false" />
-      {/snippet}
-    </RailSourceButton>
-
     <div class="rail-divider"></div>
 
     <!-- Tools — multi-instance via RailAppButton: chevron expands an
@@ -429,7 +402,6 @@
       {jiraStatus}
       {sentryStatus}
       {claudeStatus}
-      {cursorStatus}
     />
   </div>
 </aside>

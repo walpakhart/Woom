@@ -1,6 +1,6 @@
 <script lang="ts">
   /* SessionsSidebar — left pane of AgentApp.
-     v7: serif "Claude" / "Cursor" head + "+" iconbtn, group labels
+     v7: serif "Claude" head + "+" iconbtn, group labels
      (Today / Yesterday / This week / Older), session rows with sparkle
      icon + 13px title + meta line (time · N msgs · status), bottom
      dashed "+ New chat" button. */
@@ -21,7 +21,7 @@
   import { notify } from '$lib/state/toaster.svelte';
   import { invoke } from '@tauri-apps/api/core';
 
-  type Kind = 'claude' | 'cursor';
+  type Kind = 'claude';
 
   interface Props {
     kind: Kind;
@@ -36,7 +36,7 @@
   type Session = (typeof sessionsState.list)[number];
 
   const groups = $derived.by(() => {
-    const items = sessionsState.list.filter((s) => s.agentKind === kind && !s.archived);
+    const items = sessionsState.list.filter((s) => !s.archived);
     const dayMs = 24 * 60 * 60 * 1000;
     const sessTime = (s: Session) => {
       const last = s.messages[s.messages.length - 1]?.at;
@@ -68,7 +68,7 @@
   });
 
   const totalCount = $derived(
-    sessionsState.list.filter((s) => s.agentKind === kind && !s.archived).length
+    sessionsState.list.filter((s) => !s.archived).length
   );
 
   /* Archived chats of this kind — newest-archived first. Rendered in a
@@ -76,7 +76,7 @@
      back, "delete forever" purges it for good. */
   const archivedItems = $derived.by(() =>
     sessionsState.list
-      .filter((s) => s.agentKind === kind && s.archived)
+      .filter((s) => s.archived)
       .sort((a, b) => (b.archivedAt ?? 0) - (a.archivedAt ?? 0))
   );
   let showArchived = $state(false);
@@ -111,7 +111,7 @@
     return memCounts[sessId.slice(0, 8)] ?? 0;
   }
 
-  const label = $derived(kind === 'claude' ? 'Claude' : 'Cursor');
+  const label = 'Claude';
 
   /* Right-click context menu on session rows. Reuses the shared
      CardContextMenu used in inbox lists + chat-thread messages.
@@ -235,7 +235,7 @@
   }
 
   function createNew() {
-    newClaudeSession({ agentKind: kind, agentInstanceId: instanceId });
+    newClaudeSession({ agentInstanceId: instanceId });
   }
 
   function deleteSession(sessId: string, _sessTitle: string, e: MouseEvent) {
@@ -292,7 +292,7 @@
       {#each groups as g (g.label)}
         <div class="ssb-group-label">{g.label}</div>
         {#each g.items as sess (sess.id)}
-          {@const isActive = sess.id === sessionsState.activeIds[kind]}
+          {@const isActive = sess.id === sessionsState.activeIds.claude}
           {@const lastMsg = sess.messages[sess.messages.length - 1]}
           {@const lastAt = lastMsg?.at ?? null}
           {@const msgCount = sess.messages.length}
@@ -424,10 +424,9 @@
     flex-shrink: 0;
     gap: 8px;
   }
-  /* Agent logo chip — Claude burst or Cursor hex in the agent's
-     ACTUAL brand color (coral for Claude, neutral grey for Cursor),
-     not the app shell's accent. Brand identity stays per-source even
-     when the surrounding app paints in mint/sage. */
+  /* Agent logo chip — Claude burst in the agent's ACTUAL brand color
+     (coral), not the app shell's accent. Brand identity stays
+     per-source even when the surrounding app paints in mint/sage. */
   .ssb-logo {
     width: 26px; height: 26px;
     display: inline-flex; align-items: center; justify-content: center;
@@ -439,11 +438,6 @@
     color: var(--src-claude);
     background: color-mix(in srgb, var(--src-claude) 12%, var(--bg-2));
     box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--src-claude) 28%, transparent);
-  }
-  .ssb-logo[data-agent="cursor"] {
-    color: var(--src-cursor);
-    background: color-mix(in srgb, var(--src-cursor) 12%, var(--bg-2));
-    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--src-cursor) 28%, transparent);
   }
   /* BrandIcon renders the SVG / IMG with its own width/height
      attributes, so we just keep the centering rhythm and let the

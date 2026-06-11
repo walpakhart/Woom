@@ -1,6 +1,6 @@
 /* MCP payload alias parsing.
  *
- * cursor-agent and Claude both ship the same tool-call argument under
+ * Agent CLIs ship the same tool-call argument under
  * many different names: `repo_path` vs `path` vs `folder`, sometimes
  * wrapped under `args` / `arguments` / `params`, occasionally as a
  * single-element array, occasionally as `{path: "..."}` instead of
@@ -29,7 +29,7 @@ export function pickFrom(
 }
 
 /** Coerce a Value into a non-empty trimmed string when possible.
- *  cursor-agent has shipped path-style fields as:
+ *  Agent CLIs have shipped path-style fields as:
  *    - `"/Users/me/repo"`     (happy path)
  *    - `["/Users/me/repo"]`   (single-element array)
  *    - `{"path": "/Users/me/repo"}` (over-eager nesting)
@@ -60,7 +60,7 @@ export function coerceString(v: unknown): string {
 }
 
 /** Alias-aware analogue of `pickFrom` that ALSO drills into the
- *  wrapper objects cursor-agent / Claude have been known to nest
+ *  wrapper objects agent CLIs have been known to nest
  *  payloads under (`args` / `arguments` / `params` / `input`). Used
  *  by `set_editor_repo_path` / `set_agent_cwd` — both have been
  *  observed receiving fully-wrapped payloads where `repo_path` is
@@ -168,14 +168,14 @@ export function readStr(input: Record<string, unknown>, k: string): string {
 }
 
 /** Same as `readStr` but for numbers. Coerces strings ("12") because
- *  cursor-agent occasionally stringifies numeric args. */
+ *  agent CLIs occasionally stringify numeric args. */
 export function readNum(input: Record<string, unknown>, k: string): number {
   const v = input[k];
   return typeof v === 'number' ? v : Number(v);
 }
 
 /** Map the platform-named view the agent ships (`github` / `jira` /
- *  `sentry` / `claude` / `cursor` / `editor` / `canvas` / `terminal`)
+ *  `sentry` / `claude` / `editor` / `canvas` / `terminal`)
  *  to Woom's internal `…App` `View` key. Pass-through values (`rules` /
  *  `connections` / `settings`) come back unchanged. Unrecognised names
  *  return `null` so the dispatcher can no-op cleanly.
@@ -184,7 +184,7 @@ export function readNum(input: Record<string, unknown>, k: string): number {
  *  cyclic import on the `View` alias from `view.svelte.ts`. */
 export type AgentInternalView =
   | 'githubApp' | 'jiraApp' | 'sentryApp'
-  | 'claudeApp' | 'cursorApp'
+  | 'claudeApp'
   | 'editorApp' | 'canvasApp' | 'terminalApp'
   | 'rules' | 'connections' | 'settings';
 
@@ -194,7 +194,6 @@ export function mapAgentViewToInternal(v: string): AgentInternalView | null {
     case 'jira':         return 'jiraApp';
     case 'sentry':       return 'sentryApp';
     case 'claude':       return 'claudeApp';
-    case 'cursor':       return 'cursorApp';
     case 'editor':       return 'editorApp';
     case 'canvas':       return 'canvasApp';
     case 'terminal':     return 'terminalApp';
@@ -208,7 +207,7 @@ export function mapAgentViewToInternal(v: string): AgentInternalView | null {
 /** Coerce raw `sprint_ids` payload entries into the persisted
  *  `SprintScope[]` shape (numeric id or the literal `'backlog'`).
  *  The MCP tool's JSON schema accepts string|number; we accept either
- *  here too because cursor-agent and Claude have shipped both. The
+ *  here too because agent CLIs have shipped both. The
  *  return type is repeated locally rather than imported from
  *  `inbox.svelte.ts` to keep this module reactive-store-free. */
 export type SprintScopeAlias = number | 'backlog';

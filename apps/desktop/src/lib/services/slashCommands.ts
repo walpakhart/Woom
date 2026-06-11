@@ -159,7 +159,7 @@ export function appendUsageBreakdown(session: ClaudeSession): void {
      * parallel persisted value. */
     costUsd += costForUsage(u);
   }
-  const window = contextWindowFor(session.claudeModel, session.agentKind);
+  const window = contextWindowFor(session.claudeModel);
   const lines: string[] = [
     `**Usage so far** — ${turnCount} assistant turn${turnCount === 1 ? '' : 's'}.`,
     '',
@@ -170,7 +170,7 @@ export function appendUsageBreakdown(session: ClaudeSession): void {
     `- Estimated cost: \`${formatCostUsd(costUsd)}\``,
     `- Context window: \`${formatTokens(window)}\``,
     '',
-    `_Session id: \`${session.id}\` · agent: \`${session.agentKind}\` · model: \`${session.claudeModel ?? session.cursorModel ?? 'auto'}\`_`
+    `_Session id: \`${session.id}\` · model: \`${session.claudeModel ?? 'auto'}\`_`
   ];
   appendSessionMessage(session.id, {
     role: 'assistant',

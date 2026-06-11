@@ -121,13 +121,6 @@ describe('contextWindowFor', () => {
     expect(contextWindowFor('claude-mythos-5[1m]')).toBe(1_000_000);
   });
 
-  it('caps Cursor sessions at 200k regardless of model', () => {
-    // Cursor's composer is 200k under standard subscriptions even with
-    // Opus 4.7 / Max mode (Max is about tool budget, not context).
-    expect(contextWindowFor('claude-opus-4-7', 'cursor')).toBe(200_000);
-    expect(contextWindowFor('claude-sonnet-4-6', 'cursor')).toBe(200_000);
-    expect(contextWindowFor(null, 'cursor')).toBe(200_000);
-  });
 });
 
 describe('contextPct', () => {
@@ -179,7 +172,7 @@ describe('costForUsage', () => {
     expect(costForUsage(usage({}))).toBe(0);
   });
 
-  it('returns 0 for unknown / null models (Cursor turns; subscription credits, not per-token)', () => {
+  it('returns 0 for unknown / null models', () => {
     expect(costForUsage(usage({ inputTokens: 1_000_000, model: null }))).toBe(0);
     expect(costForUsage(usage({ outputTokens: 1_000_000, model: 'composer-2' }))).toBe(0);
   });
@@ -293,8 +286,6 @@ describe('estimateRtkSavings', () => {
       actions: [],
       claudeUuid: 'u',
       claudeResumable: false,
-      agentKind: 'claude',
-      cursorModel: null,
       claudeModel: model,
       lastContextSize: 0,
       linkedToEditor: false,

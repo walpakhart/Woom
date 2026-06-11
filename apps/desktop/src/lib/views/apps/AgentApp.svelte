@@ -1,6 +1,6 @@
 <script lang="ts">
-  /* AgentApp — full-screen workspace для Claude / Cursor.
-     ПОЛНОСТЬЮ standalone, без AgentApp.
+  /* AgentApp — full-screen workspace для Claude.
+     ПОЛНОСТЬЮ standalone.
 
      Layout (3 pane):
        [SessionsSidebar 280] [chat (flex)] [WorktreeSide 320]
@@ -25,7 +25,7 @@
   import { bgTasksState } from '$lib/state/bgTasks.svelte';
   import type { ClaudeAction } from '$lib/types';
 
-  type Kind = 'claude' | 'cursor';
+  type Kind = 'claude';
 
   interface Props {
     kind: Kind;
@@ -75,7 +75,6 @@
     onSend: () => void;
     onStop: () => void;
     onPasteImages: (
-      kind: Kind,
       blobs: { name: string; type: string; blob: Blob }[]
     ) => Promise<number>;
     /** Drag-drop forwarded to +page.svelte's `onAgentDrop` /
@@ -93,19 +92,15 @@
   }
   let p: Props = $props();
 
-  /* App-shell ambient tone. Each agent surface now carries its
-     own brand accent — Claude warm peach, Cursor moonlit silver —
-     instead of riding the unified mint. The `data-kind` attribute
-     hands off to per-shell `--accent-*` overrides in app.css so
-     focus rings, link chips, button glows, etc. all retint
-     downstream without per-component changes. */
+  /* App-shell ambient tone. The agent surface carries its own brand
+     accent — Claude warm peach — instead of riding the unified mint.
+     The `data-kind` attribute hands off to per-shell `--accent-*`
+     overrides in app.css so focus rings, link chips, button glows,
+     etc. all retint downstream without per-component changes. */
   const tone = $derived('var(--accent)');
   const glow = $derived('var(--accent-glow)');
 
-  /** Worktree pane open state. Persisted globally per agent kind so
-   *  Claude and Cursor can have independent preferences (some users
-   *  keep Cursor's worktree pane closed because it gets noisy with
-   *  many parallel sessions). */
+  /** Worktree pane open state. Persisted per agent kind. */
   // svelte-ignore state_referenced_locally
   const wtStorageKey = `agent-worktree-side-open:${p.kind}`;
   let worktreeOpen = $state(true);
@@ -120,13 +115,8 @@
     if (v === '0' || v === '1') worktreeOpen = v === '1';
     const pv = localStorage.getItem(pvStorageKey);
     if (pv === '0' || pv === '1') previewOpen = pv === '1';
-    /* `/preview` slash command fires this — only respond if the event
-     *  matches our kind so Cursor's pane doesn't open when the user
-     *  ran the command inside Claude. */
-    const onOpen = (e: Event) => {
-      const evt = e as CustomEvent<{ kind?: 'claude' | 'cursor' }>;
-      if (!evt.detail || evt.detail.kind === p.kind) previewOpen = true;
-    };
+    /* `/preview` slash command fires this. */
+    const onOpen = () => { previewOpen = true; };
     window.addEventListener('woom:open-preview', onOpen);
     return () => window.removeEventListener('woom:open-preview', onOpen);
   });

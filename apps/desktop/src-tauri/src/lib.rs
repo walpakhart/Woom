@@ -1,5 +1,4 @@
 mod action_ipc;
-mod agent;
 mod bg_tasks;
 mod biometry;
 mod claude;
@@ -9,8 +8,6 @@ mod claude_quota;
 mod claudemd;
 mod dw;
 mod crash_reporting;
-mod cursor;
-mod cursor_mcp;
 mod fs;
 mod git;
 mod github;
@@ -59,7 +56,6 @@ mod watch;
 mod web;
 mod worktree;
 
-use agent::{AgentAskResult, AgentKind, AgentStatus};
 use claude::{ClaudeStatus, Runners, WarmPool};
 use fs::{BashResult, DirEntry};
 use git::{Branch, CommitEntry as GitCommitEntry, GitStatus, RepoInfo};
@@ -111,13 +107,13 @@ pub enum SentryConnectionStatus {
 
 /// When Woom is launched from Finder/Dock (not a terminal) the process
 /// inherits macOS's minimal PATH (`/usr/bin:/bin:/usr/sbin:/sbin`) — the
-/// user's `~/.zshrc`/`.bash_profile` never runs. Tools like `claude`,
-/// `cursor-agent`, and anything installed via Homebrew/nvm/bun/volta live
+/// user's `~/.zshrc`/`.bash_profile` never runs. Tools like `claude`
+/// and anything installed via Homebrew/nvm/bun/volta live
 /// outside that PATH, so the app can't find them.
 ///
 /// Fix: spawn the user's login shell once at startup, ask it to print its
 /// fully-resolved PATH, and overwrite our own. Every `std::env::var("PATH")`
-/// read (including the `which()` lookups in `claude.rs` / `cursor.rs`) then
+/// read (including the `which()` lookup in `claude.rs`) then
 /// sees the right values, as do all spawned subprocesses.
 fn hydrate_path_from_login_shell() {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
@@ -296,15 +292,13 @@ fn find_docs_dir(root: &std::path::Path, max_depth: usize) -> Option<std::path::
 }
 
 /// Kill any Woom sidecar processes left running from a previous
-/// session. See `run()` for why this matters — Cursor's MCP client
-/// keeps sidecars alive across restarts and serves their (old) tool
+/// session. See `run()` for why this matters — MCP clients keep
+/// sidecars alive across restarts and serve their (old) tool
 /// schema until the process dies.
 ///
 /// Uses `pkill -f` matching on the bundled binary names. Best-effort:
 /// if pkill isn't available or no matches exist, exit is non-zero and
-/// we just shrug. Runs synchronously before the Tauri event loop so
-/// the cursor_mcp::sync() that follows writes config for fresh
-/// processes.
+/// we just shrug. Runs synchronously before the Tauri event loop.
 fn kill_stale_sidecars() {
     /* `pkill -f` matches against the full command line, so paths like
        /Applications/Woom.app/Contents/MacOS/woom-app match
@@ -420,29 +414,20 @@ pub fn run() {
      * for the moment a Sentry DSN ships with the build. See
      * `crash_reporting::init_if_enabled` for the wiring. */
     crash_reporting::init_if_enabled();
-    // Kill any stale Woom sidecars left behind by Cursor / Claude
-    // from a previous Woom version. Cursor's MCP client spawns
-    // sidecars on first handshake and keeps them alive across Cursor
-    // restarts and Woom restarts — `ps aux | grep woom-app`
-    // shows the original PID days later. After a DMG update, those
-    // long-lived sidecars run the OLD binary's tool schema; the new
-    // tools / aliases / batch endpoints simply aren't there for the
-    // agent to call. Killing them here forces Cursor (and any
-    // already-running Claude session) to spawn fresh ones from the
-    // bundle we're about to register, which solves the "I just
-    // updated Woom but Cursor still says missing field
-    // from_shape_id" class of bugs.
+    // Kill any stale Woom sidecars left behind by Claude from a
+    // previous Woom version. The MCP client spawns sidecars on first
+    // handshake and keeps them alive across restarts — `ps aux | grep
+    // woom-app` shows the original PID days later. After a DMG update,
+    // those long-lived sidecars run the OLD binary's tool schema; the
+    // new tools / aliases / batch endpoints simply aren't there for
+    // the agent to call. Killing them here forces any already-running
+    // Claude session to spawn fresh ones from the bundle we're about
+    // to register, which solves the "I just updated Woom but the agent
+    // still says missing field from_shape_id" class of bugs.
     //
     // Single-user macOS app, so there's never a "kill the other
     // user's Woom sidecars" risk to worry about.
     kill_stale_sidecars();
-    // Push the current set of Woom-owned MCP entries (jira / github /
-    // sentry / memory / app) into `~/.cursor/mcp.json` once at startup.
-    // Without this, an existing user wouldn't pick up new sidecars (most
-    // notably `woom-app` for UI-navigation tools) until they touched
-    // a connect/disconnect toggle. Best-effort — a failure here just leaves
-    // the cursor mcp config a turn behind; no UX impact otherwise.
-    let _ = cursor_mcp::sync();
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -519,7 +504,6 @@ pub fn run() {
             sentry_commands::sentry_list_environments,
             sentry_commands::sentry_get_event_detail,
             sentry_commands::sentry_set_status,
-            cursor_mcp_sync,
             jira_commands::jira_list_inbox,
             jira_commands::jira_list_inbox_for,
             jira_commands::jira_search,
@@ -940,18 +924,17 @@ pub fn run() {
             // Kill our sidecars when Woom quits. Tauri owns the
             // main `woom-desktop` process, but the `woom-app
             // / -github / -jira / -sentry / -memory` MCP sidecars are
-            // spawned by Cursor (and Claude Code) on their first
-            // handshake, NOT by us — they become Cursor's children, so
-            // a normal cmd-Q on Woom leaves them happily running
-            // for hours / days / until reboot, serving the OLD tool
-            // schema to whatever agent connects to them next.
+            // spawned by Claude Code on its first handshake, NOT by
+            // us — they become the CLI's children, so a normal cmd-Q
+            // on Woom leaves them happily running for hours / days /
+            // until reboot, serving the OLD tool schema to whatever
+            // agent connects to them next.
             //
             // `RunEvent::Exit` fires after the last window closes and
             // we're about to leave the event loop — best moment to
             // sweep them. We use the same `pkill -f` matching the
             // startup `kill_stale_sidecars` does, so the next launch
-            // of Woom (or Cursor immediately reconnecting via
-            // MCP) gets a clean slate.
+            // of Woom gets a clean slate.
             if let tauri::RunEvent::ExitRequested { .. } = &event {
                 // Stage-on-quit swap (Phase 5 task 3). If the user
                 // queued an "Install on quit" earlier, the matching
@@ -994,8 +977,7 @@ async fn token() -> Result<String, String> {
 
 /// Build the IPC server state with a per-process socket path. The path
 /// formula lives in `action_ipc::current_socket_path` so the listener
-/// (here) and the env value pushed to `~/.cursor/mcp.json` (see
-/// `cursor_mcp::sync`) stay in lock-step.
+/// (here) and the env value handed to spawned agents stay in lock-step.
 fn action_ipc_state() -> std::sync::Arc<action_ipc::ActionIpc> {
     std::sync::Arc::new(action_ipc::ActionIpc::new(action_ipc::current_socket_path()))
 }
@@ -1027,16 +1009,6 @@ async fn resolve_action_wait(
 // commands still call it.
 
 
-/// Idempotent re-sync of `~/.cursor/mcp.json` with whatever creds are
-/// currently in Keychain. Wired into every connect/disconnect so Cursor
-/// sees the same Jira/GitHub/Sentry/Memory tools as Claude with no
-/// manual `cursor-agent mcp add` step. Best-effort — a failure here
-/// just means Cursor stays out of sync; doesn't break the connect flow.
-#[tauri::command]
-fn cursor_mcp_sync() -> Result<Vec<String>, String> {
-    cursor_mcp::sync()
-}
-
 // (continued in ./github_commands.rs)
 
 // Jira + Sentry Tauri commands moved to ./jira_commands.rs and
@@ -1047,6 +1019,23 @@ fn cursor_mcp_sync() -> Result<Vec<String>, String> {
 
 
 // ---------- Claude Code ----------
+
+/// Outcome of one `claude_ask` turn. `session_uuid` is what the caller
+/// should persist and pass back on the next turn with `resume=true` —
+/// it mirrors the uuid we sent in.
+#[derive(Debug, serde::Serialize, Clone)]
+struct AgentAskResult {
+    reply: String,
+    session_uuid: String,
+}
+
+/// Wire shape of `agent_status`. Kept as a wrapper object (rather than
+/// returning `ClaudeStatus` bare) so the frontend contract stays
+/// `{ claude: ... }`.
+#[derive(Debug, serde::Serialize, Clone)]
+struct AgentStatus {
+    claude: ClaudeStatus,
+}
 
 #[tauri::command]
 fn claude_status() -> ClaudeStatus {
@@ -1066,10 +1055,9 @@ async fn claude_ask(
     resume: bool,
     rules: Option<String>,
     // camelCase on the wire (Svelte invokes pass JS-style keys); snake_case
-    // is what Tauri's codegen expects, so spell the param out explicitly to
+    // is what Tauri's codegen expects, so spell the params out explicitly to
     // keep the frontend contract stable.
-    #[allow(non_snake_case)] agentKind: Option<AgentKind>,
-    #[allow(non_snake_case)] cursorModel: Option<String>,
+    //
     // Forwarded as `--model <id>` to claude CLI. None means no flag → CLI
     // picks its default (Opus on Max). Frontend defaults new sessions to
     // `claude-sonnet-4-6` so the typical case doesn't burn the 5h quota.
@@ -1079,13 +1067,11 @@ async fn claude_ask(
     // which instance the calling session is bound to. Built fresh on the
     // frontend before every turn (instance map changes, sessions change
     // cwd) so the agent always sees current state. Prepended to the
-    // system prompt for Claude / to the prompt itself for Cursor.
+    // system prompt.
     #[allow(non_snake_case)] appContext: Option<String>,
-    // Absolute paths of image files attached to this turn. For Claude these
-    // get base64-embedded as `image` content blocks via stream-json input
-    // (the model sees the bytes directly via vision). Empty for Cursor —
-    // its CLI has no equivalent input format, so the frontend falls back
-    // to the path-mention flow there.
+    // Absolute paths of image files attached to this turn. These get
+    // base64-embedded as `image` content blocks via stream-json input
+    // (the model sees the bytes directly via vision).
     #[allow(non_snake_case)] imagePaths: Option<Vec<String>>,
     // Per-session opt-out for the woom-managed RTK PreToolUse hook
     // (Phase 3 wiring). Threaded into `spawn_claude_armed` so the
@@ -1101,14 +1087,12 @@ async fn claude_ask(
     #[allow(non_snake_case)] thinkingEffort: Option<String>,
 ) -> Result<AgentAskResult, String> {
     let cwd_path = cwd.as_deref().map(std::path::Path::new);
-    let kind = agentKind.unwrap_or_default();
     let images = imagePaths.unwrap_or_default();
     let rtk_disabled = rtkDisabled.unwrap_or(false);
     let fast_mode = fastMode.unwrap_or(false);
     let thinking_effort = thinkingEffort;
     let ipc_socket = ipc.inner().socket_path().to_path_buf();
-    let result = agent::ask(
-        kind,
+    let result = claude::ask(
         app,
         runners.inner().clone(),
         warm_pool.inner().clone(),
@@ -1118,7 +1102,6 @@ async fn claude_ask(
         &claude_uuid,
         resume,
         rules.as_deref(),
-        cursorModel.as_deref(),
         claudeModel.as_deref(),
         appContext.as_deref(),
         Some(ipc_socket.as_path()),
@@ -1133,8 +1116,14 @@ async fn claude_ask(
     // else passes through as-is (the frontend already has decent error
     // toasts for the common cases).
     match result {
-        Ok(r) => Ok(r),
-        Err(e) if e.is_resume_orphan() => Err(format!("RESUME_ORPHAN: {}", e)),
+        // Claude reuses whatever UUID we handed it, so echo it back.
+        Ok(reply) => Ok(AgentAskResult {
+            reply,
+            session_uuid: claude_uuid,
+        }),
+        Err(e @ claude::ClaudeRunError::ResumeOrphan(_)) => {
+            Err(format!("RESUME_ORPHAN: {}", e))
+        }
         Err(e) => Err(e.to_string()),
     }
 }
@@ -1153,7 +1142,6 @@ async fn claude_prewarm(
     claude_uuid: String,
     resume: bool,
     rules: Option<String>,
-    #[allow(non_snake_case)] agentKind: Option<AgentKind>,
     #[allow(non_snake_case)] claudeModel: Option<String>,
     #[allow(non_snake_case)] appContext: Option<String>,
     #[allow(non_snake_case)] rtkDisabled: Option<bool>,
@@ -1163,13 +1151,6 @@ async fn claude_prewarm(
     #[allow(non_snake_case)] fastMode: Option<bool>,
     #[allow(non_snake_case)] thinkingEffort: Option<String>,
 ) -> Result<(), String> {
-    // Cursor CLI takes its prompt as a positional arg, so we have to
-    // know the prompt at spawn time — pre-warming cursor-agent would
-    // mean spawning with a placeholder prompt the user never sent.
-    // Skip the call for cursor sessions; cold-path `ask` still works.
-    if agentKind.unwrap_or_default() == AgentKind::Cursor {
-        return Ok(());
-    }
     let cwd_path = cwd.as_deref().map(std::path::Path::new);
     let ipc_socket = ipc.inner().socket_path().to_path_buf();
     claude::prewarm(
@@ -1214,26 +1195,20 @@ async fn agent_status() -> AgentStatus {
      * spawn_blocking the worker is free to service other invokes while
      * detect_all completes (the per-call timeout in `read_version`
      * still bounds the worst case). */
-    tokio::task::spawn_blocking(agent::detect_all)
-        .await
-        .unwrap_or_else(|_| AgentStatus {
-            claude: claude::ClaudeStatus {
-                detected: false,
-                path: None,
-                version: None,
-                has_config_dir: false,
-                has_api_key_env: false,
-                ready: false,
-            },
-            cursor: cursor::CursorStatus {
-                detected: false,
-                path: None,
-                version: None,
-                has_config_dir: false,
-                has_api_key_env: false,
-                ready: false,
-            },
-        })
+    tokio::task::spawn_blocking(|| AgentStatus {
+        claude: claude::detect(),
+    })
+    .await
+    .unwrap_or_else(|_| AgentStatus {
+        claude: claude::ClaudeStatus {
+            detected: false,
+            path: None,
+            version: None,
+            has_config_dir: false,
+            has_api_key_env: false,
+            ready: false,
+        },
+    })
 }
 
 /// Subscription / plan-usage panel — same numbers the Claude Code CLI
@@ -1249,47 +1224,32 @@ async fn claude_plan_usage() -> Result<claude_quota::PlanUsage, String> {
         .map_err(|e| e.to_string())
 }
 
-/// Fork-compact dispatcher: runs the kind-appropriate two-shot summary
-/// → seed flow (claude.rs or cursor.rs) and returns `{ new_uuid,
-/// summary }`. Frontend swaps the session's stored uuid to `new_uuid`
-/// (which equals `proposed_new_uuid` for claude; cursor mints its own
-/// and round-trips it). Replaces the older `claude_compact_session`
-/// command so cursor sessions can compact too.
+/// Fork-compact: runs the two-shot summary → seed flow in claude.rs and
+/// returns `{ new_uuid, summary }`. Frontend swaps the session's stored
+/// uuid to `new_uuid` (which equals `proposed_new_uuid` — Claude's
+/// `--session-id <uuid>` flag accepts a fixed id).
 #[tauri::command]
 async fn agent_compact_session(
-    #[allow(non_snake_case)] agentKind: AgentKind,
     #[allow(non_snake_case)] oldUuid: String,
     #[allow(non_snake_case)] proposedNewUuid: String,
     cwd: Option<String>,
     model: Option<String>,
 ) -> Result<claude::CompactResult, String> {
     let cwd_path = cwd.as_deref().map(std::path::Path::new);
-    agent::compact_session(
-        agentKind,
-        &oldUuid,
-        &proposedNewUuid,
-        cwd_path,
-        model.as_deref(),
-    )
-    .await
-    .map_err(|e| e.to_string())
+    claude::compact_session(&oldUuid, &proposedNewUuid, cwd_path, model.as_deref())
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn claude_stop(runners: State<'_, Runners>, session_id: String) -> Result<bool, String> {
-    // Try both adapters — whichever one owns the PID for this session does
-    // the kill. Keeps the command name backwards-compatible even though it
-    // no longer targets only Claude.
-    Ok(agent::stop(&runners, &session_id))
+    Ok(claude::stop(&runners, &session_id))
 }
 
 #[tauri::command]
-async fn agent_generate_commit_message(
-    repo: String,
-    #[allow(non_snake_case)] agentKind: AgentKind,
-) -> Result<String, String> {
+async fn agent_generate_commit_message(repo: String) -> Result<String, String> {
     let path = std::path::PathBuf::from(&repo);
-    agent::generate_commit_message(agentKind, &path)
+    claude::generate_commit_message(&path)
         .await
         .map_err(|e| e.to_string())
 }
@@ -1430,7 +1390,7 @@ pub struct SidecarHealth {
 }
 
 /// Snapshot of which Woom MCP sidecars are alive. Sidecars are
-/// spawned by Claude / Cursor on first MCP handshake (not by us),
+/// spawned by Claude on first MCP handshake (not by us),
 /// so a `running: false` row means no agent has yet asked that
 /// sidecar to start in this session — not that it crashed. Drives
 /// the Settings → "MCP servers" diagnostic card (M4 §2.9.8).
@@ -1629,9 +1589,8 @@ fn revert_write(
 }
 
 /// Restore a file that the agent deleted, using the `prev_content` we
-/// captured at deletion time (cursor-agent's `result.success.prevContent`,
-/// or a `git show HEAD:<file>` fallback for tracked files). Inverse of
-/// `Delete`; the EditDiffCard's "Restore" button calls this.
+/// captured at deletion time (from `git show HEAD:<file>` for tracked
+/// files). The EditDiffCard's "Restore" button calls this.
 ///
 /// Refuses if a file already exists at the path. Two reasons:
 ///   1. The user might have manually re-created the file (or another

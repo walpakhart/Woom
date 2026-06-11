@@ -4,7 +4,6 @@
     type ClaudeStatus,
     type ConnectionMeta,
     type ConnectionStatus,
-    type CursorStatus,
     type JiraStatus,
     type SentryStatus
   } from '../data';
@@ -24,7 +23,6 @@
     jiraStatus: JiraStatus;
     sentryStatus: SentryStatus;
     claudeStatus: ClaudeStatus | null;
-    cursorStatus: CursorStatus | null;
     onDisconnectGithub: () => void;
     onDisconnectJira: () => void;
     onDisconnectSentry: () => void;
@@ -39,7 +37,6 @@
     jiraStatus,
     sentryStatus,
     claudeStatus,
-    cursorStatus,
     onDisconnectGithub,
     onDisconnectJira,
     onDisconnectSentry,
@@ -53,8 +50,7 @@
       github: null,
       jira: null,
       sentry: null,
-      claude: null,
-      cursor: null
+      claude: null
     };
     for (const ev of connectionEventsState.events) {
       if (map[ev.source] === null) map[ev.source] = ev;
@@ -69,8 +65,7 @@
     github: 'github',
     jira: 'jira',
     sentry: 'sentry',
-    claude: 'claude',
-    cursor: 'cursor'
+    claude: 'claude'
   };
 
   function eventKindLabel(kind: ConnectionEvent['kind']): string {
@@ -100,8 +95,8 @@
   }
 
   /* Sources whose credential is owned by Woom (PAT / API token in
-   * Keychain) — only these are eligible for rotation reminders. Agents
-   * (claude, cursor) auth to their own services. */
+   * Keychain) — only these are eligible for rotation reminders. Claude
+   * auths to its own service. */
   const TOKEN_AGE_SOURCES: Record<string, TokenSource> = {
     github: 'github',
     jira: 'jira',
@@ -232,8 +227,6 @@
                   <button class="conn-btn conn-btn--configure" onclick={onDisconnectSentry}>Disconnect</button>
                 {:else if connected && conn.id === 'claude'}
                   <button class="conn-btn conn-btn--configure" onclick={() => onOpenConnectModal(conn)}>Manage</button>
-                {:else if connected && conn.id === 'cursor'}
-                  <button class="conn-btn conn-btn--configure" onclick={() => onOpenConnectModal(conn)}>Manage</button>
                 {:else if conn.implemented}
                   <button class="conn-btn conn-btn--connect" onclick={() => onOpenConnectModal(conn)}>Connect</button>
                 {:else}
@@ -287,12 +280,6 @@
         {:else if claudeStatus.has_config_dir}
           <span class="you-name">· via <code class="mono">claude login</code></span>
         {/if}
-      </div>
-    {/if}
-    {#if cursorStatus?.ready}
-      <div class="you-are">
-        Cursor ready
-        {#if cursorStatus.version}<span class="you-name mono">· {cursorStatus.version}</span>{/if}
       </div>
     {/if}
   </div>
@@ -353,7 +340,6 @@
   .conn-icon.conn-icon--jira   { background: rgba(79, 142, 255, 0.14); color: var(--src-jira); }
   .conn-icon.conn-icon--sentry { background: rgba(232, 130, 100, 0.14); color: var(--src-sentry); }
   .conn-icon.conn-icon--claude { background: rgba(232, 155, 125, 0.14); color: var(--src-claude); }
-  .conn-icon.conn-icon--cursor { background: rgba(220, 220, 220, 0.10); color: var(--src-cursor); }
   .conn-icon--svg svg {
     width: 20px; height: 20px;
     color: currentColor;

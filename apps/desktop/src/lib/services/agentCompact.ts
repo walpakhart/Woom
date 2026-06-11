@@ -1,15 +1,9 @@
-// Fork-compact for chat sessions (Claude or Cursor). Asks the live
-// CLI session to summarise itself, mints a fresh session UUID, seeds
-// it with the summary, swaps the session over so the next turn
-// resumes the new compacted thread. See `agent::compact_session`
-// (Rust) for the two-shot details — it dispatches by AgentKind.
-//
-// One asymmetry the frontend abstracts away: claude accepts a
-// `--session-id <uuid>` flag so we control the new id; cursor-agent
-// mints its own chat_id, which the backend round-trips back as
-// `result.new_uuid`. We always trust the returned `new_uuid` and
-// stamp THAT on the session — never the proposed one — so both
-// agents converge from the caller's perspective.
+// Fork-compact for chat sessions. Asks the live CLI session to
+// summarise itself, mints a fresh session UUID, seeds it with the
+// summary, swaps the session over so the next turn resumes the new
+// compacted thread. See `agent::compact_session` (Rust) for the
+// two-shot details. We always trust the returned `new_uuid` and
+// stamp THAT on the session.
 //
 // The only component-local pieces the caller threads through are
 // `editorRepoPath` (a $derived reactive value over editor instances)
@@ -51,24 +45,20 @@ export async function runCompactSession(
       : null)
     || opts.editorRepoPath
     || null;
-  // Pick the session's effective model (claudeModel for claude
-  // sessions; cursorModel for cursor sessions) so both compact calls
-  // run on the same model the user picked for normal turns.
-  const model = s.agentKind === 'claude' ? s.claudeModel : s.cursorModel;
+  // Compact runs on the same model the user picked for normal turns.
+  const model = s.claudeModel;
   const result = await invoke<{ new_uuid: string; summary: string }>(
     'agent_compact_session',
     {
-      agentKind: s.agentKind,
       oldUuid: s.claudeUuid,
       proposedNewUuid,
       cwd,
       model
     }
   );
-  // Swap the session over to whatever uuid the backend returned (may
-  // differ from proposedNewUuid for cursor) + reset context-window
-  // counter (the new session starts with just the summary, so its
-  // first turn's context size will be small).
+  // Swap the session over to whatever uuid the backend returned +
+  // reset context-window counter (the new session starts with just
+  // the summary, so its first turn's context size will be small).
   updateSession(sessionId, {
     claudeUuid: result.new_uuid,
     claudeResumable: true,

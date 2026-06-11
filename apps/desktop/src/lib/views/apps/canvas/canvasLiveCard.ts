@@ -113,7 +113,6 @@ export function buildLiveCardShape(
         messageIndex: payload.messageIndex,
         snapshot: {
           role: snap.role,
-          agentKind: snap.agentKind,
           sessionTitle: snap.sessionTitle,
           excerpt: snap.excerpt,
           at: snap.at

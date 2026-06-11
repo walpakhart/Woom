@@ -76,9 +76,9 @@ pub struct CardResolution {
 pub type WaitMap = Arc<Mutex<HashMap<String, oneshot::Sender<CardResolution>>>>;
 
 /// Deterministic per-Woom-process socket path. Same formula used by
-/// `lib.rs::action_ipc_state()` (the listener) and by `cursor_mcp.rs`
-/// (the env value written into `~/.cursor/mcp.json`) so both sides
-/// converge on the same file. PID-suffixed for parallel-Woom safety.
+/// `lib.rs::action_ipc_state()` (the listener) and by the env value
+/// handed to spawned agents so both sides converge on the same file.
+/// PID-suffixed for parallel-Woom safety.
 pub fn current_socket_path() -> PathBuf {
     let pid = std::process::id();
     std::env::temp_dir().join(format!("woom-ipc-{}.sock", pid))

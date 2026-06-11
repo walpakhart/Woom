@@ -8,7 +8,7 @@
      cool sage+mint duotone. Surfaces are near-black with a faint
      teal undertone (no longer warm-brown), text is a cool off-white,
      and the accent ramps from light mint → sage → deep teal. Source
-     brand colours stay distinct so Jira/GitHub/Sentry/Claude/Cursor
+     brand colours stay distinct so Jira/GitHub/Sentry/Claude
      all keep their own identity against the cool app surface. */
 
   /* Surfaces — cool noir, progressively lifted. */
@@ -68,7 +68,6 @@
   --src-sentry-2:#9D85D6;
   --src-claude:  #E89B7D;
   --src-claude-2:#F2B89E;
-  --src-cursor:  #DDDDDD;
   --src-canvas:  #7DC2D5;
   --src-canvas-2:#A8DAE8;
   --src-editor:  #CC785C;
@@ -248,7 +247,6 @@
   --src-sentry-2:#6E4A99;
   --src-claude:  #B85A35;
   --src-claude-2:#D4754D;
-  --src-cursor:  #555E5A;
   --src-canvas:  #2A6F85;
   --src-canvas-2:#4690A6;
   --src-editor:  #8B3F22;
@@ -472,16 +470,6 @@ kbd {
   --accent-glow: rgba(232, 155, 125, 0.42);
   --accent-fg: #1F1410;
 }
-.app-shell.sa[data-kind="cursor"] {
-  /* Cursor — moonlit silver. Slight cool tint so it reads as
-     "white" but doesn't blow out against the noir background. */
-  --accent: #C8CDD8;
-  --accent-bright: #E8ECF2;
-  --accent-deep: #8A93A0;
-  --accent-soft: rgba(220, 225, 235, 0.10);
-  --accent-glow: rgba(220, 225, 235, 0.32);
-  --accent-fg: #15171B;
-}
 .app-shell.se-shell {
   --accent: #CC785C;
   --accent-bright: #E89B7D;
@@ -547,14 +535,6 @@ kbd {
   --accent-soft: rgba(184, 90, 53, 0.12);
   --accent-glow: rgba(184, 90, 53, 0.30);
   --accent-fg: #FCF7F0;
-}
-:root[data-theme='light'] .app-shell.sa[data-kind="cursor"] {
-  --accent: #555E5A;
-  --accent-bright: #2A302E;
-  --accent-deep: #15191A;
-  --accent-soft: rgba(85, 94, 90, 0.12);
-  --accent-glow: rgba(85, 94, 90, 0.30);
-  --accent-fg: #F1F5F2;
 }
 :root[data-theme='light'] .app-shell.se-shell {
   --accent: #8B3F22;
@@ -1320,9 +1300,9 @@ kbd {
   background: var(--bg-0);
   color: var(--text-2);
   flex-shrink: 0;
-  /* Pinned to match .cwd-chip / .wt-chip so the Cursor column's cwd-bar
-     doesn't grow taller than the Claude column's (which would shift the
-     chat-tabs row below out of alignment). */
+  /* Pinned to match .cwd-chip / .wt-chip so the cwd-bar doesn't grow
+     taller than its neighbors (which would shift the chat-tabs row
+     below out of alignment). */
   height: 28px;
   box-sizing: border-box;
 }
@@ -1340,7 +1320,7 @@ kbd {
 
 /* Normalize heights of every pill in the cwd-bar. Without this, Mac's native
    <select> makes the model-chip a few px taller than cwd/wt chips, which
-   cascades into the Claude/Cursor column row-alignment bug. */
+   cascades into the agent-column row-alignment bug. */
 .cwd-bar .cwd-chip,
 .cwd-bar .wt-chip,
 .cwd-bar .icon-btn {
@@ -1914,7 +1894,6 @@ img.chat-avatar { padding: 0; }
 .conn-icon--sentry { background: rgba(248, 143, 116, 0.08); color: #f8a994; border: 1px solid rgba(248, 143, 116, 0.2); }
 .conn-icon--slack  { background: rgba(236, 72, 153, 0.1);  color: #f472b6; border: 1px solid rgba(236, 72, 153, 0.22); }
 .conn-icon--claude { background: rgba(168, 217, 184, 0.12); color: #A8D9B8; border: 1px solid rgba(168, 217, 184, 0.24); }
-.conn-icon--cursor { background: rgba(255, 255, 255, 0.05); color: #e5ebf4; border: 1px solid rgba(255, 255, 255, 0.1); }
 .conn-icon--codex  { background: rgba(255, 255, 255, 0.05); color: #e5ebf4; border: 1px solid rgba(255, 255, 255, 0.1); }
 .conn-icon--aider  { background: rgba(167, 139, 250, 0.08); color: #D5B7FF; border: 1px solid rgba(167, 139, 250, 0.2); }
 .conn-icon--copilot{ background: rgba(100, 116, 139, 0.1); color: #8b96ab; border: 1px solid rgba(255, 255, 255, 0.12); }
@@ -2055,7 +2034,7 @@ img.chat-avatar { padding: 0; }
 }
 
 /* ============================================================
-   Claude / Cursor status modal — shared markup, shared styles.
+   Claude status modal — shared markup, shared styles.
    Two checks (CLI present + auth present) rendered as a vertical
    list with a green/grey status dot. Below: a hint card with the
    install / login command in a copyable code block, OR a green
@@ -2141,7 +2120,7 @@ img.chat-avatar { padding: 0; }
 }
 
 /* Code block + inline copy button. Used for `claude login`,
-   `cursor-agent login`, the curl one-liner. */
+   the curl one-liner. */
 .cmd-line {
   display: flex; align-items: stretch;
   gap: 0;

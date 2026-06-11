@@ -319,7 +319,6 @@
     | 'githubApp'
     | 'sentryApp'
     | 'claudeApp'
-    | 'cursorApp'
     | 'editorApp'
     | 'canvasApp'
     | 'terminalApp'
@@ -387,10 +386,9 @@
     '2': 'githubApp',
     '3': 'sentryApp',
     '4': 'claudeApp',
-    '5': 'cursorApp',
-    '6': 'editorApp',
-    '7': 'canvasApp',
-    '8': 'terminalApp'
+    '5': 'editorApp',
+    '6': 'canvasApp',
+    '7': 'terminalApp'
   };
 
   /** True whenever the user is in a source-solo view (Jira / GitHub /
@@ -410,21 +408,13 @@
    * hides while the user is viewing that solo — see Rail.svelte's
    * `view !== '...App'` guard — and an effect below snapshots the
    * current count as the new baseline on view entry. */
-  /* Per-agent-kind "is there an in-flight turn right now" signal.
-   * Drives the ambient pulse on the rail's Claude / Cursor icons so
-   * the user can tell at a glance that an agent is thinking even
-   * when they've switched out of the solo. We read the active
-   * session id per kind, then check its `sending` flag; an unknown
-   * id (`activeIds[kind]` is null on a fresh install before the
-   * first session) resolves to `false` cleanly. */
+  /* "Is there an in-flight turn right now" signal. Drives the ambient
+   * pulse on the rail's Claude icon so the user can tell at a glance
+   * that the agent is thinking even when they've switched out of the
+   * solo. An unknown id (`activeIds.claude` is null on a fresh
+   * install before the first session) resolves to `false` cleanly. */
   const claudeBusy = $derived.by(() => {
     const id = sessionsState.activeIds['claude'];
-    if (!id) return false;
-    const s = sessionsState.list.find((x) => x.id === id);
-    return !!s?.sending;
-  });
-  const cursorBusy = $derived.by(() => {
-    const id = sessionsState.activeIds['cursor'];
     if (!id) return false;
     const s = sessionsState.list.find((x) => x.id === id);
     return !!s?.sending;
@@ -442,7 +432,6 @@
       case 'githubApp': return 'var(--src-github)';
       case 'sentryApp': return 'var(--src-sentry)';
       case 'claudeApp': return 'var(--src-claude)';
-      case 'cursorApp': return 'var(--src-cursor)';
       case 'editorApp': return 'var(--src-editor)';
       case 'canvasApp': return 'var(--src-canvas)';
       case 'terminalApp': return 'var(--src-term)';
@@ -481,7 +470,7 @@
   });
 
   let paletteOpen = $state(false);
-  /** Agent View dashboard — ⌘⇧A overlay listing every Claude/Cursor
+  /** Agent View dashboard — ⌘⇧A overlay listing every Claude
    *  session grouped by state. Pure overlay, no view change underneath. */
   let agentDashboardOpen = $state(false);
   /* Which "flavour" of palette is currently open. `recents` is the
@@ -632,15 +621,14 @@
   );
 
   /* groupAgentSessions moved to ./page_helpers.ts (wave-15 split). */
-  function groupAgentSessions(kind: 'claude' | 'cursor', nowMs: number) {
-    return _groupAgentSessions(sessionsState.list, kind, nowMs);
+  function groupAgentSessions(nowMs: number) {
+    return _groupAgentSessions(sessionsState.list, nowMs);
   }
 
   // Thinking-time label for the typing indicator — keyed by session id
-  // so two chats of the same kind (or one Claude + one Cursor) each get
-  // an independent timer. Earlier the maps were keyed by `kind` which
-  // meant starting one Claude chat's run made every other Claude chat
-  // show the same elapsed-seconds counter.
+  // so two chats each get an independent timer. Earlier the maps were
+  // keyed by agent kind which meant starting one Claude chat's run made
+  // every other Claude chat show the same elapsed-seconds counter.
   let thinkingStartedAt = $state<Record<string, number | null>>({});
   let thinkingTick = $state<Record<string, number>>({});
   const thinkingTimers: Record<string, ReturnType<typeof setInterval> | null> = {};
@@ -676,7 +664,6 @@
   const jiraStatus = $derived(connectionsState.jira);
   const sentryStatus = $derived(connectionsState.sentry);
   const claudeStatus = $derived(connectionsState.claude);
-  const cursorStatus = $derived(connectionsState.cursor);
   const statusLoading = $derived(connectionsState.statusLoading);
   /* `anyRetrying` is true while the boot retry/backoff loop has at
    *  least one source mid-attempt after a transient failure. Rail
@@ -687,8 +674,7 @@
     connectionsState.retrying.github ||
       connectionsState.retrying.jira ||
       connectionsState.retrying.sentry ||
-      connectionsState.retrying.claude ||
-      connectionsState.retrying.cursor
+      connectionsState.retrying.claude
   );
 
   /* Top-level palette actions — extracted to ./paletteActions.ts
@@ -711,18 +697,16 @@
   const connectedGithub = $derived(githubStatus.kind === 'connected');
   const connectedJira = $derived(jiraStatus.kind === 'connected');
   const connectedSentry = $derived(sentryStatus.kind === 'connected');
-  // In browser preview (non-Tauri) we pretend Claude/Cursor are ready so the
+  // In browser preview (non-Tauri) we pretend Claude is ready so the
   // full agent UI renders instead of the "connect first" empty card. The
   // actual invoke calls will still no-op, which is fine for visual review.
   const connectedClaude = $derived((claudeStatus?.ready ?? false) || !inTauri);
-  const connectedCursor = $derived((cursorStatus?.ready ?? false) || !inTauri);
   const connectedIds = $derived.by(() => {
     const set = new Set<string>();
     if (connectedGithub) set.add('github');
     if (connectedJira) set.add('jira');
     if (connectedSentry) set.add('sentry');
     if (connectedClaude) set.add('claude');
-    if (connectedCursor) set.add('cursor');
     return set;
   });
   const anythingConnected = $derived(connectedIds.size > 0);
@@ -789,43 +773,7 @@
    *     also checks for an existing waitId-marked card with matching
    *     params and skips creation if one exists. (See agentStream.ts.)
    */
-  /** Sentinel session id written by `cursor_mcp::sync` into the env
-   *  block of every woom-* server in `~/.cursor/mcp.json`. The file is
-   *  global so we can't bake a per-session id — instead we route any
-   *  card carrying the sentinel to the currently-focused Cursor chat.
-   *  Single-Cursor flows (the common case) get correct routing; parallel
-   *  Cursor chats all post to whichever is focused. Keep in lock-step
-   *  with `CURSOR_SENTINEL_SESSION_ID` in `cursor_mcp.rs`. */
-  const CURSOR_SENTINEL_SESSION_ID = 'cursor';
-
-  function resolveCursorSentinelSession(): string | null {
-    /* First choice: the chat the user actively has open in the Cursor
-       solo. Falls back to the most-recently-updated Cursor session so
-       a freshly-bundled Cursor instance (no pin yet) still routes. */
-    const pinned = sessionsState.activeByInstance[APP_INSTANCE_IDS.cursor];
-    if (pinned) {
-      const found = sessionsState.list.find((s) => s.id === pinned && s.agentKind === 'cursor');
-      if (found) return found.id;
-    }
-    const cursorSessions = sessionsState.list.filter((s) => s.agentKind === 'cursor');
-    if (!cursorSessions.length) return null;
-    const sessTime = (s: typeof cursorSessions[number]) => {
-      const last = s.messages[s.messages.length - 1]?.at;
-      return last ? new Date(last).getTime() : 0;
-    };
-    cursorSessions.sort((a, b) => sessTime(b) - sessTime(a));
-    return cursorSessions[0].id;
-  }
-
   function handleActionRequest(payload: ActionRequestPayload) {
-    /* Cursor's mcp.json is global, so its sidecars all stamp the same
-       sentinel session id. Resolve it to the right live Cursor chat
-       before the regular lookup runs. */
-    if (payload.session_id === CURSOR_SENTINEL_SESSION_ID) {
-      const resolved = resolveCursorSentinelSession();
-      if (!resolved) return;
-      payload = { ...payload, session_id: resolved };
-    }
     const sess = sessionsState.list.find((s) => s.id === payload.session_id);
     if (!sess) return;
     const matching = sess.actions.find(
@@ -984,7 +932,7 @@
     const snapshot = sessionsState.list.map((s) => s.id);
     for (const id of snapshot) {
       const s = sessionsState.list.find((x) => x.id === id);
-      if (!s || s.agentKind !== 'claude') continue;
+      if (!s) continue;
       if (s.sending && hot && !s.awaitingResume) {
         const fallback = Date.now() + 30 * 60_000;
         const resumeAt = nextResetAt(quotaState.usage) ?? fallback;
@@ -1100,7 +1048,7 @@
     // drag sources forgetting their own ondragend wiring.
     installGlobalDragSafetyNet();
     // Background-task store — wires the global `bg:tasks-changed`
-    // listener so the Preview pane (right side of Claude/Cursor solo)
+    // listener so the Preview pane (right side of the Claude solo)
     // refreshes when a process spawns / exits anywhere in the app.
     void initBgTasks();
     /* Register the auto-fire dispatcher BEFORE initSdd so hydrate-time
@@ -1156,9 +1104,9 @@
       if (!sid) return;
       const target = sessionsState.list.find((s) => s.id === sid);
       if (!target) return;
-      const prev = sessionsState.activeIds[target.agentKind];
+      const prev = sessionsState.activeIds.claude;
       if (prev !== sid) {
-        sessionsState.activeIds[target.agentKind] = sid;
+        sessionsState.activeIds.claude = sid;
       }
       void sendClaudeMessage();
     });
@@ -1217,9 +1165,9 @@
       // in-progress user draft survives. If the session is busy, the
       // silent branch parks the prompt in `pendingSilentBySession` and
       // the post-turn drain picks it up.
-      sessionsState.activeIds[sess.agentKind] = session_id;
+      sessionsState.activeIds.claude = session_id;
       sessionsState.activeClaudeId = session_id;
-      await sendClaudeMessage({ silent: true, kind: sess.agentKind, prompt: promptText });
+      await sendClaudeMessage({ silent: true, kind: 'claude', prompt: promptText });
     });
     /* Window close / dev reload safety net.
      *
@@ -1405,8 +1353,8 @@
     };
     window.addEventListener('focus', focusHandler);
     removeFocusListener = () => window.removeEventListener('focus', focusHandler);
-    // Pre-warm agent detection BEFORE biometric unlock — Claude /
-    // Cursor `--version` is local-only (no keychain, no network) so
+    // Pre-warm agent detection BEFORE biometric unlock — Claude
+    // `--version` is local-only (no keychain, no network) so
     // it's safe to run during the lock screen. Cold-launch on macOS
     // routinely needs 1–3 s for the first child spawn to actually
     // return; running this in parallel with the Touch ID prompt
@@ -1707,7 +1655,7 @@
   // "drag-over" while the count is > 0.
   const agentDragCounts = new Map<string, number>();
 
-  function onAgentDragEnter(instanceId: string, _kind: 'claude' | 'cursor', e: DragEvent) {
+  function onAgentDragEnter(instanceId: string, e: DragEvent) {
     if (!agentCanAccept(e)) return;
     e.preventDefault();
     const cur = agentDragCounts.get(instanceId) ?? 0;
@@ -1715,7 +1663,7 @@
     if (cur === 0) dragOverInstanceId = instanceId;
   }
 
-  function onAgentDragOver(instanceId: string, _kind: 'claude' | 'cursor', e: DragEvent) {
+  function onAgentDragOver(instanceId: string, e: DragEvent) {
     if (!agentCanAccept(e)) return;
     // preventDefault on dragover is what *enables* the drop. Without it the
     // OS thinks the target rejected the drag and the cursor reads "no-drop".
@@ -1749,15 +1697,15 @@
   // (wave-35 split).
   const attachBlobsToSession = (sessionId: string, blobs: { name: string; type: string; blob: Blob }[]) =>
     _agentDrop.attachBlobsToSession(sessionId, blobs);
-  const pasteImagesIntoColumn = (instanceId: string, kind: 'claude' | 'cursor', blobs: { name: string; type: string; blob: Blob }[]) =>
-    _agentDrop.pasteImagesIntoColumn(instanceId, kind, blobs);
+  const pasteImagesIntoColumn = (instanceId: string, blobs: { name: string; type: string; blob: Blob }[]) =>
+    _agentDrop.pasteImagesIntoColumn(instanceId, blobs);
 
   /* imageFilesFromEvent moved to ./page_helpers.ts */
 
   // onAgentDrop moved to ./agentDrop.ts (wave-35 split). Deps inject
   // route-local justDragged setter + clearAgentDragState closure.
-  const onAgentDrop = (instanceId: string, kind: 'claude' | 'cursor', e: DragEvent) =>
-    _agentDrop.onAgentDrop(instanceId, kind, e, {
+  const onAgentDrop = (instanceId: string, e: DragEvent) =>
+    _agentDrop.onAgentDrop(instanceId, e, {
       setJustDragged: (v) => { justDragged = v; },
       clearAgentDragState,
     });
@@ -1828,7 +1776,7 @@
        session, set the input, fire. We do NOT change `view`, so the
        user stays in the editor / wherever they were. */
     sessionsState.activeClaudeId = sessionId;
-    sessionsState.activeIds[s.agentKind] = sessionId;
+    sessionsState.activeIds.claude = sessionId;
     setSessionInput(sessionId, trimmed);
     void sendClaudeMessage();
   }
@@ -1840,22 +1788,20 @@
    *  agent column, splices `@<externalId>` into the input, and
    *  switches the top-level view so the user lands on the chat
    *  ready to type. */
-  /** Resolve (or create) the session that should receive an inbox handoff
-   *  for the given agent kind: active-in-instance → instance-bound →
-   *  unbound-of-kind (binds it) → fresh session. */
-  function resolveAgentTarget(kind: 'claude' | 'cursor'): ClaudeSession | null {
-    const instanceId = kind === 'claude' ? APP_INSTANCE_IDS.claude : APP_INSTANCE_IDS.cursor;
+  /** Resolve (or create) the session that should receive an inbox handoff:
+   *  active-in-instance → instance-bound → unbound (binds it) → fresh
+   *  session. */
+  function resolveAgentTarget(): ClaudeSession | null {
+    const instanceId = APP_INSTANCE_IDS.claude;
     const activeId = sessionsState.activeByInstance[instanceId];
     let target = activeId ? sessionsState.list.find((s) => s.id === activeId) ?? null : null;
     if (!target) target = sessionsState.list.find((s) => s.agentInstanceId === instanceId) ?? null;
     if (!target) {
-      target = sessionsState.list.find(
-        (s) => s.agentKind === kind && s.agentInstanceId === null
-      ) ?? null;
+      target = sessionsState.list.find((s) => s.agentInstanceId === null) ?? null;
       if (target) updateSession(target.id, { agentInstanceId: instanceId });
     }
     if (!target) {
-      const id = newClaudeSession({ agentKind: kind, agentInstanceId: instanceId });
+      const id = newClaudeSession({ agentInstanceId: instanceId });
       target = sessionsState.list.find((s) => s.id === id) ?? null;
     }
     return target;
@@ -1871,7 +1817,7 @@
       | { kind: 'jira'; item: JiraItem }
       | { kind: 'sentry'; item: SentryIssue }
   ) {
-    const target = resolveAgentTarget('claude');
+    const target = resolveAgentTarget();
     if (!target) return;
     const mention = mentionFromInboxPayload(payload);
     const dedup = target.mentions.filter(
@@ -1893,12 +1839,11 @@
     payload:
       | { kind: 'github'; item: InboxItem }
       | { kind: 'jira'; item: JiraItem }
-      | { kind: 'sentry'; item: SentryIssue },
-    kind: 'claude' | 'cursor' = 'claude'
+      | { kind: 'sentry'; item: SentryIssue }
   ) {
-    const instanceId = kind === 'claude' ? APP_INSTANCE_IDS.claude : APP_INSTANCE_IDS.cursor;
+    const instanceId = APP_INSTANCE_IDS.claude;
     const mention = mentionFromInboxPayload(payload);
-    const target = resolveAgentTarget(kind);
+    const target = resolveAgentTarget();
     if (!target) return;
     const dedup = target.mentions.filter(
       (m) => !(m.source === mention.source && m.externalId === mention.externalId)
@@ -1912,21 +1857,20 @@
       mentions: [...dedup, mention]
     });
     setActiveSessionInInstance(instanceId, target.id);
-    view = kind === 'claude' ? 'claudeApp' : 'cursorApp';
+    view = 'claudeApp';
   }
 
   /** If user drops a file before setting cwd, infer the enclosing directory. */
   /* deriveCwd moved to ./page_helpers.ts */
 
   /** Builds the JSON payload piped to the user's statusline script.
-   *  Reads from the currently-active session (across Claude / Cursor).
-   *  Returns null if no session is active — caller skips the run. */
+   *  Reads from the currently-active session. Returns null if no
+   *  session is active — caller skips the run. */
   function buildStatusLinePayload(): StatusLinePayload | null {
     const cur = activeSession;
     if (!cur) return null;
-    const kind = (cur.agentKind ?? 'claude') as 'claude' | 'cursor';
-    const model = kind === 'cursor' ? cur.cursorModel ?? null : cur.claudeModel ?? null;
-    const window = contextWindowFor(cur.claudeModel, kind);
+    const model = cur.claudeModel ?? null;
+    const window = contextWindowFor(cur.claudeModel);
     const used = cur.lastContextSize ?? 0;
     /* Cumulative cost summed across every assistant turn's usage
      *  snapshot. costForUsage handles per-model rates. */
@@ -1939,7 +1883,7 @@
       cwd: cur.cwd ?? null,
       session_id: cur.id,
       session_title: cur.title ?? 'Untitled chat',
-      agent_kind: kind,
+      agent_kind: 'claude',
       permission_mode: 'default',
       cost_usd: costUsd,
       context_window: {
@@ -2062,9 +2006,9 @@
     ensureEditorShowing(path);
   }
 
-  /** Spawn a fresh chat in the Claude/Cursor singleton. */
-  function spawnAgentChat(kind: 'claude' | 'cursor') {
-    newClaudeSession({ agentKind: kind, agentInstanceId: APP_INSTANCE_IDS[kind] });
+  /** Spawn a fresh chat in the Claude singleton. */
+  function spawnAgentChat() {
+    newClaudeSession({ agentInstanceId: APP_INSTANCE_IDS.claude });
   }
 
   /** Backfill `linkedToEditorInstanceId` for legacy sessions that
@@ -2230,10 +2174,10 @@
      *  session's `input` populated with the orchestrator prompt
      *  while the spinner stays up on no actual run. */
     sessionsState.activeClaudeId = sessionId;
-    sessionsState.activeIds[s.agentKind] = sessionId;
+    sessionsState.activeIds.claude = sessionId;
     /* opts.prompt, not session.input — the orchestrator prompt must not
      * clobber whatever the user is typing while phases chain. */
-    await sendClaudeMessage({ silent: true, kind: s.agentKind, prompt });
+    await sendClaudeMessage({ silent: true, kind: 'claude', prompt });
   }
 
   /** Run a DW verifier as a VISIBLE streamed chat turn (Phase 2b), then
@@ -2440,7 +2384,7 @@
       openFocusItem(item);
       tab = tabHint ?? 'conversation';
       /* Inline-only architecture — there's no global modal that can
-         render the PR over Claude/Cursor. So when the agent triggers
+         render the PR over the agent solo. So when the agent triggers
          an open from another view, we have to switch the user TO the
          GitHub app or they wouldn't see anything. */
       view = 'githubApp';
@@ -2503,9 +2447,9 @@
         const sess = sessionsState.list.find((s) => s.id === sessionId);
         if (!sess?.agentInstanceId) return;
         const kind = kindForInstanceId(sess.agentInstanceId);
-        if (kind !== 'claude' && kind !== 'cursor') return;
+        if (kind !== 'claude') return;
         setActiveSessionInInstance(sess.agentInstanceId, sessionId);
-        view = kind === 'cursor' ? 'cursorApp' : 'claudeApp';
+        view = 'claudeApp';
         return;
       }
     }
@@ -2608,7 +2552,7 @@
     _agentTurn.clearContinuationInFlight(sid);
   // ---- Agent execution ----
 
-  async function stopAgentForKind(kind: 'claude' | 'cursor') {
+  async function stopAgentForKind(kind: 'claude') {
     const activeId = sessionsState.activeIds[kind];
     const s = activeId ? sessionsState.list.find((x) => x.id === activeId) : null;
     if (!s) return;
@@ -2728,7 +2672,6 @@
     setActionBusy: (s) => { actionBusy = s; },
     reloadDetailAndLists,
     getClaudeStatus: () => claudeStatus,
-    getCursorStatus: () => cursorStatus,
   });
   const submitComment = () => _modalActions.submitComment();
   const submitReview = () => _modalActions.submitReview();
@@ -2737,8 +2680,6 @@
   const askClose = () => _modalActions.askClose(_modalDeps());
   const openConnectModal = (conn: ConnectionMeta) => _modalActions.openConnectModal(conn, _modalDeps());
   const refreshClaudeModal = () => _modalActions.refreshClaudeModal(_modalDeps());
-  const refreshCursorModal = () => _modalActions.refreshCursorModal(_modalDeps());
-  const cursorInstallUrl = () => _modalActions.cursorInstallUrl();
   const claudeInstallUrl = () => _modalActions.claudeInstallUrl();
   const jiraTokenUrl = () => _modalActions.jiraTokenUrl();
   const sentryTokenUrl = () => _modalActions.sentryTokenUrl();
@@ -2877,7 +2818,7 @@
 {/if}
 
 <!-- Global drag hint banner — appears top-center while any payload is
-     in flight. The drag affordance into Claude / Cursor / Editor /
+     in flight. The drag affordance into Claude / Editor /
      Canvas was previously silent (user only learned by experimentation),
      so this banner names the valid drop targets up front. Source-tinted
      to match the drag chip and reinforce "what is being dragged".
@@ -2902,7 +2843,7 @@
   <div class="drag-hint" role="status" aria-live="polite" style="--hint-tone: {tone};">
     <span class="drag-hint-dot"></span>
     Dragging {srcLabel} — drop on
-    <strong>Claude</strong>, <strong>Cursor</strong>, or <strong>Canvas</strong>
+    <strong>Claude</strong> or <strong>Canvas</strong>
   </div>
 {/if}
 
@@ -2916,18 +2857,12 @@
     {jiraStatus}
     {sentryStatus}
     {claudeStatus}
-    {cursorStatus}
     {githubBadge}
     {jiraBadge}
     {sentryBadge}
     {claudeBusy}
-    {cursorBusy}
     dragActive={dragState.payload !== null}
-    onAgentDrop={(kind, e) => onAgentDrop(
-      kind === 'claude' ? APP_INSTANCE_IDS.claude : APP_INSTANCE_IDS.cursor,
-      kind,
-      e
-    )}
+    onAgentDrop={(e) => onAgentDrop(APP_INSTANCE_IDS.claude, e)}
   />
 
   <div class="main">
@@ -2947,7 +2882,7 @@
     <!-- Themed empty card — shown when a solo view's source isn't
          connected yet. -->
 
-    {#snippet soloEmpty(label: string, tone: string, glow: string, blurb: string, kind: 'github' | 'jira' | 'sentry' | 'claude' | 'cursor')}
+    {#snippet soloEmpty(label: string, tone: string, glow: string, blurb: string, kind: 'github' | 'jira' | 'sentry' | 'claude')}
       <section class="full-center app-stub-shell" style="--app-tone: {tone}; --app-glow: {glow};">
         <div class="app-stub">
           <div class="app-stub-icon">
@@ -2970,11 +2905,11 @@
           const sess = sessionsState.list.find((x) => x.id === sessionId);
           if (!sess) return;
           setActiveSessionInInstance(agentInstanceId, sessionId);
-          view = sess.agentKind === 'cursor' ? 'cursorApp' : 'claudeApp';
+          view = 'claudeApp';
         }}
-        onNewChat={(kind) => {
-          newClaudeSession({ agentKind: kind, agentInstanceId: APP_INSTANCE_IDS[kind] });
-          view = kind === 'cursor' ? 'cursorApp' : 'claudeApp';
+        onNewChat={() => {
+          newClaudeSession({ agentInstanceId: APP_INSTANCE_IDS.claude });
+          view = 'claudeApp';
         }}
         onOpenWelcome={() => (welcomeOpen = true)}
       />
@@ -3009,8 +2944,7 @@
           {onDragEnd}
           {onCardMouseDown}
           {isClickNotDrag}
-          onSendToClaude={(item) => sendInboxItemToAgent({ kind: 'github', item }, 'claude')}
-          onSendToCursor={(item) => sendInboxItemToAgent({ kind: 'github', item }, 'cursor')}
+          onSendToClaude={(item) => sendInboxItemToAgent({ kind: 'github', item })}
           onFixWithDw={(item) => sendInboxItemToWorkflow({ kind: 'github', item })}
         />
       {/if}
@@ -3031,8 +2965,7 @@
           {onCardMouseDown}
           {isClickNotDrag}
           {refreshAllJiraInboxes}
-          onSendToClaude={(item) => sendInboxItemToAgent({ kind: 'jira', item }, 'claude')}
-          onSendToCursor={(item) => sendInboxItemToAgent({ kind: 'jira', item }, 'cursor')}
+          onSendToClaude={(item) => sendInboxItemToAgent({ kind: 'jira', item })}
           onFixWithDw={(item) => sendInboxItemToWorkflow({ kind: 'jira', item })}
         />
       {/if}
@@ -3050,8 +2983,7 @@
           {onDragEnd}
           {onCardMouseDown}
           {isClickNotDrag}
-          onSendToClaude={(item) => sendInboxItemToAgent({ kind: 'sentry', item }, 'claude')}
-          onSendToCursor={(item) => sendInboxItemToAgent({ kind: 'sentry', item }, 'cursor')}
+          onSendToClaude={(item) => sendInboxItemToAgent({ kind: 'sentry', item })}
           onFixWithDw={(item) => sendInboxItemToWorkflow({ kind: 'sentry', item })}
         />
       {/if}
@@ -3071,7 +3003,6 @@
         {jiraStatus}
         {sentryStatus}
         {claudeStatus}
-        {cursorStatus}
         onDisconnectGithub={disconnectGithub}
         onDisconnectJira={disconnectJiraAll}
         onDisconnectSentry={disconnectSentryAll}
@@ -3132,67 +3063,10 @@
           onOpenPrInWoom={openPrUrlInWoom}
           onSend={() => void sendClaudeMessage({ kind: 'claude' })}
           onStop={() => void stopAgentForKind('claude')}
-          onPasteImages={(k, blobs) => pasteImagesIntoColumn(APP_INSTANCE_IDS.claude, k, blobs)}
-          onDragOver={(e) => onAgentDragOver(APP_INSTANCE_IDS.claude, 'claude', e)}
-          onDrop={(e) => onAgentDrop(APP_INSTANCE_IDS.claude, 'claude', e)}
+          onPasteImages={(blobs) => pasteImagesIntoColumn(APP_INSTANCE_IDS.claude, blobs)}
+          onDragOver={(e) => onAgentDragOver(APP_INSTANCE_IDS.claude, e)}
+          onDrop={(e) => onAgentDrop(APP_INSTANCE_IDS.claude, e)}
           onDragLeave={() => onAgentDragLeave(APP_INSTANCE_IDS.claude)}
-          onSddAdvance={onSddAdvance}
-          onDwVerify={onDwVerify}
-          onResumeAfterQuota={onResumeAfterQuota}
-        />
-      {/if}
-
-    {:else if view === 'cursorApp'}
-      {#if !connectedCursor}
-        {#if cursorStatus === null || connectionsState.retrying.cursor}
-          <section class="full-center app-stub-shell" style="--app-tone: var(--src-cursor); --app-glow: rgba(220,220,220,0.30);">
-            <div class="app-stub">
-              <div class="app-stub-icon">
-                <BrandIcon kind="cursor" size={36} />
-              </div>
-              <h2 class="app-stub-title">Cursor</h2>
-              <p class="app-stub-sub">Detecting Cursor CLI…</p>
-            </div>
-          </section>
-        {:else}
-          {@render soloEmpty('Cursor', 'var(--src-cursor)', 'rgba(220,220,220,0.30)', 'Cursor CLI not detected. Install Cursor and re-check connections.', 'cursor')}
-        {/if}
-      {:else}
-        <AgentApp
-          kind="cursor"
-          instanceId={APP_INSTANCE_IDS.cursor}
-          {now}
-          thinkingStartedAt={thinkingStartedAt}
-          thinkingTick={thinkingTick}
-          {worktreeBusy}
-          {editorRepoPath}
-          onPickCwd={pickCwd}
-          onClearCwd={clearCwd}
-          onToggleEditorLink={toggleSessionEditorLink}
-          onLinkToEditorInstance={linkActiveSessionToEditor}
-          onSyncAgentToEditor={syncAgentToLinkedEditor}
-          onSyncEditorToAgent={syncLinkedEditorToAgent}
-          onToggleTerminalLink={toggleSessionTerminalLink}
-          onLinkToTerminalInstance={linkActiveSessionToTerminal}
-          onToggleCanvasLink={toggleSessionCanvasLink}
-          onLinkToCanvas={linkActiveSessionToCanvas}
-          onCreateWorktree={createWorktree}
-          onOpenWorktreeDiff={openWorktreeDiff}
-          onOpenWorktreeInEditor={openWorktreeInEditor}
-          onCopyWorktreeBranch={copyWorktreeBranch}
-          onRemoveWorktree={removeWorktree}
-          onStartEditMessage={startEditMessage}
-          onResendMessage={resendMessage}
-          onUpdateAction={updateAction}
-          onRemoveAction={dismissAction}
-          onExecuteAction={executeAction}
-          onOpenPrInWoom={openPrUrlInWoom}
-          onSend={() => void sendClaudeMessage({ kind: 'cursor' })}
-          onStop={() => void stopAgentForKind('cursor')}
-          onPasteImages={(k, blobs) => pasteImagesIntoColumn(APP_INSTANCE_IDS.cursor, k, blobs)}
-          onDragOver={(e) => onAgentDragOver(APP_INSTANCE_IDS.cursor, 'cursor', e)}
-          onDrop={(e) => onAgentDrop(APP_INSTANCE_IDS.cursor, 'cursor', e)}
-          onDragLeave={() => onAgentDragLeave(APP_INSTANCE_IDS.cursor)}
           onSddAdvance={onSddAdvance}
           onDwVerify={onDwVerify}
           onResumeAfterQuota={onResumeAfterQuota}
@@ -3208,16 +3082,15 @@
         <EditorApp
           instanceId={layoutState.activeInstance.editor}
           {connectedClaude}
-          {connectedCursor}
           dock={{
             now,
             thinkingStartedAt,
             thinkingTick,
-            onSend: (k) => void sendClaudeMessage({ kind: k }),
-            onStop: (k) => void stopAgentForKind(k),
-            onPasteImages: (iid, k, blobs) => pasteImagesIntoColumn(iid, k, blobs),
-            onDragOver: (iid, k, e) => onAgentDragOver(iid, k, e),
-            onDrop: (iid, k, e) => onAgentDrop(iid, k, e),
+            onSend: () => void sendClaudeMessage({ kind: 'claude' }),
+            onStop: () => void stopAgentForKind('claude'),
+            onPasteImages: (iid, blobs) => pasteImagesIntoColumn(iid, blobs),
+            onDragOver: (iid, e) => onAgentDragOver(iid, e),
+            onDrop: (iid, e) => onAgentDrop(iid, e),
             onDragLeave: (iid) => onAgentDragLeave(iid),
             onStartEditMessage: startEditMessage,
             onResendMessage: resendMessage,
@@ -3237,7 +3110,7 @@
             const sess = sessionsState.list.find((x) => x.id === sessionId);
             if (!sess) return;
             setActiveSessionInInstance(agentInstanceId, sessionId);
-            view = sess.agentKind === 'cursor' ? 'cursorApp' : 'claudeApp';
+            view = 'claudeApp';
           }}
         />
       {/key}
@@ -3253,7 +3126,7 @@
             const sess = sessionsState.list.find((x) => x.id === sessionId);
             if (!sess) return;
             setActiveSessionInInstance(agentInstanceId, sessionId);
-            view = sess.agentKind === 'cursor' ? 'cursorApp' : 'claudeApp';
+            view = 'claudeApp';
           }}
         />
       {/key}
@@ -3264,13 +3137,12 @@
           instanceId={layoutState.activeInstance.terminal}
           cwd={editorRepoPath || null}
           onOpenClaude={() => (view = 'claudeApp')}
-          onOpenCursor={() => (view = 'cursorApp')}
           onQuickSend={quickSendToSession}
           onOpenSession={(sessionId, agentInstanceId) => {
             const sess = sessionsState.list.find((x) => x.id === sessionId);
             if (!sess) return;
             setActiveSessionInInstance(agentInstanceId, sessionId);
-            view = sess.agentKind === 'cursor' ? 'cursorApp' : 'claudeApp';
+            view = 'claudeApp';
           }}
           onLinkSession={(sessionId) =>
             linkSessionToTerminal(layoutState.activeInstance.terminal, sessionId)}
@@ -3319,8 +3191,6 @@
   {sentryTokenUrl}
   refreshClaudeStatus={refreshClaudeModal}
   {claudeInstallUrl}
-  refreshCursorStatus={refreshCursorModal}
-  {cursorInstallUrl}
   {submitPat}
   {githubTokenUrl}
   {submitComment}
@@ -3375,11 +3245,10 @@
 {#if agentDashboardOpen}
   <AgentDashboard
     onClose={() => (agentDashboardOpen = false)}
-    onActivate={(s) => {
-      /* Route to the agent solo (Claude / Cursor) for the activated
-         session. The dashboard already set the active session id; we
-         only switch the view here so the user lands inside the chat. */
-      view = s.agentKind === 'cursor' ? 'cursorApp' : 'claudeApp';
+    onActivate={() => {
+      /* The dashboard already set the active session id; we only
+         switch the view here so the user lands inside the chat. */
+      view = 'claudeApp';
     }}
   />
 {/if}
@@ -3500,7 +3369,7 @@
 
 
   /* App stubs — themed empty state shown when a rail app
-     view (Claude / Cursor / Editor / Canvas / Terminal) is selected
+     view (Claude / Editor / Canvas / Terminal) is selected
      before its full implementation lands. The card adopts the rail
      button's brand tone via --app-tone / --app-glow. */
   .app-stub-shell {

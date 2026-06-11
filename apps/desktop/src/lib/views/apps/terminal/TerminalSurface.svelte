@@ -24,7 +24,7 @@
    * whenever the surface resizes, then forwards new (cols, rows) via
    * `resizeTerminal` so the kernel's TIOCSWINSZ matches.
    *
-   * Phase-2 MCP write: when a Claude / Cursor agent calls
+   * Phase-2 MCP write: when a Claude agent calls
    * `terminal.write(id, data)` via MCP, the bytes go through the same
    * master fd this component reads from — the user sees keystrokes
    * appear live without any extra plumbing.
@@ -83,14 +83,10 @@
    * AgentApp.
    */
   const linkedSessions = $derived.by(() => {
-    const out: { sessionId: string; title: string; kind: 'claude' | 'cursor' }[] = [];
+    const out: { sessionId: string; title: string }[] = [];
     for (const s of sessionsState.list) {
       if (s.linkedTerminalInstanceId !== instanceId) continue;
-      out.push({
-        sessionId: s.id,
-        title: s.title,
-        kind: s.agentKind
-      });
+      out.push({ sessionId: s.id, title: s.title });
     }
     return out;
   });

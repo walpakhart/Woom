@@ -1,6 +1,6 @@
 /* Background-task reactive store. Mirrors `BgRegistry` in `bg_tasks.rs`:
  * one row per long-running process the agent or user spawned. The Preview
- * pane (right side of Claude/Cursor solo) renders this list; each row's
+ * pane (right side of the Claude solo) renders this list; each row's
  * detail subscribes to `bg:line:<id>` for live log tail and `bg:status:<id>`
  * for exit transitions.
  *

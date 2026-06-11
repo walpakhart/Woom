@@ -1,4 +1,4 @@
-// Per-turn system-prompt suffix builder for Claude / Cursor agent runs.
+// Per-turn system-prompt suffix builder for Claude agent runs.
 // Pure function over `layoutState` + `sessionsState`. No DOM, no events.
 //
 // Prompt-cache rule: this builder returns TWO strings.
@@ -42,7 +42,7 @@ export function buildAgentAppContext(callingSessionId: string): { system: string
   lines.push(
     'You are running inside Woom, a desktop app organised as solo '
       + 'modes — one full-screen surface per source (Jira / GitHub / '
-      + 'Sentry / Claude / Cursor / Editor / Canvas / Terminal). Source '
+      + 'Sentry / Claude / Editor / Canvas / Terminal). Source '
       + 'and agent kinds are singletons; editor / canvas / terminal can '
       + 'have MULTIPLE instances open at once — each is listed separately '
       + 'below with its own id + name (e.g. an editor named "Vermeer" '
@@ -333,7 +333,7 @@ export function buildAgentAppContext(callingSessionId: string): { system: string
         if (linked.length) meta.push(`linked_agents=[${linked.join(', ')}]`);
       }
 
-      if (kind === 'claude' || kind === 'cursor') {
+      if (kind === 'claude') {
         const sessId = sessionsState.activeByInstance[id] ?? null;
         const sess = sessId ? sessionsState.list.find((s) => s.id === sessId) : null;
         if (sess) {

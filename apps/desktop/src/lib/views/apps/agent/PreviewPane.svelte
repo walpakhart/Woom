@@ -8,7 +8,7 @@
 </script>
 
 <script lang="ts">
-  /* Preview pane — right-side panel inside Claude/Cursor solo for
+  /* Preview pane — right-side panel inside the Claude solo for
      long-running processes the agent (or user) spawns. Mirrors the
      `terminal` solo's UX but for background tasks that DON'T need a
      full PTY: dev servers, build watchers, test loops.
@@ -42,7 +42,7 @@
   import { notify } from '$lib/state/toaster.svelte';
 
   interface Props {
-    kind: 'claude' | 'cursor';
+    kind: 'claude';
     instanceId: string;
     /** Collapse callback — parent (AgentApp) owns the open/closed
      *  state so it can also render the 44px rail when closed. */

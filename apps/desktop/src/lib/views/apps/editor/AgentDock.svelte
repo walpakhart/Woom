@@ -19,32 +19,30 @@
   interface LinkedAgent {
     sessionId: string;
     agentInstanceId: string;
-    kind: 'claude' | 'cursor';
+    kind: 'claude';
     name: string;
   }
   interface PickableAgent {
     id: string;
-    kind: 'claude' | 'cursor';
+    kind: 'claude';
     name: string;
     sessionId?: string;
   }
 
   /** Agent callbacks bundled from +page.svelte — the same handlers the
-   *  AgentApp solo receives, kind-parameterized so one bundle serves
-   *  both Claude and Cursor docked sessions. */
+   *  AgentApp solo receives. */
   export interface DockHandlers {
     now: number;
     thinkingStartedAt: Record<string, number | null>;
     thinkingTick: Record<string, number>;
-    onSend: (kind: 'claude' | 'cursor') => void;
-    onStop: (kind: 'claude' | 'cursor') => void;
+    onSend: () => void;
+    onStop: () => void;
     onPasteImages: (
       instanceId: string,
-      kind: 'claude' | 'cursor',
       blobs: { name: string; type: string; blob: Blob }[]
     ) => Promise<number>;
-    onDragOver: (instanceId: string, kind: 'claude' | 'cursor', e: DragEvent) => void;
-    onDrop: (instanceId: string, kind: 'claude' | 'cursor', e: DragEvent) => void;
+    onDragOver: (instanceId: string, e: DragEvent) => void;
+    onDrop: (instanceId: string, e: DragEvent) => void;
     onDragLeave: (instanceId: string) => void;
     onStartEditMessage: (sessionId: string, index: number, content: string) => void;
     onResendMessage: (sessionId: string, index: number, content: string) => void;
@@ -62,11 +60,10 @@
     instanceId: string;
     /** Sessions linked to THIS editor instance (derived in EditorApp). */
     linkedAgents: LinkedAgent[];
-    /** Pickable rows for the empty state — every Claude/Cursor session
-     *  not already linked here (+ a spawn row per kind with no chats). */
+    /** Pickable rows for the empty state — every Claude session
+     *  not already linked here (+ a spawn row when there are no chats). */
     agentInstances: PickableAgent[];
     connectedClaude: boolean;
-    connectedCursor: boolean;
     onClose: () => void;
     /** Activate the session AND jump to its agent solo. Used by the
      *  open-in-solo button and the not-connected CTA. */
@@ -143,20 +140,14 @@
   $effect(() => {
     const ds = dockSession;
     if (!ds) return;
-    if (sessionsState.activeIds[ds.kind] !== ds.sessionId) {
+    if (sessionsState.activeIds.claude !== ds.sessionId) {
       focusSession(ds.sessionId);
     }
   });
 
-  /** Is the docked session's agent kind connected? Drives the
-   *  not-connected stub vs. the chat body. */
-  const dockConnected = $derived(
-    dockSession
-      ? dockSession.kind === 'claude'
-        ? p.connectedClaude
-        : p.connectedCursor
-      : false
-  );
+  /** Is the Claude CLI connected? Drives the not-connected stub vs.
+   *  the chat body. */
+  const dockConnected = $derived(dockSession ? p.connectedClaude : false);
 
   /** Live sending flag for the docked session — header pulse dot. */
   function isSending(sessionId: string): boolean {
@@ -176,8 +167,6 @@
   function onWindowKey(e: KeyboardEvent) {
     if (e.key === 'Escape' && showPicker) showPicker = false;
   }
-
-  const kindLabel = (k: 'claude' | 'cursor') => (k === 'claude' ? 'Claude' : 'Cursor');
 </script>
 
 <svelte:window onkeydown={onWindowKey} />
@@ -207,7 +196,7 @@
       <button
         class="adk-icon-btn"
         onclick={() => p.onOpenSession(dockSession!.sessionId, dockSession!.agentInstanceId)}
-        title="Open this chat in the {kindLabel(dockSession.kind)} app"
+        title="Open this chat in the Claude app"
         aria-label="Open in agent solo"
       >
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M15 3h6v6"/><path d="M21 3l-7 7"/><path d="M19 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h6"/></svg>
@@ -234,7 +223,7 @@
         </div>
         {#each p.linkedAgents as la (la.sessionId)}
           <button class="adk-picker-item" class:active={la.sessionId === dockSession?.sessionId} onclick={() => pickSession(la.sessionId)}>
-            <span class="adk-picker-kind" data-agent={la.kind}>{kindLabel(la.kind)}</span>
+            <span class="adk-picker-kind" data-agent="claude">Claude</span>
             <span class="adk-picker-name">{la.name || 'Untitled chat'}</span>
             {#if isSending(la.sessionId)}
               <span class="adk-pulse adk-pulse--row" data-agent={la.kind} aria-label="running"></span>
@@ -256,12 +245,12 @@
           </svg>
         </div>
         <p class="adk-empty-h serif">No agent linked</p>
-        <p class="adk-empty-p">Link a Claude or Cursor chat to this editor — it docks here side by side with your code.</p>
+        <p class="adk-empty-p">Link a Claude chat to this editor — it docks here side by side with your code.</p>
         {#if p.agentInstances.length > 0}
           <div class="adk-link-list">
             {#each p.agentInstances as a (a.sessionId ?? a.id)}
               <button class="adk-link-item" onclick={() => p.onLinkToAgent(a.id, a.sessionId)}>
-                <span class="adk-picker-kind" data-agent={a.kind}>{kindLabel(a.kind)}</span>
+                <span class="adk-picker-kind" data-agent="claude">Claude</span>
                 <span class="adk-picker-name">{a.name}</span>
               </button>
             {/each}
@@ -274,10 +263,10 @@
         <div class="adk-empty-icon" data-agent={dockSession.kind}>
           <BrandIcon kind={dockSession.kind} size={26} />
         </div>
-        <p class="adk-empty-h serif">Connect {kindLabel(dockSession.kind)} first</p>
-        <p class="adk-empty-p">The {kindLabel(dockSession.kind)} CLI isn't connected. Open the agent solo to finish setup.</p>
+        <p class="adk-empty-h serif">Connect Claude first</p>
+        <p class="adk-empty-p">The Claude CLI isn't connected. Open the agent solo to finish setup.</p>
         <button class="adk-cta" onclick={() => p.onOpenSession(dockSession!.sessionId, dockSession!.agentInstanceId)}>
-          Open {kindLabel(dockSession.kind)}
+          Open Claude
         </button>
       </div>
     {:else}
@@ -306,12 +295,12 @@
           <Composer
             kind={dockSession.kind}
             compact
-            onSend={() => p.dock.onSend(dockSession!.kind)}
-            onStop={() => p.dock.onStop(dockSession!.kind)}
-            onPasteImages={(k, blobs) => p.dock.onPasteImages(APP_INSTANCE_IDS[k], k, blobs)}
-            onDragOver={(e) => p.dock.onDragOver(APP_INSTANCE_IDS[dockSession!.kind], dockSession!.kind, e)}
-            onDrop={(e) => p.dock.onDrop(APP_INSTANCE_IDS[dockSession!.kind], dockSession!.kind, e)}
-            onDragLeave={() => p.dock.onDragLeave(APP_INSTANCE_IDS[dockSession!.kind])}
+            onSend={() => p.dock.onSend()}
+            onStop={() => p.dock.onStop()}
+            onPasteImages={(blobs) => p.dock.onPasteImages(APP_INSTANCE_IDS.claude, blobs)}
+            onDragOver={(e) => p.dock.onDragOver(APP_INSTANCE_IDS.claude, e)}
+            onDrop={(e) => p.dock.onDrop(APP_INSTANCE_IDS.claude, e)}
+            onDragLeave={() => p.dock.onDragLeave(APP_INSTANCE_IDS.claude)}
           />
         </div>
       {/key}
@@ -340,11 +329,6 @@
       linear-gradient(180deg, color-mix(in srgb, var(--src-claude) 10%, transparent), transparent),
       var(--bg-1);
   }
-  .adk[data-agent='cursor'] .adk-head {
-    background:
-      linear-gradient(180deg, color-mix(in srgb, var(--src-cursor) 10%, transparent), transparent),
-      var(--bg-1);
-  }
   .adk-brand {
     width: 26px; height: 26px;
     display: grid; place-items: center;
@@ -355,10 +339,6 @@
   .adk-brand[data-agent='claude'] {
     background: color-mix(in srgb, var(--src-claude) 10%, var(--bg-3));
     color: var(--src-claude);
-  }
-  .adk-brand[data-agent='cursor'] {
-    background: color-mix(in srgb, var(--src-cursor) 10%, var(--bg-3));
-    color: var(--src-cursor);
   }
   .adk-title-block { flex: 1; min-width: 0; display: flex; flex-direction: column; }
   .adk-title-btn {
@@ -382,7 +362,6 @@
   .adk-caret svg { width: 12px; height: 12px; }
   .adk-caret.open { transform: rotate(180deg); }
   .adk[data-agent='claude'] .adk-caret.open { color: var(--src-claude); }
-  .adk[data-agent='cursor'] .adk-caret.open { color: var(--src-cursor); }
 
   .adk-icon-btn {
     width: 26px; height: 26px;
@@ -401,9 +380,7 @@
     animation: adk-pulse 1.2s ease-in-out infinite;
   }
   .adk[data-agent='claude'] .adk-pulse { background: var(--src-claude); box-shadow: 0 0 6px color-mix(in srgb, var(--src-claude) 70%, transparent); }
-  .adk[data-agent='cursor'] .adk-pulse { background: var(--src-cursor); box-shadow: 0 0 6px color-mix(in srgb, var(--src-cursor) 70%, transparent); }
   .adk-pulse--row[data-agent='claude'] { background: var(--src-claude); box-shadow: 0 0 6px color-mix(in srgb, var(--src-claude) 70%, transparent); }
-  .adk-pulse--row[data-agent='cursor'] { background: var(--src-cursor); box-shadow: 0 0 6px color-mix(in srgb, var(--src-cursor) 70%, transparent); }
   @keyframes adk-pulse {
     0%, 100% { opacity: 0.45; transform: scale(0.85); }
     50%      { opacity: 1; transform: scale(1.15); }
@@ -459,11 +436,6 @@
     color: var(--src-claude);
     border: 1px solid color-mix(in srgb, var(--src-claude) 28%, transparent);
   }
-  .adk-picker-kind[data-agent='cursor'] {
-    background: color-mix(in srgb, var(--src-cursor) 12%, var(--bg-3));
-    color: var(--src-cursor);
-    border: 1px solid color-mix(in srgb, var(--src-cursor) 28%, transparent);
-  }
   .adk-picker-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* Queued-count chip in dropdown rows — neutral accent fill, mirrors
      InlineClaude's ic-status--queued treatment. */
@@ -493,11 +465,6 @@
     background: color-mix(in srgb, var(--src-claude) 12%, var(--bg-2));
     color: var(--src-claude);
     box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--src-claude) 26%, transparent);
-  }
-  .adk-empty-icon[data-agent='cursor'] {
-    background: color-mix(in srgb, var(--src-cursor) 12%, var(--bg-2));
-    color: var(--src-cursor);
-    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--src-cursor) 26%, transparent);
   }
   .adk-empty-icon svg { width: 26px; height: 26px; }
   .adk-empty-h {

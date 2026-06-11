@@ -6,7 +6,7 @@ Five sidecars, each scoped to one domain. Tool schemas are already in context �
 
 Surface for navigating + mutating Woom's own UI on behalf of the user.
 
-- `mcp__app__switch_view` — change top-level solo (jira/github/sentry/claude/cursor/editor/canvas/terminal/home/connections/settings)
+- `mcp__app__switch_view` — change top-level solo (jira/github/sentry/claude/editor/canvas/terminal/home/connections/settings)
 - `mcp__app__focus_solo` — bring rail attention to a kind
 - `mcp__app__set_editor_repo_path` / `mcp__app__set_agent_cwd` — change folders bound to editor / agent
 - `mcp__app__add_app_instance` — spawn new editor/canvas/terminal instance

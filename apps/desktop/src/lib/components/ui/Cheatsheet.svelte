@@ -39,12 +39,12 @@
       title: 'Global',
       rows: [
         { keys: `${mod} K`, label: 'Open command palette — search anywhere' },
-        { keys: `${shift}${mod} A`, label: 'Agent View — every Claude / Cursor session grouped by state (Needs input / Working / Pinned / Recent / Older)' },
+        { keys: `${shift}${mod} A`, label: 'Agent View — every Claude session grouped by state (Needs input / Working / Pinned / Recent / Older)' },
         { keys: `${mod} E`, label: 'Quick switcher — jump to most-recently-touched' },
         { keys: `${mod} 0`, label: 'Switch to Home' },
         { keys: `${mod} 1..3`, label: 'Switch to Jira / GitHub / Sentry' },
-        { keys: `${mod} 4..5`, label: 'Switch to Claude / Cursor' },
-        { keys: `${mod} 6..8`, label: 'Switch to Editor / Canvas / Terminal' },
+        { keys: `${mod} 4`, label: 'Switch to Claude' },
+        { keys: `${mod} 5..7`, label: 'Switch to Editor / Canvas / Terminal' },
         { keys: `${mod} [`, label: 'Back — previous solo in history' },
         { keys: `${mod} ]`, label: 'Forward — undo a Back step' },
         { keys: `${mod} \\`, label: 'Toggle UI density — Comfortable / Compact' },
@@ -59,7 +59,7 @@
         { keys: 'j / k', label: 'Move selection in inbox lists' },
         { keys: 'o', label: 'Open focused row in browser' },
         { keys: 'filter chips', label: 'Search + role + state + repo / project / level filters persist per solo across switches and restarts' },
-        { keys: 'right-click row', label: 'Card actions menu — Send to Claude / Cursor, Open in browser, Copy ref' }
+        { keys: 'right-click row', label: 'Card actions menu — Send to Claude, Open in browser, Copy ref' }
       ]
     },
     {
@@ -85,7 +85,7 @@
       ]
     },
     {
-      title: 'Agent (Claude / Cursor)',
+      title: 'Agent (Claude)',
       rows: [
         { keys: 'model · effort', label: 'Composer footer picker — Fable 5 / Mythos 5 / Opus 4.8 (+1M) / Opus 4.7 / Sonnet 4.6 / Haiku 4.5, plus the thinking-effort dial' },
         { keys: 'Enter', label: 'Send message' },
@@ -187,7 +187,7 @@
     {
       title: 'Right-click context menus',
       rows: [
-        { keys: 'PR / Jira / Sentry row', label: 'Send to Claude · Send to Cursor · Open in browser · Copy URL / key / short-id' },
+        { keys: 'PR / Jira / Sentry row', label: 'Send to Claude · Open in browser · Copy URL / key / short-id' },
         { keys: 'Chat message', label: 'Save to memory · Copy text · (user) Edit + resend · (user) Resend' },
         { keys: 'Session row', label: 'Rename · Copy transcript · Save to memory · Delete chat (auto-distills first)' },
         { keys: 'File tree row', label: 'Reveal in Finder · Copy path · Rename · Delete' }
@@ -196,7 +196,7 @@
     {
       title: 'Drag-and-drop',
       rows: [
-        { keys: 'Inbox row → rail', label: 'Drop PR / Jira / Sentry on Claude or Cursor rail icon to send as context' },
+        { keys: 'Inbox row → rail', label: 'Drop PR / Jira / Sentry on the Claude rail icon to send as context' },
         { keys: 'Inbox row → Canvas', label: 'Drop on Canvas to pin as a live card (state syncs with the source)' },
         { keys: 'Chat msg grip', label: 'Hover a chat message → ⋮⋮ grip icon → drag to Canvas to pin as a sticky' },
         { keys: 'File → Composer', label: 'Drop a file from Finder or the editor tree to attach as @mention' }
@@ -224,7 +224,7 @@
     {
       title: 'Editor ⇄ Agent (docked chat)',
       rows: [
-        { keys: 'Link chip', label: 'Editor header → Link picker docks a Claude / Cursor chat beside the buffer (Cursor-style split)' },
+        { keys: 'Link chip', label: 'Editor header → Link picker docks a Claude chat beside the buffer (Cursor-style split)' },
         { keys: 'auto-follow', label: 'Linked sessions track the editor\'s repo — switching the folder re-points their cwd in lockstep' },
         { keys: 'Unlink', label: 'Chip ✕ in the editor header detaches the session; the chat itself survives in its solo' }
       ]

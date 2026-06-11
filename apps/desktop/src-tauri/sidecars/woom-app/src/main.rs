@@ -1,4 +1,4 @@
-//! woom-app — MCP sidecar that lets Claude / Cursor drive the
+//! woom-app — MCP sidecar that lets Claude drive the
 //! Woom UI itself: open detail panes, switch top-level views, add
 //! editor instances, prompt the user to connect a missing source.
 //!
@@ -48,7 +48,6 @@ const VALID_VIEWS: &[&str] = &[
     "jira",
     "sentry",
     "claude",
-    "cursor",
     "editor",
     "canvas",
     "terminal",
@@ -59,7 +58,7 @@ const VALID_VIEWS: &[&str] = &[
 ];
 
 const VALID_SOURCES: &[&str] = &[
-    "github", "jira", "sentry", "claude", "cursor",
+    "github", "jira", "sentry", "claude",
     "slack", "linear", "notion", "gitlab", "teams", "asana",
     "codex", "aider", "copilot",
 ];
@@ -69,7 +68,7 @@ const VALID_PR_TABS: &[&str] = &[
 ];
 
 const VALID_INSTANCE_KINDS: &[&str] = &[
-    "github", "jira", "sentry", "claude", "cursor", "editor",
+    "github", "jira", "sentry", "claude", "editor",
 ];
 
 const VALID_REPO_SECTIONS: &[&str] = &[
@@ -149,7 +148,7 @@ struct OpenSentryEventParams {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct SwitchViewParams {
     /// Which app / surface to switch to. One of:
-    /// `home`, `github`, `jira`, `sentry`, `claude`, `cursor`, `editor`,
+    /// `home`, `github`, `jira`, `sentry`, `claude`, `editor`,
     /// `canvas`, `terminal`, `rules`, `library`, `connections`,
     /// `settings`. Each value maps to a full-screen solo (the rail's
     /// icons map 1:1 to these names).
@@ -159,7 +158,7 @@ struct SwitchViewParams {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct OpenConnectModalParams {
     /// Source/agent id whose connect modal to open. One of:
-    /// github, jira, sentry, claude, cursor, slack, linear, notion,
+    /// github, jira, sentry, claude, slack, linear, notion,
     /// gitlab, teams, asana, codex, aider, copilot. The modal renders
     /// install / token instructions appropriate for the source.
     source: String,
@@ -167,9 +166,9 @@ struct OpenConnectModalParams {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct AddAppInstanceParams {
-    /// Which app to spawn. One of: github, jira, sentry, claude, cursor,
+    /// Which app to spawn. One of: github, jira, sentry, claude,
     /// editor, canvas, terminal. Singleton apps (github/jira/sentry/
-    /// claude/cursor) just switch the rail; only editor/canvas/terminal
+    /// claude) just switch the rail; only editor/canvas/terminal
     /// actually create a fresh instance. Accepts `kind` or `type`.
     #[serde(alias = "type")]
     kind: String,
@@ -399,20 +398,18 @@ struct SetEditorRepoPathParams {
     /// Two-faced typing — runtime `Option<Value>`, advertised
     /// `Option<String>` via `schemars(with = …)`:
     ///
-    /// - Runtime is `Option<Value>` because cursor-agent has been
+    /// - Runtime is `Option<Value>` because agent CLIs have been
     ///   observed shipping this field as an array, a wrapped object,
     ///   or an empty string. `coerce_to_string` salvages the inner
     ///   path; recursive search through `extras` is the last fallback.
     ///
     /// - The advertised JSON Schema MUST declare a real `type`
-    ///   (`["string", "null"]`). Without that key, cursor-agent's
-    ///   tool-binder strips the field entirely from the LLM's call
-    ///   before the request reaches us — `repo_path=None` arrives
-    ///   regardless of what the model wrote. Claude is more lenient
-    ///   here, which is why the same prompt works on Claude but
-    ///   fails on Cursor without this attribute. The model sees
-    ///   `string` in the catalog, emits a string, and our runtime
-    ///   `Value` decodes the string just fine.
+    ///   (`["string", "null"]`). Stricter MCP tool-binders strip
+    ///   fields without one from the LLM's call before the request
+    ///   reaches us — `repo_path=None` arrives regardless of what
+    ///   the model wrote. The model sees `string` in the catalog,
+    ///   emits a string, and our runtime `Value` decodes the string
+    ///   just fine.
     #[serde(
         default,
         alias = "path",
@@ -461,7 +458,7 @@ struct SetAgentCwdParams {
     /// `folderPath`, `dirPath`, `fullPath`, `absolutePath`. Same Value
     /// trick AND `schemars(with = …)` rationale as
     /// `SetEditorRepoPathParams::repo_path` — without the schema
-    /// override, cursor-agent silently drops this field.
+    /// override, strict tool-binders silently drop this field.
     #[serde(
         default,
         alias = "path",
@@ -483,8 +480,8 @@ struct SetAgentCwdParams {
     extras: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
-/// Coerce a Value into a non-empty trimmed string when possible. cursor-
-/// agent has shipped this field as:
+/// Coerce a Value into a non-empty trimmed string when possible. Agent
+/// CLIs have shipped this field as:
 ///   - String("/Users/me/repo")            — happy path
 ///   - Array(["/Users/me/repo"])           — single-element wrap
 ///   - Object({"path": "/Users/me/repo"}) — over-eager nesting
@@ -538,8 +535,8 @@ fn find_field_recursive(
             }
         }
     }
-    // Walk known wrapper keys. cursor-agent / claude have both been seen
-    // wrapping arguments: `{"args": …}` is the most common, but other
+    // Walk known wrapper keys. Agent CLIs have been seen wrapping
+    // arguments: `{"args": …}` is the most common, but other
     // OpenAI-flavoured CLIs use `arguments`/`params`/`input`.
     for wrapper in ["args", "arguments", "params", "parameters", "input", "data", "payload"] {
         if let Some(inner) = map.get(wrapper) {
@@ -1143,7 +1140,7 @@ impl App {
     }
 
     #[tool(
-        description = "Switch Woom's active solo (top-level app). One of: `home`, `github`, `jira`, `sentry`, `claude`, `cursor`, `editor`, `canvas`, `terminal`, `rules`, `library`, `connections`, `settings`. Each value maps 1:1 to a rail icon. Use when the user wants to navigate (\"open github\", \"go to jira\", \"show me sentry issues\"). For SCOPED navigation (specific repo / project / sprint / sentry filter), prefer `open_github_repo` / `open_jira_tab` / `open_sentry_tab` instead — they switch the solo AND apply filters in one call."
+        description = "Switch Woom's active solo (top-level app). One of: `home`, `github`, `jira`, `sentry`, `claude`, `editor`, `canvas`, `terminal`, `rules`, `library`, `connections`, `settings`. Each value maps 1:1 to a rail icon. Use when the user wants to navigate (\"open github\", \"go to jira\", \"show me sentry issues\"). For SCOPED navigation (specific repo / project / sprint / sentry filter), prefer `open_github_repo` / `open_jira_tab` / `open_sentry_tab` instead — they switch the solo AND apply filters in one call."
     )]
     async fn switch_view(
         &self,
@@ -1157,7 +1154,7 @@ impl App {
     }
 
     #[tool(
-        description = "Open the connect / status modal for a source or agent. Use this when the user mentions an integration that isn't connected yet (\"do I have Slack hooked up?\", \"connect Sentry\") — surface the modal so they can finish setup. Source ids: github, jira, sentry, claude, cursor, slack, linear, notion, gitlab, teams, asana, codex, aider, copilot."
+        description = "Open the connect / status modal for a source or agent. Use this when the user mentions an integration that isn't connected yet (\"do I have Slack hooked up?\", \"connect Sentry\") — surface the modal so they can finish setup. Source ids: github, jira, sentry, claude, slack, linear, notion, gitlab, teams, asana, codex, aider, copilot."
     )]
     async fn open_connect_modal(
         &self,
@@ -1171,7 +1168,7 @@ impl App {
     }
 
     #[tool(
-        description = "Spawn a new instance of an app. Kinds: `github` (PR/issue inbox), `jira` (Jira inbox), `sentry` (Sentry issues inbox), `claude` (Claude chat), `cursor` (Cursor chat), `editor` (file browser + editor), `canvas` (whiteboard), `terminal` (PTY shell). For `editor`, optionally pass `repo_path` to open a folder immediately. Singleton apps (github/jira/sentry/claude/cursor) ignore the spawn and just switch the rail to them — only `editor`/`canvas`/`terminal` actually support multiple instances. Use whenever the user asks to \"open another Editor for /Users/me/Repos/foo\" / \"give me a second terminal\"."
+        description = "Spawn a new instance of an app. Kinds: `github` (PR/issue inbox), `jira` (Jira inbox), `sentry` (Sentry issues inbox), `claude` (Claude chat), `editor` (file browser + editor), `canvas` (whiteboard), `terminal` (PTY shell). For `editor`, optionally pass `repo_path` to open a folder immediately. Singleton apps (github/jira/sentry/claude) ignore the spawn and just switch the rail to them — only `editor`/`canvas`/`terminal` actually support multiple instances. Use whenever the user asks to \"open another Editor for /Users/me/Repos/foo\" / \"give me a second terminal\"."
     )]
     async fn add_app_instance(
         &self,
@@ -1454,7 +1451,7 @@ impl App {
     }
 
     #[tool(
-        description = "Change an agent session's cwd (working directory). Use when the user says \"switch yourself to /path\" / \"point Claude at /repo\" / \"have the cursor agent work on X\". For yourself, pass `target=\"self\"` — the OS process running this turn keeps its old spawn-time cwd, BUT you can keep working in the new repo within the same turn by addressing files with absolute paths (Read/Write/Edit) and prefixing shell commands with `cd <new_path> && ...`. The next turn spawns fresh with the new cwd as default, so the absolute-path workaround is a one-turn thing. For another agent instance, pass `instance_name` (e.g. \"Mona-Lisa\") or `instance_id`. Do NOT use this to create a new agent — use add_app_instance for that."
+        description = "Change an agent session's cwd (working directory). Use when the user says \"switch yourself to /path\" / \"point Claude at /repo\". For yourself, pass `target=\"self\"` — the OS process running this turn keeps its old spawn-time cwd, BUT you can keep working in the new repo within the same turn by addressing files with absolute paths (Read/Write/Edit) and prefixing shell commands with `cd <new_path> && ...`. The next turn spawns fresh with the new cwd as default, so the absolute-path workaround is a one-turn thing. For another agent instance, pass `instance_name` (e.g. \"Mona-Lisa\") or `instance_id`. Do NOT use this to create a new agent — use add_app_instance for that."
     )]
     async fn set_agent_cwd(
         &self,
@@ -2107,7 +2104,7 @@ impl App {
     // Distinct from `terminal_run`: `terminal_run` BLOCKS until the command
     // finishes and is hosted in a user-visible PTY. `bg_spawn` returns
     // immediately, the process stays alive, and the user sees it in the
-    // Preview pane on the right of the Claude/Cursor solo. Use bg_* for
+    // Preview pane on the right of the Claude solo. Use bg_* for
     // dev servers, file watchers, test loops, anything long-running. The
     // `bg_wait_line` tool turns the persistent stream into discrete
     // "react when X appears" events without polling.
@@ -2790,7 +2787,7 @@ struct EnsureTerminalParams {
     /// Art-name of the terminal instance to ensure (e.g. "Vermeer",
     /// "Notre-Dame"). When omitted, defaults to the primary terminal
     /// instance. Accepts the alias `name`. Same `schemars(with = …)`
-    /// trick as `SetEditorRepoPathParams` so cursor-agent doesn't
+    /// trick as `SetEditorRepoPathParams` so strict tool-binders don't
     /// strip the field.
     #[serde(
         default,
@@ -3188,13 +3185,13 @@ impl ServerHandler for App {
              - open_sentry_issue — open a Sentry issue's slide-over.\n\
              \n\
              ## Top-level navigation (switch solos)\n\
-             - switch_view — change the active solo (home / github / jira / sentry / claude / cursor / editor / canvas / terminal / rules / library / connections / settings). Use ONLY when the user wants the bare solo without any specific scope; if they name a repo / project / sprint / Sentry filter, prefer the targeted opener below.\n\
+             - switch_view — change the active solo (home / github / jira / sentry / claude / editor / canvas / terminal / rules / library / connections / settings). Use ONLY when the user wants the bare solo without any specific scope; if they name a repo / project / sprint / Sentry filter, prefer the targeted opener below.\n\
              - open_github_repo — GitHub solo + specific repo on a section (code/pulls/issues/actions/releases). Pass `path` with `section=code` to drill into a file (\"open src/lib/auth.ts in efficiently\").\n\
              - open_jira_tab — Jira solo + Jira filters (project_key / status_name / search / board_ids / sprint_ids). Use for \"my Jira tickets in DEVOPS\", \"sprint 160 in Jira\".\n\
              - open_sentry_tab — Sentry solo + Sentry filters (projects / search / status / level / environment). Use for \"production crashes\", \"unresolved errors in checkout-web\".\n\
              \n\
              ## App instances\n\
-             Solos can host multiple instances (editor / canvas / terminal) — each with a curated art-name (\"Vermeer\", \"Hopper\", \"Sagrada-Familia\"). The rail's icon for that kind shows a popover listing them. Singleton solos (github / jira / sentry / claude / cursor) always have exactly one instance.\n\
+             Solos can host multiple instances (editor / canvas / terminal) — each with a curated art-name (\"Vermeer\", \"Hopper\", \"Sagrada-Familia\"). The rail's icon for that kind shows a popover listing them. Singleton solos (github / jira / sentry / claude) always have exactly one instance.\n\
              - add_app_instance — spawn a NEW instance (kind=editor/canvas/terminal). For editor, optionally pass `repo_path` to open a folder immediately. Singleton kinds just switch the rail to that solo. Use ONLY when the user explicitly asks for a new/another instance. Do NOT use for \"switch the editor to /path\" — that's set_editor_repo_path.\n\
              - set_editor_repo_path — change an EXISTING editor instance's open folder. Linked agents auto-follow. CANONICAL shape: `{\"instance_name\": \"<art-name>\", \"repo_path\": \"/abs/path\"}`. The handler is permissive: aliases accepted (`path`, `folder`, `directory`, `cwd`, `repo`, `repoPath`, `folderPath`, `dirPath`, `fullPath`, `absolutePath` for the path; `name`, `instanceName` for the name; `id`, `instanceId`, `uuid` for the id), and the whole arguments object can be wrapped under `args` / `arguments` / `params` / `input`.\n\
              - set_agent_cwd — change an agent session's cwd. `target=self` for yourself, or `instance_name` for another agent instance. `repo_path` accepts the same aliases and wrapper shapes as set_editor_repo_path. Effective from the next turn.\n\
@@ -3351,7 +3348,7 @@ mod tests {
 
     #[test]
     fn wrapped_in_args() {
-        // cursor-agent has been observed nesting the whole arguments
+        // Agent CLIs have been observed nesting the whole arguments
         // payload under `args`. The handler must search recursively.
         let v = json!({"args": {"instance_name": "Raphael", "repo_path": "/y"}});
         let (repo, name, _) = parse_editor(v);
@@ -3417,7 +3414,7 @@ mod tests {
 
     /// Regression guard: every field on `SetEditorRepoPathParams` and
     /// `SetAgentCwdParams` MUST advertise a non-empty `"type"` in its
-    /// JSON Schema. cursor-agent's tool-binder silently strips fields
+    /// JSON Schema. Strict MCP tool-binders silently strip fields
     /// whose schema lacks `type`, so the LLM call lands argless on
     /// the server (`repo_path=None`) regardless of what the model
     /// emitted. The historical bug shape was typing the fields as
@@ -3436,13 +3433,13 @@ mod tests {
             .unwrap_or_else(|| panic!("schema is missing property `{}`", field));
         let ty = prop.get("type").unwrap_or_else(|| {
             panic!(
-                "field `{}` has no `type` in its schema (cursor-agent will strip it). prop = {}",
+                "field `{}` has no `type` in its schema (strict tool-binders will strip it). prop = {}",
                 field, prop
             )
         });
         assert!(
             !ty.is_null(),
-            "field `{}` has explicit null `type` (cursor-agent will strip it)",
+            "field `{}` has explicit null `type` (strict tool-binders will strip it)",
             field
         );
         ty

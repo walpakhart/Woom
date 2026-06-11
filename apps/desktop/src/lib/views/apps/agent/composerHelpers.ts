@@ -27,9 +27,6 @@ export function modelContextLimit(model: string | null | undefined): number {
   if (model.startsWith('claude-sonnet-4-6')) return 200_000;
   if (model.startsWith('claude-sonnet')) return 1_000_000;
   if (model.startsWith('claude-haiku')) return 200_000;
-  /* Cursor models inherit the Anthropic limits when proxied. */
-  if (model.includes('opus-4')) return 1_000_000;
-  if (model.includes('sonnet-4-6')) return 200_000;
   return 200_000;
 }
 
@@ -70,30 +67,6 @@ export const claudeModels: { value: string; label: string }[] = [
   { value: 'claude-opus-4-7', label: 'Opus 4.7' },
   { value: 'claude-sonnet-4-6', label: 'Sonnet 4.6' },
   { value: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5' },
-];
-
-/* Curated subset of Cursor's model catalogue (the CLI exposes ~100
-   SKUs via `cursor-agent --list-models`, including every effort
-   tier and "fast" variant). We surface the headline picks across
-   vendors so the dropdown stays scannable; advanced effort tiers
-   stay reachable through the CLI directly. Keep ids EXACTLY as
-   `--list-models` reports — cursor-agent rejects the run with
-   "model does not exist" if we pass an alias it doesn't know. */
-export const cursorModels: { value: string; label: string }[] = [
-  { value: 'auto', label: 'Auto' },
-  { value: 'composer-2', label: 'Composer 2' },
-  { value: 'claude-4.6-sonnet-medium', label: 'Sonnet 4.6' },
-  { value: 'claude-4.6-sonnet-medium-thinking', label: 'Sonnet 4.6 Thinking' },
-  { value: 'claude-opus-4-7-medium', label: 'Opus 4.7' },
-  { value: 'claude-opus-4-7-high', label: 'Opus 4.7 High' },
-  { value: 'claude-opus-4-7-thinking-medium', label: 'Opus 4.7 Thinking' },
-  { value: 'gpt-5.5-medium', label: 'GPT 5.5' },
-  { value: 'gpt-5.5-high', label: 'GPT 5.5 High' },
-  { value: 'gpt-5.4-medium', label: 'GPT 5.4' },
-  { value: 'gpt-5.3-codex', label: 'Codex 5.3' },
-  { value: 'gpt-5.1', label: 'GPT 5.1' },
-  { value: 'gemini-3.1-pro', label: 'Gemini 3.1 Pro' },
-  { value: 'grok-4.3', label: 'Grok 4.3' },
 ];
 
 export const claudeEffort: { value: string; label: string }[] = [

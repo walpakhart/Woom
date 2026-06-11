@@ -291,10 +291,9 @@ export function handleInboxOrViewMcp(
       } else {
         const instName = pickDeep(input as Record<string, unknown>, INSTANCE_NAME_KEYS_DEEP);
         const instId = pickDeep(input as Record<string, unknown>, INSTANCE_ID_KEYS_DEEP);
-        const inst = deps.findInstanceByNameOrId('claude', instName, instId)
-          ?? deps.findInstanceByNameOrId('cursor', instName, instId);
+        const inst = deps.findInstanceByNameOrId('claude', instName, instId);
         if (inst) {
-          deps.setView(inst.kind === 'cursor' ? 'cursorApp' : 'claudeApp');
+          deps.setView('claudeApp');
           sessId = sessionsState.activeByInstance[inst.id] ?? null;
         }
       }
@@ -309,7 +308,7 @@ export function handleInboxOrViewMcp(
     case 'mcp__app__add_app_instance': {
       const kindRaw = str('kind').toLowerCase();
       const VALID_KINDS: PanelKind[] = [
-        'github', 'jira', 'sentry', 'claude', 'cursor',
+        'github', 'jira', 'sentry', 'claude',
         'editor', 'canvas', 'terminal',
       ];
       if (!(VALID_KINDS as readonly string[]).includes(kindRaw)) return true;
@@ -319,7 +318,6 @@ export function handleInboxOrViewMcp(
         jira: 'jiraApp',
         sentry: 'sentryApp',
         claude: 'claudeApp',
-        cursor: 'cursorApp',
         editor: 'editorApp',
         canvas: 'canvasApp',
         terminal: 'terminalApp',

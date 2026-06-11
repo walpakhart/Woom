@@ -12,8 +12,7 @@
 //   - UserPromptSubmit hook gating.
 //   - Crash-recovery recap + uuid rotation when `interrupted=true`.
 //   - First-turn preamble (cwd snapshot + recall terms).
-//   - Mention bake-in (file refs → image vision blocks for Claude,
-//     path-pointer text for Cursor).
+//   - Mention bake-in (file refs → image vision blocks).
 //   - Resume-orphan self-heal with a single recursive retry.
 //   - Stop hook + statusline refresh + native completion notify.
 //   - SDD silent-prompt drain + queue drain in the finally block.
@@ -53,7 +52,7 @@ import type { ClaudeSession, Mention } from '$lib/types';
 
 export interface SendOpts {
   silent?: boolean;
-  kind?: 'claude' | 'cursor';
+  kind?: 'claude';
   /** Programmatic prompt — SDD advance, DW verifier, bg-task notify and
    *  the pendingSilent drain pass their text HERE instead of writing it
    *  into `session.input`. The composer input belongs to the user; auto
@@ -122,16 +121,14 @@ export function createSendClaudeMessage(deps: SendClaudeMessageDeps) {
     const text = (opts.prompt ?? s.input).trim();
     if (!opts.silent && (await deps.handleSlashCommand(text, s))) return;
     const id = s.id;
-    const kind = (s.agentKind ?? 'claude') as 'claude' | 'cursor';
-    /* Quota guard (SDD `sdd-98a42f3bdb` Phase 2). Cursor sessions use
-     * subscription credits, not Anthropic quota — skip the guard there.
-     * For Claude: if 5H or 7D utilization is at/above 95%, block the
-     * send + open the pause modal. On «wait» we queue the prompt into
-     * `pendingQueue` (same FIFO the composer's queue-while-sending UI
-     * uses) and mark `awaitingResume`; the watchdog auto-fires once
-     * quota drops back under 95%. On «cancel» we leave the user's
-     * input intact so they can edit + retry manually. */
-    if (kind === 'claude' && !opts.silent) {
+    /* Quota guard (SDD `sdd-98a42f3bdb` Phase 2). If 5H or 7D
+     * utilization is at/above 95%, block the send + open the pause
+     * modal. On «wait» we queue the prompt into `pendingQueue` (same
+     * FIFO the composer's queue-while-sending UI uses) and mark
+     * `awaitingResume`; the watchdog auto-fires once quota drops back
+     * under 95%. On «cancel» we leave the user's input intact so they
+     * can edit + retry manually. */
+    if (!opts.silent) {
       const pct5h = quotaState.usage?.five_hour?.utilization ?? 0;
       const pct7d = quotaState.usage?.seven_day?.utilization ?? 0;
       if (pct5h >= 95 || pct7d >= 95) {
@@ -164,7 +161,7 @@ export function createSendClaudeMessage(deps: SendClaudeMessageDeps) {
       try {
         const hookOut = await runHook('UserPromptSubmit', {
           session_id: id,
-          agent_kind: kind,
+          agent_kind: 'claude',
           prompt: text,
           cwd: s.cwd ?? null,
           worktree_path: s.worktreePath ?? null,
@@ -264,7 +261,6 @@ export function createSendClaudeMessage(deps: SendClaudeMessageDeps) {
     void deps.scrollChatBottom();
 
     const sess = sessionsState.list.find((x) => x.id === id);
-    const agentKindForPrompt = sess?.agentKind ?? 'claude';
     let prompt = text;
     if (mentionsSnapshot.length) {
       const ctx = mentionsSnapshot
@@ -272,11 +268,11 @@ export function createSendClaudeMessage(deps: SendClaudeMessageDeps) {
           if (m.source === 'file') {
             const abs = m.body ?? m.externalId;
             const kindLocal = m.isDir ? 'directory' : isImagePath(abs) ? 'image' : 'file';
-            if (kindLocal === 'image' && agentKindForPrompt === 'claude') return null;
-            const hint = kindLocal === 'image'
-              ? `This is an image attached by the user — load it via its absolute path to view it inline.`
-              : `You have Read / Glob / Grep tools — use them to inspect this ${kindLocal} when relevant.`;
-            const label = kindLocal === 'image' ? `Attached ${kindLocal}: ${m.title}` : `Referenced ${kindLocal}: @${m.externalId}`;
+            /* Images ride the vision channel (`imagePaths`), not the
+             * prompt text. */
+            if (kindLocal === 'image') return null;
+            const hint = `You have Read / Glob / Grep tools — use them to inspect this ${kindLocal} when relevant.`;
+            const label = `Referenced ${kindLocal}: @${m.externalId}`;
             return `${label}\nAbsolute path: ${abs}\n${hint}`;
           }
           return `@${m.externalId} — ${m.title}` + (m.body ? `\n\n${m.body}` : '');
@@ -296,9 +292,7 @@ export function createSendClaudeMessage(deps: SendClaudeMessageDeps) {
     const claudeUuid = sess?.claudeUuid ?? genUuid();
     const resume = Boolean(sess?.claudeResumable);
     const rules = sessionsState.userRules.trim();
-    const agentKind = sess?.agentKind ?? 'claude';
-    const cursorModel = agentKind === 'cursor' ? (sess?.cursorModel ?? null) : null;
-    const claudeModel = agentKind === 'claude' ? (sess?.claudeModel ?? null) : null;
+    const claudeModel = sess?.claudeModel ?? null;
     await loadClaudeMd(sess?.worktreePath ?? sess?.cwd ?? null).catch(() => {});
     const { system: appContext, turn: appTurnContext } = buildAgentAppContext(id);
     // Volatile layout/canvas/cwd-recap rides the user message, NOT the
@@ -306,9 +300,9 @@ export function createSendClaudeMessage(deps: SendClaudeMessageDeps) {
     if (appTurnContext.trim()) {
       prompt = `${prompt}\n\n---\n\n${appTurnContext}`;
     }
-    const imagePaths = agentKind === 'claude' ? userImages.map((u) => u.path) : [];
+    const imagePaths = userImages.map((u) => u.path);
 
-    if (agentKind === 'claude' && sess?.linkedCanvasId) {
+    if (sess?.linkedCanvasId) {
       const c = ensureCanvasLoaded(sess.linkedCanvasId);
       if (c && (c.shapes.length > 0 || c.edges.length > 0)) {
         try {
@@ -330,8 +324,6 @@ export function createSendClaudeMessage(deps: SendClaudeMessageDeps) {
           claudeUuid,
           resume,
           rules: rules || null,
-          agentKind,
-          cursorModel,
           claudeModel,
           appContext,
           imagePaths,
@@ -397,7 +389,7 @@ export function createSendClaudeMessage(deps: SendClaudeMessageDeps) {
             });
             notify({
               kind: 'info',
-              title: `${s.agentKind === 'cursor' ? 'Cursor' : 'Claude'} session refreshed`,
+              title: 'Claude session refreshed',
               body: 'Prior CLI history was unavailable; restarted with the in-app transcript baked into context. Continuing your turn.',
               ttlMs: 6000,
             });
@@ -422,14 +414,14 @@ export function createSendClaudeMessage(deps: SendClaudeMessageDeps) {
             at: new Date().toISOString(),
           });
         } else {
-          replaceLastAssistant(id, `**${s.agentKind === 'cursor' ? 'Cursor' : 'Claude'} failed:** ${msg}`);
+          replaceLastAssistant(id, `**Claude failed:** ${msg}`);
           if (appHasFocus()) {
-            notifyError(e, { title: `${s.agentKind === 'cursor' ? 'Cursor' : 'Claude'} run failed` });
+            notifyError(e, { title: 'Claude run failed' });
           }
         }
         if (!appHasFocus() && !cancelled) {
           notifyClaudeRunComplete({
-            agentLabel: s.agentKind === 'cursor' ? 'Cursor' : 'Claude',
+            agentLabel: 'Claude',
             sessionTitle: s.title || 'Untitled chat',
             ok: false,
             durationMs: Date.now() - runStartedAt,
@@ -451,7 +443,7 @@ export function createSendClaudeMessage(deps: SendClaudeMessageDeps) {
       }
       void runHook('Stop', {
         session_id: id,
-        agent_kind: kind,
+        agent_kind: 'claude',
         errored: !!erroredOut,
         duration_ms: Date.now() - runStartedAt,
         message_count: finalSess?.messages.length ?? 0,
@@ -462,7 +454,7 @@ export function createSendClaudeMessage(deps: SendClaudeMessageDeps) {
       }
       if (!appHasFocus() && !erroredOut) {
         notifyClaudeRunComplete({
-          agentLabel: s.agentKind === 'cursor' ? 'Cursor' : 'Claude',
+          agentLabel: 'Claude',
           sessionTitle: finalSess?.title || s.title || 'Untitled chat',
           ok: true,
           durationMs: Date.now() - runStartedAt,
@@ -482,11 +474,10 @@ export function createSendClaudeMessage(deps: SendClaudeMessageDeps) {
         if (deferred && (sessAfterDrain?.pendingQueue?.length ?? 0) === 0) {
           /* Drain via opts.prompt — routing through `input` here used to
            * wipe whatever the user typed during the finished turn. */
-          const kindForDrain = sessAfterDrain?.agentKind ?? 'claude';
           sessionsState.activeClaudeId = id;
-          sessionsState.activeIds[kindForDrain] = id;
+          sessionsState.activeIds.claude = id;
           queueMicrotask(() => {
-            void send({ silent: true, kind: kindForDrain, prompt: deferred });
+            void send({ silent: true, prompt: deferred });
           });
           return;
         }
@@ -513,7 +504,7 @@ export function createSendClaudeMessage(deps: SendClaudeMessageDeps) {
         }
         updateSession(id, { pendingQueue: rest, input: nextEntry.text, mentions: nextEntry.mentions });
         sessionsState.activeClaudeId = id;
-        sessionsState.activeIds[sessAfterDrain!.agentKind] = id;
+        sessionsState.activeIds.claude = id;
         queueMicrotask(() => {
           void send();
         });

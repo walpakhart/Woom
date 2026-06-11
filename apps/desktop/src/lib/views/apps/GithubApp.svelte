@@ -36,7 +36,6 @@
     onCardMouseDown: (e: MouseEvent) => void;
     isClickNotDrag: (e: MouseEvent) => boolean;
     onSendToClaude: (item: InboxItem) => void;
-    onSendToCursor: (item: InboxItem) => void;
     onFixWithDw: (item: InboxItem) => void;
   }
   let p: Props = $props();
@@ -68,7 +67,6 @@
         onCardMouseDown={p.onCardMouseDown}
         isClickNotDrag={p.isClickNotDrag}
         onSendToClaude={p.onSendToClaude}
-        onSendToCursor={p.onSendToCursor}
         onFixWithDw={p.onFixWithDw}
       />
     {/snippet}
@@ -94,9 +92,6 @@
             mergeDisabled={p.mergeDisabled}
             onSendToClaude={() => {
               if (inboxState.focusItem) p.onSendToClaude(inboxState.focusItem);
-            }}
-            onSendToCursor={() => {
-              if (inboxState.focusItem) p.onSendToCursor(inboxState.focusItem);
             }}
           />
         {:else}

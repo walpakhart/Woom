@@ -377,7 +377,6 @@
     const messageIndex = typeof p.messageIndex === 'number' ? p.messageIndex : 0;
     const snapshot = (p.snapshot ?? null) as {
       role?: 'user' | 'assistant' | 'system';
-      agentKind?: 'claude' | 'cursor';
       sessionTitle?: string;
       excerpt?: string;
       at?: string;
@@ -393,7 +392,6 @@
     return {
       sessionId, messageIndex,
       role: live?.message.role ?? snapshot?.role ?? 'assistant',
-      agentKind: live?.session.agentKind ?? snapshot?.agentKind ?? 'claude',
       sessionTitle: live?.session.title ?? snapshot?.sessionTitle ?? '(session gone)',
       excerpt: liveExcerpt ?? snapshot?.excerpt ?? '',
       at: live?.message.at ?? snapshot?.at ?? '',
@@ -729,14 +727,10 @@
     </div>
   {:else if shape.kind === 'chat-message-card'}
     <div class="cv-card cv-card--chat" class:cv-card--stale={pChatCard.stale}>
-      <div
-        class="cv-card-stripe"
-        class:cv-card-stripe--claude={pChatCard.agentKind === 'claude'}
-        class:cv-card-stripe--cursor={pChatCard.agentKind === 'cursor'}
-      ></div>
+      <div class="cv-card-stripe cv-card-stripe--claude"></div>
       <div class="cv-card-body">
         <div class="cv-card-meta">
-          <span class="cv-card-chip">{pChatCard.role === 'user' ? 'You' : pChatCard.agentKind}</span>
+          <span class="cv-card-chip">{pChatCard.role === 'user' ? 'You' : 'claude'}</span>
           <span class="cv-card-chip">{pChatCard.sessionTitle.slice(0, 24)}</span>
           {#if pChatCard.stale}<span class="cv-card-stale-tag">snapshot</span>{/if}
         </div>
@@ -1090,7 +1084,6 @@
   .cv-card-stripe--sentry  { background: #F88F74; }
   .cv-card-stripe--file    { background: #E8A33A; }
   .cv-card-stripe--claude  { background: #D97757; }
-  .cv-card-stripe--cursor  { background: #B099F6; }
 
   .cv-card-body {
     flex: 1 1 auto;

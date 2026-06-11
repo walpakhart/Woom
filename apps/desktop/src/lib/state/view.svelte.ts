@@ -11,7 +11,6 @@ export type View =
   | 'githubApp'
   | 'sentryApp'
   | 'claudeApp'
-  | 'cursorApp'
   | 'editorApp'
   | 'canvasApp'
   | 'terminalApp'

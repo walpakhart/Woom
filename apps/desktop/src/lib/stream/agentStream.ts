@@ -1,11 +1,7 @@
-// Unified agent streaming-event handler. Handles both Claude and Cursor
-// — Cursor's native event shape is normalized into Claude-style by
-// `cursor.rs::normalize_event` before it reaches us, so a single switch
-// here drives both agents' UI. The CLIs emit `--output-format
+// Agent streaming-event handler. The Claude CLI emits `--output-format
 // stream-json` (one JSON object per line); the Tauri backend parses
-// each line and re-emits via `claude:stream:<sessionId>` (channel name
-// is historical — it carries normalized events for both agents); we
-// dispatch each one through `handleStreamEvent`.
+// each line and re-emits via `claude:stream:<sessionId>`; we dispatch
+// each one through `handleStreamEvent`.
 //
 // The handler turns:
 //  - text blocks      → assistant message deltas
@@ -53,7 +49,7 @@ export type ToolEventKind = 'tool_use' | 'tool_result';
 
 export interface ToolStreamEvent {
   kind: ToolEventKind;
-  /** Owning agent session id (Claude / Cursor session). */
+  /** Owning agent session id. */
   sessionId: string;
   /** Stable id from the CLI — same value on the matching `tool_use` and
    *  `tool_result` so subscribers can correlate. May be empty for
@@ -181,7 +177,7 @@ export interface AgentStreamHandlers {
    *  typically forward to `appendToLastAssistant` and scroll the chat. */
   onAssistantDelta: (sessionId: string, delta: string) => void;
   /** Called with `thinking` content blocks emitted by reasoning models
-   *  (Claude `*-thinking-*`, Cursor reasoning models). The default
+   *  (Claude `*-thinking-*`). The default
    *  handler routes these into the assistant message's `thinking`
    *  field — AgentApp collapses them into an expandable pill so
    *  the user can inspect the chain-of-thought after the answer
@@ -285,18 +281,12 @@ export function handleStreamEvent(
   if (!parsed || typeof parsed !== 'object') return;
   const msg = parsed as Record<string, unknown>;
 
-  // `result` events terminate every cursor-agent turn AND every
-  // claude-code turn. Cursor names the fields camelCase
-  // (`inputTokens`, `cacheReadTokens`, `cacheWriteTokens`,
-  // `outputTokens`); Claude's CLI shape uses snake_case
-  // (`input_tokens`, `cache_read_input_tokens`,
+  // `result` events terminate every claude-code turn. The CLI's
+  // shape uses snake_case (`input_tokens`, `cache_read_input_tokens`,
   // `cache_creation_input_tokens`, `output_tokens`) — same names it
-  // uses on the per-message `assistant` events. We try both naming
-  // conventions for every field so a Claude `result` event doesn't
-  // stamp a phantom `↑ 0 ↓ 0` onto the bubble (which is what the
-  // camelCase-only path was doing before) and a Cursor `result`
-  // doesn't accidentally fall through to the assistant branch
-  // below. Skip the stamp if every count came back 0 — the CLI
+  // uses on the per-message `assistant` events; we also accept the
+  // camelCase spellings defensively since CLI shapes have drifted
+  // before. Skip the stamp if every count came back 0 — the CLI
   // sometimes emits an empty `result.usage` envelope before the
   // real one and we don't want that wiping a real usage already
   // stamped from the assistant event right before. */
@@ -330,7 +320,7 @@ export function handleStreamEvent(
       // carry the correct final-step usage; if we've seen any of
       // those for this session, prefer them and ignore the result
       // event's number entirely. Falls back to using `result.usage`
-      // when no per-step usage was seen (cursor flow + edge cases).
+      // when no per-step usage was seen (edge cases).
       const stepSeen = perTurnStepUsageSeen.get(sessionId) === true;
       if (!stepSeen) {
         merged.onUsage?.(sessionId, {
@@ -339,12 +329,10 @@ export function handleStreamEvent(
           cacheReadTokens: cacheRead,
           outputTokens: out,
           contextSize: inp + cacheWrite + cacheRead,
-          // Cursor doesn't surface a stable model id on the result
-          // event; Claude's `result` may carry one but we already
-          // pull the model from the in-stream assistant events above
-          // so either way leaving null is safe — the per-message
+          // The model is already pulled from the in-stream assistant
+          // events above, so leaving null is safe — the per-message
           // badge falls back gracefully and the context-ring chip
-          // uses the session's `cursorModel` / `claudeModel` field.
+          // uses the session's `claudeModel` field.
           model: null
         });
       }
@@ -434,11 +422,11 @@ export function handleStreamEvent(
     const u = inner.usage as Record<string, unknown>;
     /* Try BOTH naming conventions on every field — Claude CLI uses
      * snake_case (`input_tokens`, `cache_creation_input_tokens`,
-     * `cache_read_input_tokens`, `output_tokens`) but cursor-agent
-     * uses camelCase (`inputTokens`, `cacheWriteTokens`,
-     * `cacheReadTokens`, `outputTokens`) on its per-step `assistant`
+     * `cache_read_input_tokens`, `output_tokens`) but some agent CLIs
+     * have shipped camelCase (`inputTokens`, `cacheWriteTokens`,
+     * `cacheReadTokens`, `outputTokens`) on their per-step `assistant`
      * envelopes. The result-event handler upstream already does this
-     * fallback; without doing it here too, cursor's per-step events
+     * fallback; without doing it here too, camelCase per-step events
      * fell through with `inp=0/out=0/cache=0`, the contextSize stamp
      * never fired, and the context ring sat at 0% forever. */
     const inp = numField(u, 'input_tokens') || numField(u, 'inputTokens');
@@ -662,19 +650,18 @@ export function handleStreamEvent(
         }
         if (name === 'Write') {
           // Write is a full-file overwrite. The payload carries the *new*
-          // contents and (for cursor-agent edits) optionally the exact
-          // pre-state via `prev_content` — see cursor.rs::extract_tool_shape.
+          // contents and optionally the exact pre-state via
+          // `prev_content`.
           //
           // Two paths:
-          //   1. `prev_content` arrived inline (cursor-agent supplied
-          //      `beforeFullFileContent` on the completed event). Best
-          //      case: we have the *exact* moment-of-edit baseline, no
-          //      git round-trip needed, and we can correctly distinguish
-          //      "modified" from "created" by looking at whether
-          //      `prev_content` is empty.
-          //   2. `prev_content` is missing (Claude's Write, or older
-          //      cursor-agent builds): ship a loading placeholder, then
-          //      ask Tauri for `git show HEAD:<path>` in the background.
+          //   1. `prev_content` arrived inline. Best case: we have the
+          //      *exact* moment-of-edit baseline, no git round-trip
+          //      needed, and we can correctly distinguish "modified"
+          //      from "created" by looking at whether `prev_content`
+          //      is empty.
+          //   2. `prev_content` is missing (Claude's Write): ship a
+          //      loading placeholder, then ask Tauri for
+          //      `git show HEAD:<path>` in the background.
           //      Three sub-outcomes (see backfillWriteOldText):
           //        • git_show finds it → real diff against HEAD.
           //        • file isn't tracked at HEAD but the parent is a repo
@@ -684,16 +671,16 @@ export function handleStreamEvent(
           //          Revert to delete.
           //
           // Why we can't just read pre-state at tool_use time: by the
-          // time the assistant block reaches us claude/cursor-agent has
-          // already executed Write — disk already holds the new content.
-          // The inline `prev_content` from cursor.rs and the HEAD
-          // backfill are the only post-hoc baselines we can recover.
+          // time the assistant block reaches us the agent has already
+          // executed Write — disk already holds the new content. The
+          // inline `prev_content` and the HEAD backfill are the only
+          // post-hoc baselines we can recover.
           const fp = typeof input.file_path === 'string' ? input.file_path : '';
           const content = typeof input.content === 'string' ? input.content : '';
           const inlinePrev =
             typeof input.prev_content === 'string' ? input.prev_content : '';
           if (fp) {
-            // Did cursor-agent (or anyone) ship us an exact pre-state?
+            // Did the agent ship us an exact pre-state?
             // We treat any present `prev_content` field as authoritative —
             // empty string means "file genuinely didn't exist before",
             // non-empty means "this is the literal pre-edit content".
@@ -734,53 +721,13 @@ export function handleStreamEvent(
           }
           continue;
         }
-        if (name === 'Delete') {
-          // Cursor's `deleteToolCall` — the agent removed a file. Rust
-          // normalizer (cursor.rs::extract_tool_shape) already pulled
-          // `prev_content` out of `result.success.prevContent` when
-          // available; we ship it as `oldText` so the diff card can
-          // render the deletion as a sea of red lines + offer Restore.
-          //
-          // Two sub-cases for missing prev_content:
-          //   • cursor-agent didn't include it (older builds, or shape
-          //     changed) → fall back to `git show HEAD:<file>`. Same
-          //     backfill machinery as Write uses; if the file was
-          //     tracked we recover the pre-deletion contents. If it
-          //     wasn't tracked there's no recoverable content and the
-          //     card's Restore button will create an empty file (which
-          //     is at least better than the current trace-pill "no
-          //     UX" state).
-          //   • the empty-prev-content case (binary file the CLI
-          //     refused to capture, or really an empty file) — Restore
-          //     creates an empty file at the path; user can re-delete
-          //     manually if that's not what they wanted.
-          const fp = typeof input.file_path === 'string' ? input.file_path : '';
-          const prev = typeof input.prev_content === 'string' ? input.prev_content : '';
-          if (fp) {
-            appendEditEvent(sessionId, {
-              toolId: id,
-              filePath: fp,
-              oldText: prev,
-              newText: '',
-              isCreate: false,
-              isDelete: true,
-              wholeFile: true,
-              // If we already have prevContent inline, the card is
-              // ready immediately. Otherwise wait on the git_show
-              // backfill, same as Write.
-              status: prev ? 'applied' : 'loading'
-            });
-            if (!prev) void backfillDeleteOldText(sessionId, id, fp);
-          }
-          continue;
-        }
         if (name === 'Bash') {
           // Claude has no dedicated Delete tool — file removals come
           // through the generic `Bash` tool with shapes like
           // `rm path`, `rm -f a b`, `unlink path`, etc. We sniff the
           // command for those simple shapes and synthesize a Delete
           // diff card per matched path so the user gets a Restore
-          // button (same UX as Cursor's deleteToolCall).
+          // button.
           //
           // Why not `continue` afterwards: bash commands are often
           // composite (`rm tmp && build`). Letting the generic
@@ -929,7 +876,7 @@ async function backfillWriteOldText(
 }
 
 /** Mirror of `backfillWriteOldText` for the Delete fallback path. We
- *  only end up here when cursor-agent didn't ship `prevContent` on the
+ *  only end up here when the agent didn't ship `prevContent` on the
  *  `deleteToolCall` event — rare, but cheaper to handle than to bail.
  *
  *  Three outcomes:

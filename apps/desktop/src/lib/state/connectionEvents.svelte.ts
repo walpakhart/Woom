@@ -24,8 +24,7 @@ export type ConnectionEventSource =
   | 'github'
   | 'jira'
   | 'sentry'
-  | 'claude'
-  | 'cursor';
+  | 'claude';
 
 export type ConnectionEventKind =
   | 'connected' /* refresh succeeded — source is live */

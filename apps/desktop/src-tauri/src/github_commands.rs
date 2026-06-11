@@ -3,11 +3,6 @@
 //! shared `token()` helper, calls into `crate::github::*`, and maps
 //! errors to the `String` shape Tauri serializes back to the
 //! frontend.
-//!
-//! `github_connect_pat` / `github_status` / `github_disconnect` are
-//! the connection-lifecycle trio — they also fan out to
-//! `crate::cursor_mcp::sync()` so `~/.cursor/mcp.json` mirrors the
-//! current keychain state.
 
 use crate::github;
 use crate::keychain;
@@ -35,7 +30,6 @@ pub async fn github_connect_pat(token: String) -> Result<GithubUser, String> {
     }
     let (user, _rate_limit) = github::fetch_user(&trimmed).await.map_err(|e| e.to_string())?;
     keychain::set(GITHUB_KEY, &trimmed).map_err(|e| e.to_string())?;
-    let _ = crate::cursor_mcp::sync();
     Ok(user)
 }
 
@@ -57,7 +51,6 @@ pub async fn github_status() -> Result<ConnectionStatus, String> {
 #[tauri::command]
 pub fn github_disconnect() -> Result<(), String> {
     keychain::delete(GITHUB_KEY).map_err(|e| e.to_string())?;
-    let _ = crate::cursor_mcp::sync();
     Ok(())
 }
 

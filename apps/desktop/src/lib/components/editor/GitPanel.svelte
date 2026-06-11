@@ -19,12 +19,10 @@
     repo: string;
     onStatusChange?: (files: FileStatus[]) => void;
     onOpenDiff?: (path: string, staged: boolean) => void;
-    /** Which agent the ✨-button should route to, or null to grey it out.
-        Parent picks this from the first AI session linked to *this* editor
-        (either Claude or Cursor). Both adapters ship a headless
-        commit-message generator, so the button works with whichever
-        agent the user has bridged. */
-    aiKind?: 'claude' | 'cursor' | null;
+    /** Whether the ✨-button routes to a linked Claude session, or
+        null to grey it out. Parent picks this from the first AI
+        session linked to *this* editor. */
+    aiKind?: 'claude' | null;
   }
   let { repo, onStatusChange, onOpenDiff, aiKind = null }: Props = $props();
 
@@ -209,10 +207,7 @@
     aiGenerating = true;
     aiError = null;
     try {
-      const msg = await invoke<string>('agent_generate_commit_message', {
-        repo,
-        agentKind: aiKind
-      });
+      const msg = await invoke<string>('agent_generate_commit_message', { repo });
       commitMsg = msg;
     } catch (e) {
       aiError = typeof e === 'string' ? e : String(e);
@@ -518,8 +513,8 @@
             onclick={generateAiCommitMessage}
             disabled={!aiKind || aiGenerating || !!busy}
             title={aiKind
-              ? `Ask the linked ${aiKind === 'claude' ? 'Claude' : 'Cursor'} chat to write a commit message from the staged diff`
-              : 'No Claude or Cursor chat is linked to this Editor — link one to enable AI commit messages'}
+              ? 'Ask the linked Claude chat to write a commit message from the staged diff'
+              : 'No Claude chat is linked to this Editor — link one to enable AI commit messages'}
             aria-label="Write commit message with AI"
           >
             {#if aiGenerating}

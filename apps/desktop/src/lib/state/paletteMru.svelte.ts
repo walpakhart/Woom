@@ -48,7 +48,6 @@ export type MruBadgeKind =
   | 'jira'
   | 'sentry'
   | 'claude'
-  | 'cursor'
   | 'action';
 
 export type MruSnapshot = {

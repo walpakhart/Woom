@@ -22,7 +22,7 @@
     };
   }
 
-  type Kind = 'claude' | 'cursor';
+  type Kind = 'claude';
 
   interface Props {
     kind: Kind;

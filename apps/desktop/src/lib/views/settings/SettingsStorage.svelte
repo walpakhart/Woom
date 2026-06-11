@@ -16,8 +16,7 @@
   /** 14 days in seconds — matches the SPEC §worktrees retention rule. */
   const ORPHAN_AGE_SECS = 14 * 24 * 60 * 60;
 
-  const claudeCount = $derived(sessionsState.list.filter((s) => s.agentKind === 'claude').length);
-  const cursorCount = $derived(sessionsState.list.filter((s) => s.agentKind === 'cursor').length);
+  const claudeCount = $derived(sessionsState.list.length);
   const totalMessages = $derived(
     sessionsState.list.reduce((acc, s) => acc + s.messages.length, 0)
   );
@@ -117,8 +116,7 @@
     { id: 'github', label: 'GitHub' },
     { id: 'jira', label: 'Jira' },
     { id: 'sentry', label: 'Sentry' },
-    { id: 'claude', label: 'Claude' },
-    { id: 'cursor', label: 'Cursor' }
+    { id: 'claude', label: 'Claude' }
   ];
 
   const filteredEvents = $derived(
@@ -132,8 +130,7 @@
       github: 0,
       jira: 0,
       sentry: 0,
-      claude: 0,
-      cursor: 0
+      claude: 0
     };
     for (const ev of connectionEventsState.events) c[ev.source]++;
     return c;
@@ -176,10 +173,6 @@
       <div class="stat-value mono">{claudeCount}</div>
     </div>
     <div class="stat">
-      <div class="stat-label">Cursor chats</div>
-      <div class="stat-value mono">{cursorCount}</div>
-    </div>
-    <div class="stat">
       <div class="stat-label">Total messages</div>
       <div class="stat-value mono">{totalMessages}</div>
     </div>
@@ -202,7 +195,7 @@
       <div class="stat-value mono">
         {#if worktreeStatLoading}…{:else}{formatBytes(worktreeBytes ?? 0)}{/if}
       </div>
-      <div class="stat-hint">isolated branches per Claude/Cursor run</div>
+      <div class="stat-hint">isolated branches per Claude run</div>
     </div>
   </div>
 

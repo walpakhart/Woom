@@ -70,8 +70,6 @@ export async function distillMemories(session: ClaudeSession): Promise<number> {
       claudeUuid: session.claudeUuid,
       resume: true,
       rules: null,
-      agentKind: 'claude',
-      cursorModel: null,
       claudeModel: session.claudeModel ?? null,
       appContext: null,
       imagePaths: [],

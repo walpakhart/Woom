@@ -17,13 +17,12 @@
     now: number;
     onClose: () => void;
     onOpenBrowser: (url: string) => void;
-    /** Hand the focused issue off to Claude / Cursor. Optional so
-     *  any existing call site that doesn't wire them up still
-     *  compiles — each header button is hidden when undefined. */
+    /** Hand the focused issue off to Claude. Optional so
+     *  any existing call site that doesn't wire it up still
+     *  compiles — the header button is hidden when undefined. */
     onSendToClaude?: () => void;
-    onSendToCursor?: () => void;
   }
-  let { issueId, now, onClose, onOpenBrowser, onSendToClaude, onSendToCursor }: Props = $props();
+  let { issueId, now, onClose, onOpenBrowser, onSendToClaude }: Props = $props();
 
   let issue = $state<SentryIssue | null>(null);
   let issueLoading = $state(false);
@@ -226,12 +225,6 @@
       <button class="sdp-btn sdp-btn--claude" onclick={onSendToClaude} disabled={!issue} title="Send this issue to Claude">
         <svg class="i i-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="m22 2-7 20-4-9-9-4 20-7z"/></svg>
         Send to Claude
-      </button>
-    {/if}
-    {#if onSendToCursor}
-      <button class="sdp-btn sdp-btn--cursor" onclick={onSendToCursor} disabled={!issue} title="Send this issue to Cursor">
-        <svg class="i i-sm" viewBox="0 0 24 24" fill="currentColor"><path d="M3 3l8 18 2-8 8-2z"/></svg>
-        Send to Cursor
       </button>
     {/if}
     <button class="sdp-btn" onclick={() => issue?.permalink && onOpenBrowser(issue.permalink)} disabled={!issue?.permalink} title="Open on Sentry">
@@ -492,16 +485,6 @@
     background: color-mix(in srgb, var(--src-claude) 18%, transparent);
     color: var(--accent-bright);
     border-color: color-mix(in srgb, var(--src-claude) 50%, transparent);
-  }
-  .sdp-btn--cursor {
-    color: var(--src-cursor, var(--text-1));
-    background: color-mix(in srgb, var(--src-cursor, var(--text-1)) 10%, transparent);
-    border-color: color-mix(in srgb, var(--src-cursor, var(--text-1)) 32%, transparent);
-  }
-  .sdp-btn--cursor:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--src-cursor, var(--text-1)) 22%, transparent);
-    color: var(--text-0);
-    border-color: color-mix(in srgb, var(--src-cursor, var(--text-1)) 50%, transparent);
   }
 
   .sdp-state { padding: 40px; text-align: center; color: var(--text-2); }

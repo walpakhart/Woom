@@ -2,13 +2,8 @@
 //! Each command pulls Sentry creds (host + org + token) via the shared
 //! `sentry_creds()` helper, calls into `crate::sentry::*`, and maps
 //! errors to the `String` shape Tauri serializes back to the frontend.
-//!
-//! `sentry_connect` / `sentry_status` / `sentry_disconnect` are the
-//! connection-lifecycle trio — they also fan out to
-//! `crate::cursor_mcp::sync()` so `~/.cursor/mcp.json` mirrors the
-//! current keychain state.
 
-use crate::{cursor_mcp, keychain, sentry, SentryConnectionStatus, SENTRY_KEY};
+use crate::{keychain, sentry, SentryConnectionStatus, SENTRY_KEY};
 use sentry::{
     SentryCredentials, SentryEnvironment, SentryEvent, SentryEventDetail, SentryIssue,
     SentryProject, SentryUser,
@@ -34,7 +29,6 @@ pub async fn sentry_connect(
     let user = sentry::validate(&creds).await?;
     let payload = serde_json::to_string(&creds).map_err(|e| e.to_string())?;
     keychain::set(SENTRY_KEY, &payload).map_err(|e| e.to_string())?;
-    let _ = cursor_mcp::sync();
     Ok(user)
 }
 
@@ -63,7 +57,6 @@ pub async fn sentry_status() -> Result<SentryConnectionStatus, String> {
 #[tauri::command]
 pub fn sentry_disconnect() -> Result<(), String> {
     keychain::delete(SENTRY_KEY).map_err(|e| e.to_string())?;
-    let _ = cursor_mcp::sync();
     Ok(())
 }
 

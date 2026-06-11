@@ -2,7 +2,7 @@
   /* InlineClaude — generic "Inline agents" right-pane shared by
      EditorApp and TerminalApp. Per-session row exposes:
        - per-row "Open" button: focuses the session AND switches the
-         top-level view to its agent app (Claude / Cursor)
+         top-level view to the Claude app
        - click on the row body: toggles an inline mini-composer below
          where the user can dash off a message without leaving the
          host app. Message delivery is via the parent's
@@ -44,7 +44,7 @@
      *  scoped to a specific session. */
     onOpenSession: (sessionId: string, agentInstanceId: string) => void;
     /** Optional: when present, the header surfaces a "+ Link…" picker
-     *  with every Claude / Cursor session that isn't already linked
+     *  with every Claude session that isn't already linked
      *  here. Letting the user attach a chat without leaving the app.
      *  Wired by TerminalApp; EditorApp leaves this undefined because
      *  it has its own header-level link picker in EditorView. */
@@ -62,7 +62,7 @@
   );
 
   const linkedAgents = $derived.by(() => {
-    const out: { sessionId: string; agentInstanceId: string; kind: 'claude' | 'cursor'; title: string; sending: boolean; queueLen: number }[] = [];
+    const out: { sessionId: string; agentInstanceId: string; kind: 'claude'; title: string; sending: boolean; queueLen: number }[] = [];
     for (const s of sessionsState.list) {
       if (linkKind === 'editor') {
         if (!s.linkedToEditor) continue;
@@ -72,27 +72,16 @@
       } else {
         if (!p.activeCanvasId) continue;
         if (s.linkedCanvasId !== p.activeCanvasId) continue;
-        // Canvas mode shows BOTH Claude and Cursor chats — historically
-        // we filtered to Claude only because cursor-canvas wiring lagged
-        // Claude's, but link semantics (linkedCanvasId) are identical
-        // for both agents now and the pane already renders Cursor rows
-        // correctly via the per-row data-agent treatment.
       }
       /* Floating sessions (no agentInstanceId yet) fall back to the
-         singleton app id for their kind so the row can still render
-         + the per-row "Open in <app>" button has a real target. */
-      const agentInstanceId =
-        s.agentInstanceId
-        ?? (s.agentKind === 'claude' || s.agentKind === 'cursor'
-          ? APP_INSTANCE_IDS[s.agentKind]
-          : null);
-      if (!agentInstanceId) continue;
-      const kind = kindForInstanceId(agentInstanceId);
-      if (kind !== 'claude' && kind !== 'cursor') continue;
+         singleton app id so the row can still render + the per-row
+         "Open in <app>" button has a real target. */
+      const agentInstanceId = s.agentInstanceId ?? APP_INSTANCE_IDS.claude;
+      if (kindForInstanceId(agentInstanceId) !== 'claude') continue;
       out.push({
         sessionId: s.id,
         agentInstanceId,
-        kind,
+        kind: 'claude',
         title: s.title,
         sending: s.sending,
         queueLen: s.pendingQueue?.length ?? 0
@@ -101,13 +90,13 @@
     return out;
   });
 
-  /** Sessions the user can link to THIS host instance — every Claude /
-   *  Cursor chat that isn't already linked here. Sorted most-recently
+  /** Sessions the user can link to THIS host instance — every Claude
+   *  chat that isn't already linked here. Sorted most-recently
    *  active first so the picker leads with the chat the user was
    *  probably working in. Only used when `onLinkSession` is wired. */
   const pickableSessions = $derived.by(() => {
     if (!p.onLinkSession) return [];
-    const out: { sessionId: string; kind: 'claude' | 'cursor'; title: string }[] = [];
+    const out: { sessionId: string; kind: 'claude'; title: string }[] = [];
     const sortByActivity = (
       a: typeof sessionsState.list[number],
       b: typeof sessionsState.list[number]
@@ -117,11 +106,6 @@
       return tb.localeCompare(ta);
     };
     for (const s of [...sessionsState.list].sort(sortByActivity)) {
-      // Picker surfaces both Claude и Cursor chats across all link
-      // kinds — there's no longer a reason to scope canvas-pickers to
-      // Claude only (the canvas pane displays Cursor rows just fine
-      // and the link semantic is symmetric per `linkedCanvasId`).
-      if (s.agentKind !== 'claude' && s.agentKind !== 'cursor') continue;
       const linkedHere =
         linkKind === 'editor'
           ? s.linkedToEditor && s.linkedToEditorInstanceId === p.instanceId
@@ -129,7 +113,7 @@
           ? s.linkedTerminalInstanceId === p.instanceId
           : !!p.activeCanvasId && s.linkedCanvasId === p.activeCanvasId;
       if (linkedHere) continue;
-      out.push({ sessionId: s.id, kind: s.agentKind, title: s.title || 'Untitled chat' });
+      out.push({ sessionId: s.id, kind: 'claude', title: s.title || 'Untitled chat' });
     }
     return out;
   });
@@ -202,13 +186,7 @@
 <aside class="ic">
   <header class="ic-head">
     <span class="ic-brand">
-      <!-- Two-agent glyph — overlapped Claude burst (left) + Cursor
-           hex (right). Telegraphs that this pane hosts BOTH agents,
-           not just Claude. -->
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M9 4 L15 8 L15 14 L9 18 L3 14 L3 8 Z"/>
-        <path d="M21 6 v3 m0 6 v3 m-6-9 h3 m6 0 h-3 m-3 6 h-3 m9 -6 -2 2 m-2 4 2 2 m0-8 -2 2 m2 4 -2-2"/>
-      </svg>
+      <BrandIcon kind="claude" size={16} />
     </span>
     <span class="ic-title-block">
       <span class="ic-title serif">Inline agents</span>
@@ -219,7 +197,7 @@
         class="ic-link-add"
         class:has-links={linkedAgents.length > 0}
         onclick={() => (showLinkPicker = !showLinkPicker)}
-        title="Link a Claude or Cursor chat to {hostLabel}"
+        title="Link a Claude chat to {hostLabel}"
         aria-label="Link a chat"
         aria-expanded={showLinkPicker}
       >
@@ -242,9 +220,7 @@
         </div>
         {#each pickableSessions as ps (ps.sessionId)}
           <button class="ic-link-menu-item" onclick={() => pickLink(ps.sessionId)}>
-            <span class="ic-link-menu-kind" data-agent={ps.kind}>
-              {ps.kind === 'claude' ? 'Claude' : 'Cursor'}
-            </span>
+            <span class="ic-link-menu-kind" data-agent="claude">Claude</span>
             <span class="ic-link-menu-name">{ps.title}</span>
           </button>
         {/each}
@@ -253,8 +229,6 @@
     {#if linkedAgents.length === 0}
       <div class="ic-empty">
         <div class="ic-empty-icon">
-          <!-- Cursor hex + Claude burst inside — empty state advertises
-               that BOTH kinds of agent can be linked here. -->
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round">
             <path d="M12 2 L21 7 L21 17 L12 22 L3 17 L3 7 Z"/>
             <path d="M12 12 L12 22"/>
@@ -266,12 +240,10 @@
         <p class="ic-empty-p">
           {#if p.onLinkSession && pickableSessions.length > 0}
             Use the <strong>link icon</strong> above to attach a Claude
-            or Cursor chat. Linked sessions appear here for quick
-            switching — this pane works for both agents, side by side.
+            chat. Linked sessions appear here for quick switching.
           {:else}
-            From any Claude or Cursor session use <strong>{linkVerb}</strong>
-            in the cwd bar. Linked sessions appear here for quick switching —
-            this pane works for both agents, side by side.
+            From any Claude session use <strong>{linkVerb}</strong>
+            in the cwd bar. Linked sessions appear here for quick switching.
           {/if}
         </p>
         <button class="ic-cta" onclick={p.onOpenClaude}>
@@ -295,7 +267,7 @@
               <span class="ic-link-body">
                 <span class="ic-link-title">{la.title}</span>
                 <span class="ic-link-sub">
-                  {la.kind === 'claude' ? 'Claude' : 'Cursor'}
+                  Claude
                   {#if la.sending}
                     <span class="ic-status ic-status--running">
                       <span class="ic-pulse"></span>
@@ -317,8 +289,8 @@
             <button
               class="ic-link-open"
               onclick={() => p.onOpenSession(la.sessionId, la.agentInstanceId)}
-              title="Open this chat in the {la.kind === 'claude' ? 'Claude' : 'Cursor'} app"
-              aria-label="Open in {la.kind === 'claude' ? 'Claude' : 'Cursor'}"
+              title="Open this chat in the Claude app"
+              aria-label="Open in Claude"
             >
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M15 3h6v6"/><path d="M21 3l-7 7"/><path d="M19 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h6"/></svg>
             </button>
@@ -340,7 +312,7 @@
                 class="ic-quick-area"
                 placeholder={la.sending
                   ? 'Type a message — it\'ll queue and fire when the current turn finishes (Enter to queue)'
-                  : 'Quick message to ' + (la.kind === 'claude' ? 'Claude' : 'Cursor') + ' — Enter to send, Shift+Enter for newline'}
+                  : 'Quick message to Claude — Enter to send, Shift+Enter for newline'}
                 value={getDraft(la.sessionId)}
                 oninput={(e) => setDraft(la.sessionId, (e.currentTarget as HTMLTextAreaElement).value)}
                 onkeydown={(e) => onDraftKey(e, la.sessionId)}
@@ -387,9 +359,6 @@
       linear-gradient(180deg, color-mix(in srgb, var(--accent) 8%, transparent), transparent),
       var(--bg-1);
   }
-  /* Header brand chip — uses the app's main accent (mint) since this
-     pane hosts BOTH Claude and Cursor rows; per-row icons get their
-     individual src-* tint via `data-agent` below. */
   .ic-brand {
     width: 24px; height: 24px;
     display: grid; place-items: center;
@@ -487,11 +456,6 @@
     color: var(--src-claude);
     border: 1px solid color-mix(in srgb, var(--src-claude) 28%, transparent);
   }
-  .ic-link-menu-kind[data-agent="cursor"] {
-    background: color-mix(in srgb, var(--src-cursor) 12%, var(--bg-3));
-    color: var(--src-cursor);
-    border: 1px solid color-mix(in srgb, var(--src-cursor) 28%, transparent);
-  }
   .ic-link-menu-name {
     flex: 1;
     overflow: hidden;
@@ -564,11 +528,6 @@
     border-color: color-mix(in srgb, var(--src-claude) 38%, var(--border));
     background: color-mix(in srgb, var(--src-claude) 4%, var(--bg-2));
   }
-  .ic-link-card[data-agent="cursor"].ic-link-card--expanded {
-    border-color: color-mix(in srgb, var(--src-cursor) 38%, var(--border));
-    background: color-mix(in srgb, var(--src-cursor) 4%, var(--bg-2));
-  }
-
   .ic-link-row {
     display: flex; align-items: stretch;
     gap: 0;
@@ -583,7 +542,6 @@
     cursor: pointer;
   }
   .ic-link-card[data-agent="claude"] .ic-link-main:hover { background: color-mix(in srgb, var(--src-claude) 4%, transparent); }
-  .ic-link-card[data-agent="cursor"] .ic-link-main:hover { background: color-mix(in srgb, var(--src-cursor) 4%, transparent); }
   .ic-link-icon {
     width: 28px; height: 28px;
     display: grid; place-items: center;
@@ -594,10 +552,6 @@
   .ic-link-card[data-agent="claude"] .ic-link-icon {
     background: color-mix(in srgb, var(--src-claude) 10%, var(--bg-3));
     color: var(--src-claude);
-  }
-  .ic-link-card[data-agent="cursor"] .ic-link-icon {
-    background: color-mix(in srgb, var(--src-cursor) 10%, var(--bg-3));
-    color: var(--src-cursor);
   }
   /* BrandIcon sets its own width/height — no per-svg sizing needed. */
   .ic-link-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
@@ -628,11 +582,6 @@
     background: color-mix(in srgb, var(--src-claude) 14%, transparent);
     border-color: color-mix(in srgb, var(--src-claude) 30%, transparent);
   }
-  .ic-link-card[data-agent="cursor"] .ic-status--running {
-    color: var(--src-cursor);
-    background: color-mix(in srgb, var(--src-cursor) 14%, transparent);
-    border-color: color-mix(in srgb, var(--src-cursor) 30%, transparent);
-  }
   .ic-status--queued {
     color: var(--accent-bright);
     background: color-mix(in srgb, var(--accent) 14%, transparent);
@@ -657,10 +606,6 @@
     background: var(--src-claude);
     box-shadow: 0 0 6px color-mix(in srgb, var(--src-claude) 70%, transparent);
   }
-  .ic-link-card[data-agent="cursor"] .ic-pulse {
-    background: var(--src-cursor);
-    box-shadow: 0 0 6px color-mix(in srgb, var(--src-cursor) 70%, transparent);
-  }
   @keyframes ic-pulse {
     0%, 100% { opacity: 0.45; transform: scale(0.85); }
     50%      { opacity: 1; transform: scale(1.15); }
@@ -675,7 +620,6 @@
   .ic-link-caret svg { width: 12px; height: 12px; }
   .ic-link-caret--open { transform: rotate(180deg); color: var(--accent-bright); }
   .ic-link-card[data-agent="claude"] .ic-link-caret--open { color: var(--src-claude); }
-  .ic-link-card[data-agent="cursor"] .ic-link-caret--open { color: var(--src-cursor); }
 
   /* Per-row "Open in <Agent>" button. Anchored to the right edge of
      the row, separate from the click-to-expand main area so it's
@@ -695,10 +639,6 @@
     background: color-mix(in srgb, var(--src-claude) 14%, transparent);
     color: var(--src-claude);
   }
-  .ic-link-card[data-agent="cursor"] .ic-link-open:hover {
-    background: color-mix(in srgb, var(--src-cursor) 14%, transparent);
-    color: var(--src-cursor);
-  }
   .ic-link-open svg { width: 13px; height: 13px; }
 
   /* Per-card unlink × — same column treatment as `.ic-link-open` so
@@ -717,7 +657,6 @@
   }
   .ic-link-unlink:hover { background: var(--bg-3); }
   .ic-link-card[data-agent="claude"] .ic-link-unlink:hover { color: var(--src-claude); }
-  .ic-link-card[data-agent="cursor"] .ic-link-unlink:hover { color: var(--src-cursor); }
   .ic-link-unlink svg { width: 12px; height: 12px; }
 
   /* Inline mini-composer revealed on row expand. */

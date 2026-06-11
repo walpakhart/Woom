@@ -12,8 +12,8 @@ export interface ConnectionMeta {
   iconSvg?: string;
   /** Optional raster brand mark (PNG in /static). Used when the official
    *  logo can't be cleanly distilled into a single mono `<path>` —
-   *  Cursor's gradient-shaded 3D hexagon, Claude's coral 12-spike
-   *  asterisk, etc. Renderers prefer `iconImg` over `iconSvg` when set. */
+   *  Claude's coral 12-spike asterisk, etc. Renderers prefer `iconImg`
+   *  over `iconSvg` when set. */
   iconImg?: string;
   iconLetters: string;
   iconClass: string;
@@ -39,7 +39,6 @@ const SVG_ASANA = '<path d="M18.7809 11.5528c-2.88 0-5.2192 2.3392-5.2192 5.2237
    out via fill-rule="evenodd". Replaces the old path that drew an
    "A I" pair (looked like a stylised "AI"). */
 export const SVG_CLAUDE = '<path fill-rule="evenodd" d="M3 21L11 3h2l8 18h-3l-1.5-3.5h-9L6 21H3zm5.5-6h7L12 6.7 8.5 15z"/>';
-export const SVG_CURSOR = '<path d="M11.925 24l10.425-6-10.425-6L1.5 18zm0-24L1.5 6 11.925 12 22.35 6Zm0 0l10.425 6V6.001L11.925 0Zm-10.425 6v12L11.925 12Zm20.85 0v12l-10.425-6Z"/>';
 const SVG_OPENAI = '<path d="M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.872zm16.5963 3.8558L13.1038 8.364 15.1192 7.2a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.4069-.667zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654l2.602-1.4998 2.6069 1.4998v2.9994l-2.5974 1.4997-2.6067-1.4997Z"/>';
 const SVG_AIDER = '<path d="M12 2 3 7v10l9 5 9-5V7l-9-5zm0 2.311 6.5 3.611v3.189l-3.75-2.083L12 10.578 9.25 9.028 5.5 11.111V7.922L12 4.311zm0 4.889 3 1.667-3 1.667-3-1.667 3-1.667zM5.5 13.355l3.25 1.805v3.723L5.5 17.078v-3.723zm13 0v3.723l-3.25 1.805V15.16L18.5 13.355zm-7.75 1.805v3.723L12 19.689l1.25-.806V15.16L12 14.456l-1.25.704z"/>';
 export const SVG_SENTRY = '<path d="M12.74.48a1.74 1.74 0 0 0-2.43.62L7.83 5.36a13.83 13.83 0 0 1 8.38 11.59h-2.36a11.5 11.5 0 0 0-7.21-9.59L4 12.09a6.07 6.07 0 0 1 4.27 4.86H1.78a.43.43 0 0 1-.37-.65l1.55-2.66a5.4 5.4 0 0 0-1.7-1L0 15.31a2.27 2.27 0 0 0 1.95 3.41h8.56a8.34 8.34 0 0 0-3.32-7.71l1.18-2a10.51 10.51 0 0 1 4.31 9.74h5.82a12.62 12.62 0 0 0-6.05-11.07l2.43-4.16a.42.42 0 0 1 .58-.14.43.43 0 0 1 .15.16l9.56 16.45a.42.42 0 0 1-.37.65h-2.32q.06 1.13 0 2.26h2.36a2.78 2.78 0 0 0 2.41-4.17z"/>';
@@ -56,7 +55,6 @@ export const connectionsMeta: ConnectionMeta[] = [
   { id: 'teams', name: 'MS Teams', desc: 'Channels, chats, mentions.', iconSvg: SVG_TEAMS, iconLetters: 'T', iconClass: 'conn-icon--teams', category: 'sources', kind: 'graph api', implemented: false },
   { id: 'asana', name: 'Asana', desc: 'Tasks and assignments.', iconSvg: SVG_ASANA, iconLetters: 'As', iconClass: 'conn-icon--asana', category: 'sources', kind: 'oauth', implemented: false },
   { id: 'claude', name: 'Claude Code', desc: 'Headless coding agent in a worktree.', iconSvg: SVG_CLAUDE, iconImg: '/brand-claude.png', iconLetters: 'C', iconClass: 'conn-icon--claude', category: 'agents', kind: 'claude CLI', implemented: true },
-  { id: 'cursor', name: 'Cursor', desc: 'cursor-agent CLI as an alternate agent.', iconSvg: SVG_CURSOR, iconImg: '/brand-cursor.png', iconLetters: 'Cr', iconClass: 'conn-icon--cursor', category: 'agents', kind: 'cursor-agent', implemented: true },
   { id: 'codex', name: 'Codex CLI', desc: 'OpenAI Codex CLI for coding runs.', iconSvg: SVG_OPENAI, iconLetters: 'Cd', iconClass: 'conn-icon--codex', category: 'agents', kind: 'codex', implemented: false },
   { id: 'aider', name: 'Aider', desc: 'Open-source AI pair programmer.', iconSvg: SVG_AIDER, iconLetters: 'A', iconClass: 'conn-icon--aider', category: 'agents', kind: 'aider', implemented: false },
   { id: 'copilot', name: 'GitHub Copilot', desc: 'Copilot CLI for shell-mode suggestions.', iconSvg: SVG_COPILOT, iconLetters: 'Co', iconClass: 'conn-icon--copilot', category: 'agents', kind: 'gh copilot', implemented: false }
@@ -113,18 +111,8 @@ export interface ClaudeStatus {
   ready: boolean;
 }
 
-export interface CursorStatus {
-  detected: boolean;
-  path: string | null;
-  version: string | null;
-  has_config_dir: boolean;
-  has_api_key_env: boolean;
-  ready: boolean;
-}
-
 export interface AgentStatus {
   claude: ClaudeStatus;
-  cursor: CursorStatus;
 }
 
 export interface JiraActor {

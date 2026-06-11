@@ -76,17 +76,17 @@
         leave it empty and the component falls back to `[repoPath]`. The
         primary root stays `repoPath` (=== repoPaths[0]). */
     repoPaths?: string[];
-    /** Pickable rows for the link dropdown — one per Claude/Cursor
+    /** Pickable rows for the link dropdown — one per Claude
         session (so the user knows exactly which chat will get linked).
         `name` is the session title, `id` is the agent column instance,
         `sessionId` is the specific session to activate before linking
         (omitted only when the agent has no sessions yet — click then
         spawns a fresh chat in that column). */
-    agentInstances?: { id: string; kind: 'claude' | 'cursor'; name: string; sessionId?: string }[];
+    agentInstances?: { id: string; kind: 'claude'; name: string; sessionId?: string }[];
     /** Sessions currently linked TO this editor — rendered as chips in the
         header so the link is visible from the editor side too (matches the
         "Linked to Editor" pill on the AI column). */
-    linkedAgents?: { sessionId: string; agentInstanceId: string; kind: 'claude' | 'cursor'; name: string }[];
+    linkedAgents?: { sessionId: string; agentInstanceId: string; kind: 'claude'; name: string }[];
     /** Invoked when the user picks an AI session to link this editor to.
         The parent activates the chosen session in its column and flags
         it linked. When no `sessionId` is passed (agent column was
@@ -134,14 +134,8 @@
     onQuickSend
   }: Props = $props();
 
-  // Pick which linked agent the AI commit-message button routes to. Claude
-  // wins over Cursor when both are linked — not a user preference, just a
-  // stable tiebreaker so the UI is deterministic. Either one uses the
-  // same headless one-off path on the backend.
-  const linkedAiKind = $derived<'claude' | 'cursor' | null>(
-    linkedAgents.find((a) => a.kind === 'claude')?.kind
-      ?? linkedAgents.find((a) => a.kind === 'cursor')?.kind
-      ?? null
+  const linkedAiKind = $derived<'claude' | null>(
+    linkedAgents.length > 0 ? 'claude' : null
   );
 
   let showLinkPicker = $state(false);
@@ -344,51 +338,27 @@
   /* Resolve "Apply to <agent>" buttons for the current selection.
      - 0 linked agents → empty (the bar still shows the selection
        range with a hint to link an agent).
-     - 1 agent of a given kind → label is just the kind ("Claude" /
-       "Cursor"). Two distinct kinds yields two short buttons.
-     - 2+ agents of the same kind → suffix the column name so the
-       user can tell e.g. Claude · Mona-Lisa apart from Claude ·
-       Da-Vinci. We never drop the kind label even when one column
-       is unique within its kind, because the user might mentally
-       group "all Claudes" / "all Cursors" and expect consistent
-       prefixing. */
+     - 1 linked session → label is just "Claude".
+     - 2+ → suffix the session name so the user can tell e.g.
+       Claude · Mona-Lisa apart from Claude · Da-Vinci. */
   type ApplyBtn = {
     sessionId: string;
     agentInstanceId: string;
     label: string;
-    kind: 'claude' | 'cursor';
+    kind: 'claude';
   };
   const applyButtons = $derived.by<ApplyBtn[]>(() => {
     if (linkedAgents.length === 0) return [];
-    const byKind: Record<'claude' | 'cursor', typeof linkedAgents> = {
-      claude: [],
-      cursor: []
-    };
-    for (const a of linkedAgents) byKind[a.kind].push(a);
-    const out: ApplyBtn[] = [];
-    for (const k of ['claude', 'cursor'] as const) {
-      const group = byKind[k];
-      if (group.length === 0) continue;
-      const kindLabel = k === 'claude' ? 'Claude' : 'Cursor';
-      if (group.length === 1) {
-        out.push({
-          sessionId: group[0].sessionId,
-          agentInstanceId: group[0].agentInstanceId,
-          kind: k,
-          label: kindLabel
-        });
-      } else {
-        for (const a of group) {
-          out.push({
-            sessionId: a.sessionId,
-            agentInstanceId: a.agentInstanceId,
-            kind: k,
-            label: `${kindLabel} · ${a.name}`
-          });
-        }
-      }
+    if (linkedAgents.length === 1) {
+      const a = linkedAgents[0];
+      return [{ sessionId: a.sessionId, agentInstanceId: a.agentInstanceId, kind: 'claude', label: 'Claude' }];
     }
-    return out;
+    return linkedAgents.map((a) => ({
+      sessionId: a.sessionId,
+      agentInstanceId: a.agentInstanceId,
+      kind: 'claude' as const,
+      label: `Claude · ${a.name}`
+    }));
   });
 
   function selectionRangeText(): string {
@@ -434,7 +404,7 @@
   let composerMode = $state<{
     sessionId: string;
     agentInstanceId: string;
-    kind: 'claude' | 'cursor';
+    kind: 'claude';
     label: string;
     /** Frozen popover position the moment the user opened compose
      *  mode. Keeping it pinned means the textarea doesn't drift if
@@ -541,7 +511,7 @@
   type PendingForFile = {
     sessionId: string;
     sessionTitle: string;
-    sessionKind: 'claude' | 'cursor';
+    sessionKind: 'claude';
     event: PendingEditEvent;
   };
   const pendingEditsForActiveFile = $derived.by<PendingForFile[]>(() => {
@@ -554,7 +524,7 @@
         if (ev.filePath !== path) continue;
         out.push({
           sessionId: la.sessionId,
-          sessionTitle: la.name || (la.kind === 'claude' ? 'Claude' : 'Cursor'),
+          sessionTitle: la.name || 'Claude',
           sessionKind: la.kind,
           event: ev
         });
@@ -575,11 +545,10 @@
     }))
   );
 
-  /** Aggregate label for the banner — "2 from Claude" /
-   *  "3 (Claude · Cursor)". Hand-built rather than via a join because
-   *  the user reads "from <agent>" as a hint for "whose changes am
-   *  I about to keep / revert", and that voice changes shape with
-   *  the count. */
+  /** Aggregate label for the banner — "2 pending edits from <chat>".
+   *  Hand-built rather than via a join because the user reads
+   *  "from <agent>" as a hint for "whose changes am I about to keep /
+   *  revert", and that voice changes shape with the count. */
   const pendingBannerLabel = $derived.by(() => {
     const list = pendingEditsForActiveFile;
     if (list.length === 0) return '';
@@ -1175,7 +1144,7 @@
                         role="menuitem"
                         onclick={() => { onLinkToAgent?.(a.id, a.sessionId); showLinkPicker = false; }}
                       >
-                        <span class="ev-link-menu-kind" data-kind={a.kind}>{a.kind === 'claude' ? 'Claude' : 'Cursor'}</span>
+                        <span class="ev-link-menu-kind" data-kind="claude">Claude</span>
                         <span class="ev-link-menu-name">{a.name}</span>
                       </button>
                     {/each}
@@ -1197,7 +1166,7 @@
                 <span
                   class="ev-linked-chip"
                   data-kind={la.kind}
-                  title="Linked to {la.kind === 'claude' ? 'Claude' : 'Cursor'} · {la.name}"
+                  title="Linked to Claude · {la.name}"
                 >
                   <span class="ev-linked-dot"></span>
                   <span class="ev-linked-name mono">{la.name}</span>
@@ -1529,7 +1498,6 @@
                             class="ev-compose-target"
                             class:active={btn.sessionId === composerMode.sessionId}
                             class:claude={btn.kind === 'claude'}
-                            class:cursor={btn.kind === 'cursor'}
                             onmousedown={(e) => e.preventDefault()}
                             onclick={() => switchComposerTarget(btn)}
                             title="Send to {btn.label}"
@@ -1591,7 +1559,6 @@
                     <button
                       class="ev-apply-pop-btn"
                       class:claude={btn.kind === 'claude'}
-                      class:cursor={btn.kind === 'cursor'}
                       onmousedown={(e) => e.preventDefault()}
                       onclick={() => handleApplyTo(btn)}
                       title={`Pin @${relToRepo(activePath)}:${selectionRangeText()} to ${btn.label}'s composer`}
@@ -1853,18 +1820,11 @@
   .ev-linked-chip[data-kind="claude"] {
     border-color: color-mix(in srgb, var(--src-claude) 28%, var(--border));
   }
-  .ev-linked-chip[data-kind="cursor"] {
-    border-color: color-mix(in srgb, var(--src-cursor) 22%, var(--border));
-  }
   .ev-linked-dot {
     width: 6px; height: 6px; border-radius: 50%;
     background: var(--src-claude);
     box-shadow: 0 0 6px color-mix(in srgb, var(--src-claude) 60%, transparent);
     flex-shrink: 0;
-  }
-  .ev-linked-chip[data-kind="cursor"] .ev-linked-dot {
-    background: var(--src-cursor);
-    box-shadow: 0 0 6px color-mix(in srgb, var(--src-cursor) 50%, transparent);
   }
   .ev-linked-name {
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -1928,11 +1888,6 @@
     background: color-mix(in srgb, var(--src-claude) 14%, var(--bg-3));
     color: var(--src-claude);
     border: 1px solid color-mix(in srgb, var(--src-claude) 28%, transparent);
-  }
-  .ev-link-menu-kind[data-kind="cursor"] {
-    background: color-mix(in srgb, var(--src-cursor) 12%, var(--bg-3));
-    color: var(--src-cursor);
-    border-color: color-mix(in srgb, var(--src-cursor) 22%, transparent);
   }
   .ev-link-menu-name {
     flex: 1; min-width: 0;
@@ -2216,11 +2171,7 @@
   .ev-apply-pop-btn :global(svg) {
     width: 12px; height: 12px; opacity: 0.85;
   }
-  /* Same family-colour accent we use elsewhere — claude == orange
-     accent, cursor == subdued neutral — so the user can scan
-     "which agent does this go to" without reading the label. */
   .ev-apply-pop-btn.claude { border-left: 2px solid var(--accent); padding-left: 8px; }
-  .ev-apply-pop-btn.cursor { border-left: 2px solid var(--text-1); padding-left: 8px; }
   .ev-apply-pop-btn--edit {
     color: var(--accent-bright);
   }
@@ -2305,7 +2256,6 @@
   .ev-compose-target:hover { color: var(--text-0); }
   .ev-compose-target.active { background: var(--bg-3); color: var(--text-0); }
   .ev-compose-target.claude.active { color: var(--src-claude); }
-  .ev-compose-target.cursor.active { color: var(--src-cursor); }
   .ev-compose-target-single {
     font-size: 11px;
     color: var(--text-2);

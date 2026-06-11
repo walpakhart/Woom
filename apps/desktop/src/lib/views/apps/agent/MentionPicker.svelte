@@ -1,7 +1,7 @@
 <script lang="ts">
   /* MentionPicker — inline autocomplete that pops above the composer
      when the user types an @ followed by anything (or clicks the @
-     icon). Sources: recent Claude/Cursor sessions, Jira tickets,
+     icon). Sources: recent Claude sessions, Jira tickets,
      GitHub PRs/issues, Sentry events. Arrow-key nav + Enter to pick;
      Esc / outside-click to dismiss.
 
@@ -290,9 +290,9 @@
             .join('\n')
         },
         section: 'Sessions' as const,
-        tone: s.agentKind === 'cursor' ? 'var(--src-cursor)' : 'var(--src-claude)',
+        tone: 'var(--src-claude)',
         title: s.title || 'Untitled chat',
-        sub: s.agentKind === 'cursor' ? 'cursor' : 'claude'
+        sub: 'claude'
       }));
   });
 

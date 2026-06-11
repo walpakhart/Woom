@@ -5,7 +5,7 @@
      The right pane is the SAME `<InlineClaude>` component the editor
      uses, parameterised with `linkKind="terminal"` so it filters by
      `linkedTerminalInstanceId` and surfaces a "+ Link…" picker so the
-     user can attach a Claude / Cursor chat without leaving the
+     user can attach a Claude chat without leaving the
      terminal app. Once linked, that chat's row in the pane behaves
      identically to the editor's: click → expand mini-composer; the
      Apply popover (below) pipes selected terminal text straight in.
@@ -35,7 +35,6 @@
     instanceId: string;
     cwd?: string | null;
     onOpenClaude: () => void;
-    onOpenCursor: () => void;
     /** Quick-send to a specific session — same shape as EditorApp's
      *  prop, threaded through +page.svelte's `quickSendToSession`.
      *  Fires immediately if idle, queues if a turn is in flight. */
@@ -68,18 +67,12 @@
    *  derives its own copy from the same fields, so we don't pass this
    *  in. Kept local to keep the Apply pipeline self-contained. */
   const linkedAgents = $derived.by(() => {
-    const out: { sessionId: string; agentInstanceId: string; kind: 'claude' | 'cursor'; title: string }[] = [];
+    const out: { sessionId: string; agentInstanceId: string; title: string }[] = [];
     for (const s of sessionsState.list) {
       if (s.linkedTerminalInstanceId !== p.instanceId) continue;
-      const agentInstanceId =
-        s.agentInstanceId
-        ?? (s.agentKind === 'claude' || s.agentKind === 'cursor'
-          ? APP_INSTANCE_IDS[s.agentKind]
-          : null);
-      if (!agentInstanceId) continue;
-      const kind = kindForInstanceId(agentInstanceId);
-      if (kind !== 'claude' && kind !== 'cursor') continue;
-      out.push({ sessionId: s.id, agentInstanceId, kind, title: s.title });
+      const agentInstanceId = s.agentInstanceId ?? APP_INSTANCE_IDS.claude;
+      if (kindForInstanceId(agentInstanceId) !== 'claude') continue;
+      out.push({ sessionId: s.id, agentInstanceId, title: s.title });
     }
     return out;
   });
@@ -103,42 +96,24 @@
   let clearSelRef = $state<{ fn: (() => void) | null }>({ fn: null });
 
   /* Same shape as EditorView's `applyButtons` — collapse to "Claude"
-     when there's exactly one of a kind, prefix per-session names when
-     two+ Claudes/Cursors are linked. Keeps the popover scannable. */
+     when there's exactly one linked session, prefix per-session names
+     when two+ are linked. Keeps the popover scannable. */
   type ApplyBtn = {
     sessionId: string;
     agentInstanceId: string;
     label: string;
-    kind: 'claude' | 'cursor';
   };
   const applyButtons = $derived.by<ApplyBtn[]>(() => {
     if (linkedAgents.length === 0) return [];
-    const byKind: Record<'claude' | 'cursor', typeof linkedAgents> = { claude: [], cursor: [] };
-    for (const a of linkedAgents) byKind[a.kind].push(a);
-    const out: ApplyBtn[] = [];
-    for (const k of ['claude', 'cursor'] as const) {
-      const group = byKind[k];
-      if (group.length === 0) continue;
-      const kindLabel = k === 'claude' ? 'Claude' : 'Cursor';
-      if (group.length === 1) {
-        out.push({
-          sessionId: group[0].sessionId,
-          agentInstanceId: group[0].agentInstanceId,
-          kind: k,
-          label: kindLabel
-        });
-      } else {
-        for (const a of group) {
-          out.push({
-            sessionId: a.sessionId,
-            agentInstanceId: a.agentInstanceId,
-            kind: k,
-            label: `${kindLabel} · ${a.title}`
-          });
-        }
-      }
+    if (linkedAgents.length === 1) {
+      const a = linkedAgents[0];
+      return [{ sessionId: a.sessionId, agentInstanceId: a.agentInstanceId, label: 'Claude' }];
     }
-    return out;
+    return linkedAgents.map((a) => ({
+      sessionId: a.sessionId,
+      agentInstanceId: a.agentInstanceId,
+      label: `Claude · ${a.title}`
+    }));
   });
 
   function handleApplyTo(btn: ApplyBtn) {
@@ -212,9 +187,7 @@
             >
               {#each applyButtons as btn (btn.sessionId)}
                 <button
-                  class="st-apply-pop-btn"
-                  class:claude={btn.kind === 'claude'}
-                  class:cursor={btn.kind === 'cursor'}
+                  class="st-apply-pop-btn claude"
                   onmousedown={(e) => e.preventDefault()}
                   onclick={() => handleApplyTo(btn)}
                   title={`Pin selection to ${btn.label}'s composer`}
@@ -274,9 +247,7 @@
         >
           {#each applyButtons as btn (btn.sessionId)}
             <button
-              class="st-apply-pop-btn"
-              class:claude={btn.kind === 'claude'}
-              class:cursor={btn.kind === 'cursor'}
+              class="st-apply-pop-btn claude"
               onmousedown={(e) => e.preventDefault()}
               onclick={() => handleApplyTo(btn)}
               title={`Pin selection to ${btn.label}'s composer`}
@@ -294,7 +265,7 @@
       linkedAgents={linkedAgents.map((la) => ({
         sessionId: la.sessionId,
         agentInstanceId: la.agentInstanceId,
-        kind: la.kind,
+        kind: 'claude' as const,
         title: la.title
       }))}
       onExpand={() => (sideOpen = true)}
@@ -404,5 +375,4 @@
   }
   .st-apply-pop-btn svg { width: 12px; height: 12px; opacity: 0.85; }
   .st-apply-pop-btn.claude { border-left: 2px solid var(--src-claude); padding-left: 8px; }
-  .st-apply-pop-btn.cursor { border-left: 2px solid var(--src-cursor); padding-left: 8px; }
 </style>

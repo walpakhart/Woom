@@ -1,4 +1,4 @@
-// Headless Claude / Cursor invocation. Wraps the `claude_ask` Tauri
+// Headless Claude invocation. Wraps the `claude_ask` Tauri
 // command + the `claude:stream:<sessionId>` event subscription, dispatching
 // each parsed line through `handleStreamEvent`.
 //
@@ -16,16 +16,13 @@ export interface AgentRunRequest {
   sessionId: string;
   prompt: string;
   cwd: string | null;
-  /** Stable session UUID. For Claude this round-trips back; for Cursor
-   *  the CLI may mint a new chat id on first turn — always read the
-   *  returned `session_uuid` from the result. */
+  /** Stable session UUID — round-trips back via the result's
+   *  `session_uuid`. */
   claudeUuid: string;
   resume: boolean;
   /** User-authored rules from the Rules tab. Appended via
    *  `--append-system-prompt` so they apply on every turn. */
   rules: string | null;
-  agentKind: 'claude' | 'cursor';
-  cursorModel: string | null;
   /** Model id forwarded to `claude --model`. Null = no flag passed (CLI
    *  picks its default). */
   claudeModel: string | null;
@@ -36,10 +33,8 @@ export interface AgentRunRequest {
    *  so it doesn't blindly add a NEW column when the user said "switch".
    *  Built fresh on every turn. */
   appContext: string | null;
-  /** Absolute paths of image attachments. For Claude they get base64-
-   *  embedded as `image` content blocks via the CLI's stream-json input;
-   *  for Cursor (no equivalent flag) the backend ignores this and the
-   *  caller should fall back to the path-mention flow. */
+  /** Absolute paths of image attachments — base64-embedded as `image`
+   *  content blocks via the CLI's stream-json input. */
   imagePaths?: string[];
   /** When true, the backend sets `WOOM_RTK_SESSION_DISABLED=1` in the
    *  spawned `claude` CLI's environment so the woom-managed PreToolUse
@@ -77,8 +72,7 @@ export interface AgentRunRequest {
 
 export interface AgentRunResult {
   reply: string;
-  /** Effective session uuid as returned by the backend. May differ from the
-   *  one we sent for Cursor. */
+  /** Effective session uuid as returned by the backend. */
   sessionUuid: string;
 }
 
@@ -127,8 +121,6 @@ export async function runAgentRequest(req: AgentRunRequest): Promise<AgentRunRes
       claudeUuid: req.claudeUuid,
       resume: req.resume,
       rules: req.rules,
-      agentKind: req.agentKind,
-      cursorModel: req.cursorModel,
       claudeModel: req.claudeModel,
       appContext: req.appContext,
       imagePaths: req.imagePaths ?? [],
@@ -165,7 +157,6 @@ export interface PrewarmRequest {
   claudeUuid: string;
   resume: boolean;
   rules: string | null;
-  agentKind: 'claude' | 'cursor';
   claudeModel: string | null;
   appContext: string | null;
   /** Must mirror the eventual `runAgentRequest`'s `rtkDisabled` —
@@ -183,9 +174,7 @@ export interface PrewarmRequest {
 /** Pre-spawn a Claude CLI for `sessionId` so the cold-start cost
  *  (binary load + `--resume` history hydration) overlaps with the
  *  user typing their prompt. Idempotent for matching args (cheap to
- *  call on every keystroke / focus event). No-op for cursor sessions —
- *  cursor-agent takes its prompt as a positional CLI arg, so the
- *  backend has nothing to spawn until the user hits Send. */
+ *  call on every keystroke / focus event). */
 export async function prewarmAgent(req: PrewarmRequest): Promise<void> {
   try {
     await invoke('claude_prewarm', {
@@ -194,7 +183,6 @@ export async function prewarmAgent(req: PrewarmRequest): Promise<void> {
       claudeUuid: req.claudeUuid,
       resume: req.resume,
       rules: req.rules,
-      agentKind: req.agentKind,
       claudeModel: req.claudeModel,
       appContext: req.appContext,
       rtkDisabled: req.rtkDisabled ?? false,

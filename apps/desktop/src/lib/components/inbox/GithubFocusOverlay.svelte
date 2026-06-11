@@ -34,11 +34,10 @@
     onOpenBrowser: (url: string) => void;
     onOpenCheckDetails: (url: string) => void;
     mergeDisabled: () => boolean;
-    /** Hand the focused PR off to a Claude / Cursor session. Optional
+    /** Hand the focused PR off to a Claude session. Optional
      *  so older call sites that haven't wired them up yet still
-     *  compile; the overlay hides each button when undefined. */
+     *  compile; the overlay hides the button when undefined. */
     onSendToClaude?: () => void;
-    onSendToCursor?: () => void;
   }
 
   let {
@@ -58,8 +57,7 @@
     onOpenBrowser,
     onOpenCheckDetails,
     mergeDisabled,
-    onSendToClaude,
-    onSendToCursor
+    onSendToClaude
   }: Props = $props();
 
   /** Roll a check run's combined {status, conclusion} down to a single key
@@ -183,12 +181,6 @@
           <button class="gfo-btn gfo-btn--claude" onclick={onSendToClaude} title="Send this PR to a Claude session">
             <svg class="i i-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="m22 2-7 20-4-9-9-4 20-7z"/></svg>
             Send to Claude
-          </button>
-        {/if}
-        {#if onSendToCursor}
-          <button class="gfo-btn gfo-btn--cursor" onclick={onSendToCursor} title="Send this PR to a Cursor session">
-            <svg class="i i-sm" viewBox="0 0 24 24" fill="currentColor"><path d="M3 3l8 18 2-8 8-2z"/></svg>
-            Send to Cursor
           </button>
         {/if}
         <button class="gfo-btn" onclick={() => onOpenBrowser(item.url)} title="Open on GitHub">
@@ -638,16 +630,6 @@
     background: color-mix(in srgb, var(--src-claude) 18%, transparent);
     color: var(--accent-bright);
     border-color: color-mix(in srgb, var(--src-claude) 50%, transparent);
-  }
-  .gfo-btn--cursor {
-    color: var(--src-cursor, var(--text-1));
-    background: color-mix(in srgb, var(--src-cursor, var(--text-1)) 10%, transparent);
-    border-color: color-mix(in srgb, var(--src-cursor, var(--text-1)) 32%, transparent);
-  }
-  .gfo-btn--cursor:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--src-cursor, var(--text-1)) 22%, transparent);
-    color: var(--text-0);
-    border-color: color-mix(in srgb, var(--src-cursor, var(--text-1)) 50%, transparent);
   }
   .gfo-spin { animation: gfo-spin 0.8s linear infinite; }
   @keyframes gfo-spin { to { transform: rotate(360deg); } }

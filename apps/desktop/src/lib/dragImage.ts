@@ -7,7 +7,7 @@
 // DOM at the moment of `dragstart`. We append it off-screen then remove
 // on the next tick — by then the browser has already snapshotted it.
 
-export type DragChipKind = 'file' | 'dir' | 'jira' | 'github' | 'sentry' | 'cursor' | 'claude' | 'editor' | 'canvas' | 'terminal';
+export type DragChipKind = 'file' | 'dir' | 'jira' | 'github' | 'sentry' | 'claude' | 'editor' | 'canvas' | 'terminal';
 
 const KIND_GLYPH: Record<DragChipKind, string> = {
   file: '📄',
@@ -15,7 +15,6 @@ const KIND_GLYPH: Record<DragChipKind, string> = {
   jira: 'J',
   github: 'GH',
   sentry: 'St',
-  cursor: 'Cr',
   claude: 'C',
   editor: 'E',
   canvas: 'Cv',
@@ -28,7 +27,6 @@ const KIND_ACCENT: Record<DragChipKind, string> = {
   jira: 'rgba(79, 142, 255, 0.95)',     // src-jira
   github: 'rgba(181, 132, 255, 0.95)',  // src-github
   sentry: 'rgba(110, 80, 155, 0.95)',   // src-sentry (purple)
-  cursor: 'rgba(220, 220, 220, 0.85)',  // src-cursor
   claude: 'rgba(232, 155, 125, 0.95)',  // src-claude (kept warm)
   editor: 'rgba(204, 120, 92, 0.95)',   // src-editor (kept warm)
   canvas: 'rgba(125, 194, 213, 0.95)',  // src-canvas (shifted aqua)

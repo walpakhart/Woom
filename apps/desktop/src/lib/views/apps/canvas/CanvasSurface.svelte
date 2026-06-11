@@ -112,10 +112,10 @@
    *  which agent has the canvas-tools wired in. */
   const linkedSessions = $derived.by(() => {
     if (!activeCanvasId) return [];
-    const out: { sessionId: string; title: string; kind: 'claude' | 'cursor' }[] = [];
+    const out: { sessionId: string; title: string; kind: 'claude' }[] = [];
     for (const s of sessionsState.list) {
       if (s.linkedCanvasId !== activeCanvasId) continue;
-      out.push({ sessionId: s.id, title: s.title, kind: s.agentKind });
+      out.push({ sessionId: s.id, title: s.title, kind: 'claude' });
     }
     return out;
   });

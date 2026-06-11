@@ -17,7 +17,7 @@
   interface LinkedAgent {
     sessionId: string;
     agentInstanceId: string;
-    kind: 'claude' | 'cursor';
+    kind: 'claude';
     name?: string;
     title?: string;
   }
@@ -107,10 +107,6 @@
   .spr-btn--agent[data-agent='claude']:hover {
     background: color-mix(in srgb, var(--src-claude) 14%, var(--bg-2));
     border-color: color-mix(in srgb, var(--src-claude) 32%, var(--border));
-  }
-  .spr-btn--agent[data-agent='cursor']:hover {
-    background: color-mix(in srgb, var(--src-cursor) 14%, var(--bg-2));
-    border-color: color-mix(in srgb, var(--src-cursor) 32%, var(--border));
   }
   .spr-divider {
     width: 22px; height: 1px;

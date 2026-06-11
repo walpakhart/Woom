@@ -17,12 +17,12 @@ export type DragPayload =
   | { source: 'jira'; item: JiraItem }
   | { source: 'sentry'; item: SentryIssue }
   | { source: 'file'; path: string; isDir: boolean; name: string }
-  /** A specific message within a Claude / Cursor session, referenced
-   *  by `(sessionId, messageIndex)`. The drop target captures a small
-   *  snapshot (role, first ~200 chars of content, agent kind) so the
-   *  card stays meaningful even if the source session is later
-   *  deleted. The renderer prefers live data when the session still
-   *  exists. Used by Canvas's `chat-message-card` shape kind. */
+  /** A specific message within a Claude session, referenced by
+   *  `(sessionId, messageIndex)`. The drop target captures a small
+   *  snapshot (role, first ~200 chars of content) so the card stays
+   *  meaningful even if the source session is later deleted. The
+   *  renderer prefers live data when the session still exists. Used
+   *  by Canvas's `chat-message-card` shape kind. */
   | {
       source: 'chat-message';
       sessionId: string;
@@ -31,7 +31,6 @@ export type DragPayload =
        *  ever unreachable. Kept tiny on purpose. */
       snapshot: {
         role: 'user' | 'assistant' | 'system';
-        agentKind: 'claude' | 'cursor';
         sessionTitle: string;
         excerpt: string;
         at: string;
@@ -74,7 +73,7 @@ export function requestCanvasRailDrop(payload: DragPayload) {
  *  A capture-phase `drop` listener at the window fires BEFORE the
  *  drop-target's own handler, which means by the time the target
  *  reads `dragState.payload` to process the drop it's already null
- *  — drag of a Jira/GitHub/Sentry item into a Claude/Cursor column
+ *  — drag of a Jira/GitHub/Sentry item into a Claude column
  *  silently dropped because the target couldn't see what was being
  *  dropped. Bubble-phase fires AFTER all per-element handlers have
  *  had their turn, which is the safe time to clear. */

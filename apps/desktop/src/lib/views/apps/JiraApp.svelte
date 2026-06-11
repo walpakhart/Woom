@@ -27,7 +27,6 @@
     isClickNotDrag: (e: MouseEvent) => boolean;
     refreshAllJiraInboxes: (opts?: { silent?: boolean }) => Promise<void>;
     onSendToClaude: (item: JiraItem) => void;
-    onSendToCursor: (item: JiraItem) => void;
     onFixWithDw: (item: JiraItem) => void;
   }
   let p: Props = $props();
@@ -58,7 +57,6 @@
         onCardMouseDown={p.onCardMouseDown}
         isClickNotDrag={p.isClickNotDrag}
         onSendToClaude={p.onSendToClaude}
-        onSendToCursor={p.onSendToCursor}
         onFixWithDw={p.onFixWithDw}
       />
     {/snippet}
@@ -78,14 +76,6 @@
                     .flat()
                     .find((x) => x.key === focusKey) as JiraItem | undefined);
               if (it) p.onSendToClaude(it);
-            }}
-            onSendToCursor={() => {
-              const items = inboxState.jiraItemsByInstance[p.instanceId] ?? [];
-              const it = items.find((x) => x.key === focusKey)
-                ?? (Object.values(inboxState.jiraItemsByInstance)
-                    .flat()
-                    .find((x) => x.key === focusKey) as JiraItem | undefined);
-              if (it) p.onSendToCursor(it);
             }}
           />
         {:else}

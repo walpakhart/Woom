@@ -78,12 +78,11 @@ export function deriveCwd(path: string, isDir: boolean): string | null {
  *  Yesterday / This week / Older. The "now" arg makes the result
  *  reactive when the parent ticks. Sessions with no messages yet
  *  bucket into "Older" so they don't pollute Today. */
-export function groupAgentSessions<S extends { agentKind: string; messages: { at?: string }[] }>(
+export function groupAgentSessions<S extends { messages: { at?: string }[] }>(
   sessions: readonly S[],
-  kind: 'claude' | 'cursor',
   nowMs: number
 ): { label: string; items: S[] }[] {
-  const items = sessions.filter((s) => s.agentKind === kind);
+  const items = sessions;
   const dayMs = 24 * 60 * 60 * 1000;
   const sessTime = (s: S): number => {
     const last = s.messages[s.messages.length - 1]?.at;

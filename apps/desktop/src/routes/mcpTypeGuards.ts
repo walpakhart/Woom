@@ -63,7 +63,6 @@ export type ViewName =
   | 'githubApp'
   | 'sentryApp'
   | 'claudeApp'
-  | 'cursorApp'
   | 'editorApp'
   | 'canvasApp'
   | 'terminalApp'
@@ -73,7 +72,7 @@ export type ViewName =
   | 'settings';
 
 /** MCP `switch_view` ships platform-named views (`github` / `jira` /
- *  `sentry` / `claude` / `cursor` / `editor` / `canvas` / `terminal`)
+ *  `sentry` / `claude` / `editor` / `canvas` / `terminal`)
  *  so a future GitLab/Bitbucket tab can claim its own slot. Translate
  *  to the internal `…App` view name. Returns `null` for unknown values
  *  so the handler can no-op cleanly. */
@@ -83,7 +82,6 @@ export function mapAgentViewToInternal(v: string): ViewName | null {
     case 'jira':         return 'jiraApp';
     case 'sentry':       return 'sentryApp';
     case 'claude':       return 'claudeApp';
-    case 'cursor':       return 'cursorApp';
     case 'editor':       return 'editorApp';
     case 'canvas':       return 'canvasApp';
     case 'terminal':     return 'terminalApp';
@@ -99,8 +97,8 @@ export function mapAgentViewToInternal(v: string): ViewName | null {
 /** Coerce raw `sprint_ids` payload entries into the persisted
  *  `SprintScope[]` shape (numeric id or the literal `'backlog'`).
  *  The MCP tool's JSON schema accepts `string | number`; we accept
- *  either here too because cursor-agent and Claude have shipped
- *  both shapes in the wild. */
+ *  either here too because agents have shipped both shapes in the
+ *  wild. */
 export function parseSprintScopes(raw: unknown[]): SprintScope[] {
   const out: SprintScope[] = [];
   for (const x of raw) {

@@ -43,8 +43,7 @@
     const sess = sessionsState.list.find((s) => s.id === sessionId);
     if (!sess) return;
     const patch: Partial<typeof sess> = { linkedCanvasId: activeCanvasId };
-    if (!sess.agentInstanceId && (sess.agentKind === 'claude' || sess.agentKind === 'cursor'))
-      patch.agentInstanceId = APP_INSTANCE_IDS[sess.agentKind];
+    if (!sess.agentInstanceId) patch.agentInstanceId = APP_INSTANCE_IDS.claude;
     updateSession(sessionId, patch);
   }
 
@@ -54,20 +53,15 @@
 
   /** Sessions linked to the active canvas — feeds the collapsed
    *  rail-mini so the user sees which agents are attached even
-   *  with the side pane closed. Only Claude can link to canvases
-   *  (Cursor doesn't have canvas-linking yet) — kindForInstanceId
-   *  filters that for us. */
+   *  with the side pane closed. */
   const linkedAgents = $derived.by(() => {
-    if (!activeCanvasId) return [] as { sessionId: string; agentInstanceId: string; kind: 'claude' | 'cursor'; title: string }[];
-    const out: { sessionId: string; agentInstanceId: string; kind: 'claude' | 'cursor'; title: string }[] = [];
+    const out: { sessionId: string; agentInstanceId: string; kind: 'claude'; title: string }[] = [];
+    if (!activeCanvasId) return out;
     for (const s of sessionsState.list) {
       if (s.linkedCanvasId !== activeCanvasId) continue;
-      const aid = s.agentInstanceId
-        ?? (s.agentKind === 'claude' || s.agentKind === 'cursor' ? APP_INSTANCE_IDS[s.agentKind] : null);
-      if (!aid) continue;
-      const k = kindForInstanceId(aid);
-      if (k !== 'claude' && k !== 'cursor') continue;
-      out.push({ sessionId: s.id, agentInstanceId: aid, kind: k, title: s.title || 'Untitled chat' });
+      const aid = s.agentInstanceId ?? APP_INSTANCE_IDS.claude;
+      if (kindForInstanceId(aid) !== 'claude') continue;
+      out.push({ sessionId: s.id, agentInstanceId: aid, kind: 'claude', title: s.title || 'Untitled chat' });
     }
     return out;
   });

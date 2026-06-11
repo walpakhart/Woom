@@ -8,7 +8,7 @@
   import BrandIcon from '$lib/components/ui/BrandIcon.svelte';
   import { invoke } from '@tauri-apps/api/core';
 
-  type Kind = 'claude' | 'cursor';
+  type Kind = 'claude';
 
   interface Props {
     kind: Kind;
@@ -31,7 +31,7 @@
     sessionsState.list.find((s) => s.id === sessionsState.activeIds[p.kind]) ?? null
   );
 
-  const label = $derived(p.kind === 'claude' ? 'Claude' : 'Cursor');
+  const label = 'Claude';
 
   /** Diff stat counters from session edit events (each assistant message
    *  carries an `events` array; `edit` events have oldText/newText). */
@@ -399,9 +399,8 @@
     padding: 40px 20px;
     margin: auto;
   }
-  /* Pick-a-session icon — agent's brand color (coral for Claude,
-     neutral grey for Cursor) so the empty state advertises which
-     agent's worktree pane this is. */
+  /* Pick-a-session icon — Claude's brand coral so the empty state
+     advertises whose worktree pane this is. */
   .wts-empty-icon {
     width: 56px; height: 56px;
     margin: 0 auto 20px;
@@ -420,13 +419,6 @@
     box-shadow:
       inset 0 0 0 1px color-mix(in srgb, var(--src-claude) 26%, transparent),
       0 0 24px color-mix(in srgb, var(--src-claude) 32%, transparent);
-  }
-  .wts-empty-icon[data-agent="cursor"] {
-    color: var(--src-cursor);
-    background: color-mix(in srgb, var(--src-cursor) 12%, var(--bg-2));
-    box-shadow:
-      inset 0 0 0 1px color-mix(in srgb, var(--src-cursor) 26%, transparent),
-      0 0 24px color-mix(in srgb, var(--src-cursor) 30%, transparent);
   }
   .wts-empty-icon svg { width: 28px; height: 28px; display: block; }
   .wts-empty-h {

@@ -42,10 +42,10 @@ export function pickFrom(
   return '';
 }
 
-/** Cursor-agent has shipped the same field as a string, a single-
- *  element array, or even a wrapped object with an inner `path`/
- *  `value` key. We accept any of those shapes and return the first
- *  plausible non-empty string (or empty string when nothing resolves).
+/** Agents have shipped the same field as a string, a single-element
+ *  array, or even a wrapped object with an inner `path`/`value` key.
+ *  We accept any of those shapes and return the first plausible
+ *  non-empty string (or empty string when nothing resolves).
  *  Mirrors the sidecar's `coerce_to_string`. */
 export function coerceString(v: unknown): string {
   if (typeof v === 'string') return v.trim();
@@ -69,7 +69,7 @@ export function coerceString(v: unknown): string {
 }
 
 /** Alias-aware deep extractor — drills into the wrapper objects
- *  cursor-agent / claude have been known to nest payloads under
+ *  agent CLIs have been known to nest payloads under
  *  (`args` / `arguments` / `params` / `input`). Walks up to depth 4
  *  to cover the `{"args":{"args":{...}}}` case we've seen in the
  *  wild. Returns empty string when nothing in the alias list

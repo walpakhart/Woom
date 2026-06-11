@@ -33,7 +33,7 @@ import { skillsState, renderSkill } from '$lib/state/skills.svelte';
 import type { ClaudeSession } from '$lib/types';
 
 export interface SlashCommandDeps {
-  sendClaudeMessage(opts?: { silent?: boolean; kind?: 'claude' | 'cursor' }): Promise<void>;
+  sendClaudeMessage(opts?: { silent?: boolean; kind?: 'claude' }): Promise<void>;
   scrollChatBottom(): Promise<void> | void;
   runCompactSession(sessionId: string): Promise<void>;
 }
@@ -245,7 +245,7 @@ export async function handleSlashCommand(
      * the AgentApp listens for. */
     try {
       window.dispatchEvent(new CustomEvent('woom:open-preview', {
-        detail: { kind: session.agentKind },
+        detail: { kind: 'claude' },
       }));
     } catch { /* noop */ }
   }

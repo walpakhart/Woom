@@ -98,22 +98,21 @@ export async function attachBlobsToSession(
  *  identical. */
 export async function pasteImagesIntoColumn(
   instanceId: string,
-  kind: 'claude' | 'cursor',
   blobs: { name: string; type: string; blob: Blob }[],
 ): Promise<number> {
   if (blobs.length === 0) return 0;
   // Resolve target the same way `onAgentDrop` does: active session in this
-  // column, then any session bound here, then a fresh one of this kind.
-  // Prefer `activeIds[kind]` since that's what ChatThread renders;
+  // column, then any session bound here, then a fresh one.
+  // Prefer `activeIds.claude` since that's what ChatThread renders;
   // `activeByInstance[instanceId]` only updates when the focused
   // session has an `agentInstanceId`, which leaves floating sessions
   // out of sync.
   const activeId =
-    sessionsState.activeIds[kind] ?? sessionsState.activeByInstance[instanceId];
+    sessionsState.activeIds.claude ?? sessionsState.activeByInstance[instanceId];
   let target = activeId ? sessionsState.list.find((s) => s.id === activeId) ?? null : null;
   if (!target) target = sessionsState.list.find((s) => s.agentInstanceId === instanceId) ?? null;
   if (!target) {
-    const id = newClaudeSession({ agentKind: kind, agentInstanceId: instanceId });
+    const id = newClaudeSession({ agentInstanceId: instanceId });
     target = sessionsState.list.find((s) => s.id === id) ?? null;
   }
   if (!target) return 0;
@@ -124,7 +123,6 @@ export async function pasteImagesIntoColumn(
 
 export function onAgentDrop(
   instanceId: string,
-  kind: 'claude' | 'cursor',
   e: DragEvent,
   deps: AgentDropDeps,
 ) {
@@ -132,21 +130,19 @@ export function onAgentDrop(
 
   // Pick (or create) the drop target: the active session in THIS column
   // instance. Falls back to any session bound to this instance, then a
-  // floating session of this kind (adopted), then a fresh one.
+  // floating session (adopted), then a fresh one.
   const pickTarget = (): ClaudeSession | null => {
     const activeId =
-      sessionsState.activeIds[kind] ?? sessionsState.activeByInstance[instanceId];
+      sessionsState.activeIds.claude ?? sessionsState.activeByInstance[instanceId];
     let t = activeId ? sessionsState.list.find((s) => s.id === activeId) ?? null : null;
     if (!t) t = sessionsState.list.find((s) => s.agentInstanceId === instanceId) ?? null;
     if (!t) {
-      // Adopt a floating session of the same kind if one exists.
-      t = sessionsState.list.find(
-        (s) => s.agentKind === kind && s.agentInstanceId === null,
-      ) ?? null;
+      // Adopt a floating session if one exists.
+      t = sessionsState.list.find((s) => s.agentInstanceId === null) ?? null;
       if (t) updateSession(t.id, { agentInstanceId: instanceId });
     }
     if (!t) {
-      const id = newClaudeSession({ agentKind: kind, agentInstanceId: instanceId });
+      const id = newClaudeSession({ agentInstanceId: instanceId });
       t = sessionsState.list.find((s) => s.id === id) ?? null;
     }
     return t;

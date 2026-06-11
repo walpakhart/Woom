@@ -154,7 +154,7 @@
   <header class="card-head">
     <h2 class="card-title">MCP servers</h2>
     <p class="card-sub">
-      Woom's bundled sidecars. Spawned by Claude / Cursor on first MCP handshake; "not running" means no agent has talked to that sidecar yet this launch.
+      Woom's bundled sidecars. Spawned by Claude on first MCP handshake; "not running" means no agent has talked to that sidecar yet this launch.
     </p>
   </header>
   <div class="update-actions">

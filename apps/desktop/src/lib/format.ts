@@ -55,13 +55,13 @@ export function formatToolUse(name: string, input: Record<string, unknown>): str
     return cmd ? mdInlineCode(`$ ${truncInline(cmd, 400)}`) : `_using Bash…_`;
   }
   if (name === 'Read') {
-    // Accept Claude's `file_path` AND cursor-agent's raw `path` /
-    // `target_file` aliases. Earlier we'd render `_read_` (no target)
-    // when the cursor-side flattening in `cursor.rs` missed a freshly
-    // shipped variant — surfacing a row labeled "READ" with NO file
-    // beside it. Falling through to the alternate keys + a last-ditch
-    // string scan keeps the row informative until the canonical key
-    // wins again.
+    // Accept Claude's `file_path` AND the raw `path` / `target_file`
+    // aliases some agent CLIs have shipped. Earlier we'd render
+    // `_read_` (no target) when a freshly shipped variant slipped
+    // past the normalizer — surfacing a row labeled "READ" with NO
+    // file beside it. Falling through to the alternate keys + a
+    // last-ditch string scan keeps the row informative until the
+    // canonical key wins again.
     const fp = s('file_path') || s('path') || s('target_file') || s('filePath');
     const range = input.offset || input.limit ? ` (L${input.offset ?? 1}–)` : '';
     return fp ? `_read_ ${mdInlineCode(toolPathLabel(fp))}${range}` : `_read_ \`(args pending)\``;
@@ -73,8 +73,8 @@ export function formatToolUse(name: string, input: Record<string, unknown>): str
       : `_${name.toLowerCase()}_ \`(args pending)\``;
   }
   if (name === 'Grep') {
-    // Cursor's grep variant has shipped both `query` and `regex` over
-    // time; accept either alongside the canonical `pattern`.
+    // Some agent grep variants have shipped `query` / `regex` instead
+    // of the canonical `pattern`; accept any of them defensively.
     const pattern = s('pattern') || s('query') || s('regex');
     const path = s('path') || s('include') || s('glob');
     const inPath = path ? ` in ${mdInlineCode(toolPathLabel(path))}` : '';

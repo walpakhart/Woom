@@ -8,7 +8,7 @@
 //! `terminal_resize` / `terminal_kill` close the loop.
 //!
 //! Phase 2 (MCP) — the same Session is exposed via a localhost HTTP
-//! bridge in `terminal_bridge.rs`. Agents (Claude / Cursor) call MCP
+//! bridge in `terminal_bridge.rs`. Agents (Claude) call MCP
 //! tools in `woom-app` that POST to the bridge and read/write
 //! the same master fd the user is staring at. Each Session keeps a
 //! ring buffer of its last ~64 KB of output so `run_command` can

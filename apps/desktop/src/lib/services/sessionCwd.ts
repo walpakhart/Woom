@@ -1,9 +1,9 @@
 // Session cwd swap logic. When the user repoints a chat session at a
 // new working directory mid-conversation, two things must happen
 // atomically:
-//   1. The CLI session uuid swaps (claude / cursor-agent scope chat
-//      memory by project — we either resume an old uuid stashed for
-//      this cwd, or mint a fresh one).
+//   1. The CLI session uuid swaps (claude scopes chat memory by
+//      project — we either resume an old uuid stashed for this cwd,
+//      or mint a fresh one).
 //   2. A "cwd switch recap" gets stamped on the session as a one-shot
 //      system-prompt suffix, injected into the very next turn so the
 //      agent has continuity across the swap (the new CLI session has

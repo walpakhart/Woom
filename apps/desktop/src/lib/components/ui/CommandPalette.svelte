@@ -83,7 +83,7 @@
   type Result = {
     key: string;
     badge: string;
-    badgeKind: 'view' | 'editor' | 'canvas' | 'github' | 'jira' | 'sentry' | 'claude' | 'cursor' | 'action';
+    badgeKind: 'view' | 'editor' | 'canvas' | 'github' | 'jira' | 'sentry' | 'claude' | 'action';
     title: string;
     subtitle?: string;
     section: string;
@@ -208,7 +208,6 @@
 
   const VIEWS: { key: View; title: string; sub: string }[] = [
     { key: 'claudeApp', title: 'Claude', sub: 'Agent · sessions · worktrees' },
-    { key: 'cursorApp', title: 'Cursor', sub: 'Agent · sessions · worktrees' },
     { key: 'githubApp', title: 'GitHub', sub: 'Repos / PRs / issues / actions' },
     { key: 'jiraApp', title: 'Jira', sub: 'Tickets / boards / sprints' },
     { key: 'sentryApp', title: 'Sentry', sub: 'Errors / events' },
@@ -1049,7 +1048,6 @@
   .badge--jira     { background: rgba(79, 142, 255, 0.10);  color: var(--src-jira);    border-color: rgba(79, 142, 255, 0.26); }
   .badge--sentry   { background: rgba(232, 130, 100, 0.10); color: var(--src-sentry);  border-color: rgba(232, 130, 100, 0.26); }
   .badge--claude   { background: rgba(232, 155, 125, 0.10); color: var(--src-claude);  border-color: rgba(232, 155, 125, 0.26); }
-  .badge--cursor   { background: var(--bg-3); color: var(--src-cursor); border-color: var(--border-hi); }
   .badge--action   { background: var(--accent-soft); color: var(--accent-bright); border-color: var(--border-accent); }
 
   /* v7 — footer kbd hints. */

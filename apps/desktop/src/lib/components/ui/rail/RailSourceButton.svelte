@@ -1,12 +1,11 @@
 <script lang="ts">
   /* Singleton rail button for source/agent solos (Jira / GitHub / Sentry /
-     Claude / Cursor). Each solo has exactly one instance — different
-     contract from RailAppButton's multi-instance editor/canvas/terminal.
-     Optional badge (unread count) and optional drag-drop (Claude/Cursor
-     only). */
+     Claude). Each solo has exactly one instance — different contract
+     from RailAppButton's multi-instance editor/canvas/terminal.
+     Optional badge (unread count) and optional drag-drop (Claude only). */
   import type { Snippet } from 'svelte';
 
-  type DragKind = 'claude' | 'cursor';
+  type DragKind = 'claude';
 
   interface Props {
     /** True when this solo is the currently active top-level view. */
@@ -28,7 +27,7 @@
     busy?: boolean;
     /** When set, treats this button as a drop target — registers
      *  drag listeners and accepts the same payloads the column-
-     *  level drop targets handle. Only Claude/Cursor opt in. */
+     *  level drop targets handle. Only Claude opts in. */
     dragKind?: DragKind;
     /** Highlight while a payload hovers — parent owns the state
      *  because dragleave/drop need to be coordinated across the

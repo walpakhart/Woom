@@ -1,6 +1,6 @@
 <script lang="ts">
-  /* Agent View dashboard — a `⌘⇧A` overlay showing every Claude /
-     Cursor session across all instances, grouped by lifecycle state.
+  /* Agent View dashboard — a `⌘⇧A` overlay showing every Claude
+     session across all instances, grouped by lifecycle state.
      Mirrors Claude Code's `claude agents` table (CLAUDE_PARITY.md §5).
      MVP: no Haiku-summarized one-liners yet — we render the last
      assistant message's first line as a stand-in. Adds Haiku later
@@ -101,8 +101,8 @@
   }
 
   function activate(s: ClaudeSession): void {
-    const aid = s.agentInstanceId ?? APP_INSTANCE_IDS[s.agentKind];
-    if (aid) setActiveSessionInInstance(aid, s.id);
+    const aid = s.agentInstanceId ?? APP_INSTANCE_IDS.claude;
+    setActiveSessionInInstance(aid, s.id);
     p.onActivate(s);
     p.onClose();
   }
@@ -188,7 +188,7 @@
 
     {#if totalShown === 0}
       <div class="ad-empty">
-        <p>No sessions match. Open a Claude or Cursor solo to start one.</p>
+        <p>No sessions match. Open a Claude solo to start one.</p>
       </div>
     {:else}
       <div class="ad-scroll">
@@ -202,13 +202,13 @@
               {#each sec.rows as s (s.id)}
                 <button
                   class="ad-row"
-                  data-kind={s.agentKind}
+                  data-kind="claude"
                   onclick={() => activate(s)}
                   oncontextmenu={(e) => togglePin(s, e)}
                   title="Click to activate · right-click to {s.pinned ? 'unpin' : 'pin'}"
                 >
                   <div class="ad-row-icon">
-                    <BrandIcon kind={s.agentKind} size={16} />
+                    <BrandIcon kind="claude" size={16} />
                   </div>
                   <div class="ad-row-body">
                     <div class="ad-row-line1">
@@ -348,7 +348,6 @@
   }
   .ad-row[data-kind="claude"] { border-left: 2px solid transparent; }
   .ad-row[data-kind="claude"]:hover { border-left-color: var(--src-claude); }
-  .ad-row[data-kind="cursor"]:hover { border-left-color: var(--src-cursor); }
 
   .ad-row-body {
     flex: 1; min-width: 0;

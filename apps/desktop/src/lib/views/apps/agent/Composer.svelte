@@ -13,7 +13,6 @@
   import { convertFileSrc, invoke } from '@tauri-apps/api/core';
   import { open as openDialog } from '@tauri-apps/plugin-dialog';
   import { notify } from '$lib/state/toaster.svelte';
-  import Dropdown from '$lib/components/ui/Dropdown.svelte';
   import ModelEngine from './ModelEngine.svelte';
   import MentionPicker from './MentionPicker.svelte';
   import { onMount } from 'svelte';
@@ -29,7 +28,6 @@
   import {
     claudeEffort,
     claudeModels,
-    cursorModels,
     detectTriggerPosition,
     fmtPct,
     modelContextLimit,
@@ -37,7 +35,7 @@
     spliceTriggerInsertion,
   } from './composerHelpers';
 
-  type Kind = 'claude' | 'cursor';
+  type Kind = 'claude';
 
   interface Props {
     kind: Kind;
@@ -48,7 +46,6 @@
     onSend: () => void;
     onStop: () => void;
     onPasteImages: (
-      kind: Kind,
       blobs: { name: string; type: string; blob: Blob }[]
     ) => Promise<number>;
     /** OS / inbox drag-drop. The composer surfaces the dragover hint
@@ -218,7 +215,7 @@
     }
     if (blobs.length > 0) {
       e.preventDefault();
-      await p.onPasteImages(p.kind, blobs);
+      await p.onPasteImages(blobs);
       return;
     }
     /* Long-text paste trap. When the user pastes a substantial block
@@ -836,11 +833,7 @@
      models that actually have 5× the headroom. Numbers tracked
      against Anthropic's published limits as of late-2025; if a new
      model lands, fall through to the `200_000` Sonnet/Haiku default. */
-  const tokenLimit = $derived(
-    p.kind === 'claude'
-      ? modelContextLimit(sess?.claudeModel ?? null)
-      : modelContextLimit(sess?.cursorModel ?? null)
-  );
+  const tokenLimit = $derived(modelContextLimit(sess?.claudeModel ?? null));
   const inputTokens = $derived(
     sess?.input ? Math.ceil(sess.input.length / 4) : 0
   );
@@ -871,12 +864,8 @@
   const RING_C = 50.27;
   const ctxRingOffset = $derived(RING_C * (1 - ctxPct / 100));
 
-  const fiveHour = $derived(
-    p.kind === 'claude' ? quotaState.usage?.five_hour ?? null : null
-  );
-  const sevenDay = $derived(
-    p.kind === 'claude' ? quotaState.usage?.seven_day ?? null : null
-  );
+  const fiveHour = $derived(quotaState.usage?.five_hour ?? null);
+  const sevenDay = $derived(quotaState.usage?.seven_day ?? null);
 
   /* Model catalogues + claudeEffort moved to ./composerHelpers.ts
    * (wave-1 phase-6 split). Edit the lists there when adding new
@@ -884,8 +873,7 @@
 
   function setModel(v: string | null) {
     if (!sess) return;
-    if (p.kind === 'claude') updateSession(sess.id, { claudeModel: v });
-    else updateSession(sess.id, { cursorModel: v });
+    updateSession(sess.id, { claudeModel: v });
   }
   function setEffort(v: string | null) {
     if (!sess) return;
@@ -1147,12 +1135,8 @@
             onkeyup={() => { detectMentionTrigger(); detectSlashTrigger(); }}
             onscroll={syncBackdropScroll}
             placeholder={sess.sending
-              ? (p.kind === 'claude'
-                  ? 'Type to queue — fires after the current Claude turn finishes.'
-                  : 'Type to queue — fires after the current Cursor turn finishes.')
-              : (p.kind === 'claude'
-                  ? 'Ask Claude anything…  Drop a Jira card / PR / file to attach context.'
-                  : 'Ask Cursor…  Drop a Jira card / PR / file to attach context.')}
+              ? 'Type to queue — fires after the current Claude turn finishes.'
+              : 'Ask Claude anything…  Drop a Jira card / PR / file to attach context.'}
             rows="1"
             spellcheck="false"
             autocomplete="off"
@@ -1178,7 +1162,7 @@
             <span class="cmp-ctx-label mono">{ctxLabel}</span>
           </span>
 
-          {#if p.kind === 'claude' && (fiveHour || sevenDay)}
+          {#if fiveHour || sevenDay}
             <span class="cmp-quotas">
               {#if fiveHour}
                 <button
@@ -1266,29 +1250,25 @@
 
           <!-- DW button — prefills `/dw ` into the composer, mirroring
                the SDD launcher. Same code path as typing the slash
-               command (`runDwFromSlash` in routes/handleSlashCommand.ts).
-               Claude-only: Dynamic Workflows fan out parallel `claude`
-               subagents, which Cursor sessions can't drive. -->
-          {#if p.kind === 'claude'}
-            <button
-              class="cmp-dw-btn"
-              onclick={() => {
-                if (!sess) return;
-                updateSession(sess.id, { input: '/dw ' });
-                queueMicrotask(() => {
-                  if (ta) {
-                    ta.selectionStart = ta.value.length;
-                    ta.selectionEnd = ta.value.length;
-                    ta.focus();
-                  }
-                });
-              }}
-              aria-label="Start a Dynamic Workflow"
-              title="DW — planner fans out parallel subagents (each in its own git worktree), then a verifier synthesises one answer. Shows a cost estimate before it runs."
-            >
-              <span class="cmp-dw-glyph">/dw</span>
-            </button>
-          {/if}
+               command (`runDwFromSlash` in routes/handleSlashCommand.ts). -->
+          <button
+            class="cmp-dw-btn"
+            onclick={() => {
+              if (!sess) return;
+              updateSession(sess.id, { input: '/dw ' });
+              queueMicrotask(() => {
+                if (ta) {
+                  ta.selectionStart = ta.value.length;
+                  ta.selectionEnd = ta.value.length;
+                  ta.focus();
+                }
+              });
+            }}
+            aria-label="Start a Dynamic Workflow"
+            title="DW — planner fans out parallel subagents (each in its own git worktree), then a verifier synthesises one answer. Shows a cost estimate before it runs."
+          >
+            <span class="cmp-dw-glyph">/dw</span>
+          </button>
 
           <!-- SDD history moved to ChatHeader chip (next to memory).
                Removed the [HISTORY] composer button on user feedback:
@@ -1305,7 +1285,7 @@
                of `claude` (mid-stream turn isn't affected). Hidden when
                the bundled rtk binary isn't usable on this platform
                (native Windows — see Phase 1's `platformSupported`). -->
-          {#if p.kind === 'claude' && rtkUiState !== 'unavailable'}
+          {#if rtkUiState !== 'unavailable'}
             <button
               class="cmp-rtk-pill"
               class:cmp-rtk-pill--off={rtkUiState === 'off'}
@@ -1336,7 +1316,7 @@
                (same model, dedicated infra). Effect applies to the
                NEXT spawn — current turn stays on whatever endpoint it
                started on. -->
-          {#if p.kind === 'claude' && (sess.claudeModel ?? '').startsWith('claude-opus-4-8')}
+          {#if (sess.claudeModel ?? '').startsWith('claude-opus-4-8')}
             <button
               class="cmp-fast-chip"
               class:cmp-fast-chip--on={sess.fastMode === true}
@@ -1360,25 +1340,14 @@
 
           <!-- Group 3 · model config — model picker + effort slider. -->
           <span class="cmp-model">
-            {#if p.kind === 'claude'}
-              <ModelEngine
-                model={sess.claudeModel ?? 'claude-sonnet-4-6'}
-                modelOptions={claudeModels}
-                effort={sess.thinkingEffort ?? 'auto'}
-                effortOptions={claudeEffort}
-                onModelChange={setModel}
-                onEffortChange={setEffort}
-              />
-            {:else}
-              <Dropdown
-                value={sess.cursorModel ?? 'sonnet-4-6'}
-                options={cursorModels}
-                onChange={setModel}
-                placeholder="model"
-                ariaLabel="Cursor model"
-                forceUp={true}
-              />
-            {/if}
+            <ModelEngine
+              model={sess.claudeModel ?? 'claude-sonnet-4-6'}
+              modelOptions={claudeModels}
+              effort={sess.thinkingEffort ?? 'auto'}
+              effortOptions={claudeEffort}
+              onModelChange={setModel}
+              onEffortChange={setEffort}
+            />
           </span>
 
           {#if (sess.pendingQueue?.length ?? 0) > 0}

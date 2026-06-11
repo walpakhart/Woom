@@ -98,8 +98,7 @@ export function onActionResolved(
   const lastMsg = sess.messages[sess.messages.length - 1];
   const lastErrored =
     lastMsg?.role === 'assistant' &&
-    (lastMsg.content.startsWith('**Claude failed:') ||
-      lastMsg.content.startsWith('**Cursor failed:'));
+    lastMsg.content.startsWith('**Claude failed:');
   if (lastErrored) return;
   continuationInFlight.add(sessionId);
   if (sess.awaitingApproval) {
@@ -133,8 +132,7 @@ export async function continueAgentTurn(
    * survive for resume), surface the pause modal, and flip the session
    * to awaitingResume — onResumeAfterQuota / the watchdog re-fire the
    * continuation once quota recovers. */
-  const guardKind = (sess.agentKind ?? 'claude') as 'claude' | 'cursor';
-  if (guardKind === 'claude' && !ignoreQuota) {
+  if (!ignoreQuota) {
     const pct5h = quotaState.usage?.five_hour?.utilization ?? 0;
     const pct7d = quotaState.usage?.seven_day?.utilization ?? 0;
     if (pct5h >= 95 || pct7d >= 95) {
@@ -177,7 +175,6 @@ export async function continueAgentTurn(
     return;
   }
   let prompt = formatActionResultsForPrompt(drained);
-  const kind = (sess.agentKind ?? 'claude') as 'claude' | 'cursor';
   updateSession(sessionId, { sending: true });
   appendSessionMessage(sessionId, {
     role: 'assistant',
@@ -192,9 +189,7 @@ export async function continueAgentTurn(
   const claudeUuid = sess.claudeUuid;
   const resume = Boolean(sess.claudeResumable);
   const rules = sessionsState.userRules.trim();
-  const agentKind = sess.agentKind;
-  const cursorModel = agentKind === 'cursor' ? sess.cursorModel : null;
-  const claudeModel = agentKind === 'claude' ? sess.claudeModel : null;
+  const claudeModel = sess.claudeModel;
   const { system: appContext, turn: appTurnContext } = buildAgentAppContext(sessionId);
   // Volatile layout/canvas/cwd-recap rides the turn message, not the
   // cached system prompt — see agentContext.ts for the cache rationale.
@@ -210,8 +205,6 @@ export async function continueAgentTurn(
       claudeUuid,
       resume,
       rules: rules || null,
-      agentKind,
-      cursorModel,
       claudeModel,
       appContext,
       // See `sendClaudeMessage.ts` for the RTK wiring rationale.
@@ -252,7 +245,6 @@ export async function continueAgentTurn(
   } catch (e) {
     const msg = typeof e === 'string' ? e : String(e);
     const cancelled = msg.toLowerCase().includes('cancelled');
-    const agentLabel = sess.agentKind === 'cursor' ? 'Cursor' : 'Claude';
     if (cancelled) {
       appendSessionMessage(sessionId, {
         role: 'system',
@@ -260,12 +252,12 @@ export async function continueAgentTurn(
         at: new Date().toISOString(),
       });
     } else {
-      replaceLastAssistant(sessionId, `**${agentLabel} failed:** ${msg}`);
+      replaceLastAssistant(sessionId, `**Claude failed:** ${msg}`);
       if (appHasFocus()) {
-        notifyError(e, { title: `${agentLabel} run failed` });
+        notifyError(e, { title: 'Claude run failed' });
       } else {
         notifyClaudeRunComplete({
-          agentLabel,
+          agentLabel: 'Claude',
           sessionTitle: sess.title || 'Untitled chat',
           ok: false,
           durationMs: Date.now() - runStartedAt,

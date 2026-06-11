@@ -43,7 +43,7 @@ export interface KeyboardShortcutDeps {
   isSymbolPickerOpen(): boolean;
   navBack(): void;
   navForward(): void;
-  stopAgentForKind(kind: 'claude' | 'cursor'): Promise<void>;
+  stopAgentForKind(kind: 'claude'): Promise<void>;
   // Modal derived snapshots (returns truthy object when open)
   getPatModal(): { busy: boolean } | null;
   getJiraModal(): { busy: boolean } | null;
@@ -182,10 +182,7 @@ export function createOnKey(deps: KeyboardShortcutDeps): (e: KeyboardEvent) => v
       (e.key === '.' || e.code === 'Period')
     ) {
       const view = deps.getView();
-      const kind: 'claude' | 'cursor' | null =
-        view === 'claudeApp' ? 'claude'
-        : view === 'cursorApp' ? 'cursor'
-        : null;
+      const kind: 'claude' | null = view === 'claudeApp' ? 'claude' : null;
       if (kind) {
         const activeId = sessionsState.activeIds[kind];
         const s = activeId ? sessionsState.list.find((x) => x.id === activeId) : null;
@@ -225,7 +222,6 @@ export function createOnKey(deps: KeyboardShortcutDeps): (e: KeyboardEvent) => v
       if (jiraModal && !jiraModal.busy) closeModal('jiraConnect');
       const claudeModal = deps.getClaudeModal();
       if (claudeModal && !claudeModal.loading) closeModal('claudeStatus');
-      if (modalsState.cursorStatus && !modalsState.cursorStatus.loading) closeModal('cursorStatus');
       if (modalsState.userPicker) closeModal('userPicker');
       const commentModal = deps.getCommentModal();
       if (commentModal && !commentModal.busy) closeModal('comment');

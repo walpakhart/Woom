@@ -31,11 +31,10 @@
     onDragEnd: () => void;
     onCardMouseDown: (e: MouseEvent) => void;
     isClickNotDrag: (e: MouseEvent) => boolean;
-    /** One-click handoff to Claude / Cursor — equivalent to dragging
-     *  the row onto the matching rail icon, but for users who prefer
+    /** One-click handoff to Claude — equivalent to dragging
+     *  the row onto the rail icon, but for users who prefer
      *  a button over a drag gesture. Shown on each PR/issue card. */
     onSendToClaude: (item: InboxItem) => void;
-    onSendToCursor: (item: InboxItem) => void;
     /** Seed a Dynamic Workflow from this item — templates a task and
      *  routes through the live-build DW pipeline. */
     onFixWithDw: (item: InboxItem) => void;
@@ -47,10 +46,6 @@
        focus the item; the user has expressed a different intent. */
     e.stopPropagation();
     p.onSendToClaude(it);
-  }
-  function clickSendToCursor(it: InboxItem, e: MouseEvent) {
-    e.stopPropagation();
-    p.onSendToCursor(it);
   }
 
   const items = $derived(githubItemsFor(p.instanceId));
@@ -113,11 +108,6 @@
         label: 'Send to Claude',
         icon: 'M22 2 11 13 M22 2l-7 20-4-9-9-4 20-7z',
         onClick: () => p.onSendToClaude(it)
-      },
-      {
-        label: 'Send to Cursor',
-        icon: 'M3 3l8 18 2-8 8-2z',
-        onClick: () => p.onSendToCursor(it)
       },
       {
         label: 'Fix with DW',
@@ -835,19 +825,6 @@
                 </svg>
                 <span>Claude</span>
               </span>
-              <span
-                class="gl-card-send gl-card-send--cursor"
-                role="button"
-                tabindex="0"
-                onclick={(e) => clickSendToCursor(it, e)}
-                onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); clickSendToCursor(it, e as unknown as MouseEvent); } }}
-                onpointerdown={(e) => e.stopPropagation()}
-                title="Send to Cursor"
-                aria-label="Send to Cursor"
-              >
-                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 3l8 18 2-8 8-2z"/></svg>
-                <span>Cursor</span>
-              </span>
             </span>
           </button>
         {/each}
@@ -1217,16 +1194,6 @@
   .gl-card-send--claude:hover {
     background: color-mix(in srgb, var(--src-claude) 22%, transparent);
     color: var(--accent-bright);
-    transform: translateY(-1px);
-  }
-  .gl-card-send--cursor {
-    color: var(--src-cursor, var(--text-1));
-    background: color-mix(in srgb, var(--src-cursor, var(--text-1)) 14%, transparent);
-    border: 1px solid color-mix(in srgb, var(--src-cursor, var(--text-1)) 32%, transparent);
-  }
-  .gl-card-send--cursor:hover {
-    background: color-mix(in srgb, var(--src-cursor, var(--text-1)) 24%, transparent);
-    color: var(--text-0);
     transform: translateY(-1px);
   }
   .gl-card-send:active { transform: translateY(0); }
