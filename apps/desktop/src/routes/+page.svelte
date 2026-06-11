@@ -745,6 +745,11 @@
    *  handler fires a silent continuation prompt so the agent picks up
    *  the bg task's tail output and continues working. */
   let claudeBgUnlisten: UnlistenFn | null = null;
+  /** Unlisten for `bg:agent_done` from bg_tasks.rs — fired when a
+   *  session-tagged Preview-pane bg task (spawned via the sidecar's
+   *  `bg_spawn` MCP tool) exits on its own. Same auto-resume pattern
+   *  as `claude:bg_done`. */
+  let bgAgentDoneUnlisten: UnlistenFn | null = null;
   /* Window-close lifecycle handles. Both are unlisten-style — see
      the close-flush hook inside onMount for what they catch. */
   let tauriCloseUnlisten: UnlistenFn | null = null;
@@ -1169,6 +1174,36 @@
       sessionsState.activeClaudeId = session_id;
       await sendClaudeMessage({ silent: true, kind: 'claude', prompt: promptText });
     });
+    /* Preview-pane bg-task auto-resume. Tasks spawned through the
+     *  sidecar's `bg_spawn` MCP tool carry the owning session_id;
+     *  bg_tasks.rs emits this when such a task exits on its own
+     *  (killed tasks stay silent — the user/agent already moved on).
+     *  Mirrors the `claude:bg_done` flow above. */
+    bgAgentDoneUnlisten = await listen<{
+      session_id: string;
+      task_id: string;
+      label: string;
+      code: number;
+      tail: string;
+    }>('bg:agent_done', async (event) => {
+      const { session_id, task_id, label, code, tail } = event.payload;
+      const sess = sessionsState.list.find((x) => x.id === session_id);
+      if (!sess) return;
+      const capped = tail.length > 4000 ? `…${tail.slice(tail.length - 4000)}` : tail;
+      const promptText = [
+        `[Woom: bg task ${task_id} (${label}) exited with code ${code}]`,
+        '',
+        'Output tail:',
+        '```',
+        capped.trim() || '(empty)',
+        '```',
+        '',
+        'Continue from where you were. Run `bg_logs` on the task if you need more.',
+      ].join('\n');
+      sessionsState.activeIds.claude = session_id;
+      sessionsState.activeClaudeId = session_id;
+      await sendClaudeMessage({ silent: true, kind: 'claude', prompt: promptText });
+    });
     /* Window close / dev reload safety net.
      *
      * The session persister debounces writes (see scheduleDiskWrite
@@ -1490,6 +1525,7 @@
     removeFocusListener?.();
     actionIpcUnlisten?.();
     claudeBgUnlisten?.();
+    bgAgentDoneUnlisten?.();
     tauriCloseUnlisten?.();
     dwDoneUnlistenRef?.();
     dwCreatedUnlistenRef?.();

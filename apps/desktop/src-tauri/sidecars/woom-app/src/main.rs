@@ -2123,12 +2123,19 @@ impl App {
             return Err(ErrorData::invalid_params("`cwd` is empty", None));
         }
         let client = BridgeClient::discover().map_err(bridge_to_mcp)?;
+        /* Tag the task with the owning agent session so the desktop's
+         * bg_tasks waiter can emit `bg:agent_done` on exit — that's what
+         * auto-resumes the agent with the log tail instead of leaving it
+         * asleep after its turn ended. */
+        let session_id = std::env::var("WOOM_SESSION_ID")
+            .ok()
+            .filter(|s| !s.trim().is_empty());
         let task = client
             .bg_spawn(terminal_bridge_client::BgSpawnReq {
                 cmd: cmd.clone(),
                 cwd,
                 label,
-                session_id: None,
+                session_id,
                 env,
             })
             .await

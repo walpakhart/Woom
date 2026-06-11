@@ -86,6 +86,32 @@ pub enum BgStatus {
     Killed { reason: String },
 }
 
+/// Payload for `bg:agent_done` — fired when a session-tagged bg task
+/// exits on its own. The frontend turns it into a silent agent prompt
+/// (same auto-resume pattern as `claude:bg_done` in claude_bg.rs).
+#[derive(Clone, Debug, Serialize)]
+pub struct BgAgentDoneEvent {
+    pub session_id: String,
+    pub task_id: String,
+    pub label: String,
+    pub code: i32,
+    pub tail: String,
+}
+
+/// Tail bytes captured for the `bg:agent_done` payload. The frontend
+/// trims further; we cap here to keep the Tauri IPC small.
+const AGENT_DONE_TAIL_BYTES: usize = 8 * 1024;
+
+/// Read the last `AGENT_DONE_TAIL_BYTES` of a log file, cut at a UTF-8
+/// boundary so the Tauri IPC never carries invalid bytes.
+fn read_log_tail(path: &std::path::Path) -> Option<String> {
+    let bytes = std::fs::read(path).ok()?;
+    let start = bytes.len().saturating_sub(AGENT_DONE_TAIL_BYTES);
+    let slice = &bytes[start..];
+    let safe_start = slice.iter().position(|b| (*b as i8) >= -0x40).unwrap_or(0);
+    String::from_utf8(slice[safe_start..].to_vec()).ok()
+}
+
 /// Tunables — easier to find here than scattered.
 const LOG_CAP_BYTES: u64 = 10 * 1024 * 1024;
 const RECENT_LINES_CAP: usize = 30;
@@ -562,6 +588,31 @@ pub async fn spawn(
             // Generic event for "any task changed" — lets the store
             // re-fetch list without subscribing per id.
             let _ = app2.emit("bg:tasks-changed", &id2);
+
+            /* Agent auto-resume. A session-tagged task that exited on
+             *  its own (NOT killed — kill means the user/agent moved on)
+             *  wakes the owning agent session: the frontend folds the
+             *  log tail into a silent continuation prompt, mirroring the
+             *  `claude:bg_done` flow in claude_bg.rs. Brief grace sleep
+             *  lets the reader loops flush their final lines to the log
+             *  file — wait() returning races with stdout/stderr EOF. */
+            if snapshot.session_id.is_some()
+                && matches!(snapshot.status, BgStatus::Exited { .. })
+            {
+                tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                let tail = read_log_tail(std::path::Path::new(&snapshot.log_path))
+                    .unwrap_or_default();
+                let _ = app2.emit(
+                    "bg:agent_done",
+                    BgAgentDoneEvent {
+                        session_id: snapshot.session_id.clone().unwrap_or_default(),
+                        task_id: id2.clone(),
+                        label: snapshot.label.clone(),
+                        code: exit_code,
+                        tail,
+                    },
+                );
+            }
         });
     }
 
