@@ -812,6 +812,31 @@
     return () => window.removeEventListener('woom:fs:path-deleted', onFsDeleted);
   });
 
+  /* ⌘W — close the active tab, NOT the window. The Rust side rebinds
+     the macOS menu's Cmd+W from "Close Window" to a custom item that
+     fires `menu:close-tab`; only a mounted EditorView reacts (solos
+     remount on view switch, so at most one is live = the visible one).
+     Priority: diff overlay first (it sits on top of the buffer), then
+     the active file tab. No tabs open → no-op, window stays. */
+  onMount(() => {
+    let dead = false;
+    let unlisten: UnlistenFn | null = null;
+    void listen('menu:close-tab', () => {
+      if (diffTarget) {
+        closeDiff();
+        return;
+      }
+      if (activePath) void closeTab(activePath);
+    }).then((u) => {
+      if (dead) u();
+      else unlisten = u;
+    });
+    return () => {
+      dead = true;
+      unlisten?.();
+    };
+  });
+
   async function pickFolder() {
     let picked: string | string[] | null;
     try {

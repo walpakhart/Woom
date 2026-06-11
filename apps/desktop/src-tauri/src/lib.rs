@@ -762,6 +762,71 @@ pub fn run() {
             updater::updater_install_now,
             updater::updater_install_on_quit,
         ])
+        // Custom macOS menu. Replaces Tauri's default solely to RECLAIM
+        // Cmd+W: the default Window menu binds it to "Close Window",
+        // which swallows the keystroke before the webview sees it and
+        // closes the whole app window when the user just wanted to
+        // close an editor tab. We rebuild the standard App/Edit/Window
+        // submenus (Edit's predefined items are what make Cmd+C/V/X/Z
+        // work inside WKWebView — do NOT drop them) and bind Cmd+W to
+        // a custom "Close Tab" item forwarded to the frontend as a
+        // `menu:close-tab` event. The active EditorView closes its
+        // diff overlay / active tab; with no editor mounted it's a
+        // no-op — the window never closes from Cmd+W.
+        .menu(|handle| {
+            use tauri::menu::{AboutMetadata, Menu, MenuItem, PredefinedMenuItem, Submenu};
+            let app_m = Submenu::with_items(
+                handle,
+                "Woom",
+                true,
+                &[
+                    &PredefinedMenuItem::about(handle, None, Some(AboutMetadata::default()))?,
+                    &PredefinedMenuItem::separator(handle)?,
+                    &PredefinedMenuItem::services(handle, None)?,
+                    &PredefinedMenuItem::separator(handle)?,
+                    &PredefinedMenuItem::hide(handle, None)?,
+                    &PredefinedMenuItem::hide_others(handle, None)?,
+                    &PredefinedMenuItem::show_all(handle, None)?,
+                    &PredefinedMenuItem::separator(handle)?,
+                    &PredefinedMenuItem::quit(handle, None)?,
+                ],
+            )?;
+            let edit_m = Submenu::with_items(
+                handle,
+                "Edit",
+                true,
+                &[
+                    &PredefinedMenuItem::undo(handle, None)?,
+                    &PredefinedMenuItem::redo(handle, None)?,
+                    &PredefinedMenuItem::separator(handle)?,
+                    &PredefinedMenuItem::cut(handle, None)?,
+                    &PredefinedMenuItem::copy(handle, None)?,
+                    &PredefinedMenuItem::paste(handle, None)?,
+                    &PredefinedMenuItem::select_all(handle, None)?,
+                ],
+            )?;
+            let close_tab =
+                MenuItem::with_id(handle, "close-tab", "Close Tab", true, Some("CmdOrCtrl+W"))?;
+            let window_m = Submenu::with_items(
+                handle,
+                "Window",
+                true,
+                &[
+                    &PredefinedMenuItem::minimize(handle, None)?,
+                    &PredefinedMenuItem::maximize(handle, None)?,
+                    &PredefinedMenuItem::fullscreen(handle, None)?,
+                    &PredefinedMenuItem::separator(handle)?,
+                    &close_tab,
+                ],
+            )?;
+            Menu::with_items(handle, &[&app_m, &edit_m, &window_m])
+        })
+        .on_menu_event(|app, event| {
+            use tauri::Emitter;
+            if event.id().as_ref() == "close-tab" {
+                let _ = app.emit("menu:close-tab", ());
+            }
+        })
         .setup(|app| {
             // Hooks config — load at startup so the frontend's first
             // `hooks_load_config` call doesn't pay a disk read. Failure
