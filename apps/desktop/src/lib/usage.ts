@@ -29,6 +29,10 @@ const RATE_TABLE: Record<
    * Opus 4.8 in the hierarchy. Cache write/read follow the standard
    * 1.25× / 0.1× of base (Anthropic didn't publish cache rates). */
   'claude-fable-5':             { input: 10, output: 50,  cacheWrite: 12.5, cacheRead: 1.0 },
+  /* 1M-context variant = base × 2, same convention as Opus 4.8[1m]
+   * (no published rate sheet for Fable[1m] yet — revise when one
+   * lands; over-estimating beats silently under-billing). */
+  'claude-fable-5[1m]':         { input: 20, output: 100, cacheWrite: 25.0, cacheRead: 2.0 },
   'claude-mythos-5':            { input: 10, output: 50,  cacheWrite: 12.5, cacheRead: 1.0 },
   'claude-opus-4-8':            { input: 5,  output: 25,  cacheWrite: 6.25, cacheRead: 0.5 },
   'claude-opus-4-8[1m]':        { input: 10, output: 50,  cacheWrite: 12.5, cacheRead: 1.0 },
@@ -62,11 +66,12 @@ export function contextWindowFor(
 ): number {
   if (agentKind === 'cursor') return 200_000;
   if (!model) return 200_000;
-  /* Fable/Mythos 5: marketing says "focused across millions of tokens"
-   * but the shipped window is 200K — Claude Code auto-compacts these
-   * sessions at ~155K, the standard 77.5% threshold of a 200K window.
-   * The earlier 1M cap made the ring show ~15% while the CLI was
-   * already compacting (observed live 2026-06-11). */
+  /* Fable/Mythos 5: the default tier ships a 200K window — Claude Code
+   * auto-compacts these sessions at ~155K, the standard 77.5% threshold
+   * of a 200K window (observed live 2026-06-11; the earlier 1M cap made
+   * the ring show ~15% mid-compaction). The dedicated 1M variant carries
+   * the `[1m]` suffix — check it FIRST, base-id `startsWith` matches both. */
+  if (model.startsWith('claude-fable-5[1m]') || model.startsWith('claude-mythos-5[1m]')) return 1_000_000;
   if (model.startsWith('claude-fable-5') || model.startsWith('claude-mythos-5')) return 200_000;
   if (model.startsWith('claude-opus-4-7')) return 1_000_000;
   /* Opus 4.8 default tier dropped to 200K; the dedicated 1M variant

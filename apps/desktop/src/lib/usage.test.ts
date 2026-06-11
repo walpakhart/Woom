@@ -112,6 +112,15 @@ describe('contextWindowFor', () => {
     expect(contextWindowFor('claude-opus-4-8[1m]')).toBe(1_000_000);
   });
 
+  it('returns 200k for fable/mythos default, 1M for the [1m] variant', () => {
+    // Default tier auto-compacts at ~155K = 77.5% of a 200K window
+    // (observed live); the 1M tier is the explicit `[1m]` suffix.
+    expect(contextWindowFor('claude-fable-5')).toBe(200_000);
+    expect(contextWindowFor('claude-fable-5[1m]')).toBe(1_000_000);
+    expect(contextWindowFor('claude-mythos-5')).toBe(200_000);
+    expect(contextWindowFor('claude-mythos-5[1m]')).toBe(1_000_000);
+  });
+
   it('caps Cursor sessions at 200k regardless of model', () => {
     // Cursor's composer is 200k under standard subscriptions even with
     // Opus 4.7 / Max mode (Max is about tool budget, not context).
