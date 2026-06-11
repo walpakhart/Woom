@@ -1,3 +1,12 @@
+<script module lang="ts">
+  /* Per-task UI prefs live in MODULE scope so they survive remounts —
+     the pane is destroyed on every solo switch (keep-alive reverted),
+     and instance $state would reset each task back to the `logs` tab. */
+  type DetailTab = 'logs' | 'preview';
+  const detailTabByTask = $state<Record<string, DetailTab>>({});
+  const iframeBustByTask = $state<Record<string, number>>({});
+</script>
+
 <script lang="ts">
   /* Preview pane — right-side panel inside Claude/Cursor solo for
      long-running processes the agent (or user) spawns. Mirrors the
@@ -217,9 +226,6 @@
      tasks remembers each one's preferred tab. Preview tab auto-
      activates the first time a URL gets detected for a task the user
      is currently viewing — feels like "the preview just lit up". */
-  type DetailTab = 'logs' | 'preview';
-  let detailTabByTask = $state<Record<string, DetailTab>>({});
-
   function detailTab(id: string): DetailTab {
     return detailTabByTask[id] ?? 'logs';
   }
@@ -239,7 +245,6 @@
 
   /** `bust` query param so a manual "reload" button forces the iframe
    *  to re-fetch without changing the src URL meaningfully. */
-  let iframeBustByTask = $state<Record<string, number>>({});
   function reloadIframe(id: string) {
     iframeBustByTask[id] = Date.now();
   }

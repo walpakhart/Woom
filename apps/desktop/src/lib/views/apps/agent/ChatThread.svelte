@@ -27,6 +27,10 @@
 
   interface Props {
     kind: Kind;
+    /** Narrow-column layout (agent dock). Collapses the 76px byline
+     *  gutter to an inline name-above-body label so the chat reads in
+     *  ~340px. Solo (AgentApp) leaves it undefined → unchanged. */
+    compact?: boolean;
     thinkingStartedAt: Record<string, number | null>;
     thinkingTick: Record<string, number>;
     onUpdateAction: (sessionId: string, actionId: string, patch: Partial<ClaudeAction>) => void;
@@ -572,6 +576,7 @@
       {:else if msg.role === 'user'}
         <article
           class="msg msg--user"
+          class:msg--compact={p.compact}
           use:observeArticle={i}
           oncontextmenu={(e) => openMsgCtxMenu(e, msg, i)}
         >
@@ -629,6 +634,7 @@
              renders here (the card's resting place). -->
         <article
           class="msg msg--assistant"
+          class:msg--compact={p.compact}
           use:observeArticle={i}
           oncontextmenu={(e) => openMsgCtxMenu(e, msg, i)}
         >
@@ -941,6 +947,18 @@
     align-items: start;
   }
   .msg--system { grid-template-columns: 1fr; }
+
+  /* Compact (agent dock, ~340px): drop the 76px byline gutter, stack
+     the author name inline above the body so prose + cards get the
+     full column width. Solo never gets `.msg--compact`. */
+  .msg--compact {
+    grid-template-columns: 1fr;
+    gap: 3px;
+  }
+  .msg--compact .msg-byline {
+    padding-top: 0;
+    padding-bottom: 1px;
+  }
 
   .msg-byline {
     font-size: 11px;

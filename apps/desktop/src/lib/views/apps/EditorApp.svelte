@@ -321,6 +321,19 @@
       }))}
       {reviewCount}
       onExpand={() => (dockOpen = true)}
+      onAgentClick={(a) => {
+        /* Rail icon → dock THAT session. The dock (AgentDock) reads
+           `editor-dock-session:<instanceId>` on mount to pick its
+           session, so seed it before expanding — otherwise the dock
+           re-opens on its last/most-recent pick and ignores the rail
+           click. */
+        try {
+          localStorage.setItem(`editor-dock-session:${p.instanceId}`, a.sessionId);
+        } catch {
+          /* private mode / quota — dock falls back to most-recent. */
+        }
+        dockOpen = true;
+      }}
     />
   {/if}
 </section>

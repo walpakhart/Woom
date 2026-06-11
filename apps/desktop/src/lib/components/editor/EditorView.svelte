@@ -1014,6 +1014,17 @@
    *  first (so stale files from the previous repo vanish), then restores
    *  only paths that still exist AND live under one of the given roots. */
   async function loadTabsForRoots(rs: string[]) {
+    /* Capture the previously-active file BEFORE clearing: `activePath = ''`
+       below triggers the mirror $effect, which removes `activeKey` — so
+       read it first or we lose which tab was focused. Restoring it (vs.
+       always next[0]) is what keeps the editor on the file you left open
+       when you leave + return to the editor solo (EditorApp remounts). */
+    let storedActive: string | null = null;
+    try {
+      storedActive = localStorage.getItem(activeKey(instanceId));
+    } catch {
+      storedActive = null;
+    }
     tabs = [];
     activePath = '';
     dirtyByPath = {};
@@ -1034,7 +1045,7 @@
       if (ok) next.push(p);
     }
     tabs = next;
-    activePath = next[0] ?? '';
+    activePath = storedActive && next.includes(storedActive) ? storedActive : (next[0] ?? '');
   }
 
   /* Mirror the active path into localStorage so the agent's @-mention

@@ -8,7 +8,7 @@
      The composer holds the source of truth for the textarea value;
      we only emit `onPick(mention, replaceFrom)` and let the parent
      splice the mention into the input and append it to `mentions[]`. */
-  import { sessionsState } from '$lib/state/sessions.svelte';
+  import { sessionsState, editorRoots } from '$lib/state/sessions.svelte';
   import { inboxState } from '$lib/state/inbox.svelte';
   import { jiraItemsFor } from '$lib/state/inbox-jira';
   import { githubItemsFor } from '$lib/state/inbox-github';
@@ -126,25 +126,32 @@
       sessionsState.editorInstanceState[editorActive]?.repoPath ?? '';
 
     /* Editor's open tabs — the user is most likely to mention these.
-       v8: read the per-instance cache (`woom:editor:tabs:<id>`) instead
-       of the legacy single-key (`woom:editor:tabs`) which never gets
-       written today. Fallback to the legacy key for sessions saved
-       before the per-instance migration so an upgrade window still
-       surfaces tabs. The currently-active file is read from a sibling
-       per-instance key and pinned to the top with a "current" sub-label
-       so "@" + Enter just mentions whatever the editor is showing. */
+       Since the per-repo tab migration (0.4.0) EditorView persists tabs
+       under `woom:editor:tabs:<sorted roots joined by |>` — mirror that
+       key derivation here (EditorView.svelte `repoKeyFor`). Older builds
+       wrote per-instance (`woom:editor:tabs:<instanceId>`) and before
+       that a single legacy key — keep both as fallbacks so an upgrade
+       window still surfaces tabs. The currently-active file stays on a
+       per-instance key and is pinned to the top with a "current"
+       sub-label so "@" + Enter just mentions whatever the editor is
+       showing. */
     let tabs: string[] = [];
     let activeTab = '';
     try {
-      const rawScoped = localStorage.getItem(`woom:editor:tabs:${editorActive}`);
-      if (rawScoped) {
-        const parsed = JSON.parse(rawScoped);
-        if (Array.isArray(parsed)) tabs = parsed.filter((p) => typeof p === 'string');
-      } else {
-        const rawLegacy = localStorage.getItem('woom:editor:tabs');
-        if (rawLegacy) {
-          const parsed = JSON.parse(rawLegacy);
-          if (Array.isArray(parsed)) tabs = parsed.filter((p) => typeof p === 'string');
+      const roots = editorRoots(editorActive);
+      const repoKey = roots.length ? [...roots].sort().join('|') : '';
+      const candidates = [
+        repoKey ? `woom:editor:tabs:${repoKey}` : '',
+        `woom:editor:tabs:${editorActive}`,
+        'woom:editor:tabs'
+      ].filter(Boolean);
+      for (const key of candidates) {
+        const raw = localStorage.getItem(key);
+        if (!raw) continue;
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          tabs = parsed.filter((p) => typeof p === 'string');
+          break;
         }
       }
       activeTab = localStorage.getItem(`woom:editor:active:${editorActive}`) || '';

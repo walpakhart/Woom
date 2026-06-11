@@ -41,6 +41,10 @@
 
   interface Props {
     kind: Kind;
+    /** Narrow-column layout (agent dock). Sheds the noisy suffix chips
+     *  (quota pills + numeric context label) so the bottom row fits in
+     *  ~340px; the context ring stays. Solo leaves it undefined. */
+    compact?: boolean;
     onSend: () => void;
     onStop: () => void;
     onPasteImages: (
@@ -1036,6 +1040,7 @@
 {#if sess}
   <div
     class="cmp"
+    class:cmp--compact={p.compact}
     ondragenter={onShellDragEnter}
     ondragover={onShellDragOver}
     ondragleave={onShellDragLeave}
@@ -1988,6 +1993,37 @@
   .cmp-suffix {
     display: flex; align-items: center; gap: 10px;
   }
+  /* Compact (agent dock, ~340px): the single row can't hold textarea +
+     full control run. Go two-tier — textarea gets its own full-width
+     line, controls drop to a second line below. Shed only the truly
+     redundant noise: quota pills, numeric ctx label, group dividers.
+     Keep ring + /sdd /dw + RTK/FAST + model + send — the second tier
+     has room for them. Solo never gets `.cmp--compact`. */
+  .cmp--compact .cmp-quotas,
+  .cmp--compact .cmp-ctx-label,
+  .cmp--compact .cmp-divider { display: none; }
+  .cmp--compact .cmp-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 6px;
+  }
+  .cmp--compact .cmp-area-wrap {
+    order: 1;
+    flex: 1 1 100%;   /* tier 1 — textarea full width */
+  }
+  .cmp--compact .cmp-prefix { order: 2; }
+  .cmp--compact .cmp-suffix {
+    order: 3;
+    flex: 1 1 auto;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  /* Send pinned to the right edge of tier 2; everything else flows left. */
+  .cmp--compact .cmp-send,
+  .cmp--compact .cmp-stop { margin-left: auto; }
+  .cmp--compact .cmp-send ~ .cmp-send,
+  .cmp--compact .cmp-stop ~ .cmp-send { margin-left: 0; }
   /* Three semantic clusters — usage · launchers · model — so the row
      reads as grouped intent instead of one flat run of chips. Tight
      intra-group gap; the hairline divider carries inter-group

@@ -236,7 +236,10 @@
   .bp-popover {
     position: absolute;
     top: calc(100% + 6px);
-    right: 0;
+    /* Anchor is zero-width at the chip's LEFT edge — `right: 0` would
+       grow the 280px panel leftward, out of the chat pane and under
+       the sessions sidebar (only a digit-sliver stays visible). */
+    left: 0;
     z-index: 40;
     width: 280px;
     padding: 10px 12px 8px;

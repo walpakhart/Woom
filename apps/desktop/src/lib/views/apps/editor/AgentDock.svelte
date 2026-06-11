@@ -289,6 +289,7 @@
         <div class="adk-chat">
           <ChatThread
             kind={dockSession.kind}
+            compact
             thinkingStartedAt={p.dock.thinkingStartedAt}
             thinkingTick={p.dock.thinkingTick}
             onUpdateAction={p.dock.onUpdateAction}
@@ -304,6 +305,7 @@
           />
           <Composer
             kind={dockSession.kind}
+            compact
             onSend={() => p.dock.onSend(dockSession!.kind)}
             onStop={() => p.dock.onStop(dockSession!.kind)}
             onPasteImages={(k, blobs) => p.dock.onPasteImages(APP_INSTANCE_IDS[k], k, blobs)}
