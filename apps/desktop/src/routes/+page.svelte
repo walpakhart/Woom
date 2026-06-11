@@ -1016,9 +1016,14 @@
         clearResumeState(s.id);
         if ((s.pendingQueue ?? []).length > 0) {
           /* Pop queue head into composer input + fire send. Same
-           * shape as the ResumePill click path. */
+           * shape as the ResumePill click path. Stash whatever the
+           * user typed while waiting — the send-finally restores it
+           * once the queue drains. */
           const entry = s.pendingQueue![0];
           const rest = s.pendingQueue!.slice(1);
+          if (!queueSavedDrafts.has(s.id) && (s.input.trim() || s.mentions.length > 0)) {
+            queueSavedDrafts.set(s.id, { text: s.input, mentions: [...s.mentions] });
+          }
           updateSession(s.id, {
             input: entry.text,
             mentions: entry.mentions ?? [],
@@ -1055,6 +1060,9 @@
     if ((s.pendingQueue ?? []).length > 0) {
       const entry = s.pendingQueue![0];
       const rest = s.pendingQueue!.slice(1);
+      if (!queueSavedDrafts.has(s.id) && (s.input.trim() || s.mentions.length > 0)) {
+        queueSavedDrafts.set(s.id, { text: s.input, mentions: [...s.mentions] });
+      }
       updateSession(s.id, {
         input: entry.text,
         mentions: entry.mentions ?? [],
@@ -1205,14 +1213,13 @@
         '',
         'Continue from where you were. Run `BashOutput` on the task if you need more.',
       ].join('\n');
-      // Sequence: set input → focus session → fire silent. The send
-      // path reads session.input. If the session is busy, the silent
-      // branch parks the prompt in `pendingSilentBySession` and the
-      // post-turn drain picks it up.
-      updateSession(session_id, { input: promptText });
+      // Prompt travels via opts.prompt — NOT session.input — so an
+      // in-progress user draft survives. If the session is busy, the
+      // silent branch parks the prompt in `pendingSilentBySession` and
+      // the post-turn drain picks it up.
       sessionsState.activeIds[sess.agentKind] = session_id;
       sessionsState.activeClaudeId = session_id;
-      await sendClaudeMessage({ silent: true, kind: sess.agentKind });
+      await sendClaudeMessage({ silent: true, kind: sess.agentKind, prompt: promptText });
     });
     /* Window close / dev reload safety net.
      *
@@ -2224,9 +2231,9 @@
      *  while the spinner stays up on no actual run. */
     sessionsState.activeClaudeId = sessionId;
     sessionsState.activeIds[s.agentKind] = sessionId;
-    updateSession(sessionId, { input: prompt });
-    await Promise.resolve();
-    await sendClaudeMessage({ silent: true, kind: s.agentKind });
+    /* opts.prompt, not session.input — the orchestrator prompt must not
+     * clobber whatever the user is typing while phases chain. */
+    await sendClaudeMessage({ silent: true, kind: s.agentKind, prompt });
   }
 
   /** Run a DW verifier as a VISIBLE streamed chat turn (Phase 2b), then
@@ -2254,13 +2261,12 @@
       `reconcile any conflicts, and write the final conclusion grounded in the real post-apply state. Be concise.`;
     sessionsState.activeClaudeId = w.sessionId;
     sessionsState.activeIds.claude = w.sessionId;
-    updateSession(w.sessionId, { input: prompt });
-    await Promise.resolve();
     try {
       // SILENT: the verifier prompt (subagent results dump) is internal —
       // mark it hidden so it doesn't show as a giant user bubble. The
-      // agent's streamed reply (the conclusion) stays visible.
-      await sendClaudeMessage({ silent: true, kind: 'claude' });
+      // agent's streamed reply (the conclusion) stays visible. Travels
+      // via opts.prompt so the user's composer draft survives.
+      await sendClaudeMessage({ silent: true, kind: 'claude', prompt });
     } catch (e) {
       console.warn('dw verify turn failed', e);
     }
@@ -2271,16 +2277,8 @@
     }
   }
 
-  /** Options for `sendClaudeMessage`. `silent` is used by the SDD
-   *  orchestrator to push phase prompts into the agent's CLI session
-   *  WITHOUT polluting the visible chat with the giant template — the
-   *  user-message bubble is marked `hidden: true` so ChatThread skips
-   *  it. Agent's reply stays visible (it's short and useful — usually
-   *  "Phase N done."). Skips slash-command parsing, the UserPromptSubmit
-   *  hook, and mention baking — SDD prompts are internal and shouldn't
-   *  go through user-prompt-shaped middleware. */
-  type SendOpts = { silent?: boolean; kind?: 'claude' | 'cursor' };
-  // sendClaudeMessage moved to ./sendClaudeMessage.ts (wave-39 split).
+  // sendClaudeMessage moved to ./sendClaudeMessage.ts (wave-39 split) —
+  // SendOpts (silent / kind / prompt) is documented there.
   // The factory returns a self-aware closure so recursive retries
   // + post-turn queue drain resolve to the same fn reference.
   const queueSavedDrafts = new Map<string, { text: string; mentions: import('$lib/types').Mention[] }>();

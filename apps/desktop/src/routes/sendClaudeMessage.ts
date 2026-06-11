@@ -54,6 +54,13 @@ import type { ClaudeSession, Mention } from '$lib/types';
 export interface SendOpts {
   silent?: boolean;
   kind?: 'claude' | 'cursor';
+  /** Programmatic prompt — SDD advance, DW verifier, bg-task notify and
+   *  the pendingSilent drain pass their text HERE instead of writing it
+   *  into `session.input`. The composer input belongs to the user; auto
+   *  sends that routed through it used to wipe whatever the user was
+   *  typing mid-turn. When set, the send neither reads nor clears
+   *  `input` / `mentions`. */
+  prompt?: string;
 }
 
 export interface SendClaudeMessageDeps {
@@ -86,14 +93,18 @@ export function createSendClaudeMessage(deps: SendClaudeMessageDeps) {
       ? sessionsState.list.find((x) => x.id === sessionsState.activeIds[opts.kind!]) ?? null
       : deps.getActiveSession();
     if (!s) return;
+    const hasExternalPrompt = typeof opts.prompt === 'string';
     if (s.sending) {
       if (opts.silent) {
-        const promptText = s.input.trim();
+        const promptText = (opts.prompt ?? s.input).trim();
         if (promptText) {
           const { setPendingSilent } = await import('$lib/state/sdd.svelte');
           setPendingSilent(s.id, promptText);
         }
-        updateSession(s.id, { input: '' });
+        /* Only clear the composer when the prompt actually came from it
+         * (legacy path) — external prompts must not touch the user's
+         * draft. */
+        if (!hasExternalPrompt) updateSession(s.id, { input: '' });
         return;
       }
       const draft = s.input.trim();
@@ -103,8 +114,12 @@ export function createSendClaudeMessage(deps: SendClaudeMessageDeps) {
       updateSession(s.id, { input: '', mentions: [], pendingQueue: nextQueue });
       return;
     }
-    if (!s.input.trim() && s.mentions.length === 0) return;
-    const text = s.input.trim();
+    if (hasExternalPrompt) {
+      if (!opts.prompt!.trim()) return;
+    } else if (!s.input.trim() && s.mentions.length === 0) {
+      return;
+    }
+    const text = (opts.prompt ?? s.input).trim();
     if (!opts.silent && (await deps.handleSlashCommand(text, s))) return;
     const id = s.id;
     const kind = (s.agentKind ?? 'claude') as 'claude' | 'cursor';
@@ -166,7 +181,9 @@ export function createSendClaudeMessage(deps: SendClaudeMessageDeps) {
         console.warn('UserPromptSubmit hook failed', err);
       }
     }
-    const mentionsSnapshotPre = s.mentions;
+    /* External prompts don't consume the user's attached mentions —
+     * those belong to the draft still sitting in the composer. */
+    const mentionsSnapshotPre = hasExternalPrompt ? [] : s.mentions;
     const imageMentions = mentionsSnapshotPre.filter(
       (m) => m.source === 'file' && !m.isDir && !!m.body && isImagePath(m.body),
     );
@@ -179,16 +196,21 @@ export function createSendClaudeMessage(deps: SendClaudeMessageDeps) {
       ...(opts.silent ? { hidden: true } : {}),
     });
     const curr = sessionsState.list.find((x) => x.id === id);
-    const mentionsSnapshot = curr?.mentions ?? [];
-    if (
-      curr &&
-      curr.messages.filter((m) => m.role === 'user').length === 1 &&
-      curr.mentions.length === 0
-    ) {
-      const autoTitle = text.slice(0, 36) + (text.length > 36 ? '…' : '');
-      updateSession(id, { title: autoTitle, input: '', sending: true, mentions: [], awaitingApproval: false });
-    } else {
-      updateSession(id, { input: '', sending: true, mentions: [], awaitingApproval: false });
+    const mentionsSnapshot = hasExternalPrompt ? [] : (curr?.mentions ?? []);
+    {
+      const firstTurn =
+        curr &&
+        curr.messages.filter((m) => m.role === 'user').length === 1 &&
+        curr.mentions.length === 0;
+      const patch: Parameters<typeof updateSession>[1] = { sending: true, awaitingApproval: false };
+      if (firstTurn) patch.title = text.slice(0, 36) + (text.length > 36 ? '…' : '');
+      /* Composer-origin sends consume the draft; external prompts leave
+       * input + mentions exactly as the user had them. */
+      if (!hasExternalPrompt) {
+        patch.input = '';
+        patch.mentions = [];
+      }
+      updateSession(id, patch);
     }
     const crashedSess = sessionsState.list.find((x) => x.id === id);
     if (crashedSess?.interrupted) {
@@ -380,9 +402,16 @@ export function createSendClaudeMessage(deps: SendClaudeMessageDeps) {
               ttlMs: 6000,
             });
             replaceLastAssistant(id, '');
-            updateSession(id, { sending: false, input: text, mentions: mentionsSnapshotPre });
-            deps.stopThinkingTimer(id);
-            await send();
+            if (hasExternalPrompt) {
+              /* Retry with the same external prompt — composer untouched. */
+              updateSession(id, { sending: false });
+              deps.stopThinkingTimer(id);
+              await send(opts);
+            } else {
+              updateSession(id, { sending: false, input: text, mentions: mentionsSnapshotPre });
+              deps.stopThinkingTimer(id);
+              await send();
+            }
             return;
           }
         }
@@ -451,12 +480,13 @@ export function createSendClaudeMessage(deps: SendClaudeMessageDeps) {
         const { popPendingSilent } = await import('$lib/state/sdd.svelte');
         const deferred = popPendingSilent(id);
         if (deferred && (sessAfterDrain?.pendingQueue?.length ?? 0) === 0) {
-          updateSession(id, { input: deferred });
+          /* Drain via opts.prompt — routing through `input` here used to
+           * wipe whatever the user typed during the finished turn. */
           const kindForDrain = sessAfterDrain?.agentKind ?? 'claude';
           sessionsState.activeClaudeId = id;
           sessionsState.activeIds[kindForDrain] = id;
           queueMicrotask(() => {
-            void send({ silent: true, kind: kindForDrain });
+            void send({ silent: true, kind: kindForDrain, prompt: deferred });
           });
           return;
         }
