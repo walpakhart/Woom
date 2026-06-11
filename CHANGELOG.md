@@ -8,6 +8,35 @@ release runbook (how this CHANGELOG feeds `latest-mac.json`) lives in
 
 ## Unreleased
 
+## 0.4.4 — 2026-06-11
+
+Bumps version 0.4.3 → 0.4.4 across `apps/desktop/package.json`,
+`apps/desktop/src-tauri/Cargo.toml`, `apps/desktop/src-tauri/tauri.conf.json`,
+`apps/desktop/src-tauri/Cargo.lock`.
+
+### Added
+
+- **Claude Fable 5 · 1M model variant** in the Composer picker, with a
+  correct 200K/1M context ring and a quota "n/a" fallback when the CLI
+  doesn't report limits.
+- **Edit cards: file path opens in editor** — clicking the file name on
+  a chat edit card jumps to that file; expanded diffs scroll
+  horizontally instead of clipping long lines.
+
+### Fixed
+
+- **Memory search recall** — queries now match word prefixes (inflected
+  Russian works: `нудж` finds `нуджа`), one stray word no longer zeroes
+  out results (AND pass with OR fallback), and ranking adds recency +
+  kind penalties so pasted-log noise stops outranking curated entries.
+  Applies to both the MCP sidecar and the first-turn auto-recall.
+- **Auto-sent prompts no longer clobber the composer draft.**
+
+### Removed
+
+- **Cursor agent integration** — the Cursor solo and its session
+  plumbing are gone; Claude is the single agent surface.
+
 ## 0.3.5 — 2026-06-09
 
 Bumps version 0.3.4 → 0.3.5 across `apps/desktop/package.json`,
