@@ -63,10 +63,12 @@ struct SaveParams {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct SearchParams {
-    /// FTS5 query string. Supports prefix (`foo*`), phrase (`"foo bar"`),
-    /// AND/OR/NOT. Plain words are treated as an AND match. Tokenizer
-    /// is `unicode61 remove_diacritics 2`, so case + diacritics +
-    /// Cyrillic-vs-Latin variants normalize automatically.
+    /// Plain words, space-separated. Each word matches as a prefix
+    /// (`нудж` finds `нуджа`), all words first (precision), then any
+    /// word as fallback (recall). FTS5 operators (:, *, "", AND/OR)
+    /// are neutralized — don't bother with them. Case + diacritics
+    /// normalize automatically; no stemming, so prefer word stems
+    /// over inflected forms.
     query: String,
     /// Max results to return (default 10, cap 50).
     #[serde(default)]
@@ -186,7 +188,7 @@ impl Memory {
     }
 
     #[tool(
-        description = "Full-text search of stored memories. Returns matches with id, kind, content, and tags. SQLite FTS handles multi-word queries with unicode-aware case-folding, so Russian and English work the same way. Pass `kind` to scope the search."
+        description = "Full-text search of stored memories. Returns matches with id, kind, content, and tags. Words match as prefixes (Russian and English alike); rows matching ALL words rank first, then partial matches fill remaining slots — so extra words refine rather than zero out results. Pass `kind` to scope the search."
     )]
     async fn memory_search(
         &self,
@@ -201,8 +203,8 @@ impl Memory {
             Some(k) => Some(normalize_kind(Some(k))?),
             None => None,
         };
-        let safe_query = sanitize_fts5_query(query);
-        if safe_query.is_empty() {
+        let tokens = sanitize_fts5_tokens(query);
+        if tokens.is_empty() {
             /* All tokens were stripped (e.g. query was pure punctuation
              * like ":::"). Return empty result rather than letting an
              * empty MATCH string error out at SQLite level. */
@@ -212,36 +214,8 @@ impl Memory {
         }
         let rows = {
             let conn = self.db.lock().map_err(lock_err)?;
-            let sql = if kind_filter.is_some() {
-                "SELECT m.id, m.content, m.tags, m.kind, m.created_at, m.updated_at \
-                 FROM memories m \
-                 JOIN memories_fts fts ON fts.rowid = m.id \
-                 WHERE memories_fts MATCH ?1 AND m.kind = ?2 \
-                 ORDER BY bm25(memories_fts) \
-                 LIMIT ?3"
-            } else {
-                "SELECT m.id, m.content, m.tags, m.kind, m.created_at, m.updated_at \
-                 FROM memories m \
-                 JOIN memories_fts fts ON fts.rowid = m.id \
-                 WHERE memories_fts MATCH ?1 \
-                 ORDER BY bm25(memories_fts) \
-                 LIMIT ?2"
-            };
-            /* Bind `stmt` and the iterator separately so the
-             * MappedRows borrow on `stmt` is unambiguously contained
-             * in the block scope. The chained-`?` form `stmt.query_map
-             * (...)?.collect(...)?` confuses NLL (Rust 1.75) into
-             * thinking `stmt` is dropped before the temporary
-             * `Result` finishes. */
-            let mut stmt = conn.prepare(sql).map_err(sql_err)?;
-            let iter = if let Some(k) = &kind_filter {
-                stmt.query_map(params![safe_query, k, limit], row_to_memory)
-                    .map_err(sql_err)?
-            } else {
-                stmt.query_map(params![safe_query, limit], row_to_memory)
-                    .map_err(sql_err)?
-            };
-            iter.collect::<Result<Vec<_>, _>>().map_err(sql_err)?
+            two_pass_search(&conn, &tokens, kind_filter.as_deref(), limit)
+                .map_err(sql_err)?
         };
         Ok(CallToolResult::success(vec![Content::text(format_rows(&rows))]))
     }
@@ -472,7 +446,7 @@ impl ServerHandler for Memory {
         info.instructions = Some(
             "Persistent memory store. Survives across chat sessions. Tools:\n\
              - memory_save: store a fact (kind: user / feedback / project / reference / note)\n\
-             - memory_search: FTS5 lookup, optionally scoped by kind (works for Russian + English)\n\
+             - memory_search: prefix-matching word search, all-words-first then any-word fallback, optionally scoped by kind (Russian + English)\n\
              - memory_list: browse newest-first, optionally filtered by tag and/or kind\n\
              - memory_get: fetch one row by id\n\
              - memory_update: edit content / tags / kind in place\n\
@@ -714,7 +688,7 @@ fn like_tag_pattern(t: &str) -> String {
     format!("%,{escaped},%")
 }
 
-/// Sanitize a user-supplied FTS5 MATCH query.
+/// Sanitize a user-supplied query into FTS5 phrase-prefix tokens.
 ///
 /// FTS5 has its own mini-DSL on top of the user's words: `:` means
 /// "column filter" (`tags:foo`), `*` is prefix, `"…"` is phrase,
@@ -724,16 +698,19 @@ fn like_tag_pattern(t: &str) -> String {
 ///
 /// Strategy: tokenize on whitespace, strip every FTS5 metachar from
 /// each token (`"`, `:`, `(`, `)`, `*`, `^`), drop empty tokens, then
-/// re-emit each as a quoted phrase so any remaining content (digits,
-/// punctuation, Cyrillic) is treated as literal text. Multiple
-/// phrases joined by whitespace yield FTS5's implicit AND-of-phrases,
-/// which is exactly the recall semantics we want.
+/// re-emit each as a quoted phrase with a `*` prefix marker
+/// (`"tok"*`). Quoting makes any remaining content (digits,
+/// punctuation, Cyrillic) literal; the prefix marker buys partial
+/// morphology — `unicode61` does no stemming, so without it a search
+/// for `нудж` would never match `нуджа` / `нуджи` (highly inflected
+/// Russian was the main recall killer).
 ///
-/// Trade-off: power users lose access to prefix-search (`foo*`) and
-/// boolean operators. That's acceptable — the tool description never
-/// promised them, and the cost of one mis-typed `:` killing search
-/// for everyone is much higher than the upside of advanced syntax.
-fn sanitize_fts5_query(input: &str) -> String {
+/// Callers combine the returned tokens with `join_and` / `join_or`
+/// for the two-pass search (AND for precision, OR fallback for
+/// recall). Boolean operators typed by the user are neutralized into
+/// literal tokens — the cost of one mis-typed `:` killing search is
+/// much higher than the upside of advanced syntax.
+fn sanitize_fts5_tokens(input: &str) -> Vec<String> {
     /* Characters that have syntactic meaning to FTS5. Stripping these
      * is safer than escaping because the FTS5 grammar treats some of
      * them (e.g. `*` in column ref position) ambiguously. */
@@ -744,9 +721,88 @@ fn sanitize_fts5_query(input: &str) -> String {
         .split_whitespace()
         .map(|tok| tok.chars().filter(|c| !strip(*c)).collect::<String>())
         .filter(|tok| !tok.is_empty())
-        .map(|tok| format!("\"{}\"", tok))
-        .collect::<Vec<_>>()
-        .join(" ")
+        .map(|tok| format!("\"{}\"*", tok))
+        .collect()
+}
+
+fn join_and(tokens: &[String]) -> String {
+    tokens.join(" ")
+}
+
+fn join_or(tokens: &[String]) -> String {
+    tokens.join(" OR ")
+}
+
+/// One FTS pass with composite ranking. ORDER BY combines:
+///   - bm25 lexical score (negative = better, so ascending sort)
+///   - age penalty: ~0.3 per year since creation, so equally-relevant
+///     fresh entries beat stale ones and token-spam from old pasted
+///     logs can't camp the top slot forever
+///   - kind penalty: flat +0.5 for `note` (the un-curated catch-all)
+///     so deliberately-filed memories win lexical ties
+fn run_fts_pass(
+    conn: &Connection,
+    match_expr: &str,
+    kind: Option<&str>,
+    limit: i64,
+) -> rusqlite::Result<Vec<MemoryRow>> {
+    let now = unix_now();
+    match kind {
+        Some(k) => {
+            let mut stmt = conn.prepare(
+                "SELECT m.id, m.content, m.tags, m.kind, m.created_at, m.updated_at \
+                 FROM memories m \
+                 JOIN memories_fts fts ON fts.rowid = m.id \
+                 WHERE memories_fts MATCH ?1 AND m.kind = ?2 \
+                 ORDER BY bm25(memories_fts) \
+                   + ((?3 - m.created_at) / 31557600.0) * 0.3 \
+                   + (CASE WHEN m.kind = 'note' THEN 0.5 ELSE 0.0 END) \
+                 LIMIT ?4",
+            )?;
+            let iter = stmt.query_map(params![match_expr, k, now, limit], row_to_memory)?;
+            iter.collect()
+        }
+        None => {
+            let mut stmt = conn.prepare(
+                "SELECT m.id, m.content, m.tags, m.kind, m.created_at, m.updated_at \
+                 FROM memories m \
+                 JOIN memories_fts fts ON fts.rowid = m.id \
+                 WHERE memories_fts MATCH ?1 \
+                 ORDER BY bm25(memories_fts) \
+                   + ((?2 - m.created_at) / 31557600.0) * 0.3 \
+                   + (CASE WHEN m.kind = 'note' THEN 0.5 ELSE 0.0 END) \
+                 LIMIT ?3",
+            )?;
+            let iter = stmt.query_map(params![match_expr, now, limit], row_to_memory)?;
+            iter.collect()
+        }
+    }
+}
+
+/// Two-pass search: AND first (all tokens must match — precision),
+/// then an OR fallback when the AND pass under-fills the limit
+/// (recall — one stray token in the query shouldn't zero out the
+/// results). OR hits are appended after AND hits, deduped by id, so
+/// full matches always rank first.
+fn two_pass_search(
+    conn: &Connection,
+    tokens: &[String],
+    kind: Option<&str>,
+    limit: i64,
+) -> rusqlite::Result<Vec<MemoryRow>> {
+    let mut rows = run_fts_pass(conn, &join_and(tokens), kind, limit)?;
+    if rows.len() < limit as usize && tokens.len() > 1 {
+        let seen: std::collections::HashSet<i64> = rows.iter().map(|r| r.id).collect();
+        for r in run_fts_pass(conn, &join_or(tokens), kind, limit)? {
+            if rows.len() >= limit as usize {
+                break;
+            }
+            if !seen.contains(&r.id) {
+                rows.push(r);
+            }
+        }
+    }
+    Ok(rows)
 }
 
 fn unix_now() -> i64 {
@@ -895,64 +951,122 @@ mod tests {
         assert_eq!(iso_8601(1709210096), "2024-02-29T12:34:56Z");
     }
 
+    fn insert_row(conn: &Connection, content: &str, kind: &str, created_at: i64) -> i64 {
+        conn.execute(
+            "INSERT INTO memories (content, tags, kind, created_at, updated_at) \
+             VALUES (?1, '', ?2, ?3, 0)",
+            params![content, kind, created_at],
+        )
+        .unwrap();
+        conn.last_insert_rowid()
+    }
+
     #[test]
     fn sanitize_fts5_strips_column_ref_syntax() {
         /* The 2026-05-16 incident: `475:` was read as a column
          * reference and SQLite errored with "no such column: 475". */
-        assert_eq!(sanitize_fts5_query("client 475:"), "\"client\" \"475\"");
-        assert_eq!(sanitize_fts5_query("foo:bar"), "\"foobar\"");
+        assert_eq!(
+            sanitize_fts5_tokens("client 475:"),
+            vec!["\"client\"*", "\"475\"*"]
+        );
+        assert_eq!(sanitize_fts5_tokens("foo:bar"), vec!["\"foobar\"*"]);
     }
 
     #[test]
     fn sanitize_fts5_strips_operators_and_quotes() {
         assert_eq!(
-            sanitize_fts5_query("\"hello\" AND world*"),
-            "\"hello\" \"AND\" \"world\""
+            sanitize_fts5_tokens("\"hello\" AND world*"),
+            vec!["\"hello\"*", "\"AND\"*", "\"world\"*"]
         );
-        assert_eq!(sanitize_fts5_query("(a OR b)"), "\"a\" \"OR\" \"b\"");
+        assert_eq!(
+            sanitize_fts5_tokens("(a OR b)"),
+            vec!["\"a\"*", "\"OR\"*", "\"b\"*"]
+        );
     }
 
     #[test]
     fn sanitize_fts5_keeps_unicode() {
         assert_eq!(
-            sanitize_fts5_query("кнопка density"),
-            "\"кнопка\" \"density\""
+            sanitize_fts5_tokens("кнопка density"),
+            vec!["\"кнопка\"*", "\"density\"*"]
         );
     }
 
     #[test]
     fn sanitize_fts5_empty_when_all_punct() {
-        assert_eq!(sanitize_fts5_query(":::"), "");
-        assert_eq!(sanitize_fts5_query("   "), "");
+        assert!(sanitize_fts5_tokens(":::").is_empty());
+        assert!(sanitize_fts5_tokens("   ").is_empty());
     }
 
     #[test]
     fn fts_search_survives_colon_query() {
         /* Pre-fix this query crashed at SQLite level. Now it should
-         * just return zero matches without erroring. */
+         * find the row without erroring. */
         let conn = fresh_db();
-        conn.execute(
-            "INSERT INTO memories (content, tags, kind, created_at, updated_at) \
-             VALUES (?1, '', 'note', 100, 0)",
-            params!["client Acme had 475 widgets"],
-        )
-        .unwrap();
-        /* Use the sanitizer the way memory_search does. */
-        let safe = sanitize_fts5_query("client 475:");
-        assert!(!safe.is_empty());
-        let mut stmt = conn
-            .prepare(
-                "SELECT m.id FROM memories m \
-                 JOIN memories_fts fts ON fts.rowid = m.id \
-                 WHERE memories_fts MATCH ?1",
-            )
-            .unwrap();
-        let ids: Vec<i64> = stmt
-            .query_map(params![safe], |r| r.get::<_, i64>(0))
-            .unwrap()
-            .collect::<Result<_, _>>()
-            .unwrap();
-        assert_eq!(ids, vec![1]);
+        insert_row(&conn, "client Acme had 475 widgets", "note", 100);
+        let tokens = sanitize_fts5_tokens("client 475:");
+        assert!(!tokens.is_empty());
+        let rows = two_pass_search(&conn, &tokens, None, 10).unwrap();
+        assert_eq!(rows.iter().map(|r| r.id).collect::<Vec<_>>(), vec![1]);
+    }
+
+    #[test]
+    fn prefix_tokens_match_inflected_forms() {
+        /* unicode61 does no stemming; the `"tok"*` prefix marker is
+         * what lets `нудж` match `нуджа` / `нуджи`. */
+        let conn = fresh_db();
+        insert_row(&conn, "настройка нуджа для агента", "note", unix_now());
+        let tokens = sanitize_fts5_tokens("нудж");
+        let rows = two_pass_search(&conn, &tokens, None, 10).unwrap();
+        assert_eq!(rows.len(), 1);
+    }
+
+    #[test]
+    fn two_pass_falls_back_to_or() {
+        /* One garbage token must not zero out the whole result —
+         * the OR pass recovers rows matching the real tokens. */
+        let conn = fresh_db();
+        insert_row(&conn, "cursor excision details", "project", unix_now());
+        let tokens = sanitize_fts5_tokens("excision несуществующееслово");
+        let rows = two_pass_search(&conn, &tokens, None, 10).unwrap();
+        assert_eq!(rows.len(), 1);
+    }
+
+    #[test]
+    fn and_hits_rank_before_or_hits() {
+        let conn = fresh_db();
+        let now = unix_now();
+        let partial = insert_row(&conn, "alpha standalone entry", "note", now);
+        let full = insert_row(&conn, "alpha beta combined entry", "note", now);
+        let tokens = sanitize_fts5_tokens("alpha beta");
+        let rows = two_pass_search(&conn, &tokens, None, 10).unwrap();
+        let ids: Vec<i64> = rows.iter().map(|r| r.id).collect();
+        assert_eq!(ids, vec![full, partial]);
+    }
+
+    #[test]
+    fn ranking_penalizes_old_notes() {
+        /* Identical content → bm25 tie → age + kind penalties decide.
+         * Fresh `project` row must beat a 3-year-old `note`. */
+        let conn = fresh_db();
+        let now = unix_now();
+        let old_note = insert_row(&conn, "woom build pipeline", "note", now - 3 * 31_557_600);
+        let fresh_project = insert_row(&conn, "woom build pipeline", "project", now);
+        let tokens = sanitize_fts5_tokens("woom build");
+        let rows = two_pass_search(&conn, &tokens, None, 10).unwrap();
+        let ids: Vec<i64> = rows.iter().map(|r| r.id).collect();
+        assert_eq!(ids, vec![fresh_project, old_note]);
+    }
+
+    #[test]
+    fn two_pass_respects_kind_filter() {
+        let conn = fresh_db();
+        let now = unix_now();
+        insert_row(&conn, "deploy checklist", "note", now);
+        let proj = insert_row(&conn, "deploy checklist", "project", now);
+        let tokens = sanitize_fts5_tokens("deploy");
+        let rows = two_pass_search(&conn, &tokens, Some("project"), 10).unwrap();
+        assert_eq!(rows.iter().map(|r| r.id).collect::<Vec<_>>(), vec![proj]);
     }
 
     #[test]

@@ -474,8 +474,10 @@ async fn spawn_claude_armed(args: &AskArgs<'_>) -> Result<ArmedCli, ClaudeRunErr
              trim-able rows than under-save and ask again.\n\
              \n\
              SEARCH at the start of every non-trivial turn — even \
-             without obvious keywords. Use 2-5 word queries; FTS5 \
-             with `unicode61` handles Russian + English the same way. \
+             without obvious keywords. Use 2-5 plain words (Russian \
+             or English); each word matches as a prefix, rows \
+             matching all words rank first, partial matches fill \
+             the rest — so extra words refine rather than zero out. \
              A miss is free; a missed save costs the user trust.\n\
              \n\
              Tag with `kind`: `user` / `feedback` / `project` / \

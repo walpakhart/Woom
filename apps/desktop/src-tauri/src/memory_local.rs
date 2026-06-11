@@ -183,12 +183,13 @@ pub struct MemoryStats {
 
 /// FTS5 search against the same memory.db the sidecar serves.
 ///
-/// Sanitization matches the sidecar's strategy (`sanitize_fts5_query`
-/// in `woom-memory/src/main.rs`): strip FTS5 metachars, split on
-/// whitespace, re-emit each token as a `"phrase"` so a stray `:` or
-/// `*` in the user query can't trip "no such column" errors. Returns
-/// an empty Vec on null/empty post-sanitization input — caller can
-/// treat that as "no recall" without special-casing.
+/// Mirrors the sidecar's strategy (`sanitize_fts5_tokens` +
+/// `two_pass_search` in `woom-memory/src/main.rs`): strip FTS5
+/// metachars, emit each word as a `"phrase"*` prefix token, run an
+/// AND pass first (precision) then an OR fallback (recall), rank by
+/// bm25 + age penalty + note-kind penalty. Returns an empty Vec on
+/// empty post-sanitization input — caller can treat that as "no
+/// recall" without special-casing.
 ///
 /// `limit` is clamped to [1, 50] to match the sidecar's behaviour
 /// and prevent unbounded scans on large stores.
@@ -197,8 +198,8 @@ pub fn memory_search_local(
     query: String,
     limit: Option<u32>,
 ) -> Result<Vec<MemoryHit>, String> {
-    let safe = sanitize_fts5_query(query.trim());
-    if safe.is_empty() {
+    let tokens = sanitize_fts5_tokens(query.trim());
+    if tokens.is_empty() {
         return Ok(Vec::new());
     }
     let n = limit.unwrap_or(5).clamp(1, 50) as i64;
@@ -207,6 +208,33 @@ pub fn memory_search_local(
         .map_err(|e| format!("open {}: {}", path.display(), e))?;
     conn.busy_timeout(std::time::Duration::from_millis(2_000))
         .map_err(|e| format!("set busy_timeout: {e}"))?;
+    let mut hits = run_fts_pass_local(&conn, &tokens.join(" "), n)?;
+    if hits.len() < n as usize && tokens.len() > 1 {
+        let seen: std::collections::HashSet<i64> = hits.iter().map(|h| h.id).collect();
+        for h in run_fts_pass_local(&conn, &tokens.join(" OR "), n)? {
+            if hits.len() >= n as usize {
+                break;
+            }
+            if !seen.contains(&h.id) {
+                hits.push(h);
+            }
+        }
+    }
+    Ok(hits)
+}
+
+/// One FTS pass — same ranking formula as the sidecar's
+/// `run_fts_pass`: bm25 (negative = better) + ~0.3/year age penalty
+/// + flat +0.5 for the un-curated `note` kind.
+fn run_fts_pass_local(
+    conn: &Connection,
+    match_expr: &str,
+    limit: i64,
+) -> Result<Vec<MemoryHit>, String> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
     let mut stmt = conn
         .prepare(
             "SELECT m.id, m.kind, m.content, m.tags, m.created_at \
@@ -214,11 +242,13 @@ pub fn memory_search_local(
              JOIN memories_fts fts ON fts.rowid = m.id \
              WHERE memories_fts MATCH ?1 \
              ORDER BY bm25(memories_fts) \
-             LIMIT ?2",
+               + ((?2 - m.created_at) / 31557600.0) * 0.3 \
+               + (CASE WHEN m.kind = 'note' THEN 0.5 ELSE 0.0 END) \
+             LIMIT ?3",
         )
         .map_err(|e| format!("prepare: {e}"))?;
     let rows = stmt
-        .query_map(params![safe, n], |r| {
+        .query_map(params![match_expr, now, limit], |r| {
             Ok(MemoryHit {
                 id: r.get(0)?,
                 kind: r.get(1)?,
@@ -490,8 +520,10 @@ pub fn memory_stats_local() -> Result<MemoryStats, String> {
 /// Copy of the sidecar's FTS5 sanitizer kept in sync by hand. Drift
 /// here would resurrect the "no such column: 475" bug for whichever
 /// surface uses the stale logic. If you change one, change the other
-/// (woom-memory/src/main.rs).
-fn sanitize_fts5_query(input: &str) -> String {
+/// (woom-memory/src/main.rs). Each token becomes a quoted phrase
+/// with a `*` prefix marker (`"tok"*`) — quoting neutralizes FTS5
+/// syntax, the prefix buys partial morphology for inflected Russian.
+fn sanitize_fts5_tokens(input: &str) -> Vec<String> {
     fn strip(c: char) -> bool {
         matches!(c, '"' | ':' | '(' | ')' | '*' | '^' | '\\' | '\0')
     }
@@ -499,9 +531,8 @@ fn sanitize_fts5_query(input: &str) -> String {
         .split_whitespace()
         .map(|tok| tok.chars().filter(|c| !strip(*c)).collect::<String>())
         .filter(|tok| !tok.is_empty())
-        .map(|tok| format!("\"{}\"", tok))
-        .collect::<Vec<_>>()
-        .join(" ")
+        .map(|tok| format!("\"{}\"*", tok))
+        .collect()
 }
 
 #[cfg(test)]
@@ -546,7 +577,10 @@ mod tests {
     #[test]
     fn sanitize_fts5_local_matches_sidecar() {
         /* Smoke-test the duplicated sanitizer to catch drift early. */
-        assert_eq!(sanitize_fts5_query("foo:bar 475:"), "\"foobar\" \"475\"");
-        assert_eq!(sanitize_fts5_query(":::"), "");
+        assert_eq!(
+            sanitize_fts5_tokens("foo:bar 475:"),
+            vec!["\"foobar\"*", "\"475\"*"]
+        );
+        assert!(sanitize_fts5_tokens(":::").is_empty());
     }
 }
