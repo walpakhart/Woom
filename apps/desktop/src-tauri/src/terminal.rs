@@ -81,6 +81,15 @@ pub struct Session {
     /// `None` means inherit from the Woom process cwd
     /// (rarely the right thing, but safe fallback).
     pub spawn_cwd: Option<std::path::PathBuf>,
+    /// Gate for `terminal:output:<id>` event emission. False until the
+    /// frontend calls `terminal_attach` — events emitted before the JS
+    /// `listen()` registration completes would be dropped on the floor
+    /// (Tauri events aren't queued), losing the shell's earliest bytes
+    /// (prompt, motd, instant-prompt) on the very first mount. The
+    /// reader thread buffers into `output_buf` regardless; `attach`
+    /// atomically snapshots the backlog and flips this gate, so every
+    /// byte lands exactly once: either in the snapshot or in an event.
+    pub emit_started: Arc<Mutex<bool>>,
 }
 
 #[derive(Default)]
@@ -225,6 +234,7 @@ pub fn terminal_spawn(
     let id = Uuid::new_v4().to_string();
     let output_buf = Arc::new(Mutex::new(Vec::with_capacity(BUFFER_CAP)));
     let output_notify = Arc::new(Notify::new());
+    let emit_started = Arc::new(Mutex::new(false));
     // Capture the cwd we actually spawned the shell with — bridge
     // uses this for agent-subprocess cwd. Stored as PathBuf so we
     // don't have to re-parse the string later.
@@ -243,6 +253,7 @@ pub fn terminal_spawn(
         name: opts.name.clone(),
         instance_id: opts.instance_id.clone(),
         spawn_cwd,
+        emit_started: emit_started.clone(),
     });
     state.sessions.lock().insert(id.clone(), session);
 
@@ -261,9 +272,13 @@ pub fn terminal_spawn(
                 Ok(0) => break, // EOF — child exited
                 Ok(n) => {
                     let chunk = &buf[..n];
-                    let payload = STANDARD.encode(chunk);
-                    let _ = app.emit(&format!("terminal:output:{event_id}"), payload);
-                    {
+                    // Append + gate-read under the SAME buffer lock that
+                    // `terminal_attach` holds while snapshotting: this
+                    // makes the backlog/live partition exact — a chunk
+                    // is either inside the attach snapshot (gate was
+                    // still closed) or emitted as an event (gate open),
+                    // never both, never neither.
+                    let started = {
                         let mut b = output_buf.lock();
                         b.extend_from_slice(chunk);
                         if b.len() > BUFFER_CAP {
@@ -274,6 +289,11 @@ pub fn terminal_spawn(
                             let excess = b.len() - BUFFER_CAP;
                             b.drain(..excess);
                         }
+                        *emit_started.lock()
+                    };
+                    if started {
+                        let payload = STANDARD.encode(chunk);
+                        let _ = app.emit(&format!("terminal:output:{event_id}"), payload);
                     }
                     // notify_one() (NOT notify_waiters): waiters has a
                     // missed-notify race — if no one is currently parked
@@ -304,6 +324,28 @@ pub fn terminal_spawn(
     });
 
     Ok(SpawnResult { id })
+}
+
+/// Open the output-event gate for a session and return everything the
+/// PTY emitted so far (base64). The frontend calls this AFTER its
+/// `listen('terminal:output:<id>')` registration completes — closing
+/// the spawn→listen race where the shell's first bytes (prompt, motd)
+/// were emitted into the void and the terminal looked empty until a
+/// remount. Snapshot + gate-flip happen under the buffer lock, so the
+/// caller gets every pre-attach byte exactly once and every post-attach
+/// byte arrives as a normal event.
+#[tauri::command]
+pub fn terminal_attach(
+    state: State<'_, TerminalRegistry>,
+    id: String,
+) -> Result<String, String> {
+    let session = {
+        let map = state.sessions.lock();
+        map.get(&id).ok_or_else(|| "unknown id".to_string())?.clone()
+    };
+    let b = session.output_buf.lock();
+    *session.emit_started.lock() = true;
+    Ok(STANDARD.encode(&b[..]))
 }
 
 /// Write base64-encoded bytes to the PTY. xterm.js sends keystrokes

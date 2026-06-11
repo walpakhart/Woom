@@ -13,7 +13,8 @@
     changeBarExtension,
     setChangeBar,
     parseUnifiedDiffToLineChanges,
-    type LineChanges
+    type LineChanges,
+    type LineChangeKind
   } from '$lib/components/editor/changeBar';
   import {
     inlineHunksExtension,
@@ -395,6 +396,44 @@
     }
   }
 
+  /* Overview ruler (à la VS Code) — colored marks on the scrollbar strip
+     showing WHERE in the document the git changes live. Derived from the
+     same LineChanges map as the gutter change bar; contiguous same-kind
+     lines collapse into one block so a 50-line hunk is one DOM node. */
+  let rulerMarks = $state<{ top: number; h: number; kind: LineChangeKind }[]>([]);
+  function buildRulerMarks(
+    map: LineChanges,
+    totalLines: number
+  ): { top: number; h: number; kind: LineChangeKind }[] {
+    if (map.size === 0 || totalLines < 1) return [];
+    const lines = [...map.keys()].sort((a, b) => a - b);
+    const blocks: { top: number; h: number; kind: LineChangeKind }[] = [];
+    let start = -1;
+    let prev = -2;
+    let kind: LineChangeKind = 'add';
+    const flush = (end: number) => {
+      if (start < 0) return;
+      blocks.push({
+        top: ((start - 1) / totalLines) * 100,
+        h: ((end - start + 1) / totalLines) * 100,
+        kind
+      });
+    };
+    for (const ln of lines) {
+      const k = map.get(ln)!;
+      if (ln === prev + 1 && k === kind) {
+        prev = ln;
+        continue;
+      }
+      flush(prev);
+      start = ln;
+      prev = ln;
+      kind = k;
+    }
+    flush(prev);
+    return blocks;
+  }
+
   /** Fetch `git diff` for the active file and push parsed per-line
    *  markers into the editor's changeBar state field. Silent on
    *  non-git roots / untracked paths — change bar just stays empty. */
@@ -412,8 +451,10 @@
       });
       const map: LineChanges = parseUnifiedDiffToLineChanges(diff);
       view.dispatch({ effects: setChangeBar.of(map) });
+      rulerMarks = buildRulerMarks(map, view.state.doc.lines);
     } catch {
       view.dispatch({ effects: setChangeBar.of(new Map()) });
+      rulerMarks = [];
     }
   }
   function scheduleChangeBar() {
@@ -757,6 +798,18 @@
     <div class="ed-error">{error}</div>
   {/if}
   <div class="ed-surface" bind:this={editorEl}></div>
+  {#if rulerMarks.length > 0}
+    <!-- Overview ruler — sits over the scrollbar track (pointer-events
+         none so the thumb stays draggable through it). -->
+    <div class="ed-ruler" aria-hidden="true">
+      {#each rulerMarks as m, i (i)}
+        <div
+          class="ed-ruler-mark ed-ruler-mark--{m.kind}"
+          style="top:{m.top}%;height:{m.h}%"
+        ></div>
+      {/each}
+    </div>
+  {/if}
   {#if loading}<div class="ed-spinner">Loading…</div>{/if}
 </div>
 
@@ -766,6 +819,55 @@
   .ed-surface :global(.cm-editor) { height: 100%; font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', monospace; font-size: 13px; }
   .ed-surface :global(.cm-editor.cm-focused) { outline: none; }
   .ed-surface :global(.cm-scroller) { font-family: inherit; }
+
+  /* VS Code-style scrollbar — always-visible track lane, flat square
+     thumb that brightens on hover/drag. WKWebView honours
+     ::-webkit-scrollbar, so we get a real custom bar (the macOS
+     overlay default is near-invisible for long files). */
+  .ed-surface :global(.cm-scroller::-webkit-scrollbar) {
+    width: 14px;
+    height: 10px;
+  }
+  .ed-surface :global(.cm-scroller::-webkit-scrollbar-track),
+  .ed-surface :global(.cm-scroller::-webkit-scrollbar-corner) {
+    background: transparent;
+  }
+  .ed-surface :global(.cm-scroller::-webkit-scrollbar-thumb) {
+    background: color-mix(in srgb, var(--text-mute) 26%, transparent);
+    background-clip: padding-box;
+    border: 3px solid transparent;
+    border-radius: 7px;
+  }
+  .ed-surface :global(.cm-scroller::-webkit-scrollbar-thumb:hover) {
+    background-color: color-mix(in srgb, var(--text-mute) 42%, transparent);
+  }
+  .ed-surface :global(.cm-scroller::-webkit-scrollbar-thumb:active) {
+    background-color: color-mix(in srgb, var(--text-mute) 55%, transparent);
+  }
+
+  /* Overview ruler — left lane of the scrollbar track. Marks paint over
+     the track but under the pointer (pointer-events: none), so dragging
+     the thumb through a mark still works. Palette echoes the gutter
+     change bar. */
+  .ed-ruler {
+    position: absolute;
+    top: 0;
+    bottom: 10px; /* leave the horizontal-bar corner clear */
+    right: 9px;
+    width: 4px;
+    pointer-events: none;
+    z-index: 5;
+  }
+  .ed-ruler-mark {
+    position: absolute;
+    left: 0;
+    width: 100%;
+    min-height: 3px;
+    border-radius: 1px;
+  }
+  .ed-ruler-mark--add { background: rgba(111, 174, 136, 0.85); }
+  .ed-ruler-mark--mod { background: rgba(217, 184, 110, 0.85); }
+  .ed-ruler-mark--del { background: rgba(232, 130, 100, 0.9); }
 
   /* Git change bar — a dedicated thin gutter column (à la VS Code / Cursor):
      crisp full-line-height stripes that never shift the code. add = green,

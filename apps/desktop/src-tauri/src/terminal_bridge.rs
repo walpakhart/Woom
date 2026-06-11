@@ -455,8 +455,11 @@ fn inject_to_display(
     session: &std::sync::Arc<crate::terminal::Session>,
     bytes: &[u8],
 ) {
-    // Append to rolling buffer + bound size.
-    {
+    // Append to rolling buffer + bound size. Gate-read under the same
+    // lock `terminal_attach` snapshots under, mirroring the PTY reader
+    // thread: pre-attach bytes ride the attach backlog instead of an
+    // event, so they're never delivered twice (or dropped).
+    let started = {
         let mut buf = session.output_buf.lock();
         buf.extend_from_slice(bytes);
         const BUFFER_CAP: usize = 64 * 1024;
@@ -464,10 +467,13 @@ fn inject_to_display(
             let excess = buf.len() - BUFFER_CAP;
             buf.drain(..excess);
         }
-    }
+        *session.emit_started.lock()
+    };
     // Emit to xterm.js for live display.
-    let payload = STANDARD.encode(bytes);
-    let _ = app.emit(&format!("terminal:output:{}", session.id), payload);
+    if started {
+        let payload = STANDARD.encode(bytes);
+        let _ = app.emit(&format!("terminal:output:{}", session.id), payload);
+    }
     // Wake terminal_buffer waiters, if any.
     session.output_notify.notify_one();
 }

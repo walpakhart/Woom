@@ -155,6 +155,17 @@ export async function ensureTerminalSession(
   });
   _unlistenByPty.set(result.id, [u1, u2, u3]);
 
+  /* Open the output gate. The Rust reader thread buffers (but does
+     NOT emit) until this call — events fired before our `listen()`
+     registrations above would be dropped by Tauri, which is how the
+     shell's first prompt used to vanish and the terminal looked empty
+     on first entry. The attach response carries every byte emitted so
+     far; everything after flows through the listeners. */
+  try {
+    const backlog = await invoke<string>('terminal_attach', { id: result.id });
+    if (backlog) _sessions[instanceId].chunks.unshift(backlog);
+  } catch {/* session may have died instantly */}
+
   return _sessions[instanceId];
 }
 

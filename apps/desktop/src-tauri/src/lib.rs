@@ -655,6 +655,7 @@ pub fn run() {
             // `terminal:output:<id>` Tauri events; write/resize/kill
             // address by id. See `terminal.rs`.
             terminal::terminal_spawn,
+            terminal::terminal_attach,
             terminal::terminal_write,
             terminal::terminal_resize,
             terminal::terminal_kill,

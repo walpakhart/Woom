@@ -110,6 +110,11 @@
   let host = $state<HTMLDivElement | null>(null);
   let term: Terminal | null = null;
   let fit: FitAddon | null = null;
+  let webgl: WebglAddon | null = null;
+  /* Init is async (font wait + settle frame) — if the user bounces off
+     the solo mid-init, onDestroy flips this and the init body bails
+     instead of opening xterm into a torn-down host. */
+  let destroyed = false;
   let unsubOutput: (() => void) | null = null;
   let unsubExit: (() => void) | null = null;
   let unsubError: (() => void) | null = null;
@@ -159,7 +164,30 @@
   }
 
   onMount(() => {
+    void initSurface();
+  });
+
+  async function initSurface() {
     if (!host) return;
+
+    /* Wait for the terminal's monospace font before xterm measures
+       cell metrics. JetBrains Mono comes from Google Fonts — on the
+       FIRST terminal mount after app launch it may still be in flight,
+       so xterm would measure a fallback font and the WebGL glyph atlas
+       would render blank/garbled ("terminal is empty until I leave and
+       come back"). Bounded by a timeout so an offline host still gets
+       a (fallback-font) terminal instead of hanging forever. */
+    try {
+      await Promise.race([
+        document.fonts.load('12.5px "JetBrains Mono"'),
+        new Promise((r) => setTimeout(r, 1500))
+      ]);
+    } catch {/* FontFaceSet unavailable — proceed with fallback */}
+    /* One settle frame so fit() measures the host AFTER the solo's
+       layout (splitter widths, grid) has been applied — a zero-size
+       first measurement spawns the PTY with bogus cols/rows. */
+    await new Promise(requestAnimationFrame);
+    if (destroyed || !host) return;
 
     /* Pull surface + text + accent from the live theme so the
      * terminal blends with the rest of the app — Header, host padding,
@@ -229,13 +257,27 @@
      * Falls back silently to DOM if context-loss fires (e.g. user
      * suspends + resumes the laptop). */
     try {
-      const webgl = new WebglAddon();
-      webgl.onContextLoss(() => webgl.dispose());
-      term.loadAddon(webgl);
+      const gl = new WebglAddon();
+      gl.onContextLoss(() => {
+        gl.dispose();
+        if (webgl === gl) webgl = null;
+      });
+      term.loadAddon(gl);
+      webgl = gl;
     } catch {
       /* WebGL unavailable (rare on macOS WKWebView) — DOM renderer
        * still works, just slower. Silent fallback. */
     }
+
+    /* Late-font safety net: if JetBrains Mono finishes loading after
+       the timeout above let us proceed with a fallback font, rebuild
+       the glyph atlas + refit once the FontFaceSet settles so the
+       terminal self-heals instead of staying mis-rendered. */
+    document.fonts?.ready?.then(() => {
+      if (destroyed) return;
+      try { webgl?.clearTextureAtlas(); } catch {/* renderer gone */}
+      fitAndPush();
+    });
 
     // Forward keystrokes to the PTY. Multi-byte input (paste, dead
     // keys, IME) all goes through `onData` as a single string, which
@@ -324,6 +366,7 @@
           rows,
           layoutName
         );
+        if (destroyed) return;
 
         /* Replay every captured chunk in order. Xterm processes ANSI
            and writes to its scrollback buffer synchronously, so this
@@ -378,9 +421,10 @@
     // resize during splitter drag.
     resizeObserver = new ResizeObserver(() => fitAndPush());
     resizeObserver.observe(host);
-  });
+  }
 
   onDestroy(() => {
+    destroyed = true;
     resizeObserver?.disconnect();
     /* Drop our subscriptions so we don't write into a torn-down xterm,
        BUT do NOT kill the PTY — the global terminals-state keeps it
@@ -396,6 +440,7 @@
     term?.dispose();
     term = null;
     fit = null;
+    webgl = null;
   });
 
   /**
