@@ -845,7 +845,20 @@
                       {:else}
                         <span class="edit-tag">Edit</span>
                       {/if}
-                      <span class="edit-path mono">{ev.filePath}</span>
+                      {#if p.onOpenFile}
+                        <button
+                          type="button"
+                          class="edit-path mono"
+                          title="Open in editor"
+                          onclick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            p.onOpenFile?.(ev.filePath);
+                          }}
+                        >{ev.filePath}</button>
+                      {:else}
+                        <span class="edit-path mono">{ev.filePath}</span>
+                      {/if}
                       <span class="edit-stats mono">
                         <span class="add">+{stats.add}</span>
                         <span class="rem">−{stats.rem}</span>
@@ -1451,6 +1464,16 @@
     direction: rtl;
     text-align: left;
     unicode-bidi: plaintext;
+    background: none;
+    border: 0;
+    padding: 0;
+    min-width: 0;
+  }
+  button.edit-path { cursor: pointer; }
+  button.edit-path:hover {
+    color: var(--text-0);
+    text-decoration: underline;
+    text-underline-offset: 2px;
   }
   .edit-card[open] .edit-path {
     direction: ltr;
@@ -1491,6 +1514,11 @@
     font-family: 'JetBrains Mono', monospace;
     font-size: 11.5px;
     line-height: 1.55;
+    /* Long lines extend the diff past the card width; the card body
+       (overflow: auto) provides the horizontal scrollbar. min-width
+       keeps row backgrounds full-bleed on short diffs. */
+    width: max-content;
+    min-width: 100%;
   }
   .diff-row {
     display: grid;
@@ -1525,8 +1553,7 @@
     color: var(--text-mute);
   }
   .diff-text {
-    overflow: hidden;
-    text-overflow: ellipsis;
+    overflow: visible;
   }
 
   /* Thinking pill (reasoning trace, collapsible) */
