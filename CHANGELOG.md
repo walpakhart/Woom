@@ -8,6 +8,32 @@ release runbook (how this CHANGELOG feeds `latest-mac.json`) lives in
 
 ## Unreleased
 
+## 0.4.6 — 2026-06-12
+
+Bumps version 0.4.5 → 0.4.6 across `apps/desktop/package.json`,
+`apps/desktop/src-tauri/Cargo.toml`, `apps/desktop/src-tauri/tauri.conf.json`,
+`apps/desktop/src-tauri/Cargo.lock`.
+
+### Fixed
+
+- **Inline diff hunks anchor at their real position** — Edit/MultiEdit
+  snippets used to paint at the top of the file regardless of where the
+  change landed; they now locate the snippet in the live buffer first.
+  Unresolvable (drifted) snippets render nothing instead of garbage.
+- **Unlinking a chat from the editor survives restarts** — the unlink
+  bypassed the persist scheduler and silently reverted.
+- **Rail active-button halo no longer sticks mid-animation** — the
+  offset "shadow square" after expanding instance stacks; geometry now
+  re-settles after transitions finish.
+- **Editor scrollbar thumb visible on the dark theme**; Review sidebar
+  rows get icon actions that fit the narrow pane and higher-contrast
+  +/− stats.
+
+### Docs
+
+- README rewritten version-free (history lives in CHANGELOG); Cursor
+  integration purged from all module specs.
+
 ## 0.4.5 — 2026-06-12
 
 Bumps version 0.4.4 → 0.4.5 across `apps/desktop/package.json`,
