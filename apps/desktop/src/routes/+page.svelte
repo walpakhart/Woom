@@ -1997,27 +1997,67 @@
   const toggleSessionCanvasLink = () => _sessionLinks.toggleSessionCanvasLink(_linkDeps());
   const linkEditorToAgent = (eid: string, aid: string, sid?: string) => _sessionLinks.linkEditorToAgent(eid, aid, sid);
 
-  /** File-path click in a chat edit-card → open that file in the right
-   *  editor and bring the editor solo up. Resolution order: the active
-   *  session's linked editor, else any editor whose roots contain the
-   *  path, else the rail's active editor instance. */
-  const openChatFileInEditor = (path: string) => {
+  /** File-path click in a chat edit-card or markdown code-span → open
+   *  that file in the right editor and bring the editor solo up.
+   *
+   *  Markdown paths are often repo-RELATIVE (the agent writes
+   *  `apps/desktop/src/...`), so non-absolute input is resolved against
+   *  the session's worktree/cwd, then each editor instance's roots —
+   *  first candidate that exists on disk wins. Everything is verified
+   *  via fs_path_exists before dispatch: opening a non-existent path
+   *  (e.g. a `…`-truncated one) lands as an error tab in the editor.
+   *
+   *  Target editor: the session's linked editor, else any editor whose
+   *  roots contain the resolved path, else the active instance. */
+  const openChatFileInEditor = async (path: string, opts?: { stayOnView?: boolean }) => {
     if (!path) return;
     const sess = sessionsState.list.find((x) => x.id === sessionsState.activeIds.claude);
+    const editorRoots = (iid: string): string[] => {
+      const slot = sessionsState.editorInstanceState[iid];
+      return slot?.repoPaths?.length ? slot.repoPaths : slot?.repoPath ? [slot.repoPath] : [];
+    };
+    const candidates: string[] = [];
+    if (path.startsWith('~/')) {
+      /* `~/…` display-shortened path — expand against the session cwd's
+         home prefix (all woom paths are /Users/<name>/…). */
+      const home = (sess?.cwd ?? '').match(/^(\/Users\/[^/]+)\//)?.[1] ?? '';
+      if (home) candidates.push(home + path.slice(1));
+    } else if (path.startsWith('/')) {
+      candidates.push(path);
+    } else {
+      const base = sess?.worktreePath || sess?.cwd || '';
+      if (base) candidates.push(`${base}/${path}`);
+      for (const iid of Object.keys(sessionsState.editorInstanceState)) {
+        for (const r of editorRoots(iid)) candidates.push(`${r}/${path}`);
+      }
+    }
+    let resolved = '';
+    for (const c of candidates) {
+      const ok = await invoke<boolean>('fs_path_exists', { path: c }).catch(() => false);
+      if (ok) {
+        resolved = c;
+        break;
+      }
+    }
+    if (!resolved) {
+      notify({ kind: 'error', title: 'File not found', body: path });
+      return;
+    }
     let eid = sess?.linkedToEditor ? (sess.linkedToEditorInstanceId ?? '') : '';
     if (!eid) {
-      for (const [iid, slot] of Object.entries(sessionsState.editorInstanceState)) {
-        const roots = slot.repoPaths?.length ? slot.repoPaths : slot.repoPath ? [slot.repoPath] : [];
-        if (roots.some((r) => path === r || path.startsWith(r + '/'))) {
+      for (const iid of Object.keys(sessionsState.editorInstanceState)) {
+        if (editorRoots(iid).some((r) => resolved === r || resolved.startsWith(r + '/'))) {
           eid = iid;
           break;
         }
       }
     }
     if (!eid) eid = layoutState.activeInstance.editor;
-    openFileInEditor(path, { preferInstanceId: eid });
-    setActiveInstance('editor', eid);
-    view = 'editorApp';
+    openFileInEditor(resolved, { preferInstanceId: eid });
+    if (!opts?.stayOnView) {
+      setActiveInstance('editor', eid);
+      view = 'editorApp';
+    }
   };
 
   // ---- Worktree management for the active Claude session ----
@@ -3162,10 +3202,9 @@
             onSddAdvance,
             onDwVerify,
             onResumeAfterQuota,
-            /* Dock lives inside the editor already — open in the hosting
-               instance, no view switch. */
-            onOpenFile: (path) =>
-              openFileInEditor(path, { preferInstanceId: layoutState.activeInstance.editor })
+            /* Dock lives inside the editor already — resolve relatives
+               the same way, but skip the view switch. */
+            onOpenFile: (path) => void openChatFileInEditor(path, { stayOnView: true })
           }}
           onLinkToAgent={(agentId, sessionId) => linkEditorToAgent(layoutState.activeInstance.editor, agentId, sessionId)}
           onOpenClaude={() => (view = 'claudeApp')}

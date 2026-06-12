@@ -40,12 +40,16 @@
     const trimmed = s.trim();
     if (trimmed.length === 0 || trimmed.length > 200) return false;
     if (/[\s=;{}]/.test(trimmed)) return false;
-    /* Path with at least one slash + non-empty trailing segment. */
-    if (/^[a-zA-Z0-9_./\-@]+\/[a-zA-Z0-9_./\-]+$/.test(trimmed)) return true;
+    /* Ellipsis = truncated-for-display path ("/Users/me/repo/apps/…").
+       Opening it can only produce a "No such file" error tab. */
+    if (trimmed.includes('…') || trimmed.includes('...')) return false;
+    /* Path with at least one slash + non-empty trailing segment.
+       `+` allowed for SvelteKit route files (+page.svelte, +layout.ts). */
+    if (/^[a-zA-Z0-9_./\-@+]+\/[a-zA-Z0-9_./\-+]+$/.test(trimmed)) return true;
     /* Single-segment filename with extension. The suffix list keeps
        false positives down (`a.b.c` bare strings aren't always files;
        ticking only when the suffix looks like an actual file kind). */
-    if (/^[a-zA-Z0-9_\-]+(?:\.[a-zA-Z0-9]+){1,3}$/.test(trimmed)) {
+    if (/^[a-zA-Z0-9_\-+]+(?:\.[a-zA-Z0-9]+){1,3}$/.test(trimmed)) {
       const ext = trimmed.split('.').pop() ?? '';
       const known = new Set([
         'ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs', 'json', 'jsonc',
