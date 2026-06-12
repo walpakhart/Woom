@@ -23,6 +23,7 @@
   import { parseToolHint, parseTraceSegment, type ToolHint, type ToolKind } from './chatTraceParse';
   import { computeDiffRows, diffStats, type DiffRow } from './chatDiff';
   import { shortenFsPath } from '$lib/format';
+  import { overlayScrollbars } from '$lib/actions/overlayScrollbars';
 
   type Kind = 'claude';
 
@@ -878,7 +879,7 @@
                         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg>
                       </span>
                     </summary>
-                    <div class="edit-card-body">
+                    <div class="edit-card-body" use:overlayScrollbars>
                       <div class="diff">
                         {#each computeDiffRows(ev.oldText ?? '', ev.newText ?? '') as row, ri (ri)}
                           <div class="diff-row diff-row--{row.kind}">
@@ -1519,25 +1520,13 @@
     background: transparent;
     margin-top: 4px;
   }
-  /* Always-visible scrollbars — the macOS overlay default stays hidden
-     until a scroll gesture, which reads as "no scrollbar at all" on a
-     clipped diff. Mirrors the editor's cm-scroller styling. */
+  /* Scrollbars come from use:overlayScrollbars (custom DOM) — WKWebView
+     ignores ::-webkit-scrollbar styling under macOS overlay mode, so the
+     styled-native attempt never showed. Suppress the native bars so the
+     classic-scrollbar system setting doesn't double them. */
   .edit-card-body::-webkit-scrollbar {
-    width: 10px;
-    height: 10px;
-  }
-  .edit-card-body::-webkit-scrollbar-track,
-  .edit-card-body::-webkit-scrollbar-corner {
-    background: transparent;
-  }
-  .edit-card-body::-webkit-scrollbar-thumb {
-    background: color-mix(in srgb, var(--text-mute) 26%, transparent);
-    background-clip: padding-box;
-    border: 3px solid transparent;
-    border-radius: 7px;
-  }
-  .edit-card-body::-webkit-scrollbar-thumb:hover {
-    background-color: color-mix(in srgb, var(--text-mute) 42%, transparent);
+    width: 0;
+    height: 0;
   }
   .diff {
     display: block;

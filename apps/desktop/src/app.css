@@ -2292,3 +2292,24 @@ img.chat-avatar { padding: 0; }
 :root[data-density="compact"] .home-section + .home-section {
   margin-top: 16px;
 }
+
+/* ── Custom overlay scrollbars (use:overlayScrollbars action) ──────────
+   WKWebView can't style native overlay scrollbars, so the action builds
+   its own track + thumb DOM. Global classes — the nodes are created
+   imperatively and can't pick up component-scoped styles. */
+.wm-sb {
+  position: absolute;
+  z-index: 6;
+  pointer-events: auto;
+}
+.wm-sb--v { width: 8px; }
+.wm-sb--h { height: 8px; }
+.wm-sb-thumb {
+  position: absolute;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--text-mute) 45%, transparent);
+  transition: background 120ms;
+}
+.wm-sb--v .wm-sb-thumb { left: 1px; right: 1px; }
+.wm-sb--h .wm-sb-thumb { top: 1px; bottom: 1px; }
+.wm-sb-thumb:hover { background: color-mix(in srgb, var(--text-mute) 62%, transparent); }
