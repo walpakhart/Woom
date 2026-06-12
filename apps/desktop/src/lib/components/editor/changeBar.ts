@@ -61,56 +61,126 @@ const markerField = StateField.define<RangeSet<GutterMarker>>({
   }
 });
 
-export function changeBarExtension(): Extension {
+export interface ChangeBarHandlers {
+  /** Mousedown on a change mark. `lineNo` is the 1-based buffer line the
+   *  mark sits on. Return true to swallow the event. */
+  onMarkClick?: (lineNo: number, event: MouseEvent) => boolean;
+}
+
+export function changeBarExtension(handlers: ChangeBarHandlers = {}): Extension {
   return [
     markerField,
     gutter({
       class: 'cm-changebar',
-      markers: (view) => view.state.field(markerField)
+      markers: (view) => view.state.field(markerField),
+      domEventHandlers: {
+        mousedown(view, line, event) {
+          if (!handlers.onMarkClick) return false;
+          const ln = view.state.doc.lineAt(line.from).number;
+          return handlers.onMarkClick(ln, event as MouseEvent);
+        }
+      }
     })
   ];
 }
 
-/** Parse unified-diff text → per-line markers on new (right) side. */
-export function parseUnifiedDiffToLineChanges(diffText: string): LineChanges {
-  const out: LineChanges = new Map();
-  if (!diffText) return out;
+/** One contiguous run of -/+ lines from a unified diff. Pure additions
+ *  have empty `oldLines`; pure deletions have empty `newLines` and their
+ *  gutter mark sits on `markerLine` (the surviving line above). */
+export interface ChangeHunk {
+  /** 1-based first old-side line of the run. */
+  oldStart: number;
+  /** 1-based first new-side line of the run (for pure deletions: the
+   *  next surviving line, i.e. where the removed block used to start). */
+  newStart: number;
+  oldLines: string[];
+  newLines: string[];
+  /** Buffer line carrying the gutter mark for this hunk. */
+  markerLine: number;
+}
+
+export interface ParsedFileDiff {
+  map: LineChanges;
+  hunks: ChangeHunk[];
+  /** marked buffer line → index into `hunks`. */
+  lineHunk: Map<number, number>;
+}
+
+/** Parse unified-diff text → per-line markers on the new (right) side
+ *  plus the hunks behind them (for the click-to-peek diff popup). */
+export function parseUnifiedDiff(diffText: string): ParsedFileDiff {
+  const map: LineChanges = new Map();
+  const hunks: ChangeHunk[] = [];
+  const lineHunk = new Map<number, number>();
+  if (!diffText) return { map, hunks, lineHunk };
   const lines = diffText.split('\n');
+  let oldLine = 0;
   let newLine = 0;
-  let addsInHunk: number[] = [];
-  let delsInHunk = 0;
-  const flushHunk = () => {
-    if (delsInHunk > 0 && addsInHunk.length > 0) {
-      for (const ln of addsInHunk) out.set(ln, 'mod');
+  let curOld: string[] = [];
+  let curNew: string[] = [];
+  let runOldStart = 0;
+  let runNewStart = 0;
+  const flush = () => {
+    if (curOld.length === 0 && curNew.length === 0) return;
+    const idx = hunks.length;
+    if (curNew.length > 0) {
+      const kind: LineChangeKind = curOld.length > 0 ? 'mod' : 'add';
+      for (let i = 0; i < curNew.length; i++) {
+        const ln = runNewStart + i;
+        map.set(ln, kind);
+        lineHunk.set(ln, idx);
+      }
+      hunks.push({
+        oldStart: runOldStart, newStart: runNewStart,
+        oldLines: curOld, newLines: curNew, markerLine: runNewStart
+      });
+    } else {
+      const prev = Math.max(1, runNewStart - 1);
+      if (!map.has(prev)) map.set(prev, 'del');
+      if (!lineHunk.has(prev)) lineHunk.set(prev, idx);
+      hunks.push({
+        oldStart: runOldStart, newStart: runNewStart,
+        oldLines: curOld, newLines: [], markerLine: prev
+      });
     }
-    addsInHunk = [];
-    delsInHunk = 0;
+    curOld = [];
+    curNew = [];
   };
   for (const raw of lines) {
     if (raw.startsWith('@@')) {
-      flushHunk();
-      const m = /\+([0-9]+)(?:,([0-9]+))?/.exec(raw);
-      if (m) newLine = parseInt(m[1], 10);
+      flush();
+      const mo = /-([0-9]+)(?:,([0-9]+))?/.exec(raw);
+      const mn = /\+([0-9]+)(?:,([0-9]+))?/.exec(raw);
+      if (mo) oldLine = parseInt(mo[1], 10);
+      if (mn) newLine = parseInt(mn[1], 10);
       continue;
     }
     if (
       raw.startsWith('+++') || raw.startsWith('---') ||
       raw.startsWith('diff ') || raw.startsWith('index ') ||
-      raw.startsWith('new file') || raw.startsWith('deleted file')
+      raw.startsWith('new file') || raw.startsWith('deleted file') ||
+      raw.startsWith('\\') // "\ No newline at end of file"
     ) continue;
     if (raw.startsWith('+')) {
-      if (!out.has(newLine)) out.set(newLine, 'add');
-      addsInHunk.push(newLine);
+      if (curOld.length === 0 && curNew.length === 0) {
+        runOldStart = oldLine;
+        runNewStart = newLine;
+      }
+      curNew.push(raw.slice(1));
       newLine++;
     } else if (raw.startsWith('-')) {
-      delsInHunk++;
-      const prev = newLine - 1;
-      if (prev >= 1 && !out.has(prev)) out.set(prev, 'del');
+      if (curOld.length === 0 && curNew.length === 0) {
+        runOldStart = oldLine;
+        runNewStart = newLine;
+      }
+      curOld.push(raw.slice(1));
+      oldLine++;
     } else {
-      flushHunk();
+      flush();
+      oldLine++;
       newLine++;
     }
   }
-  flushHunk();
-  return out;
+  flush();
+  return { map, hunks, lineHunk };
 }

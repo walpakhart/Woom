@@ -12,10 +12,13 @@
   import {
     changeBarExtension,
     setChangeBar,
-    parseUnifiedDiffToLineChanges,
+    parseUnifiedDiff,
     type LineChanges,
-    type LineChangeKind
+    type LineChangeKind,
+    type ChangeHunk
   } from '$lib/components/editor/changeBar';
+  import { diffWordsWithSpace } from 'diff';
+  import { overlayScrollbars } from '$lib/actions/overlayScrollbars';
   import {
     inlineHunksExtension,
     setHunks,
@@ -130,6 +133,7 @@
   }: Props = $props();
 
   let editorEl: HTMLDivElement;
+  let edEl: HTMLDivElement;
   let view: EditorView | null = null;
   let lastLoadedPath = $state('');
   let savedContents = $state('');
@@ -185,6 +189,7 @@
     if (!p || p === lastLoadedPath) return;
     loading = true;
     error = null;
+    gutterPopup = null;
     try {
       const contents = await invoke<string>('fs_read_file', { path: p });
       savedContents = contents;
@@ -254,7 +259,7 @@
             themeCompartment.of(editorThemeExtension(themeState.name)),
             languageCompartment.of(languageFor(p)),
             wrapCompartment.of(wordWrap ? EditorView.lineWrapping : []),
-            changeBarExtension(),
+            changeBarExtension({ onMarkClick: onChangeMarkClick }),
             inlineHunksExtension(),
             // Scoped hunk resolution: Tab=accept / Esc=reject the hunk under
             // the caret. Prec.highest inspects them first, but each handler
@@ -278,6 +283,7 @@
                   onDirty?.(d);
                 }
                 scheduleChangeBar();
+                gutterPopup = null;
                 if (d) scheduleAutosave();
                 /* Stream the buffer text up so the Markdown live-
                    preview can re-render. Only fired when the parent
@@ -478,7 +484,12 @@
     const sd = view?.scrollDOM;
     if (!sd) return;
     refreshVbar();
-    const onScroll = () => refreshVbar();
+    const onScroll = () => {
+      refreshVbar();
+      // The peek popup is anchored to a viewport position — scrolling
+      // moves the hunk away from it, so dismiss rather than drift.
+      if (gutterPopup) gutterPopup = null;
+    };
     sd.addEventListener('scroll', onScroll, { passive: true });
     const ro = new ResizeObserver(refreshVbar);
     ro.observe(sd);
@@ -528,6 +539,86 @@
     return blocks;
   }
 
+  /* Click-to-peek diff popup on the gutter change bar. Clicking a mark
+     opens a floating GitHub-style inline diff of that hunk: paired
+     old/new lines collapse into ONE row with word-level del/ins
+     segments (diffWordsWithSpace — same engine as DiffView), unpaired
+     lines render as full del/add rows. Rows are snapshotted at click
+     time so a background change-bar refresh can't shift them under the
+     reader. */
+  type PopupPart = { text: string; hl?: 'add' | 'del' };
+  type PopupRow = {
+    kind: 'change' | 'add' | 'del';
+    oldNo: number | null;
+    newNo: number | null;
+    parts: PopupPart[];
+  };
+  let gutterHunks: ChangeHunk[] = [];
+  let gutterLineHunk = new Map<number, number>();
+  let gutterPopup = $state<{
+    key: number;
+    top: number;
+    left: number;
+    dels: number;
+    adds: number;
+    rows: PopupRow[];
+  } | null>(null);
+  let gutterPopupEl = $state<HTMLDivElement | null>(null);
+
+  function buildPopupRows(h: ChangeHunk): PopupRow[] {
+    const rows: PopupRow[] = [];
+    const n = Math.max(h.oldLines.length, h.newLines.length);
+    for (let i = 0; i < n; i++) {
+      const o = h.oldLines[i];
+      const nw = h.newLines[i];
+      const oldNo = o != null ? h.oldStart + i : null;
+      const newNo = nw != null ? h.newStart + i : null;
+      if (o != null && nw != null) {
+        const parts: PopupPart[] = diffWordsWithSpace(o, nw).map((w) =>
+          w.added ? { text: w.value, hl: 'add' as const }
+          : w.removed ? { text: w.value, hl: 'del' as const }
+          : { text: w.value }
+        );
+        rows.push({ kind: 'change', oldNo, newNo, parts });
+      } else if (o != null) {
+        rows.push({ kind: 'del', oldNo, newNo: null, parts: [{ text: o }] });
+      } else {
+        rows.push({ kind: 'add', oldNo: null, newNo, parts: [{ text: nw! }] });
+      }
+    }
+    return rows;
+  }
+
+  function onChangeMarkClick(lineNo: number, ev: MouseEvent): boolean {
+    const idx = gutterLineHunk.get(lineNo);
+    if (idx == null) {
+      gutterPopup = null;
+      return false;
+    }
+    if (gutterPopup?.key === idx) {
+      gutterPopup = null;
+      return true;
+    }
+    const h = gutterHunks[idx];
+    const rows = buildPopupRows(h);
+    const rect = edEl.getBoundingClientRect();
+    const popW = Math.min(560, rect.width - 24);
+    let left = ev.clientX - rect.left + 12;
+    if (left + popW > rect.width - 12) left = Math.max(12, rect.width - 12 - popW);
+    const estH = Math.min(300, 40 + rows.length * 20);
+    let top = ev.clientY - rect.top + 8;
+    if (top + estH > rect.height - 10) top = Math.max(10, ev.clientY - rect.top - estH - 8);
+    gutterPopup = {
+      key: idx,
+      top,
+      left,
+      dels: h.oldLines.length,
+      adds: h.newLines.length,
+      rows
+    };
+    return true;
+  }
+
   /** Fetch `git diff` for the active file and push parsed per-line
    *  markers into the editor's changeBar state field. Silent on
    *  non-git roots / untracked paths — change bar just stays empty. */
@@ -543,12 +634,17 @@
         path: rel,
         staged: false
       });
-      const map: LineChanges = parseUnifiedDiffToLineChanges(diff);
-      view.dispatch({ effects: setChangeBar.of(map) });
-      rulerMarks = buildRulerMarks(map, view.state.doc.lines);
+      const parsed = parseUnifiedDiff(diff);
+      view.dispatch({ effects: setChangeBar.of(parsed.map) });
+      rulerMarks = buildRulerMarks(parsed.map, view.state.doc.lines);
+      gutterHunks = parsed.hunks;
+      gutterLineHunk = parsed.lineHunk;
     } catch {
       view.dispatch({ effects: setChangeBar.of(new Map()) });
       rulerMarks = [];
+      gutterHunks = [];
+      gutterLineHunk = new Map();
+      gutterPopup = null;
     }
   }
   function scheduleChangeBar() {
@@ -934,11 +1030,51 @@
   });
 </script>
 
-<div class="ed">
+<svelte:window
+  onkeydown={(e) => {
+    if (e.key === 'Escape' && gutterPopup) gutterPopup = null;
+  }}
+  onpointerdown={(e) => {
+    if (!gutterPopup) return;
+    const t = e.target as HTMLElement;
+    if (gutterPopupEl?.contains(t)) return;
+    /* Clicks on the change bar are handled by the gutter's own
+       mousedown (open / toggle) — closing here too would make the
+       same-mark toggle reopen instantly. */
+    if (t.closest?.('.cm-changebar')) return;
+    gutterPopup = null;
+  }}
+/>
+
+<div class="ed" bind:this={edEl}>
   {#if error}
     <div class="ed-error">{error}</div>
   {/if}
   <div class="ed-surface" bind:this={editorEl}></div>
+  {#if gutterPopup}
+    <div
+      class="ed-gd"
+      style="top:{gutterPopup.top}px;left:{gutterPopup.left}px"
+      bind:this={gutterPopupEl}
+    >
+      <div class="ed-gd-head">
+        {#if gutterPopup.dels > 0}<span class="ed-gd-stat ed-gd-stat--del">−{gutterPopup.dels}</span>{/if}
+        {#if gutterPopup.adds > 0}<span class="ed-gd-stat ed-gd-stat--add">+{gutterPopup.adds}</span>{/if}
+        <span class="ed-gd-title">uncommitted change</span>
+        <button class="ed-gd-x" onclick={() => (gutterPopup = null)} aria-label="Close">✕</button>
+      </div>
+      <div class="ed-gd-body" use:overlayScrollbars>
+        {#each gutterPopup.rows as r, i (i)}
+          <div class="ed-gd-row ed-gd-row--{r.kind}">
+            <span class="ed-gd-ln">{r.oldNo ?? ''}</span>
+            <span class="ed-gd-ln">{r.newNo ?? ''}</span>
+            <span class="ed-gd-sign">{r.kind === 'add' ? '+' : r.kind === 'del' ? '−' : '±'}</span>
+            <span class="ed-gd-code">{#each r.parts as p, j (j)}<span class={p.hl ? `ed-gd-seg ed-gd-seg--${p.hl}` : ''}>{p.text}</span>{/each}</span>
+          </div>
+        {/each}
+      </div>
+    </div>
+  {/if}
   {#if vbarVisible}
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div class="ed-vbar" class:ed-vbar--drag={vbarDragging} onpointerdown={vbarTrackDown} aria-hidden="true">
@@ -1047,8 +1183,11 @@
   /* Git change bar — a dedicated thin gutter column (à la VS Code / Cursor):
      crisp full-line-height stripes that never shift the code. add = green,
      mod = ochre, del = a small red triangle on the line above removed code. */
+  /* 8px column = humane click target for the peek-diff popup; the
+     visible stripe stays 3px (transparent right border + padding-box
+     clip on the mark below). */
   .ed-surface :global(.cm-changebar) {
-    width: 3px;
+    width: 8px;
     padding: 0;
     background: transparent;
     border: none;
@@ -1057,13 +1196,26 @@
     padding: 0;
     display: flex;
     align-items: stretch;
+    cursor: pointer;
   }
+  /* Marks are clickable (peek-diff popup): visible stripe is 3px but
+     the element fills the 8px column (transparent right border,
+     background clipped to padding) so the hit target is humane; hover
+     shrinks the border → stripe widens to 6px, VS Code-style. */
   .ed-surface :global(.cm-changebar-mark) {
-    width: 3px;
+    width: 8px;
     align-self: stretch;
+    border-right: 5px solid transparent;
+    background-clip: padding-box;
+    transition: border-right-width 90ms ease, filter 90ms ease;
   }
-  .ed-surface :global(.cm-changebar-mark--add) { background: #6faE88; }
-  .ed-surface :global(.cm-changebar-mark--mod) { background: #d9b86e; }
+  .ed-surface :global(.cm-changebar-mark--add) { background-color: #6faE88; }
+  .ed-surface :global(.cm-changebar-mark--mod) { background-color: #d9b86e; }
+  .ed-surface :global(.cm-gutterElement:hover .cm-changebar-mark--add),
+  .ed-surface :global(.cm-gutterElement:hover .cm-changebar-mark--mod) {
+    border-right-width: 2px;
+    filter: brightness(1.25);
+  }
   /* Deleted-above indicator: a downward red triangle pinned to the cell
      bottom, so it reads as "lines removed here" rather than a full stripe. */
   .ed-surface :global(.cm-changebar-mark--del) {
@@ -1073,8 +1225,95 @@
     border-left: 4px solid transparent;
     border-right: 4px solid transparent;
     border-top: 5px solid #e88264;
-    margin-left: -2.5px;
+    margin-left: -1px;
+    transition: transform 90ms ease;
+    transform-origin: 50% 100%;
   }
+  .ed-surface :global(.cm-gutterElement:hover .cm-changebar-mark--del) {
+    transform: scale(1.4);
+  }
+
+  /* Peek-diff popup (click on a change-bar mark). GitHub-style inline
+     rows: word-level del segments red, ins segments green, both in the
+     SAME line for modified pairs. */
+  .ed-gd {
+    position: absolute;
+    z-index: 30;
+    width: min(560px, calc(100% - 24px));
+    background: var(--bg-2);
+    border: 1px solid var(--border-hi);
+    border-radius: 8px;
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  .ed-gd-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 8px 5px 10px;
+    border-bottom: 1px solid var(--border);
+    font-size: 11px;
+  }
+  .ed-gd-stat { font-weight: 600; font-variant-numeric: tabular-nums; }
+  .ed-gd-stat--del { color: #e88264; }
+  .ed-gd-stat--add { color: #6faE88; }
+  .ed-gd-title { color: var(--text-mute); }
+  .ed-gd-x {
+    margin-left: auto;
+    background: none;
+    border: none;
+    color: var(--text-mute);
+    cursor: pointer;
+    font-size: 11px;
+    padding: 2px 4px;
+    border-radius: 4px;
+  }
+  .ed-gd-x:hover { color: var(--text-1); background: color-mix(in srgb, var(--text-mute) 15%, transparent); }
+  .ed-gd-body {
+    overflow: auto;
+    max-height: 260px;
+    padding: 4px 0;
+    font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', monospace;
+    font-size: 12px;
+    line-height: 1.55;
+  }
+  .ed-gd-row {
+    display: flex;
+    align-items: baseline;
+    white-space: pre;
+    min-width: max-content;
+    padding-right: 12px;
+  }
+  .ed-gd-row--del { background: rgba(232, 130, 100, 0.10); }
+  .ed-gd-row--add { background: rgba(111, 174, 136, 0.10); }
+  .ed-gd-ln {
+    flex: none;
+    width: 34px;
+    text-align: right;
+    padding-right: 6px;
+    color: var(--text-mute);
+    font-variant-numeric: tabular-nums;
+    user-select: none;
+  }
+  .ed-gd-sign {
+    flex: none;
+    width: 16px;
+    text-align: center;
+    color: var(--text-mute);
+    user-select: none;
+  }
+  .ed-gd-row--del .ed-gd-sign { color: #e88264; }
+  .ed-gd-row--add .ed-gd-sign { color: #6faE88; }
+  .ed-gd-code { flex: none; }
+  .ed-gd-seg { border-radius: 2px; }
+  .ed-gd-seg--del {
+    background: rgba(232, 130, 100, 0.28);
+    text-decoration: line-through;
+    text-decoration-color: rgba(232, 130, 100, 0.7);
+  }
+  .ed-gd-seg--add { background: rgba(111, 174, 136, 0.28); }
   /* Inline agentic-edit overlay (sibling to the change bar above).
      Added/modified lines get a soft green wash across the full line;
      removed lines render as a ghost block (struck-through, red-tinted)
