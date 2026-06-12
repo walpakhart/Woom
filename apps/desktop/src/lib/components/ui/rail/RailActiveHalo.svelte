@@ -154,7 +154,20 @@
      "halo jitters with many instances" symptom when stacks were big
      enough to scroll. */
   let _haloRaf: number | null = null;
+  let _haloSettle: ReturnType<typeof setTimeout> | null = null;
   function scheduleHaloRecompute() {
+    /* Settle pass: rail buttons animate (fly on instance-stack
+       expand/collapse, popover open) and the rAF read often lands
+       MID-transition — the halo then sticks at an interim position
+       because no further mutation/scroll event fires once the
+       animation finishes (the "offset shadow square" bug). One
+       deferred recompute after the longest rail transition (≈200ms)
+       re-reads the settled geometry. */
+    if (_haloSettle) clearTimeout(_haloSettle);
+    _haloSettle = setTimeout(() => {
+      _haloSettle = null;
+      recomputeHalo();
+    }, 240);
     if (_haloRaf != null) return;
     _haloRaf = requestAnimationFrame(() => {
       _haloRaf = null;
@@ -195,13 +208,25 @@
       attributes: true,
       attributeFilter: ['class']
     });
+    /* Svelte transitions (fly) + CSS transitions move buttons without
+       any class mutation — recompute when they finish so the halo
+       lands on final geometry, not the mid-animation snapshot. */
+    const onSettled = () => scheduleHaloRecompute();
+    rail.addEventListener('transitionend', onSettled, { passive: true });
+    rail.addEventListener('animationend', onSettled, { passive: true });
     return () => {
       scroll?.removeEventListener('scroll', onScroll);
+      rail.removeEventListener('transitionend', onSettled);
+      rail.removeEventListener('animationend', onSettled);
       ro.disconnect();
       mo.disconnect();
       if (_haloRaf != null) {
         cancelAnimationFrame(_haloRaf);
         _haloRaf = null;
+      }
+      if (_haloSettle) {
+        clearTimeout(_haloSettle);
+        _haloSettle = null;
       }
     };
   });

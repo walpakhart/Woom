@@ -12,7 +12,7 @@
   import AgentDock, { type DockHandlers } from './editor/AgentDock.svelte';
   import Splitter from '$lib/components/ui/Splitter.svelte';
   import SidePaneRail from '$lib/components/ui/SidePaneRail.svelte';
-  import { sessionsState, getPendingEditEvents, editorRoots } from '$lib/state/sessions.svelte';
+  import { sessionsState, getPendingEditEvents, editorRoots, updateSession } from '$lib/state/sessions.svelte';
   import { kindForInstanceId, APP_INSTANCE_IDS, layoutState } from '$lib/state/layout.svelte';
   import { onMount, untrack } from 'svelte';
   import { fly } from 'svelte/transition';
@@ -178,10 +178,10 @@
   });
 
   function unlinkSession(sessionId: string) {
-    const s = sessionsState.list.find((x) => x.id === sessionId);
-    if (!s) return;
-    s.linkedToEditor = false;
-    s.linkedToEditorInstanceId = null;
+    /* Through updateSession, NOT direct field writes — a bare
+       `s.linkedToEditor = false` skipped the persist scheduler, so the
+       unlink evaporated on restart and the chat came back linked. */
+    updateSession(sessionId, { linkedToEditor: false, linkedToEditorInstanceId: null });
   }
 
   /** Git change count → badge на activity-bar Git button. Будет реальным
