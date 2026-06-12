@@ -828,21 +828,26 @@
     width: 14px;
     height: 10px;
   }
-  .ed-surface :global(.cm-scroller::-webkit-scrollbar-track),
+  .ed-surface :global(.cm-scroller::-webkit-scrollbar-track) {
+    background: color-mix(in srgb, var(--text-mute) 7%, transparent);
+  }
   .ed-surface :global(.cm-scroller::-webkit-scrollbar-corner) {
     background: transparent;
   }
   .ed-surface :global(.cm-scroller::-webkit-scrollbar-thumb) {
-    background: color-mix(in srgb, var(--text-mute) 26%, transparent);
+    /* 26% alpha + 3px inset used to vanish on the dark theme — the
+       "no scrollbar, only ruler dots" complaint. Keep the thumb
+       clearly visible at rest. */
+    background: color-mix(in srgb, var(--text-mute) 48%, transparent);
     background-clip: padding-box;
-    border: 3px solid transparent;
+    border: 2px solid transparent;
     border-radius: 7px;
   }
   .ed-surface :global(.cm-scroller::-webkit-scrollbar-thumb:hover) {
-    background-color: color-mix(in srgb, var(--text-mute) 42%, transparent);
+    background-color: color-mix(in srgb, var(--text-mute) 62%, transparent);
   }
   .ed-surface :global(.cm-scroller::-webkit-scrollbar-thumb:active) {
-    background-color: color-mix(in srgb, var(--text-mute) 55%, transparent);
+    background-color: color-mix(in srgb, var(--text-mute) 75%, transparent);
   }
 
   /* Overview ruler — left lane of the scrollbar track. Marks paint over
