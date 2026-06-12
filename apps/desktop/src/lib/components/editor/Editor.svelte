@@ -405,6 +405,91 @@
     }
   }
 
+  /* ── Custom vertical scrollbar ──────────────────────────────────────
+     WKWebView ignores `::-webkit-scrollbar` styling whenever macOS runs
+     overlay scrollbars ("Show scroll bars: When scrolling" — the
+     trackpad default), so the native bar stays invisible until a scroll
+     gesture no matter what alpha we give the thumb. Same road VS Code
+     took: draw our own track + thumb and drive scrollTop directly. */
+  let vbarTop = $state(0);
+  let vbarH = $state(0);
+  let vbarVisible = $state(false);
+  let vbarDragging = $state(false);
+
+  function refreshVbar() {
+    const sd = view?.scrollDOM;
+    if (!sd) {
+      vbarVisible = false;
+      return;
+    }
+    const { scrollTop, scrollHeight, clientHeight } = sd;
+    if (scrollHeight <= clientHeight + 1) {
+      vbarVisible = false;
+      return;
+    }
+    const h = Math.max(24, (clientHeight / scrollHeight) * clientHeight);
+    vbarH = h;
+    vbarTop = (scrollTop / (scrollHeight - clientHeight)) * (clientHeight - h);
+    vbarVisible = true;
+  }
+
+  function vbarThumbDown(e: PointerEvent) {
+    const sd = view?.scrollDOM;
+    if (!sd) return;
+    e.preventDefault();
+    e.stopPropagation();
+    vbarDragging = true;
+    const startY = e.clientY;
+    const startTop = sd.scrollTop;
+    const onMove = (ev: PointerEvent) => {
+      const { scrollHeight, clientHeight } = sd;
+      const denom = clientHeight - vbarH;
+      if (denom <= 0) return;
+      sd.scrollTop = startTop + (ev.clientY - startY) * ((scrollHeight - clientHeight) / denom);
+    };
+    const onUp = () => {
+      vbarDragging = false;
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  }
+
+  function vbarTrackDown(e: PointerEvent) {
+    const sd = view?.scrollDOM;
+    if (!sd) return;
+    if ((e.target as HTMLElement).classList.contains('ed-vbar-thumb')) return;
+    const track = e.currentTarget as HTMLElement;
+    const rect = track.getBoundingClientRect();
+    const { scrollHeight, clientHeight } = sd;
+    const denom = clientHeight - vbarH;
+    if (denom <= 0) return;
+    const ratio = (e.clientY - rect.top - vbarH / 2) / denom;
+    sd.scrollTop = Math.max(0, Math.min(1, ratio)) * (scrollHeight - clientHeight);
+  }
+
+  /* Wire scroll + geometry observers to the live view. Re-runs per
+     viewVersion (fresh EditorView per file load). The content element
+     is observed too — doc edits / folds change scrollHeight without
+     firing a scroll event. */
+  $effect(() => {
+    void viewVersion;
+    const sd = view?.scrollDOM;
+    if (!sd) return;
+    refreshVbar();
+    const onScroll = () => refreshVbar();
+    sd.addEventListener('scroll', onScroll, { passive: true });
+    const ro = new ResizeObserver(refreshVbar);
+    ro.observe(sd);
+    const content = sd.querySelector('.cm-content');
+    if (content) ro.observe(content);
+    return () => {
+      sd.removeEventListener('scroll', onScroll);
+      ro.disconnect();
+    };
+  });
+
   /* Overview ruler (à la VS Code) — colored marks on the scrollbar strip
      showing WHERE in the document the git changes live. Derived from the
      same LineChanges map as the gutter change bar; contiguous same-kind
@@ -854,6 +939,16 @@
     <div class="ed-error">{error}</div>
   {/if}
   <div class="ed-surface" bind:this={editorEl}></div>
+  {#if vbarVisible}
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div class="ed-vbar" class:ed-vbar--drag={vbarDragging} onpointerdown={vbarTrackDown} aria-hidden="true">
+      <div
+        class="ed-vbar-thumb"
+        style="top:{vbarTop}px;height:{vbarH}px"
+        onpointerdown={vbarThumbDown}
+      ></div>
+    </div>
+  {/if}
   {#if rulerMarks.length > 0}
     <!-- Overview ruler — sits over the scrollbar track (pointer-events
          none so the thumb stays draggable through it). -->
@@ -876,34 +971,53 @@
   .ed-surface :global(.cm-editor.cm-focused) { outline: none; }
   .ed-surface :global(.cm-scroller) { font-family: inherit; }
 
-  /* VS Code-style scrollbar — always-visible track lane, flat square
-     thumb that brightens on hover/drag. WKWebView honours
-     ::-webkit-scrollbar, so we get a real custom bar (the macOS
-     overlay default is near-invisible for long files). */
-  .ed-surface :global(.cm-scroller::-webkit-scrollbar) {
-    width: 14px;
+  /* Native vertical scrollbar suppressed — WKWebView ignores
+     ::-webkit-scrollbar styling under macOS overlay scrollbars (the
+     trackpad default), so the styled-native approach (v0.4.3-0.4.6)
+     never showed for most users. `.ed-vbar` below is the real bar.
+     Horizontal stays native: rarely needed, overlay is fine there. */
+  .ed-surface :global(.cm-scroller::-webkit-scrollbar:vertical) {
+    width: 0;
+  }
+  .ed-surface :global(.cm-scroller::-webkit-scrollbar:horizontal) {
     height: 10px;
   }
-  .ed-surface :global(.cm-scroller::-webkit-scrollbar-track) {
-    background: color-mix(in srgb, var(--text-mute) 7%, transparent);
-  }
+  .ed-surface :global(.cm-scroller::-webkit-scrollbar-track),
   .ed-surface :global(.cm-scroller::-webkit-scrollbar-corner) {
     background: transparent;
   }
   .ed-surface :global(.cm-scroller::-webkit-scrollbar-thumb) {
-    /* 26% alpha + 3px inset used to vanish on the dark theme — the
-       "no scrollbar, only ruler dots" complaint. Keep the thumb
-       clearly visible at rest. */
     background: color-mix(in srgb, var(--text-mute) 48%, transparent);
     background-clip: padding-box;
     border: 2px solid transparent;
     border-radius: 7px;
   }
-  .ed-surface :global(.cm-scroller::-webkit-scrollbar-thumb:hover) {
-    background-color: color-mix(in srgb, var(--text-mute) 62%, transparent);
+
+  /* Custom always-visible vertical scrollbar (VS Code-style). Sits over
+     the editor's right edge; overview-ruler dots paint on top of the
+     track (pointer-events: none keeps the thumb draggable through). */
+  .ed-vbar {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    right: 0;
+    width: 14px;
+    z-index: 4;
+    background: color-mix(in srgb, var(--text-mute) 6%, transparent);
   }
-  .ed-surface :global(.cm-scroller::-webkit-scrollbar-thumb:active) {
-    background-color: color-mix(in srgb, var(--text-mute) 75%, transparent);
+  .ed-vbar-thumb {
+    position: absolute;
+    left: 2px;
+    right: 2px;
+    border-radius: 5px;
+    background: color-mix(in srgb, var(--text-mute) 45%, transparent);
+    transition: background 120ms;
+  }
+  .ed-vbar-thumb:hover {
+    background: color-mix(in srgb, var(--text-mute) 60%, transparent);
+  }
+  .ed-vbar--drag .ed-vbar-thumb {
+    background: color-mix(in srgb, var(--text-mute) 75%, transparent);
   }
 
   /* Overview ruler — left lane of the scrollbar track. Marks paint over
