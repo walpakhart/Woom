@@ -7,10 +7,10 @@ of the Editor column ships in the desktop app today; this document is a
 ground-truth spec, not a forward-looking proposal.
 
 > A workbench column for **opening a repo, browsing its file tree, and
-> editing files locally**. Sits next to the agent (Claude / Cursor)
+> editing files locally**. Sits next to the agent (Claude)
 > column and acts as the *visible surface* of the agent's work — when
 > an agent edits a file, the editor reloads it; when the user picks a
-> selection, "Apply to Claude / Cursor" sends a precise line-range
+> selection, "Apply to Claude" sends a precise line-range
 > mention to the linked agent. Repo path is the canonical "where am I
 > working" pointer for everything connected to it.
 
@@ -21,15 +21,15 @@ ground-truth spec, not a forward-looking proposal.
 ### 1.1 Vision
 
 The Editor column is **not** trying to replace VS Code or Cursor IDE.
-Woom already runs Cursor and Claude as sidecars, and Cursor IDE itself
-is a fully-featured editor we have no interest in re-implementing. The
+Woom already runs Claude as a sidecar, and full-featured editors are
+something we have no interest in re-implementing. The
 column has a narrower job:
 
 1. **Anchor the cwd.** Every other column (agent, GitHub PR, Jira
    ticket, canvas, terminal proposals) needs to know "what repo are we
    in right now". The Editor column owns that pointer for the linked
    agents.
-2. **See what the agent did.** When Claude / Cursor edit a file, the
+2. **See what the agent did.** When Claude edits a file, the
    editor reloads the buffer (if not dirty) and a fresh git diff appears
    in the Git panel. The user sees the change land without context
    switching.
@@ -313,7 +313,7 @@ Establishment paths:
 
 | Trigger                              | Function                     | Location                                |
 |--------------------------------------|------------------------------|-----------------------------------------|
-| Editor "Link Claude / Cursor"        | `linkEditorToAgent`          | `+page.svelte:1077-1111`                |
+| Editor "Link Claude"                 | `linkEditorToAgent`          | `+page.svelte:1077-1111`                |
 | Agent "Link editor"                  | `linkActiveSessionToEditor`  | `+page.svelte:1031-1057`                |
 | MCP `set_editor_repo_path` follow-up | `applySessionCwd`            | `+page.svelte:2084-2104`, `sessionCwd.ts` |
 
@@ -400,7 +400,7 @@ own; staying linked would re-snap them on the next editor change.
 
 There is no `editor.read_file` or `editor.write_file` MCP tool — those
 are routed through the agent's own filesystem tools (Claude Code's
-`Read` / `Write` / `Edit`, Cursor's equivalent). The editor is a *view*
+`Read` / `Write` / `Edit`). The editor is a *view*
 on disk state, not a programmable surface.
 
 ---

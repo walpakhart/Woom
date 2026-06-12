@@ -4,7 +4,7 @@
 **Last updated:** 2026-04-29
 **Status:** describes shipping behaviour. Connections cover the
 external services Woom can pull from (GitHub, Jira, Sentry) and
-the local agent CLIs it can drive (Claude, Cursor). Slack, Linear,
+the local agent CLI it can drive (Claude). Slack, Linear,
 Notion, GitLab, Teams, Asana, Codex, Aider, Copilot are catalogued in
 the Connect view as "coming soon" placeholders only.
 
@@ -15,8 +15,8 @@ the Connect view as "coming soon" placeholders only.
 > GitHub uses a PAT, Jira uses email + API token, Sentry uses an
 > internal-integration token. PAT-only is the permanent shape of
 > Woom auth; we invest in token UX (rotation reminders, multi-
-> account, diagnostics) rather than OAuth bureaucracy. Agents
-> (Claude / Cursor) aren't tokens at all — they're shelled subprocesses;
+> account, diagnostics) rather than OAuth bureaucracy. The agent
+> (Claude) isn't a token at all — it's a shelled subprocess;
 > we just check the binary is on PATH and authenticated to its own
 > service.
 
@@ -33,8 +33,8 @@ revocation path. No magic; no surprise re-auth roundtrips at runtime.
 
 ### 1.2 Goals (v1, shipping)
 
-1. Five live integrations: GitHub, Jira, Sentry (data sources),
-   Claude, Cursor (agent CLIs).
+1. Four live integrations: GitHub, Jira, Sentry (data sources),
+   Claude (agent CLI).
 2. macOS Keychain storage for every token (`security` keychain access).
 3. Token validation on connect; eviction on `InvalidToken` at status
    check.
@@ -70,7 +70,6 @@ export const connectionsMeta: ConnectionMeta[] = [
   { id: 'jira',   name: 'Jira',   kind: 'source',  implemented: true },
   { id: 'sentry', name: 'Sentry', kind: 'source',  implemented: true },
   { id: 'claude', name: 'Claude', kind: 'agent',   implemented: true },
-  { id: 'cursor', name: 'Cursor', kind: 'agent',   implemented: true },
   { id: 'slack',  name: 'Slack',  kind: 'source',  implemented: false },
   { id: 'linear', name: 'Linear', kind: 'source',  implemented: false },
   // notion, gitlab, teams, asana, codex, aider, copilot — implemented: false
@@ -107,8 +106,7 @@ keychain item shows up as `Service: Woom, Account: <key>`.
 | `"jira"`        | JSON `{ workspace, email, token }` |
 | `"sentry"`      | JSON `{ host, organization_slug, token }` |
 
-Claude and Cursor have no Woom-managed token; they auth to their
-own services.
+Claude has no Woom-managed token; it auths to its own service.
 
 ### 3.2 Connect roundtrip
 
@@ -124,7 +122,7 @@ For each source the ⌘-shape is:
 3. `connectionsState[source] = { kind: 'connected', user }`
 4. trigger initial refresh of dependent state
    (refreshAllInboxes for github/jira; addPanelInstance('sentry') for
-   sentry first-connect; status modal close for claude/cursor)
+   sentry first-connect; status modal close for claude)
 ```
 
 For agents, "connect" is a poll:
@@ -172,7 +170,6 @@ function openConnectModal(conn: ConnectionMeta) {
   if (conn.id === 'jira') openModal('jiraConnect', { ... });
   if (conn.id === 'sentry') openModal('sentryConnect', { ... });
   if (conn.id === 'claude') openModal('claudeStatus', { ... });
-  if (conn.id === 'cursor') openModal('cursorStatus', { ... });
 }
 ```
 
@@ -184,7 +181,6 @@ function openConnectModal(conn: ConnectionMeta) {
 | `jiraConnect`  | `apps/desktop/src/lib/components/connect/JiraConnectModal.svelte` |
 | `sentryConnect`| `apps/desktop/src/lib/components/connect/SentryConnectModal.svelte` |
 | `claudeStatus` | a status pane with "Install Claude" link + version readout  |
-| `cursorStatus` | same shape as claudeStatus, for `cursor-agent`              |
 
 PAT modal helpers expose the right "create token" URL with prefilled
 scopes (see `docs/GITHUB.md §11`).
@@ -211,7 +207,6 @@ export const connectionsState = $state<{
   jira: ...;
   sentry: ...;
   claude: ...;
-  cursor: ...;
 }>({ ... });
 ```
 
@@ -340,7 +335,6 @@ sources:
   claude: connected (3.x)
 agents:
   claude (you): linked editor=Sagrada-Familia
-  cursor: linked editor=Notre-Dame
 ```
 
 If the user mentions Slack and Slack isn't in the connected list, the
@@ -359,8 +353,8 @@ since `implemented: false`).
 3. Slack / Linear / Notion / GitLab / Teams / Asana / Codex / Aider /
    Copilot rows are dead ends. Each is a separate sidecar + UI surface;
    roadmap, not blocking.
-4. `claudeStatus` / `cursorStatus` modals show binary path + version,
-   not "logged in as" — the CLIs don't expose a uniform identity API.
+4. The `claudeStatus` modal shows binary path + version,
+   not "logged in as" — the CLI doesn't expose an identity API.
 5. Migration of v1 boolean columns persistence assumes a Main
    workbench; unusual for users who reset state.
 6. No "test connection" button per source — it's "Connect" or
@@ -372,7 +366,7 @@ since `implemented: false`).
 
 - **Source** — a service Woom reads / writes data from (GitHub,
   Jira, Sentry, Slack-future).
-- **Agent** — a CLI Woom drives as a subprocess (Claude, Cursor).
+- **Agent** — a CLI Woom drives as a subprocess (Claude).
 - **`connectionsMeta`** — static catalogue of all known sources +
   agents and whether they're implemented yet.
 - **`connectionsState`** — runtime status per source.

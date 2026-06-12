@@ -436,7 +436,7 @@ that the parent process sets (see `docs/MCP.md`).
 | Target                          | Result                                                          |
 |---------------------------------|-----------------------------------------------------------------|
 | Agent column body               | `@<repo>#<number>` mention in composer                          |
-| `claude` / `cursor` pill        | Spring-loaded — opens menu of instances; drop on one to add mention |
+| `claude` pill                   | Spring-loaded — opens menu of instances; drop on one to add mention |
 | Other pills (`github`, `jira`, …)| Rejected (`pillCanAccept` returns `false` for non-agent kinds)  |
 | Canvas surface                  | `github-pr-card` / `github-issue-card` shape                    |
 

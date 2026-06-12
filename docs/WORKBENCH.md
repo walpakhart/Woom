@@ -8,7 +8,7 @@ top-level surface of every Woom view that isn't a settings page.
 > A workbench is **a named layout of columns**. The user has many
 > workbenches (tabs at the top), each with its own set of column
 > instances. A column instance is a live mount of a `PanelKind`
-> (github / jira / sentry / claude / cursor / editor / canvas) with a
+> (github / jira / sentry / claude / editor / canvas) with a
 > width, a name, and per-instance state living inside the relevant
 > store. The shell owns drag-drop between columns, resize with snap,
 > archive/restore, maximize-overlay, and persistence; everything below
@@ -68,7 +68,7 @@ re-opening it lands you exactly where you were.
 |---------------------|--------------------------------------------|--------------------------------------------------------------|
 | **Workbench**       | `apps/desktop/src/lib/types.ts:24-28`      | `{ id, name, instances: PanelInstance[] }`                   |
 | **PanelInstance**   | `apps/desktop/src/lib/types.ts:17-22`      | A live column: `{ id, kind, width, name }`                   |
-| **PanelKind**       | `apps/desktop/src/lib/types.ts:7`          | `'github' \| 'jira' \| 'sentry' \| 'claude' \| 'cursor' \| 'editor' \| 'canvas'` |
+| **PanelKind**       | `apps/desktop/src/lib/types.ts:7`          | `'github' \| 'jira' \| 'sentry' \| 'claude' \| 'editor' \| 'canvas'` |
 | **Pill**            | `+page.svelte:3840-3972`                   | Group button in `.wb-bar` per kind                            |
 | **Snap-flash**      | `layoutState.snapFlashInstanceId`          | Brief outline pulse on a resize handle when a snap fires     |
 | **Maximize**        | `layoutState.maximizedInstanceId`          | One column overlays the bench area                            |
@@ -82,13 +82,12 @@ re-opening it lands you exactly where you were.
 ```ts
 // apps/desktop/src/lib/state/layout.svelte.ts:10-18
 export const DEFAULT_PANEL_ORDER: PanelKind[] =
-  ['github', 'jira', 'sentry', 'claude', 'cursor', 'editor', 'canvas'];
+  ['github', 'jira', 'sentry', 'claude', 'editor', 'canvas'];
 export const DEFAULT_PANEL_WIDTHS: Record<PanelKind, number> = {
   github: 420,
   jira:   420,
   sentry: 440,
   claude: 520,
-  cursor: 520,
   editor: 720,
   canvas: 720
 };
@@ -193,7 +192,7 @@ across WKWebView quirks.
 export type DragChipKind =
   | 'file' | 'dir'
   | 'jira' | 'github' | 'sentry'
-  | 'cursor' | 'claude'
+  | 'claude'
   | 'editor' | 'canvas';
 
 export function attachDragChip(e: DragEvent, kind: DragChipKind, label: string): void;
@@ -207,7 +206,7 @@ removes the element on next tick.
 | Target                 | Accepts                                             | Result                                                       |
 |------------------------|-----------------------------------------------------|--------------------------------------------------------------|
 | Agent column body      | `github / jira / sentry / file / chat-message`      | Adds a `Mention` to the active session's composer            |
-| Pill (claude / cursor) | Same as above                                        | Spring-loaded menu of instances; drop on row → mention       |
+| Pill (claude)          | Same as above                                        | Spring-loaded menu of instances; drop on row → mention       |
 | Pill (other kinds)     | Nothing — `pillCanAccept` returns false             | Visually rejects the hover                                   |
 | Workbench tab          | Column move (`application/x-woom-column`)       | `moveInstanceToWorkbench(...)` to that workbench             |
 | Canvas surface         | inbox payloads, file payloads, OS files, OS images   | Live card / file card / image shape (see `CANVAS.md §9`)     |
@@ -365,9 +364,8 @@ Order in the bar:
 2. jira (when `connectedJira`).
 3. sentry (when `connectedSentry`).
 4. claude (when `connectedClaude`).
-5. cursor (when `connectedCursor`).
-6. editor (always).
-7. canvas (always).
+5. editor (always).
+6. canvas (always).
 
 A pill renders:
 
@@ -386,8 +384,8 @@ The chevron opens a dropdown listing all instances of that kind across
 all workbenches plus archived ones. Drag a row to focus / move /
 restore.
 
-Spring-loaded drag: hovering with a drag payload over a `claude` /
-`cursor` pill for `PILL_OPEN_DELAY` ms opens the dropdown; leaving for
+Spring-loaded drag: hovering with a drag payload over a `claude`
+pill for `PILL_OPEN_DELAY` ms opens the dropdown; leaving for
 `PILL_CLOSE_DELAY` ms closes it.
 
 ---
@@ -507,7 +505,7 @@ for v1→v3 is:
 ```ts
 const defaults: Record<PanelKind, boolean> = {
   github: true, jira: true,  sentry: false,
-  claude: true, cursor: false,
+  claude: true,
   editor: false, canvas: false
 };
 ```

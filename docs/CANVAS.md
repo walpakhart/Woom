@@ -6,7 +6,7 @@
 (`M-canvas-*`). v0.1 ships without Canvas; this document pins the
 shape of it before any pixel is committed.
 
-> A second-class workbench surface where Claude / Cursor agents and the
+> A second-class workbench surface where Claude agents and the
 > user share a 2D plane and put things on it: diagrams, sketches,
 > live cards (Jira / PR / Sentry / files), code snippets, freehand
 > notes. The agent **sees** the canvas as both a JSON scene graph
@@ -528,7 +528,7 @@ A reference to a file or folder in the user's open repo. Used for
 Click opens in an Editor column instance (linked or floating).
 
 #### `chat-message-card`
-A pinned chat message from a Claude / Cursor session. The card holds a
+A pinned chat message from a Claude session. The card holds a
 copy of the message content + a back-pointer to the session it came
 from. Useful for "this is what the agent decided at step 3".
 ```ts
@@ -639,7 +639,7 @@ position becomes the new shape's center.
 
 Reverse — Canvas as a drag **source**:
 
-- Drag a shape **out** of the canvas onto a Claude / Cursor column →
+- Drag a shape **out** of the canvas onto a Claude column →
   attaches as a `Mention` (the mention payload includes the shape's id,
   kind, label, and a small JSON snapshot of its props). The agent sees
   it the same way it sees any other mention.
@@ -658,7 +658,7 @@ The crux. Three things to spec: (a) how the agent **reads** the canvas;
 
 ### 10.1 The link
 
-A Claude / Cursor session can be linked to **at most one** canvas (per
+A Claude session can be linked to **at most one** canvas (per
 session). Linking happens by:
 
 - Drag the canvas-column instance pill onto the agent column's "link
@@ -719,7 +719,7 @@ Sub-pixel positions, exact w/h, all metadata. The agent uses this for
 #### b) Screenshot — `canvas.screenshot(opts?)`
 
 Returns a base64 PNG via the existing tool-result image-input channel
-(Claude / Cursor both support image inputs):
+(Claude supports image inputs):
 
 ```ts
 canvas.screenshot({
@@ -1155,7 +1155,7 @@ Suggested milestones, sized for one engineer.
 ### M-canvas-8 — Agent vision channel (3 days)
 
 - `canvas.screenshot` implementation (off-screen render).
-- Plug into the existing image-input path used by Cursor / Claude
+- Plug into the existing image-input path used by Claude
   ([applyToAgent.ts](../apps/desktop/src/lib/services/applyToAgent.ts) /
   [agentContext.ts](../apps/desktop/src/lib/services/agentContext.ts)).
 - Round-trip test: agent reads, draws, screenshots, refines.

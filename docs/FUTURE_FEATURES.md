@@ -342,8 +342,9 @@ modes of agent operation.
 
 ### C.7 Multi-agent orchestration
 
-- **Pitch:** "Claude, ask Cursor to compile this and report errors."
-  Two agents collaborate via a shared MCP channel.
+- **Pitch:** "Claude, ask the agent in the other column to compile
+  this and report errors." Two agent sessions collaborate via a
+  shared MCP channel.
 - **Anatomy:** A new `mcp__app__ask_agent(instance_name, prompt)` tool
   that posts a message to another agent's chat and streams the result
   back.

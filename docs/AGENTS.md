@@ -1,14 +1,14 @@
-# Woom — Agents (Claude / Cursor) Specification
+# Woom — Agents (Claude) Specification
 
 **Version:** 0.1
 **Last updated:** 2026-04-29
-**Status:** describes shipping behaviour. Two agent kinds are in
-production today (`claude`, `cursor`). Codex / Aider / Copilot exist
+**Status:** describes shipping behaviour. One agent kind is in
+production today (`claude`). Codex / Aider / Copilot exist
 in the connections list as `implemented: false` placeholders only.
 
 > Agent columns are how Woom talks to coding LLMs. Each column is
 > a viewing window on a single conversation with a CLI-driven agent —
-> Claude Code or Cursor Agent — whose stdout is parsed live into a
+> Claude Code — whose stdout is parsed live into a
 > structured stream of text, tool traces, edit cards, and proposed
 > actions. The column owns no model state; it's a render of the global
 > session list scoped to one `agentKind`. The cwd binding to an Editor
@@ -21,8 +21,8 @@ in the connections list as `implemented: false` placeholders only.
 
 ### 1.1 Vision
 
-LLM coding tools are CLIs at heart. `claude` and `cursor-agent` both
-print streamed JSONL on stdout, and that's what Woom renders.
+LLM coding tools are CLIs at heart. `claude` prints streamed JSONL
+on stdout, and that's what Woom renders.
 Three things matter:
 
 1. **Structure the stream.** Raw stdout is unreadable. We parse every
@@ -37,7 +37,7 @@ Three things matter:
 
 ### 1.2 Goals (v1, shipping)
 
-1. Run `claude` and `cursor-agent` as Tauri sidecars; stream stdout
+1. Run `claude` as a Tauri sidecar; stream stdout
    to the UI; allow stop / resume / compact.
 2. Persist all sessions to `localStorage` with `cwd`, `linkedToEditor`,
    `worktreePath`, `linkedCanvasId`, message history, mentions.
@@ -75,8 +75,8 @@ Three things matter:
 ## 2. Supported Agent Kinds
 
 The `agentKind` enum in `apps/desktop/src/lib/types.ts:226` is
-**`'claude' | 'cursor'`**. The corresponding `PanelKind`s are
-`'claude'` and `'cursor'`. `Codex`, `Aider`, `Copilot` show in
+**`'claude'`**. The corresponding `PanelKind` is
+`'claude'`. `Codex`, `Aider`, `Copilot` show in
 `connectionsMeta` (`apps/desktop/src/lib/data.ts:45-56`) with
 `implemented: false` so they appear in the Connect modal as roadmap
 chips, but no column / sidecar exists for them.
@@ -85,7 +85,7 @@ The Rust side mirrors this:
 
 ```rust
 // apps/desktop/src-tauri/src/agent.rs
-pub enum AgentKind { Claude, Cursor }
+pub enum AgentKind { Claude }
 ```
 
 The MCP descriptor folder names use the `woom-` prefix and have
@@ -195,10 +195,8 @@ let event_name = format!("claude:stream:{}", session_id);
 let _ = app.emit(&event_name, &line);
 ```
 
-Both Claude (`apps/desktop/src-tauri/src/claude.rs:407-411`) and Cursor
-(`apps/desktop/src-tauri/src/cursor.rs:224-226`) use this same channel
-name — once the Rust adapter has normalised the line, the frontend
-doesn't care which CLI produced it. There is one event per line.
+Claude (`apps/desktop/src-tauri/src/claude.rs:407-411`) emits on this
+channel. There is one event per line.
 
 ### 5.2 Frontend pipeline
 
@@ -225,11 +223,6 @@ unlisten = await listen<string>(`claude:stream:${req.sessionId}`, (event) => {
 - Intercepts `mcp__app__*` navigation tools → routes to UI handlers
   (`open_github_pr`, `set_editor_repo_path`, etc.) without surfacing
   in chat.
-
-### 5.3 Backpressure / re-entry
-
-Cursor's stream is deduped against re-emit storms by
-`cursor.rs:228-233` (a small ring of recently-seen line hashes).
 
 ---
 
@@ -271,7 +264,7 @@ Buttons:
 - No three-way merge with the user's own edits in the editor (CodeMirror
   diff is read-only). If the user edits the file between agent write
   and Revert, Revert wins.
-- No deferred apply — Claude / Cursor CLIs already write to disk before
+- No deferred apply — the Claude CLI already writes to disk before
   emitting the tool result. We intercept *after the fact*.
 
 ---
@@ -354,7 +347,7 @@ type Mention =
 Mentions are added by:
 
 - **Drag drop** onto the column body — `onAgentDrop` in `+page.svelte:834-875`.
-- **Drag drop** onto a pill of kind `claude` / `cursor` — `pillCanAccept`,
+- **Drag drop** onto a pill of kind `claude` — `pillCanAccept`,
   `onPillDrop`. Other pill kinds reject the drop.
 - **`@`-typing** in the composer (file completion via `fs_list_dir`).
 - **"Apply to agent"** from the Editor column — see [`EDITOR.md §9`](EDITOR.md#9-apply-to-agent).
@@ -376,8 +369,8 @@ if (mentionsSnapshot.length) {
 `onPasteImages` and `attachBlobsToSession` (paths in
 `apps/desktop/src/lib/state/sessions.svelte.ts` and
 `AgentColumn.svelte`) write image data to a temp folder and attach
-`{ path, name }[]` to the user message. Both Claude and Cursor CLIs
-ingest images via their image-input flag.
+`{ path, name }[]` to the user message. The Claude CLI
+ingests images via its image-input flag.
 
 ### 8.3 Send hotkeys
 
@@ -398,8 +391,8 @@ checks.
 ### 8.4 Slash commands
 
 There is **no** structured slash-command parser in v1. Anything starting
-with `/` goes through to the agent verbatim. Claude Code and Cursor
-both define their own slash commands which stay invisible to Woom.
+with `/` goes through to the agent verbatim. Claude Code
+defines its own slash commands which stay invisible to Woom.
 
 ---
 
@@ -469,8 +462,7 @@ pub enum ToolProfile { All, Coding, Github, Jira, Sentry, Triage }
 ```
 
 Each profile defines an allow-list of `mcp__*__*` tool name patterns;
-the rest are dropped from the `--allowedTools` list passed to Claude
-or filtered server-side for Cursor.
+the rest are dropped from the `--allowedTools` list passed to Claude.
 
 The agent context preamble (`apps/desktop/src/lib/services/agentContext.ts`)
 documents the `mcp__app__set_editor_repo_path` / `mcp__app__set_agent_cwd`
@@ -504,26 +496,7 @@ claude_stop(session_id)
 
 Exact spawn at `claude.rs:694-705`.
 
-### 12.2 Cursor
-
-`apps/desktop/src-tauri/src/cursor.rs:152-177`:
-
-```rust
-cmd.arg("--print")
-   .arg("--output-format").arg("stream-json")
-   .arg("--stream-partial-output")
-   .arg("--resume").arg(&chat_id)
-   .arg("--force")
-   .arg("--approve-mcps")
-   .arg("--trust");
-if let Some(model) = ... { cmd.arg("--model").arg(model); }
-if let Some(workspace) = ... { cmd.arg("--workspace").arg(workspace); }
-cmd.current_dir(cwd);
-```
-
-Same `Runners` registry, same `claude:stream:{id}` channel post-normalize.
-
-### 12.3 Bin discovery
+### 12.2 Bin discovery
 
 `agent.rs::resolve_bin(kind)` walks `$PATH` and falls back to a few
 canonical install locations (e.g. Anthropic's installer drop). If
@@ -653,9 +626,8 @@ the string in old comments, it's stale.
 
 ## 20. Glossary
 
-- **Agent column** — a workbench column of `kind === 'claude' | 'cursor'`.
-- **Session** — `ClaudeSession`, the conversation object — name kept for
-  historical reasons, applies to both kinds.
+- **Agent column** — a workbench column of `kind === 'claude'`.
+- **Session** — `ClaudeSession`, the conversation object.
 - **Edit card** — UI for an `Edit` / `Write` / `MultiEdit` / `Delete`
   tool result. Lives inside the assistant message.
 - **Action card** — UI for a `propose_*` tool call awaiting user OK.
@@ -665,6 +637,6 @@ the string in old comments, it's stale.
   whenever the agent's cwd changed since the last turn, so the model
   notices the move.
 - **`claude:stream:{id}`** — the single Tauri event channel for
-  per-session stdout (used by both Claude and Cursor sidecars).
+  per-session stdout (used by the Claude sidecar).
 - **`ToolProfile`** — Rust enum that filters which MCP tools the agent
   is allowed to invoke this session.
