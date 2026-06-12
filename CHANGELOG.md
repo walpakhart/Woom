@@ -8,6 +8,32 @@ release runbook (how this CHANGELOG feeds `latest-mac.json`) lives in
 
 ## Unreleased
 
+## 0.4.5 — 2026-06-12
+
+Bumps version 0.4.4 → 0.4.5 across `apps/desktop/package.json`,
+`apps/desktop/src-tauri/Cargo.toml`, `apps/desktop/src-tauri/tauri.conf.json`,
+`apps/desktop/src-tauri/Cargo.lock`.
+
+### Added
+
+- **Background tasks wake their agent** — `bg_spawn` tasks tagged with
+  the owning session now auto-resume the chat with the log tail when
+  they exit, same as Claude CLI background tasks. No more silent
+  finishes in the Preview pane.
+
+### Fixed
+
+- **Editor restores the last-focused tab** after leaving and returning
+  to the editor solo — the active-tab memory was being erased on mount
+  before the restore could read it.
+- **Chat file links actually open the editor** — clicking a file path
+  on an edit card or in message markdown opens it in the session's
+  linked editor; relative paths (`apps/desktop/src/...`) resolve
+  against the session repo, `+page.svelte`-style names are clickable,
+  and dead/truncated paths show a toast instead of an editor error tab.
+- **Edit-card paths render repo-relative** with the full path in the
+  tooltip; expanded diffs get always-visible scrollbars.
+
 ## 0.4.4 — 2026-06-11
 
 Bumps version 0.4.3 → 0.4.4 across `apps/desktop/package.json`,
