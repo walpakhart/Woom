@@ -388,9 +388,11 @@
                   {:else if row.event.wholeFile}Write
                   {:else}Edit{/if}
                 </span>
-                <span class="rp-row-agent rp-row-agent--claude" title="From {row.sessionTitle}">
-                  C
-                </span>
+                {#if p.linkedAgents.length > 1}
+                  <span class="rp-row-agent rp-row-agent--claude" title="From {row.sessionTitle}">
+                    C
+                  </span>
+                {/if}
                 {#if row.event.status === 'loading'}
                   <span class="rp-row-streaming mono">streaming…</span>
                 {/if}
@@ -400,10 +402,18 @@
                   <span class="rp-rem">−{row.stats.rem}</span>
                 </span>
                 <span class="rp-row-actions">
-                  <button class="rp-act" onclick={(e) => { e.stopPropagation(); openSelected(row); }} title="Open (Enter / o)">Open</button>
-                  <button class="rp-act" onclick={(e) => { e.stopPropagation(); refineRow(row); }} title="Refine (e)">Refine</button>
-                  <button class="rp-act" disabled={busy} onclick={(e) => { e.stopPropagation(); void revertRow(row); }} title={row.event.isDelete ? 'Restore (r)' : 'Revert (r)'}>{row.event.isDelete ? 'Restore' : 'Revert'}</button>
-                  <button class="rp-act rp-act--primary" disabled={busy} onclick={(e) => { e.stopPropagation(); keepRow(row); }} title="Keep (a)">Keep</button>
+                  <button class="rp-act" aria-label="Open" onclick={(e) => { e.stopPropagation(); openSelected(row); }} title="Open (Enter / o)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17L17 7M9 7h8v8"/></svg>
+                  </button>
+                  <button class="rp-act" aria-label="Refine" onclick={(e) => { e.stopPropagation(); refineRow(row); }} title="Refine (e)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+                  </button>
+                  <button class="rp-act" aria-label={row.event.isDelete ? 'Restore' : 'Revert'} disabled={busy} onclick={(e) => { e.stopPropagation(); void revertRow(row); }} title={row.event.isDelete ? 'Restore (r)' : 'Revert (r)'}>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 2.6-6.4"/><path d="M3 4v5h5"/></svg>
+                  </button>
+                  <button class="rp-act rp-act--primary" aria-label="Keep" disabled={busy} onclick={(e) => { e.stopPropagation(); keepRow(row); }} title="Keep (a)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 7"/></svg>
+                  </button>
                 </span>
               </div>
             {/each}
@@ -467,7 +477,7 @@
     border-bottom: 1px solid var(--border);
   }
   .rp-bar-count { font-size: 11.5px; color: var(--text-1); font-weight: 600; }
-  .rp-bar-stats { display: flex; gap: 6px; font-size: 11px; }
+  .rp-bar-stats { display: flex; gap: 6px; font-size: 11.5px; font-weight: 600; }
   .rp-bar-spacer { flex: 1; }
   .rp-bar-btn {
     padding: 4px 10px;
@@ -566,7 +576,7 @@
     color: var(--text-1);
     font-size: 10px; font-weight: 700;
   }
-  .rp-group-stats { display: flex; gap: 6px; font-size: 10.5px; flex: 0 0 auto; }
+  .rp-group-stats { display: flex; gap: 6px; font-size: 11px; font-weight: 600; flex: 0 0 auto; }
 
   /* Row — one compact line, nested under its file header. Separated by
      hairlines; actions hidden until hover / selection. */
@@ -624,12 +634,17 @@
 
   .rp-row-streaming { font-size: 10px; color: var(--accent-bright); flex: 0 0 auto; }
   .rp-row-spacer { flex: 1; }
-  .rp-row-stats { display: flex; gap: 6px; font-size: 10.5px; flex: 0 0 auto; }
+  /* Stats stay readable at a glance — the prior 10.5px regular-weight
+     rendering washed out against the dark row ("цифры бледные"). */
+  .rp-row-stats { display: flex; gap: 6px; font-size: 11px; font-weight: 600; flex: 0 0 auto; }
   .rp-add { color: var(--diff-add); }
   .rp-rem { color: var(--diff-rem); }
 
+  /* Icon-only actions — four text buttons overflowed the narrow sidebar
+     and clipped ("Rever"). 22px icon squares always fit; tooltips +
+     aria-labels carry the verb. */
   .rp-row-actions {
-    display: flex; gap: 5px;
+    display: flex; gap: 3px;
     flex: 0 0 auto;
     opacity: 0;
     pointer-events: none;
@@ -641,16 +656,18 @@
     pointer-events: auto;
   }
   .rp-act {
-    padding: 2px 8px;
+    width: 22px; height: 20px;
+    padding: 0;
+    display: grid; place-items: center;
     background: var(--bg-1);
     border: 1px solid var(--border-neutral-hi, var(--border));
-    color: var(--text-0);
+    color: var(--text-1);
     border-radius: 4px;
-    font-size: 10.5px;
     cursor: pointer;
     transition: color 120ms, border-color 120ms, background 120ms;
   }
-  .rp-act:hover { border-color: var(--accent); background: var(--bg-3, var(--bg-2)); }
+  .rp-act svg { width: 13px; height: 13px; }
+  .rp-act:hover { color: var(--text-0); border-color: var(--accent); background: var(--bg-3, var(--bg-2)); }
   .rp-act:disabled { opacity: 0.45; cursor: not-allowed; }
   .rp-act--primary {
     color: var(--accent-bright);

@@ -541,7 +541,8 @@
       sessionId: p.sessionId,
       toolId: p.event.toolId,
       oldText: p.event.oldText,
-      newText: p.event.newText
+      newText: p.event.newText,
+      wholeFile: p.event.wholeFile ?? false
     }))
   );
 

@@ -94,7 +94,16 @@
      *  path by EditorView). Each carries the full-file `oldText`/`newText`;
      *  we diff them into hunks and render an inline overlay (adds
      *  highlighted, deletes ghosted). Empty / omitted → no overlay. */
-    pendingEdits?: { sessionId: string; toolId: string; oldText: string; newText: string }[];
+    pendingEdits?: {
+      sessionId: string;
+      toolId: string;
+      oldText: string;
+      newText: string;
+      /** True for full-file edits (Write) where oldText/newText are the
+       *  whole document. False for Edit/MultiEdit snippets, which must be
+       *  anchored at their real position in the buffer before rendering. */
+      wholeFile?: boolean;
+    }[];
     /** Fires once `load()` has read the file and built the view, with the
      *  loaded path. Lets the parent drive a post-load `goToLine` (e.g. the
      *  Review pane scrolling to an edit's first hunk) without racing the
@@ -550,6 +559,31 @@
      With STACKED edits there's no single coherent new-side, so we fall back
      to each edit's own frozen newText — multi-edit refinement is deferred
      (P4) and already documented as approximate. */
+  /** 1-based line number containing string index `idx`. */
+  function lineOfIndex(text: string, idx: number): number {
+    let line = 1;
+    for (let i = 0; i < idx; i++) if (text.charCodeAt(i) === 10) line++;
+    return line;
+  }
+
+  /** Anchor a snippet edit inside the live buffer: the new side is what's
+   *  on disk after the edit applied (normal case); the old side matches
+   *  when the edit was reverted or not yet applied. Returns the 1-based
+   *  line where the snippet begins, or null when neither side is present
+   *  (buffer drifted) — in which case we render nothing rather than
+   *  painting the hunk at line 1. */
+  function anchorSnippet(live: string, newText: string, oldText: string): number | null {
+    if (newText) {
+      const idx = live.indexOf(newText);
+      if (idx >= 0) return lineOfIndex(live, idx);
+    }
+    if (oldText) {
+      const idx = live.indexOf(oldText);
+      if (idx >= 0) return lineOfIndex(live, idx);
+    }
+    return null;
+  }
+
   $effect(() => {
     // Track dependencies explicitly.
     const edits = pendingEdits;
@@ -572,21 +606,43 @@
          collide when several edits stack on one file (two edits both anchor a
          hunk at old line 5), which cross-assigned owners and piled overlapping
          decorations. Namespacing keeps each edit's hunks distinct + stable. */
+      const frozen = computeHunks(e.oldText, e.newText);
       const ids: string[] = [];
-      for (const h of computeHunks(e.oldText, e.newText)) {
+      for (const h of frozen) {
         const nid = `${key}#${h.id}`;
         ids.push(nid);
         owners.set(nid, { sessionId: e.sessionId, toolId: e.toolId });
       }
       byEdit.set(key, ids);
-      /* Geometry to render + revert: for a single edit, diff against the live
-         buffer so a prior reject's line-count change is reflected exactly;
-         resolved hunks are filtered out (rejected ones also drop from the
-         live diff naturally, accepted ones are suppressed here). */
-      const newSide = singleEdit ? liveText : e.newText;
-      for (const h of computeHunks(e.oldText, newSide)) {
-        const nid = `${key}#${h.id}`;
-        if (!resolvedHunkIds.has(nid)) merged.push({ ...h, id: nid });
+      if (e.wholeFile) {
+        /* Whole-file edit (Write): oldText/newText ARE the document, so
+           hunk coordinates are already file-absolute. For a single edit,
+           diff against the live buffer so a prior reject's line-count
+           change is reflected exactly; resolved hunks are filtered out. */
+        const newSide = singleEdit ? liveText : e.newText;
+        for (const h of computeHunks(e.oldText, newSide)) {
+          const nid = `${key}#${h.id}`;
+          if (!resolvedHunkIds.has(nid)) merged.push({ ...h, id: nid });
+        }
+      } else {
+        /* Snippet edit (Edit/MultiEdit): oldText/newText are fragments —
+           diffing them yields snippet-relative line numbers (1..n), which
+           painted hunks at the TOP of the file regardless of where the
+           edit landed. Locate the snippet in the live buffer and offset
+           every hunk to its real position; if the snippet can't be found
+           (buffer drifted past both sides), skip rendering entirely. */
+        const anchor = anchorSnippet(liveText, e.newText, e.oldText);
+        if (anchor == null) continue;
+        for (const h of frozen) {
+          const nid = `${key}#${h.id}`;
+          if (resolvedHunkIds.has(nid)) continue;
+          merged.push({
+            ...h,
+            id: nid,
+            oldStart: h.oldStart + anchor - 1,
+            newStart: h.newStart + anchor - 1
+          });
+        }
       }
     }
     hunkOwners = owners;
