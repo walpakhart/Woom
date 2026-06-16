@@ -33,7 +33,7 @@ import { skillsState, renderSkill } from '$lib/state/skills.svelte';
 import type { ClaudeSession } from '$lib/types';
 
 export interface SlashCommandDeps {
-  sendClaudeMessage(opts?: { silent?: boolean; kind?: 'claude' }): Promise<void>;
+  sendClaudeMessage(opts?: { silent?: boolean; kind?: 'claude'; prompt?: string }): Promise<void>;
   scrollChatBottom(): Promise<void> | void;
   runCompactSession(sessionId: string): Promise<void>;
 }
@@ -307,7 +307,8 @@ export async function runDwFromSlash(
     `2. mcp__app__dw_add_subagent — workflowId "${workflowId}", one self-contained prompt per slice (call repeatedly). Spell out what to investigate/change + what to report.\n` +
     `3. mcp__app__dw_launch — workflowId "${workflowId}" once all slices are added.\n` +
     `Use read-only tools for the survey. Keep it tight — no long preamble, just build it.`;
-  updateSession(session.id, { input: brief });
-  await Promise.resolve();
-  await deps.sendClaudeMessage({ silent: true });
+  // Programmatic send via `prompt` (NOT updateSession({ input })): the
+  // brief is hidden orchestration traffic and must not clobber whatever
+  // the user is typing in the composer (architecture rule, commit 24ffc4c).
+  await deps.sendClaudeMessage({ silent: true, prompt: brief });
 }

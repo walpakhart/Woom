@@ -577,6 +577,46 @@ fn walk_size(p: &Path) -> u64 {
 /// Branch name: `woom/dw-<wf>-<sub>`. Path: `<storage_root>/dw/<wf>/<sub>/`.
 /// Sequential creation only — `git worktree add` takes a repo-level
 /// lock; running 20 in parallel deadlocks.
+/// Make `repo_path` capable of hosting `git worktree add … HEAD`:
+/// `git init` when it isn't a repo yet (DW launched on a plain folder),
+/// then an empty initial commit when HEAD is unborn (repo with zero
+/// commits). Idempotent. Without this, fan-out on a non-repo folder or
+/// an empty repo fails EVERY subagent with `not a git repository` /
+/// `invalid reference: HEAD` — they come back $0 with no output.
+fn ensure_worktree_base(repo_path: &str) -> Result<(), String> {
+    let succeeds = |args: &[&str]| {
+        let mut c = git(repo_path);
+        c.args(args);
+        c.output().map(|o| o.status.success()).unwrap_or(false)
+    };
+    if !succeeds(&["rev-parse", "--git-dir"]) {
+        let mut init = git(repo_path);
+        init.args(["init"]);
+        run(init)?;
+    }
+    if !succeeds(&["rev-parse", "--verify", "-q", "HEAD"]) {
+        let mut commit = git(repo_path);
+        commit.args(["commit", "--allow-empty", "-m", "woom: initialize repository"]);
+        if run(commit).is_err() {
+            // Fresh repo with no git identity configured — supply a fallback
+            // so the bootstrap commit doesn't die with "tell me who you are".
+            let mut commit = git(repo_path);
+            commit.args([
+                "-c",
+                "user.name=Woom",
+                "-c",
+                "user.email=woom@local",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "woom: initialize repository",
+            ]);
+            run(commit)?;
+        }
+    }
+    Ok(())
+}
+
 pub fn create_for_subagent(
     repo_path: &str,
     workflow_id: &str,
@@ -597,6 +637,8 @@ pub fn create_for_subagent(
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("create subagent worktree parent: {}", e))?;
     }
+
+    ensure_worktree_base(repo_path)?;
 
     let mut cmd = git(repo_path);
     cmd.args([

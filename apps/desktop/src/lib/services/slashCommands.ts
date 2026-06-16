@@ -105,7 +105,10 @@ export function parseSlashCommandWithArgs(
 ): { name: SlashCommand; args: string } | null {
   const trimmed = input.trim();
   if (!trimmed.startsWith('/')) return null;
-  const m = /^\/([a-z]+)\s+(.+)$/i.exec(trimmed);
+  // `s` flag: args may span multiple lines (e.g. a multi-paragraph
+  // `/dw` brief). Without it `.` stops at the first `\n` and the `$`
+  // anchor fails, so the whole command silently falls through to the CLI.
+  const m = /^\/([a-z]+)\s+(.+)$/is.exec(trimmed);
   if (!m) return null;
   const name = m[1].toLowerCase() as SlashCommand;
   if (!KNOWN_SLASH_COMMANDS.includes(name)) return null;

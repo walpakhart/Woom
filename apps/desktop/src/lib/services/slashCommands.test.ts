@@ -83,4 +83,15 @@ describe('parseSlashCommandWithArgs', () => {
   it('returns null for unknown commands', () => {
     expect(parseSlashCommandWithArgs('/foo bar')).toBeNull();
   });
+
+  it('matches multi-line args (multi-paragraph /dw or /sdd briefs)', () => {
+    /* Regression: without the `s` flag the args group stopped at the
+     *  first newline and the `$` anchor failed, so a multi-line brief
+     *  silently fell through to the CLI instead of triggering DW/SDD. */
+    const brief = 'build a portal\n\nfirst module is docs\nthen more modules';
+    expect(parseSlashCommandWithArgs(`/dw ${brief}`))
+      .toEqual({ name: 'dw', args: brief });
+    expect(parseSlashCommandWithArgs(`/sdd line one\nline two`))
+      .toEqual({ name: 'sdd', args: 'line one\nline two' });
+  });
 });

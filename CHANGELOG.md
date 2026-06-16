@@ -8,6 +8,26 @@ release runbook (how this CHANGELOG feeds `latest-mac.json`) lives in
 
 ## Unreleased
 
+## 0.4.7 — 2026-06-16
+
+Bumps version 0.4.6 → 0.4.7 across `apps/desktop/package.json`,
+`apps/desktop/src-tauri/Cargo.toml`, `apps/desktop/src-tauri/tauri.conf.json`,
+`apps/desktop/src-tauri/Cargo.lock`.
+
+### Fixed
+
+- **DW fan-out no longer fails with $0 / empty results on fresh or
+  non-repo folders** — subagents run in `git worktree add … HEAD`, which
+  dies on an unborn HEAD (repo with `.git` but zero commits) or a plain
+  folder (no `.git`). A new `ensure_worktree_base` `git init`s the folder
+  and lays down an empty initial commit before the worktree add.
+- **`/dw` and `/sdd` slash commands fire on multi-line prompts** — the
+  parser regex lacked the `s` flag, so any newline in the argument made
+  the command fall through to the raw CLI ("Unknown command").
+- **DW build-brief no longer leaks into the chat** — it now goes through
+  the `opts.prompt` programmatic channel instead of `updateSession({ input })`,
+  which also stops it clobbering the user's composer draft.
+
 ## 0.4.6 — 2026-06-12
 
 Bumps version 0.4.5 → 0.4.6 across `apps/desktop/package.json`,
