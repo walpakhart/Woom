@@ -50,7 +50,7 @@
     "codemirror": "^6.0.2",
     "d3-dag": "^1.2.1",
     "diff": "^9.0.0",
-    "dompurify": "^3.4.7",
+    "dompurify": "^3.4.9",
     "marked": "^18.0.2",
     "mermaid": "^11.15.0",
     "perfect-freehand": "^1.2.3"
