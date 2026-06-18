@@ -8,6 +8,41 @@ release runbook (how this CHANGELOG feeds `latest-mac.json`) lives in
 
 ## Unreleased
 
+## 0.4.8 — 2026-06-18
+
+Bumps version 0.4.7 → 0.4.8 across `apps/desktop/package.json`,
+`apps/desktop/src-tauri/Cargo.toml`, `apps/desktop/src-tauri/tauri.conf.json`,
+`apps/desktop/src-tauri/Cargo.lock`.
+
+### Fixed
+
+- **Two chats no longer cross their working directories** — the agent
+  send + resume paths fell back to the *focused* editor's repo path when
+  a session carried no explicit cwd, so a second chat could spawn the
+  agent in the first chat's repo. cwd now resolves from the session's
+  OWN linked editor (new `resolveSessionCwd`); the focused-editor
+  fallback only applies to unlinked, cwd-less sessions.
+- **Terminal renders on first open** — the surface could open xterm and
+  build its WebGL glyph atlas while the host was still 0×0, leaving a
+  blank terminal until a view-switch forced a remount. It now waits
+  (bounded) for real layout before opening.
+- **Terminal teardown no longer glitches the app** — a PTY output/exit
+  event arriving during unmount could write into a disposed xterm.
+  Writes now guard the teardown flag and swallow disposed-terminal
+  errors.
+- **Chat scroll no longer janks while the agent streams** — the
+  streaming message re-parsed its entire markdown body on every delta
+  (O(n²) on the growing text), saturating the main thread. Markdown
+  re-parsing is now throttled (~80ms) with a trailing parse so the final
+  content always lands; one-shot renders are unaffected.
+
+### Added
+
+- **New File / New Folder in the editor file tree** — right-click → New
+  File… / New Folder… with an inline naming row; backed by new
+  `fs_create_file` / `fs_create_dir` commands (refuse to overwrite,
+  create missing parents). Rename already covered files + folders.
+
 ## 0.4.7 — 2026-06-16
 
 Bumps version 0.4.6 → 0.4.7 across `apps/desktop/package.json`,

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { marked } from 'marked';
+  import { onDestroy } from 'svelte';
   import { openUrl } from '@tauri-apps/plugin-opener';
   import { sanitizeMarkdownHtml } from '$lib/markdownSafe';
 
@@ -110,10 +111,44 @@
     return `<pre class="diff-block">${codeOpenTag}${decorated}</code></pre>`;
   }
 
+  /* Throttle markdown re-parsing during rapid streaming. `marked.parse`
+   * plus the regex decoration passes below run over the FULL source on
+   * every change; for the actively-streaming assistant message that's
+   * O(n²) on growing text and was a main-thread hog behind chat scroll
+   * jank. We parse a throttled mirror of `source`; a trailing timer
+   * guarantees the final content always lands. The first change is never
+   * throttled, so one-shot (non-streaming) callers parse immediately. */
+  let parseSource = $state('');
+  let lastParseAt = 0;
+  let trailingTimer: ReturnType<typeof setTimeout> | null = null;
+  const PARSE_THROTTLE_MS = 80;
+
+  $effect(() => {
+    const s = source;
+    const now = performance.now();
+    const elapsed = now - lastParseAt;
+    if (elapsed >= PARSE_THROTTLE_MS) {
+      if (trailingTimer) { clearTimeout(trailingTimer); trailingTimer = null; }
+      lastParseAt = now;
+      parseSource = s;
+    } else {
+      if (trailingTimer) clearTimeout(trailingTimer);
+      trailingTimer = setTimeout(() => {
+        lastParseAt = performance.now();
+        parseSource = source;
+        trailingTimer = null;
+      }, PARSE_THROTTLE_MS - elapsed);
+    }
+  });
+
+  onDestroy(() => {
+    if (trailingTimer) clearTimeout(trailingTimer);
+  });
+
   const html = $derived.by(() => {
-    if (!source) return '';
+    if (!parseSource) return '';
     try {
-      const raw = marked.parse(source, { async: false }) as string;
+      const raw = marked.parse(parseSource, { async: false }) as string;
 
       /* Stash `<pre>...</pre>` blocks (full code listings) so the
          single-token file detector below doesn't accidentally tag
@@ -160,7 +195,7 @@
       const restored = withMentions.replace(/PRE_(\d+)/g, (_, idx: string) => preBlocks[Number(idx)] ?? '');
       return sanitizeMarkdownHtml(restored);
     } catch {
-      return source;
+      return parseSource;
     }
   });
 

@@ -44,6 +44,30 @@ export function extractCompactSummary(messages: ClaudeMessage[]): string | null 
   return null;
 }
 
+/** Resolve the working directory for a session at send / spawn time.
+ *  Priority: explicit worktree → explicit cwd → the session's OWN linked
+ *  editor's repoPath → caller-supplied focused-editor fallback.
+ *
+ *  Reading the session's OWN linked editor (never the globally-focused
+ *  editor) is load-bearing for multi-chat safety: with two chats linked
+ *  to two different editors, the send path must not resolve cwd off
+ *  whichever editor happens to be focused — otherwise a cwd-less session
+ *  B can spawn the agent in session A's repo. The focused-editor fallback
+ *  only applies to UNLINKED sessions that carry no cwd of their own. */
+export function resolveSessionCwd(
+  sess: ClaudeSession | null | undefined,
+  fallbackEditorRepoPath: string | null = null
+): string | null {
+  if (!sess) return fallbackEditorRepoPath || null;
+  if (sess.worktreePath) return sess.worktreePath;
+  if (sess.cwd) return sess.cwd;
+  if (sess.linkedToEditor && sess.linkedToEditorInstanceId) {
+    const linked = sessionsState.editorInstanceState[sess.linkedToEditorInstanceId]?.repoPath;
+    if (linked) return linked;
+  }
+  return fallbackEditorRepoPath || null;
+}
+
 /** Bound the per-session cwd→uuid memory. Hopping between many projects in
  *  one chat would otherwise grow the map without limit, bloating the
  *  serialized session JSON on every flush. JS object property order is

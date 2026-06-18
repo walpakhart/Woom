@@ -29,7 +29,7 @@ import {
   setAwaitingResume,
   updateSession,
 } from '$lib/state/sessions.svelte';
-import { applySessionCwd, buildContinuationRecap } from '$lib/services/sessionCwd';
+import { applySessionCwd, buildContinuationRecap, resolveSessionCwd } from '$lib/services/sessionCwd';
 import { buildFirstTurnPreamble, getActiveEditorFile } from '$lib/services/firstTurnContext';
 import { buildAgentAppContext } from '$lib/services/agentContext';
 import { saveCanvasScreenshot } from '$lib/services/canvasScreenshot';
@@ -288,7 +288,7 @@ export function createSendClaudeMessage(deps: SendClaudeMessageDeps) {
       prompt = `${block}\n\n---\n\n${prompt}`;
     }
 
-    const cwd = sess?.worktreePath || sess?.cwd || deps.getEditorRepoPath() || null;
+    const cwd = resolveSessionCwd(sess, deps.getEditorRepoPath());
     const claudeUuid = sess?.claudeUuid ?? genUuid();
     const resume = Boolean(sess?.claudeResumable);
     const rules = sessionsState.userRules.trim();

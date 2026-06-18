@@ -21,6 +21,7 @@ import {
 import { quotaState, nextResetAt } from '$lib/state/quota.svelte';
 import { openQuotaPauseModal } from '$lib/state/modals.svelte';
 import { buildAgentAppContext } from '$lib/services/agentContext';
+import { resolveSessionCwd } from '$lib/services/sessionCwd';
 import { runAgentRequest } from '$lib/exec/claude';
 import { dispatchAction } from '$lib/exec/actions';
 import { notifyError } from '$lib/state/toaster.svelte';
@@ -185,7 +186,7 @@ export async function continueAgentTurn(
   const runStartedAt = Date.now();
   void deps.scrollChatBottom();
 
-  const cwd = sess.worktreePath || sess.cwd || deps.getEditorRepoPath() || null;
+  const cwd = resolveSessionCwd(sess, deps.getEditorRepoPath());
   const claudeUuid = sess.claudeUuid;
   const resume = Boolean(sess.claudeResumable);
   const rules = sessionsState.userRules.trim();

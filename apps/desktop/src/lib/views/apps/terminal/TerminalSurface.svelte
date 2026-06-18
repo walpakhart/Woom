@@ -128,11 +128,20 @@
    * mangle control bytes if we shipped raw text).
    */
   function writeChunk(b64: string) {
-    if (!term) return;
+    // `destroyed` guard closes the teardown race: a PTY output/exit
+    // event can fire after onDestroy disposed xterm but before its
+    // listener fully detached — writing into a disposed terminal throws
+    // and glitches the app. Bail + try/catch so a torn-down surface
+    // silently drops the chunk.
+    if (!term || destroyed) return;
     const bin = atob(b64);
     const bytes = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    term.write(bytes);
+    try {
+      term.write(bytes);
+    } catch {
+      /* xterm disposed mid-flight or WebGL context lost — drop it. */
+    }
   }
 
   /** Pack a UTF-8 string back into base64 for the Rust side. */
@@ -184,6 +193,16 @@
        first measurement spawns the PTY with bogus cols/rows. */
     await new Promise(requestAnimationFrame);
     if (destroyed || !host) return;
+
+    /* First mount of the terminal solo can paint before its flex/grid
+       layout settles, leaving `host` at 0×0. Opening xterm + building the
+       WebGL glyph atlas at 0-size renders a blank terminal that only
+       heals on a later resize — exactly the "empty until I switch away
+       and come back" bug. Wait (bounded) for real layout before open. */
+    for (let tries = 0; (host.clientWidth === 0 || host.clientHeight === 0) && tries < 30; tries++) {
+      await new Promise(requestAnimationFrame);
+      if (destroyed || !host) return;
+    }
 
     /* Pull surface + text + accent from the live theme so the
      * terminal blends with the rest of the app — Header, host padding,
@@ -382,7 +401,8 @@
         unsubOutput = subscribeTerminalOutput(instanceId, (b64) => writeChunk(b64));
         unsubExit = subscribeTerminalExit(instanceId, () => {
           exited = true;
-          term?.write('\r\n\x1b[2m[shell exited]\x1b[0m\r\n');
+          if (destroyed || !term) return;
+          try { term.write('\r\n\x1b[2m[shell exited]\x1b[0m\r\n'); } catch {}
         });
         unsubError = subscribeTerminalError(instanceId, (msg) => {
           error = msg;

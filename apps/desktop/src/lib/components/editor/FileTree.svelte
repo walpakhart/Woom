@@ -380,6 +380,54 @@
   function cancelRename() {
     renaming = null;
   }
+
+  /* New file / new folder. The inline input is pinned at the top of the
+   * tree (the flat list is rebuilt by the fs watcher, so injecting a row
+   * at the exact parent slot mid-list is fragile). On commit we create
+   * via the Rust fs command; the watcher's smartRefresh() folds in the
+   * real row, and `revealPath` expands the parent + scrolls to it. */
+  let creating = $state<{ parentDir: string; isDir: boolean; draft: string } | null>(null);
+
+  function parentDirOf(it: Item): string {
+    if (it.is_dir) return it.path;
+    const lastSlash = it.path.lastIndexOf('/');
+    return lastSlash > 0 ? it.path.slice(0, lastSlash) : (rootPath ?? '');
+  }
+  async function startCreate(it: Item, isDir: boolean) {
+    closeContextMenu();
+    const parentDir = parentDirOf(it);
+    // Expand the target folder so the freshly-created child shows once
+    // the watcher refresh lands.
+    if (it.is_dir && !it.expanded) {
+      const idx = items.findIndex((x) => x.path === it.path);
+      if (idx >= 0) await toggle(idx);
+    }
+    creating = { parentDir, isDir, draft: '' };
+  }
+  async function commitCreate() {
+    if (!creating) return;
+    const name = creating.draft.trim();
+    // Reject empty + path separators — keep this single-level (a name
+    // with `/` would silently create nested dirs).
+    if (!name || name.includes('/')) {
+      creating = null;
+      return;
+    }
+    const isDir = creating.isDir;
+    const newPath = `${creating.parentDir}/${name}`;
+    creating = null;
+    try {
+      await invoke(isDir ? 'fs_create_dir' : 'fs_create_file', { path: newPath });
+      await revealPath(newPath);
+    } catch (e) {
+      console.warn(isDir ? 'fs_create_dir' : 'fs_create_file', e);
+      window.alert(`Couldn't create ${isDir ? 'folder' : 'file'}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+  function cancelCreate() {
+    creating = null;
+  }
+
   async function ctxDelete(it: Item) {
     closeContextMenu();
     if (it.is_dir) {
@@ -423,6 +471,30 @@
 <div class="tree" bind:this={treeContainer}>
   {#if loading}<div class="tree-state">Loading…</div>{/if}
   {#if error}<div class="tree-state tree-error">{error}</div>{/if}
+  {#if creating}
+    {@const cIcon = iconFor(creating.draft || (creating.isDir ? 'folder' : 'file'), creating.isDir, true)}
+    <div class="tree-row tree-creating" style="padding-left: 8px">
+      <span class="tree-chevron"><span class="tree-chevron-pad"></span></span>
+      <svg class="tree-icon" viewBox="0 0 24 24" aria-hidden="true">
+        <path d={cIcon.d}/>
+        {#if cIcon.d2}<path d={cIcon.d2}/>{/if}
+      </svg>
+      <!-- svelte-ignore a11y_autofocus -->
+      <input
+        class="tree-rename mono"
+        bind:value={creating.draft}
+        autofocus
+        placeholder={creating.isDir ? 'new folder' : 'new file'}
+        onclick={(e) => e.stopPropagation()}
+        onkeydown={(e) => {
+          e.stopPropagation();
+          if (e.key === 'Enter') void commitCreate();
+          else if (e.key === 'Escape') cancelCreate();
+        }}
+        onblur={commitCreate}
+      />
+    </div>
+  {/if}
   {#each items as it, i (it.path)}
     <button
       class="tree-row"
@@ -508,6 +580,12 @@
     </button>
     <button class="tree-ctx-item" onclick={() => void ctxCopyPath(contextMenu!.item)} role="menuitem">
       Copy path
+    </button>
+    <button class="tree-ctx-item" onclick={() => void startCreate(contextMenu!.item, false)} role="menuitem">
+      New File…
+    </button>
+    <button class="tree-ctx-item" onclick={() => void startCreate(contextMenu!.item, true)} role="menuitem">
+      New Folder…
     </button>
     <button class="tree-ctx-item" onclick={() => ctxRename(contextMenu!.item)} role="menuitem">
       Rename…

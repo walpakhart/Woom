@@ -625,6 +625,8 @@ pub fn run() {
             fs_remove_file,
             fs_remove_dir,
             fs_rename,
+            fs_create_file,
+            fs_create_dir,
             fs_reveal_in_finder,
             mcp_sidecar_health,
             memory_local::memory_save_local,
@@ -1364,6 +1366,35 @@ fn fs_rename(from: String, to: String) -> Result<(), String> {
         return Err(format!("destination {to} already exists"));
     }
     std::fs::rename(from_p, to_p).map_err(|e| format!("rename {from} -> {to}: {e}"))
+}
+
+/// Create a new empty file. Refuses to overwrite an existing path so a
+/// "New File" with an already-taken name can't clobber it. Creates any
+/// missing parent dirs. Used by the FileTree right-click "New File".
+#[tauri::command]
+fn fs_create_file(path: String) -> Result<(), String> {
+    use std::path::Path;
+    let p = Path::new(&path);
+    if p.exists() {
+        return Err(format!("{path} already exists"));
+    }
+    if let Some(parent) = p.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("create parent for {path}: {e}"))?;
+    }
+    std::fs::write(p, b"").map_err(|e| format!("create file {path}: {e}"))
+}
+
+/// Create a new directory (and any missing parents). Refuses if the
+/// path already exists so "New Folder" can't silently merge into an
+/// existing dir. Used by the FileTree right-click "New Folder".
+#[tauri::command]
+fn fs_create_dir(path: String) -> Result<(), String> {
+    use std::path::Path;
+    let p = Path::new(&path);
+    if p.exists() {
+        return Err(format!("{path} already exists"));
+    }
+    std::fs::create_dir_all(p).map_err(|e| format!("create dir {path}: {e}"))
 }
 
 /// Open the system file manager scrolled to and highlighting the
