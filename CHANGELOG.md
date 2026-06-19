@@ -8,6 +8,26 @@ release runbook (how this CHANGELOG feeds `latest-mac.json`) lives in
 
 ## Unreleased
 
+## 0.4.9 — 2026-06-19
+
+Bumps version 0.4.8 → 0.4.9 across `apps/desktop/package.json`,
+`apps/desktop/src-tauri/Cargo.toml`, `apps/desktop/src-tauri/tauri.conf.json`,
+`apps/desktop/src-tauri/Cargo.lock`. Follow-up to 0.4.8 — the file-tree
+create UX and the terminal-blank-on-open fix both needed a second pass.
+
+### Fixed
+
+- **File-tree New File / New Folder now lands in the selected folder** —
+  the inline naming input was pinned at the top of the tree, so it read
+  as "always creates at root" even though the path was correct. The
+  input now renders nested under its target folder at the right depth
+  (VSCode-style), and the target folder is highlighted while naming.
+- **Terminal no longer opens blank** — the first mount could paint the
+  xterm/WebGL canvas before its glyph atlas + size settled, leaving the
+  terminal empty until a view-switch forced a remount. After attach we
+  now force a re-fit + atlas rebuild + full refresh across the next two
+  frames so the first paint always lands.
+
 ## 0.4.8 — 2026-06-18
 
 Bumps version 0.4.7 → 0.4.8 across `apps/desktop/package.json`,

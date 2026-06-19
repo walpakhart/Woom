@@ -425,6 +425,26 @@
            we don't accidentally SIGWINCH the shell on a clean
            remount and trigger prompt-redraw clear sequences. */
         busy = false;
+
+        /* WebGL blank-on-first-mount cure. On the first mount the xterm
+           canvas + WebGL glyph atlas can initialize before the host has
+           its final size / before the font atlas is warm, so the very
+           first frame paints EMPTY and only heals on a later resize —
+           the "open terminal, it's blank, switch away+back to see it"
+           bug. Force a re-fit + atlas rebuild + full refresh across the
+           next two frames so the first paint lands without a manual
+           resize. Guarded + try/caught — a torn-down surface no-ops. */
+        requestAnimationFrame(() => {
+          if (destroyed || !term) return;
+          try { fit?.fit(); } catch {}
+          try { webgl?.clearTextureAtlas(); } catch {}
+          try { term.refresh(0, term.rows - 1); } catch {}
+          requestAnimationFrame(() => {
+            if (destroyed || !term) return;
+            try { fit?.fit(); } catch {}
+            try { term.refresh(0, term.rows - 1); } catch {}
+          });
+        });
       } catch (e) {
         error = typeof e === 'string' ? e : String(e);
         busy = false;

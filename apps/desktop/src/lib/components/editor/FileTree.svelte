@@ -471,9 +471,9 @@
 <div class="tree" bind:this={treeContainer}>
   {#if loading}<div class="tree-state">Loading…</div>{/if}
   {#if error}<div class="tree-state tree-error">{error}</div>{/if}
-  {#if creating}
-    {@const cIcon = iconFor(creating.draft || (creating.isDir ? 'folder' : 'file'), creating.isDir, true)}
-    <div class="tree-row tree-creating" style="padding-left: 8px">
+  {#snippet createRow(depth: number)}
+    {@const cIcon = iconFor(creating?.draft || (creating?.isDir ? 'folder' : 'file'), creating?.isDir ?? false, true)}
+    <div class="tree-row tree-creating" style="padding-left: {8 + depth * 12}px">
       <span class="tree-chevron"><span class="tree-chevron-pad"></span></span>
       <svg class="tree-icon" viewBox="0 0 24 24" aria-hidden="true">
         <path d={cIcon.d}/>
@@ -482,9 +482,10 @@
       <!-- svelte-ignore a11y_autofocus -->
       <input
         class="tree-rename mono"
-        bind:value={creating.draft}
+        value={creating?.draft ?? ''}
+        oninput={(e) => { if (creating) creating.draft = e.currentTarget.value; }}
         autofocus
-        placeholder={creating.isDir ? 'new folder' : 'new file'}
+        placeholder={creating?.isDir ? 'new folder' : 'new file'}
         onclick={(e) => e.stopPropagation()}
         onkeydown={(e) => {
           e.stopPropagation();
@@ -494,6 +495,12 @@
         onblur={commitCreate}
       />
     </div>
+  {/snippet}
+  <!-- Root-level create (target is the repo root, e.g. acted on a
+       top-level file) renders at the top; folder-scoped create renders
+       nested under its parent folder row inside the loop below. -->
+  {#if creating && creating.parentDir === (rootPath ?? '')}
+    {@render createRow(0)}
   {/if}
   {#each items as it, i (it.path)}
     <button
@@ -501,6 +508,7 @@
       class:selected={selectedPath === it.path && !it.is_dir}
       class:dir={it.is_dir}
       class:ignored={it.ignored}
+      class:create-target={creating?.parentDir === it.path}
       data-git={rowCode(it) ? gitClass(rowCode(it)) : ''}
       style="padding-left: {8 + it.depth * 12}px"
       onclick={() => toggle(i)}
@@ -564,6 +572,9 @@
         >{code}</span>
       {/if}
     </button>
+    {#if creating && creating.parentDir === it.path}
+      {@render createRow(it.depth + 1)}
+    {/if}
   {/each}
 </div>
 
@@ -611,6 +622,10 @@
   .tree-row:hover { background: var(--bg-2); color: var(--text-0); }
   .tree-row.selected { background: var(--accent-soft); color: var(--accent-bright); }
   .tree-row.dir { color: var(--text-0); font-weight: 500; }
+  /* Folder the inline create input is nested under — highlight so it's
+     unmistakable WHERE the new file/folder lands (VSCode-style). */
+  .tree-row.create-target { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+  .tree-creating { background: color-mix(in srgb, var(--accent) 8%, transparent); }
   /* Gitignored files/dirs — dimmed + italic so they read as "outside git"
      at a glance (mirrors VS Code / IntelliJ). `.selected` still wins, so
      opening an ignored file still shows the accent highlight. */
