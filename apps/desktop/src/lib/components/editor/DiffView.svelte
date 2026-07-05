@@ -501,7 +501,7 @@
     inset: 0;
     z-index: 1000;
     background: var(--bg-0);
-    box-shadow: 0 0 0 1px var(--border-neutral), 0 20px 60px rgba(0, 0, 0, 0.5);
+    box-shadow: 0 0 0 1px var(--border-neutral), var(--shadow-3);
   }
   .dv-head {
     display: flex; align-items: center; gap: 12px;
@@ -549,7 +549,7 @@
   .dv-scroll {
     flex: 1; min-height: 0;
     overflow: auto;
-    font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', monospace;
+    font-family: var(--font-mono);
     font-size: 12.5px;
     line-height: 1.55;
     color: var(--text-0);
@@ -686,5 +686,5 @@
   .dv-collapsed:hover { background: var(--bg-3); color: var(--accent-bright); }
   .dv-collapsed-range { margin-left: auto; opacity: 0.7; font-variant-numeric: tabular-nums; }
 
-  .mono { font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', monospace; }
+  .mono { font-family: var(--font-mono); }
 </style>

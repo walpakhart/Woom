@@ -87,7 +87,7 @@
     opacity: 0.7;
   }
   .mono {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono);
     font-size: 11.5px;
   }
 </style>

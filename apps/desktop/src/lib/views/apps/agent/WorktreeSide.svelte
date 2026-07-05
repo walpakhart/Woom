@@ -333,13 +333,19 @@
   .wts-btn--discard:hover { color: var(--error); border-color: var(--error); }
   .wts-btn--discard:hover svg { color: var(--error); }
 
+  /* Ink-inversion pill, engraved two-step — redesign primary. */
   .wts-btn--primary {
-    background: linear-gradient(180deg, var(--accent-bright), var(--accent));
+    background: var(--text-0);
     color: var(--accent-fg);
     border: none;
     justify-content: center;
     margin-top: 16px;
-    box-shadow: 0 2px 8px var(--accent-glow), inset 0 1px 0 rgba(255,255,255,0.18);
+    border-radius: var(--r-item);
+    box-shadow: var(--shadow-pill);
+  }
+  .wts-btn--primary:hover:not(:disabled) {
+    transform: translate(-1px, -1px);
+    box-shadow: var(--shadow-2);
   }
   .wts-btn--primary svg { color: var(--accent-fg); }
   .wts-btn--primary:hover svg { color: var(--accent-fg); }
@@ -380,9 +386,9 @@
   .linked-dot {
     width: 8px; height: 8px; border-radius: 50%;
     background: var(--src-editor);
-    box-shadow: 0 0 8px var(--src-editor);
+    box-shadow: var(--shadow-1);
   }
-  .linked-dot--editor { background: var(--src-editor); box-shadow: 0 0 8px var(--src-editor); }
+  .linked-dot--editor { background: var(--src-editor); box-shadow: var(--shadow-1); }
   .linked-dot--off { background: var(--text-mute); box-shadow: none; }
   .linked-name { flex: 1; font-size: 12.5px; }
   .linked-meta { font-size: 10.5px; color: var(--text-mute); }
@@ -408,21 +414,17 @@
     border-radius: 14px;
     background: color-mix(in srgb, var(--app-tone, var(--accent)) 10%, var(--bg-2));
     color: var(--app-tone, var(--accent));
-    box-shadow:
-      inset 0 0 0 1px color-mix(in srgb, var(--app-tone, var(--accent)) 24%, transparent),
-      0 0 24px var(--app-glow);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--app-tone, var(--accent)) 24%, transparent), var(--shadow-3);
     line-height: 0;
   }
   .wts-empty-icon[data-agent="claude"] {
     color: var(--src-claude);
     background: color-mix(in srgb, var(--src-claude) 12%, var(--bg-2));
-    box-shadow:
-      inset 0 0 0 1px color-mix(in srgb, var(--src-claude) 26%, transparent),
-      0 0 24px color-mix(in srgb, var(--src-claude) 32%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--src-claude) 26%, transparent), var(--shadow-3);
   }
   .wts-empty-icon svg { width: 28px; height: 28px; display: block; }
   .wts-empty-h {
-    font-family: 'Geist', 'Inter', -apple-system, system-ui, sans-serif;
+    font-family: var(--font-mono);
     font-size: 22px; font-weight: 600; letter-spacing: -0.015em;
     color: var(--text-0);
     margin: 0 0 10px;

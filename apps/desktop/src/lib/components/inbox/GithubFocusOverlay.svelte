@@ -640,7 +640,7 @@
   .chip-state { padding: 2px 9px; border-radius: 5px; font-size: 10.5px; font-weight: 500; }
 
   .focus-title {
-    font-family: 'Geist', 'Inter', -apple-system, system-ui, sans-serif;
+    font-family: var(--font-mono);
     font-size: 30px;
     line-height: 1.18;
     letter-spacing: -0.02em;
@@ -698,7 +698,7 @@
     color: var(--text-1); margin-left: 6px;
   }
   .detail-tab.active .tab-count { background: var(--accent-soft); color: var(--accent-bright); }
-  .tab-count--ok { background: rgba(168, 217, 184, 0.18); color: #A8D9B8; }
+  .tab-count--ok { background: color-mix(in srgb, var(--ok) 18%, transparent); color: #A8D9B8; }
   .tab-count--err { background: rgba(232, 130, 100, 0.18); color: #F0A38A; }
   .tab-count--pending { background: rgba(217, 184, 110, 0.16); color: #E4C885; }
 
@@ -709,33 +709,36 @@
     background: var(--bg-2); color: var(--text-1);
   }
   .check-pill--total { background: var(--bg-2); color: var(--text-1); }
-  .check-pill--ok { background: rgba(168, 217, 184, 0.12); color: #A8D9B8; border-color: rgba(168, 217, 184, 0.3); }
+  .check-pill--ok { background: color-mix(in srgb, var(--ok) 12%, transparent); color: #A8D9B8; border-color: color-mix(in srgb, var(--ok) 30%, transparent); }
   .check-pill--err { background: rgba(232, 130, 100, 0.12); color: #F0A38A; border-color: rgba(232, 130, 100, 0.3); }
   .check-pill--pending { background: rgba(217, 184, 110, 0.12); color: #E4C885; border-color: rgba(217, 184, 110, 0.3); }
   .check-pill--skip { background: var(--bg-2); color: var(--text-mute); }
 
+  /* Mockup CHECKS card: printed card + flat glyph rows. */
   .check-list {
-    border: 1px solid var(--border-neutral); border-radius: 10px;
-    overflow: hidden; background: var(--bg-1);
+    border: 1px solid var(--border); border-radius: var(--r-card);
+    overflow: hidden; background: var(--bg-2);
+    box-shadow: var(--shadow-1);
   }
   .check-row {
-    display: flex; align-items: center; gap: 12px;
-    padding: 12px 14px;
-    border-bottom: 1px solid var(--border-neutral);
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--border-lo);
   }
   .check-row:last-child { border-bottom: none; }
   .check-icon {
-    width: 22px; height: 22px; border-radius: 50%;
+    width: 14px;
     display: inline-flex; align-items: center; justify-content: center;
-    font-size: 12px; font-weight: 700;
+    font-size: 11px; font-weight: 700;
     flex-shrink: 0;
+    background: transparent;
   }
-  .check-icon--success { background: rgba(168, 217, 184, 0.15); color: #A8D9B8; }
-  .check-icon--failure { background: rgba(232, 130, 100, 0.15); color: #F0A38A; }
-  .check-icon--pending { background: rgba(217, 184, 110, 0.15); color: #E4C885; animation: check-spin 1.6s linear infinite; }
+  .check-icon--success { color: var(--ok); }
+  .check-icon--failure { color: var(--err); }
+  .check-icon--pending { color: var(--warn); animation: check-spin 1.6s linear infinite; }
   .check-icon--skipped,
   .check-icon--cancelled,
-  .check-icon--neutral { background: var(--bg-2); color: var(--text-mute); }
+  .check-icon--neutral { color: var(--text-faint); }
 
   .check-main { flex: 1; min-width: 0; }
   .check-name { color: var(--text-0); font-weight: 500; }
@@ -830,7 +833,7 @@
   }
   .meta-time { margin-left: auto; color: var(--text-mute); font-size: 11px; }
 
-  .review-item.rev--approved .review-state { color: var(--accent-bright); background: var(--accent-soft); border-color: rgba(168, 217, 184, 0.3); }
+  .review-item.rev--approved .review-state { color: var(--accent-bright); background: var(--accent-soft); border-color: color-mix(in srgb, var(--ok) 30%, transparent); }
   .review-item.rev--changes .review-state { color: #F0A38A; background: rgba(232, 130, 100, 0.08); border-color: rgba(232, 130, 100, 0.28); }
   .review-item.rev--commented .review-state { color: var(--blue-bright); background: rgba(79, 142, 255, 0.08); border-color: rgba(79, 142, 255, 0.24); }
   .review-item.rev--approved { border-left: 3px solid var(--accent); }
@@ -901,7 +904,7 @@
   .commit-rest {
     font-size: 12px; color: var(--text-2); margin-top: 3px;
     white-space: pre-wrap;
-    font-family: 'JetBrains Mono', monospace; line-height: 1.5;
+    font-family: var(--font-mono); line-height: 1.5;
     max-height: 80px; overflow: hidden;
   }
   .commit-meta {
@@ -932,7 +935,7 @@
     font-size: 10px; font-weight: 700; text-transform: uppercase;
     letter-spacing: 0.06em; padding: 2px 7px; border-radius: 4px;
   }
-  .file-status--added    { color: var(--accent-bright); background: var(--accent-soft); border: 1px solid rgba(168, 217, 184, 0.24); }
+  .file-status--added    { color: var(--accent-bright); background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--ok) 24%, transparent); }
   .file-status--modified { color: var(--blue-bright); background: rgba(79, 142, 255, 0.08); border: 1px solid rgba(79, 142, 255, 0.22); }
   .file-status--removed  { color: #F0A38A; background: rgba(232, 130, 100, 0.08); border: 1px solid rgba(232, 130, 100, 0.22); }
   .file-status--renamed  { color: #E4C885; background: rgba(217, 184, 110, 0.06); border: 1px solid rgba(217, 184, 110, 0.22); }
@@ -955,7 +958,7 @@
     background: var(--bg-0);
   }
   .diff-body {
-    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-family: var(--font-mono);
     font-size: 12px; line-height: 1.65;
     width: fit-content; min-width: 100%;
   }
@@ -977,8 +980,8 @@
     position: sticky; left: 0;
   }
   .diff-line-content { padding: 0 14px; white-space: pre; color: var(--text-1); }
-  .diff-line.add .diff-line-content { background: rgba(168, 217, 184, 0.08); color: #A8DEC8; }
-  .diff-line.add .diff-line-num { background: rgba(168, 217, 184, 0.12); color: #A8DEC8; }
+  .diff-line.add .diff-line-content { background: color-mix(in srgb, var(--ok) 8%, transparent); color: #A8DEC8; }
+  .diff-line.add .diff-line-num { background: color-mix(in srgb, var(--ok) 12%, transparent); color: #A8DEC8; }
   .diff-line.del .diff-line-content { background: rgba(232, 130, 100, 0.07); color: #F0A38A; }
   .diff-line.del .diff-line-num { background: rgba(232, 130, 100, 0.1); color: #F0A38A; }
 

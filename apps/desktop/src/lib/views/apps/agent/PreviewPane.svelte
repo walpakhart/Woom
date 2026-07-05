@@ -260,6 +260,8 @@
 
 <aside class="pv app-pane" in:fly={{ x: 24, duration: 220, easing: cubicOut }}>
   <header class="app-pane-head pv-head">
+    <span class="app-pane-head-h">Preview</span>
+    <span class="app-pane-head-meta mono">{tasks.length}</span>
     <button
       class="pv-collapse-btn"
       onclick={p.onCollapse}
@@ -270,8 +272,6 @@
         <path d="M10 6l6 6-6 6"/>
       </svg>
     </button>
-    <span class="app-pane-head-h">Preview</span>
-    <span class="app-pane-head-meta mono">{tasks.length}</span>
   </header>
 
   <div
@@ -450,16 +450,17 @@
     gap: 10px;
   }
   .pv-collapse-btn {
-    width: 24px; height: 24px;
+    width: 26px; height: 26px;
     display: grid; place-items: center;
     background: transparent; border: 0; padding: 0;
-    color: var(--text-mute);
-    border-radius: 6px;
+    color: var(--text-2);
+    border-radius: var(--r-btn);
     cursor: pointer;
+    margin-left: auto;
     transition: color 120ms, background 120ms;
   }
-  .pv-collapse-btn:hover { color: var(--text-0); background: var(--bg-2); }
-  .pv-collapse-btn svg { width: 14px; height: 14px; }
+  .pv-collapse-btn:hover { color: var(--text-0); background: var(--bg-3); }
+  .pv-collapse-btn svg { width: 13px; height: 13px; }
 
   /* Horizontal task strip — hidden scrollbar (per user spec). */
   .pv-strip {
@@ -506,15 +507,15 @@
   }
   .pv-chip[data-tone="live"] .pv-chip-dot {
     background: #66d39a;
-    box-shadow: 0 0 0 2px rgba(102, 211, 154, 0.18);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--ok) 18%, transparent);
     animation: pv-dot-pulse 1.4s ease-in-out infinite;
   }
   .pv-chip[data-tone="ok"] .pv-chip-dot { background: #6ec3a4; }
   .pv-chip[data-tone="warn"] .pv-chip-dot { background: #e0b16c; }
   .pv-chip[data-tone="dim"] .pv-chip-dot { background: #5e6566; }
   @keyframes pv-dot-pulse {
-    0%, 100% { box-shadow: 0 0 0 2px rgba(102, 211, 154, 0.18); }
-    50%      { box-shadow: 0 0 0 4px rgba(102, 211, 154, 0.32); }
+    0%, 100% { box-shadow: 0 0 0 2px color-mix(in srgb, var(--ok) 18%, transparent); }
+    50%      { box-shadow: 0 0 0 4px color-mix(in srgb, var(--ok) 32%, transparent); }
   }
   @media (prefers-reduced-motion: reduce) {
     .pv-chip[data-tone="live"] .pv-chip-dot { animation: none; }
@@ -663,7 +664,7 @@
   .pv-tab.active {
     background: var(--bg-0);
     color: var(--text-0);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+    box-shadow: var(--shadow-1);
   }
   .pv-tab:disabled { opacity: 0.4; cursor: not-allowed; }
   .pv-tab--icon { padding: 3px 6px; }

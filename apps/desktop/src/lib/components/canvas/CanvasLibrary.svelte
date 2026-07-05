@@ -451,7 +451,7 @@
     background: var(--bg-1);
     border: 1px solid var(--border-neutral);
     border-radius: 12px;
-    box-shadow: 0 24px 48px rgba(0, 0, 0, 0.4);
+    box-shadow: var(--shadow-3);
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -541,7 +541,7 @@
   .cv-tile:hover {
     border-color: var(--accent);
     transform: translateY(-1px);
-    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.35);
+    box-shadow: var(--shadow-2);
   }
   .cv-tile--current { outline: 2px solid var(--accent); outline-offset: 1px; }
   .cv-tile--archived { opacity: 0.7; }

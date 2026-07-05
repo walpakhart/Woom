@@ -320,14 +320,7 @@
     display: flex; align-items: center; gap: 8px;
     padding: 0 10px 0 12px;
     border-bottom: 1px solid var(--border);
-    background:
-      linear-gradient(180deg, color-mix(in srgb, var(--accent) 8%, transparent), transparent),
-      var(--bg-1);
-  }
-  .adk[data-agent='claude'] .adk-head {
-    background:
-      linear-gradient(180deg, color-mix(in srgb, var(--src-claude) 10%, transparent), transparent),
-      var(--bg-1);
+    background: var(--bg-1);
   }
   .adk-brand {
     width: 26px; height: 26px;
@@ -353,7 +346,7 @@
   .adk-title-btn:hover:not(.disabled) { background: var(--bg-2); }
   .adk-title-btn.disabled { cursor: default; }
   .adk-title {
-    font-family: 'Geist', 'Inter', -apple-system, system-ui, sans-serif;
+    font-family: var(--font-mono);
     font-size: 13px; font-weight: 600; letter-spacing: -0.01em;
     color: var(--text-0);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -379,8 +372,8 @@
     width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
     animation: adk-pulse 1.2s ease-in-out infinite;
   }
-  .adk[data-agent='claude'] .adk-pulse { background: var(--src-claude); box-shadow: 0 0 6px color-mix(in srgb, var(--src-claude) 70%, transparent); }
-  .adk-pulse--row[data-agent='claude'] { background: var(--src-claude); box-shadow: 0 0 6px color-mix(in srgb, var(--src-claude) 70%, transparent); }
+  .adk[data-agent='claude'] .adk-pulse { background: var(--src-claude); box-shadow: var(--shadow-1); }
+  .adk-pulse--row[data-agent='claude'] { background: var(--src-claude); box-shadow: var(--shadow-1); }
   @keyframes adk-pulse {
     0%, 100% { opacity: 0.45; transform: scale(0.85); }
     50%      { opacity: 1; transform: scale(1.15); }
@@ -457,9 +450,7 @@
     display: grid; place-items: center; border-radius: 14px;
     background: color-mix(in srgb, var(--accent) 10%, var(--bg-2));
     color: var(--accent-bright);
-    box-shadow:
-      inset 0 0 0 1px color-mix(in srgb, var(--accent) 24%, transparent),
-      0 0 28px var(--accent-glow);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 24%, transparent), var(--shadow-3);
   }
   .adk-empty-icon[data-agent='claude'] {
     background: color-mix(in srgb, var(--src-claude) 12%, var(--bg-2));
@@ -468,7 +459,7 @@
   }
   .adk-empty-icon svg { width: 26px; height: 26px; }
   .adk-empty-h {
-    font-family: 'Geist', 'Inter', -apple-system, system-ui, sans-serif;
+    font-family: var(--font-mono);
     font-size: 20px; font-weight: 600; letter-spacing: -0.015em;
     color: var(--text-0); margin: 0 0 10px;
   }
@@ -484,7 +475,7 @@
     font-size: 12px; font-weight: 600;
     background: linear-gradient(180deg, var(--accent-bright), var(--accent));
     color: var(--accent-fg); border: none; cursor: pointer;
-    box-shadow: 0 6px 18px var(--accent-glow), inset 0 1px 0 rgba(255,255,255,0.20);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.20), var(--shadow-2);
     transition: transform 140ms;
   }
   .adk-cta:hover { transform: translateY(-1px); }

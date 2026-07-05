@@ -172,12 +172,12 @@
     content: '';
     position: absolute;
     inset: 0;
-    margin: 0 4px;
-    background: var(--border-neutral);
-    border-radius: 1px;
+    margin: 0 4.5px;
+    background: var(--border);
+    border-radius: 0;
     transition: background 100ms ease;
   }
-  .s-divider.vert::before { margin: 4px 0; }
+  .s-divider.vert::before { margin: 4.5px 0; }
   .s-divider:hover::before,
   .s-divider:focus-visible::before,
   .splitter.dragging .s-divider::before { background: var(--accent); }

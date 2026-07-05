@@ -142,7 +142,7 @@
     overflow-y: auto;
     padding: 28px 36px 60px;
     color: var(--text-1);
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Geist', system-ui, sans-serif;
+    font-family: var(--font-mono);
     font-size: 14px;
     line-height: 1.65;
     background: var(--bg-0);
@@ -164,7 +164,7 @@
   .mdp :global(h5),
   .mdp :global(h6) {
     color: var(--text-0);
-    font-family: 'Geist', system-ui, sans-serif;
+    font-family: var(--font-mono);
     font-weight: 600;
     letter-spacing: -0.015em;
     line-height: 1.25;
@@ -196,7 +196,7 @@
 
   /* Inline code — pill, monospace. */
   .mdp :global(code) {
-    font-family: 'JetBrains Mono', 'SF Mono', monospace;
+    font-family: var(--font-mono);
     font-size: 0.88em;
     padding: 1.5px 5px;
     border-radius: 4px;
@@ -308,7 +308,7 @@
     background: var(--bg-2);
     border: 1px solid var(--border);
     color: var(--text-0);
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono);
     font-size: 0.85em;
     box-shadow: inset 0 -1px 0 var(--border-hi);
   }

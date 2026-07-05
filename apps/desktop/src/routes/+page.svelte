@@ -10,7 +10,9 @@
   import Welcome from '$lib/components/ui/Welcome.svelte';
   import { welcomeState } from '$lib/state/welcome.svelte';
   import WorktreeDiffModal from '$lib/components/editor/WorktreeDiffModal.svelte';
-  import Rail from '$lib/components/ui/Rail.svelte';
+  import Sidebar from '$lib/components/ui/Sidebar.svelte';
+  import Titlebar from '$lib/components/ui/Titlebar.svelte';
+  import StatusStrip from '$lib/components/ui/StatusStrip.svelte';
   import RulesView from '$lib/views/RulesView.svelte';
   import LibraryApp from '$lib/views/apps/LibraryApp.svelte';
   import ConnectionsView from '$lib/views/ConnectionsView.svelte';
@@ -332,6 +334,25 @@
   /* Default view = Claude solo. Fresh installs land here (or get
    * redirected to Connections by the rail if nothing is set up). */
   let view = $state<View>('claudeApp');
+
+  /* Titlebar's `Woom — {solo}` label. */
+  const SOLO_TITLES: Record<string, string> = {
+    home: 'Home',
+    jiraApp: 'Jira',
+    githubApp: 'GitHub',
+    sentryApp: 'Sentry',
+    claudeApp: 'Claude',
+    editorApp: 'Editor',
+    canvasApp: 'Canvas',
+    terminalApp: 'Terminal',
+    rules: 'Rules',
+    library: 'Library',
+    connections: 'Connections',
+    settings: 'Settings'
+  };
+  function soloTitleFor(v: string): string {
+    return SOLO_TITLES[v] ?? 'Home';
+  }
 
   /* Browser-style back/forward stack for solo navigation. ⌘[ steps
    * back through the user's view history, ⌘] redoes it. We capture
@@ -2948,7 +2969,13 @@
 {/if}
 
 <div id="app" class:is-dragging={dragState.payload !== null}>
-  <Rail
+  <Titlebar
+    soloTitle={soloTitleFor(view)}
+    onPalette={() => { paletteMode = 'normal'; paletteOpen = true; }}
+  />
+
+  <div class="app-body">
+  <Sidebar
     bind:view
     {anythingConnected}
     {statusLoading}
@@ -3263,6 +3290,14 @@
       </section>
     {/if}
   </div>
+  </div>
+
+  <StatusStrip
+    {claudeBusy}
+    {githubBadge}
+    {sentryBadge}
+    onGoClaude={() => (view = 'claudeApp')}
+  />
 </div>
 
 <!-- Inbox focus state (PR / ticket / issue) is persisted per app and
@@ -3374,13 +3409,23 @@
 {/if}
 
 <style>
+  /* Paper redesign: flat paper page — no ambient gradient washes. */
   .bg {
     position: fixed; inset: 0; pointer-events: none; z-index: 0;
-    background:
-      radial-gradient(ellipse 1200px 600px at 10% 0%, rgba(30, 58, 107, 0.18), transparent 60%),
-      radial-gradient(ellipse 900px 500px at 90% 100%, rgba(168, 217, 184, 0.06), transparent 60%);
+    background: var(--bg-0);
   }
-  #app { position: relative; z-index: 1; display: grid; grid-template-columns: 56px 1fr; height: 100vh; }
+  /* Paper skeleton: titlebar 40px / body (sidebar 212px + main) /
+     status strip 34px. */
+  #app {
+    position: relative; z-index: 1;
+    display: flex; flex-direction: column;
+    height: 100vh;
+  }
+  .app-body {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+  }
 
   /* Touch ID / device-owner-auth gate shown at launch. Sits over the app
      (z-index 500) so the solo doesn't flash through before unlock —
@@ -3388,7 +3433,7 @@
      the usual UI is already primed. */
   .lock-screen {
     position: fixed; inset: 0; z-index: 500;
-    background: radial-gradient(ellipse at center, rgba(12, 17, 23, 0.92), rgba(12, 17, 23, 0.98));
+    background: var(--backdrop);
     backdrop-filter: blur(20px);
     display: flex; align-items: center; justify-content: center;
     animation: fadeIn 200ms ease-out;
@@ -3401,7 +3446,7 @@
     background: var(--bg-1);
     border: 1px solid var(--border-neutral-hi);
     border-radius: 16px;
-    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+    box-shadow: var(--shadow-3);
   }
   .lock-title {
     font-size: 22px; font-weight: 600; color: var(--text-0);
@@ -3428,6 +3473,11 @@
 
 
   .main {
+    /* Fill everything right of the sidebar — the old grid gave this
+       column `1fr`; the flex rewrite must grow it explicitly or the
+       solo shrinks to content width and leaves a void on the right. */
+    flex: 1;
+    min-width: 0;
     min-height: 0; height: 100%;
     overflow: hidden; display: flex; flex-direction: column;
     /* Anchor for the solo-flash overlay (absolute child). */
@@ -3464,7 +3514,7 @@
   .full-center { flex: 1; display: flex; align-items: center; justify-content: center; padding: 40px; }
   .empty { display: flex; flex-direction: column; align-items: center; gap: 16px; text-align: center; max-width: 420px; }
   .empty-title {
-    font-family: 'Geist', 'Inter', -apple-system, system-ui, sans-serif;
+    font-family: var(--font-mono);
     font-size: 28px; font-weight: 600;
     margin: 14px 0 0; color: var(--text-0);
     letter-spacing: -0.02em; line-height: 1.18;
@@ -3477,20 +3527,16 @@
      before its full implementation lands. The card adopts the rail
      button's brand tone via --app-tone / --app-glow. */
   .app-stub-shell {
-    background:
-      radial-gradient(ellipse 1100px 700px at 4% 100%, color-mix(in srgb, var(--app-tone, var(--accent)) 14%, transparent), transparent 65%),
-      radial-gradient(ellipse 900px 600px at 100% 0%, rgba(110, 90, 130, 0.05), transparent 60%);
+    background: var(--bg-0);
   }
   .app-stub {
     max-width: 560px;
     text-align: center;
     padding: 44px 40px 36px;
-    background: var(--bg-1);
+    background: var(--bg-2);
     border: 1px solid var(--border-hi);
-    border-radius: 18px;
-    box-shadow:
-      0 0 0 1px color-mix(in srgb, var(--app-tone, var(--accent)) 14%, transparent),
-      var(--shadow-3, 0 24px 64px rgba(0,0,0,0.55));
+    border-radius: var(--r-panel);
+    box-shadow: var(--shadow-3);
   }
   .app-stub-icon {
     width: 64px; height: 64px;
@@ -3499,13 +3545,11 @@
     border-radius: 16px;
     background: color-mix(in srgb, var(--app-tone, var(--accent)) 12%, var(--bg-2));
     color: var(--app-tone, var(--accent-bright));
-    box-shadow:
-      inset 0 0 0 1px color-mix(in srgb, var(--app-tone, var(--accent)) 32%, transparent),
-      0 0 28px var(--app-glow, var(--accent-glow));
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--app-tone, var(--accent)) 32%, transparent), var(--shadow-3);
   }
   /* BrandIcon sets its own width/height — no per-svg sizing needed. */
   .app-stub-title {
-    font-family: 'Geist', 'Inter', -apple-system, system-ui, sans-serif;
+    font-family: var(--font-mono);
     font-size: 30px; font-weight: 600; letter-spacing: -0.02em;
     color: var(--text-0);
     margin: 0 0 12px;
@@ -3539,9 +3583,7 @@
     border-radius: 999px;
     backdrop-filter: blur(10px);
     -webkit-backdrop-filter: blur(10px);
-    box-shadow:
-      0 6px 24px rgba(0, 0, 0, 0.35),
-      0 0 0 4px color-mix(in srgb, var(--hint-tone, var(--accent)) 12%, transparent);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--hint-tone, var(--accent)) 12%, transparent), var(--shadow-3);
     pointer-events: none;
     animation: drag-hint-in 220ms var(--ease-out, ease-out);
   }
@@ -3553,7 +3595,7 @@
     width: 8px; height: 8px;
     border-radius: 50%;
     background: var(--hint-tone, var(--accent));
-    box-shadow: 0 0 12px var(--hint-tone, var(--accent));
+    box-shadow: var(--shadow-2);
     animation: drag-hint-pulse 1.4s ease-in-out infinite;
   }
   @keyframes drag-hint-in {

@@ -54,6 +54,8 @@ pub struct SentryIssue {
     pub permalink: String,
     pub metadata_type: Option<String>,
     pub metadata_value: Option<String>,
+    /// Hourly event counts for the last 24h — drives the list sparkline.
+    pub stats_24h: Vec<u64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -279,7 +281,7 @@ pub async fn list_issues(
         _ => "date",
     };
     let url = format!(
-        "{}/api/0/organizations/{}/issues/?query={}&limit={}&sort={}{}{}",
+        "{}/api/0/organizations/{}/issues/?query={}&limit={}&sort={}&statsPeriod=24h{}{}",
         creds.host,
         creds.organization_slug,
         urlencoding::encode(q),
@@ -774,6 +776,16 @@ fn parse_issue(v: serde_json::Value) -> SentryIssue {
             .to_string(),
         metadata_type: metadata.get("type").and_then(|s| s.as_str()).map(String::from),
         metadata_value: metadata.get("value").and_then(|s| s.as_str()).map(String::from),
+        stats_24h: v
+            .get("stats")
+            .and_then(|s| s.get("24h"))
+            .and_then(|a| a.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|p| p.get(1).and_then(|c| c.as_u64()))
+                    .collect()
+            })
+            .unwrap_or_default(),
     }
 }
 

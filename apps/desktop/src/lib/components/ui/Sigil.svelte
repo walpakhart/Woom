@@ -1,15 +1,15 @@
 <script lang="ts">
-  /* Woom sigil — renders the brand mark (transparent PNG generated
-     from the macOS installer icon). The earlier traced SVG looked
-     jagged at small sizes; the rasterised mark stays sharp because
-     it ships at 512×512 with the same gradient the installer uses,
-     just minus the dark card backdrop.
+  /* Woom sigil — engraved W wordmark. Rendered as an alpha mask
+     (generated from the etched logo PNG) filled with `--text-0`,
+     so it re-inks itself per theme: warm ink on paper, cream on
+     charcoal. The hatching detail lives in the mask's alpha.
 
-     Two knobs, kept compatible with the prior inline-SVG version so
-     consumers (Welcome, +page empty-state, …) didn't need updating:
-       • size — pixel side length, mark stays square inside.
-       • glow — soft mint drop-shadow under the glyph; on by default
-                because the empty-state callsites relied on it. */
+     Knobs kept compatible with previous versions:
+       • size — pixel side length of the square box; the wide mark
+                centers inside it (aspect ≈ 512:233).
+       • glow — soft shadow under the glyph; on by default because
+                empty-state callsites relied on it. Now a quiet ink
+                offset instead of the old mint halo. */
   interface Props {
     size?: number;
     glow?: boolean;
@@ -17,24 +17,23 @@
   let { size = 36, glow = true }: Props = $props();
 </script>
 
-<img
+<span
   class="sigil"
   class:glow
-  src="/woom-mark-transparent.png"
-  alt="Woom"
-  width={size}
-  height={size}
-  draggable="false"
-/>
+  role="img"
+  aria-label="Woom"
+  style="width:{size}px;height:{size}px"
+></span>
 
 <style>
   .sigil {
     display: block;
     user-select: none;
-    -webkit-user-drag: none;
-    object-fit: contain;
+    background: var(--text-0);
+    -webkit-mask: url('/woom-mark-ink.png') center / contain no-repeat;
+    mask: url('/woom-mark-ink.png') center / contain no-repeat;
   }
   .sigil.glow {
-    filter: drop-shadow(0 0 12px rgba(166, 212, 194, 0.40));
+    filter: drop-shadow(2px 2px 0 color-mix(in srgb, var(--text-0) 14%, transparent));
   }
 </style>

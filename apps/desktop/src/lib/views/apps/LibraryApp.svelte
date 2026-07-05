@@ -447,7 +447,7 @@
   }
   .lib-head { max-width: 980px; margin: 0 auto 22px; width: 100%; }
   .view-title {
-    font-family: 'Geist', 'Inter', -apple-system, system-ui, sans-serif;
+    font-family: var(--font-mono);
     font-size: 38px; font-weight: 600;
     letter-spacing: -0.02em;
     color: var(--text-0);
@@ -456,7 +456,7 @@
   .view-sub { font-size: 14px; color: var(--text-2); margin: 0; line-height: 1.5; }
   .view-sub code {
     background: var(--bg-2); padding: 1px 6px; border-radius: 4px;
-    font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', monospace;
+    font-family: var(--font-mono);
     font-size: 12px; color: var(--text-1);
   }
 

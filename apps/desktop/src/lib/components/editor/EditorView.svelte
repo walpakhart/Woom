@@ -1122,10 +1122,10 @@
                their own subtle row below to keep the head uncluttered. -->
           <div class="ev-left-head">
             <div class="ev-root-stack">
-              {#if instanceLabel}
-                <span class="ev-instance-label" title="Editor instance · {instanceLabel}">{instanceLabel}</span>
-              {/if}
               <span class="ev-root-name" title={rootTitle}>{rootLabel}</span>
+              {#if gitBranch}
+                <span class="ev-root-branch">on <b>{gitBranch}</b></span>
+              {/if}
             </div>
             {#if onLinkToAgent && agentInstances.length > 0}
               <div class="ev-link-wrap">
@@ -1198,17 +1198,18 @@
               {/each}
             </div>
           {/if}
-          <!-- Sidebar pane label — small caption matching the active
-               activity tab so users get a heading for the panel without
-               needing the bottom tab strip. -->
-          <div class="ev-sidebar-label">
-            {#if sidebarTab === 'explorer'}Explorer
-            {:else if sidebarTab === 'search'}Search
-            {:else if sidebarTab === 'git'}Source control
-            {:else if sidebarTab === 'review'}Agent edits
-            {:else if sidebarTab === 'debug'}Debug
-            {:else if sidebarTab === 'tests'}Tests{/if}
-          </div>
+          <!-- Mockup: no caption strip — the tree speaks for itself.
+               Non-explorer panels keep a caption so users know where
+               they landed. -->
+          {#if sidebarTab !== 'explorer'}
+            <div class="ev-sidebar-label">
+              {#if sidebarTab === 'search'}Search
+              {:else if sidebarTab === 'git'}Source control
+              {:else if sidebarTab === 'review'}Agent edits
+              {:else if sidebarTab === 'debug'}Debug
+              {:else if sidebarTab === 'tests'}Tests{/if}
+            </div>
+          {/if}
 
           <!-- Sidebar body: one of five panels picked by the activity bar. -->
           <div class="ev-sidebar-body">
@@ -1719,7 +1720,7 @@
     background: var(--bg-3);
     border: 1px solid var(--border-neutral-hi);
     border-radius: 8px;
-    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.36);
+    box-shadow: var(--shadow-3);
     max-height: 280px; overflow-y: auto;
   }
   .ev-scm-item {
@@ -1753,9 +1754,8 @@
   }
   .ev-left-head {
     display: flex; align-items: center; gap: 6px;
-    padding: 14px 16px 12px;
-    border-bottom: 1px solid var(--border);
-    background: linear-gradient(180deg, var(--bg-2), var(--bg-1));
+    padding: 10px 12px 8px;
+    background: var(--bg-0);
     flex-shrink: 0;
   }
   /* Two-line head stack: small italic-serif instance mark above the
@@ -1763,12 +1763,12 @@
      instance they're inside without having to open the rail menu. */
   .ev-root-stack {
     flex: 1 1 0; min-width: 0;
-    display: flex; flex-direction: column;
-    gap: 1px;
+    display: flex; align-items: baseline;
+    gap: 8px;
     overflow: hidden;
   }
   .ev-instance-label {
-    font-family: 'Geist', 'Inter', -apple-system, system-ui, sans-serif;
+    font-family: var(--font-mono);
     font-size: 11px;
     
     line-height: 1;
@@ -1777,11 +1777,12 @@
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   /* v7 — repo name reads as a small editorial heading. */
+  /* Mockup tree head: `woom on fix/branch` — small, quiet. */
   .ev-root-name {
     min-width: 0;
-    font-family: 'Geist', 'Inter', -apple-system, system-ui, sans-serif;
-    font-size: 18px; font-weight: 600;
-    letter-spacing: -0.01em;
+    font-family: var(--font-mono);
+    font-size: 11px; font-weight: 600;
+    letter-spacing: 0;
     color: var(--text-0);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
@@ -1805,7 +1806,7 @@
     border-radius: 7px;
     background: var(--accent);
     color: var(--accent-fg);
-    font-family: 'Inter Tight', system-ui, sans-serif;
+    font-family: var(--font-mono);
     font-size: 8.5px; font-weight: 700;
     display: inline-flex; align-items: center; justify-content: center;
     box-shadow: 0 0 0 2px var(--bg-2);
@@ -1837,7 +1838,7 @@
   .ev-linked-dot {
     width: 6px; height: 6px; border-radius: 50%;
     background: var(--src-claude);
-    box-shadow: 0 0 6px color-mix(in srgb, var(--src-claude) 60%, transparent);
+    box-shadow: var(--shadow-1);
     flex-shrink: 0;
   }
   .ev-linked-name {
@@ -1893,7 +1894,7 @@
   .ev-link-menu-item:hover { background: var(--bg-2); color: var(--text-0); }
   .ev-link-menu-kind {
     flex-shrink: 0;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono);
     font-size: 9.5px; font-weight: 700;
     letter-spacing: 0.08em;
     text-transform: uppercase;
@@ -1928,11 +1929,9 @@
   .ev-sidebar-label {
     flex: 0 0 auto;
     padding: 8px 16px 6px;
-    font-size: 9.5px; font-weight: 700;
-    letter-spacing: 0.10em; text-transform: uppercase;
-    color: var(--text-mute);
-    background: var(--bg-1);
-    border-bottom: 1px solid var(--border);
+    font-size: 9.5px; font-weight: 600;
+    letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--text-faint);
   }
 
   /* Generic pane shell for the search / debug / tests panels — they
@@ -1961,7 +1960,7 @@
   }
   .ev-sidebar-empty-icon svg { width: 20px; height: 20px; }
   .ev-sidebar-empty-h {
-    font-family: 'Geist', 'Inter', -apple-system, system-ui, sans-serif;
+    font-family: var(--font-mono);
     font-size: 18px; font-weight: 600; letter-spacing: -0.01em;
     color: var(--text-0);
     margin: 0 0 8px;
@@ -1971,7 +1970,7 @@
     line-height: 1.5; margin: 0;
   }
   .ev-sidebar-empty-p .mono {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono);
     font-size: 10.5px;
     padding: 1px 5px;
     background: var(--bg-2); border: 1px solid var(--border);
@@ -2007,13 +2006,15 @@
   /* Status bar — single horizontal strip pinned to the bottom of
      the editor pane. Mono throughout, brand-dot for the git branch
      readout, mint check for "no problems". */
+  /* Whisper statusbar — mockup shows no status chrome, so this
+     stays but fades to a hairline caption. */
   .ev-statusbar {
     display: flex; align-items: center; gap: 6px;
-    padding: 7px 18px;
-    border-top: 1px solid var(--border);
-    background: var(--bg-1);
-    font-size: 11px;
-    color: var(--text-2);
+    padding: 4px 16px;
+    border-top: 0;
+    background: var(--bg-2);
+    font-size: 10px;
+    color: var(--text-faint);
     flex-shrink: 0;
     overflow-x: auto;
     white-space: nowrap;
@@ -2148,7 +2149,7 @@
     background: var(--bg-2);
     border: 1px solid var(--border-hi);
     border-radius: 7px;
-    box-shadow: 0 6px 20px -6px rgba(0, 0, 0, 0.55), 0 1px 0 0 rgba(0, 0, 0, 0.1);
+    box-shadow: 0 1px 0 0 rgba(0, 0, 0, 0.1), var(--shadow-1);
     /* Inline `max-width` (computed against the anchor's viewport x)
      * keeps the popover from running past the editor's right edge
      * when the session list is long. Buttons inside ellipsize their
@@ -2303,4 +2304,10 @@
     border-radius: 6px;
     font-size: 12px;
   }
+  .ev-root-branch {
+    font-size: 10px; color: var(--text-mute);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    min-width: 0;
+  }
+  .ev-root-branch b { color: var(--src-editor); font-weight: 500; }
 </style>

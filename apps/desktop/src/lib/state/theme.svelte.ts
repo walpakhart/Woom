@@ -1,8 +1,8 @@
 /* App-wide colour theme.
  *
- * Two palettes:
- *   iconic — sage/mint on cool noir (the brand look, default dark).
- *   light  — sage/mint on cream-mint (the brand look, light variant).
+ * Two palettes (Paper Redesign):
+ *   light  — warm cream paper, ink text (the default).
+ *   iconic — warm charcoal paper, cream ink (the dark variant).
  *
  * Implementation is just a `data-theme` attribute on `<html>` plus
  * matching `:root[data-theme="…"]` blocks in app.css that override
@@ -38,7 +38,7 @@ function readPersistedTheme(): ThemeName {
   } catch {
     /* SSR / privacy mode */
   }
-  return 'iconic';
+  return 'light';
 }
 
 /** Push the chosen theme to `<html data-theme="…">` so the CSS

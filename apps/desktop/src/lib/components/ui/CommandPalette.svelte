@@ -938,7 +938,7 @@
     width: 720px; max-width: 92vw;
     max-height: 70vh;
     display: flex; flex-direction: column;
-    background: linear-gradient(180deg, var(--bg-2), var(--bg-1));
+    background: var(--bg-0);
     border: 1px solid var(--border-hi);
     border-radius: var(--r-modal, 16px);
     overflow: hidden;
@@ -962,7 +962,7 @@
   .palette-section { padding: 4px 10px; }
   .palette-section-title {
     padding: 12px 14px 6px;
-    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-family: var(--font-mono);
     font-size: 10px; font-weight: 600;
     color: var(--text-mute); text-transform: uppercase; letter-spacing: 0.10em;
   }
@@ -988,7 +988,7 @@
     position: absolute; left: 0; top: 6px; bottom: 6px;
     width: 2.5px; border-radius: 2px;
     background: var(--accent);
-    box-shadow: 0 0 10px var(--accent-glow);
+    box-shadow: var(--shadow-2);
   }
   .palette-item-main {
     flex: 1; min-width: 0;
@@ -1011,7 +1011,7 @@
   .palette-pin:hover { opacity: 1; color: var(--accent-bright); }
   .palette-pin.pinned { opacity: 1; color: var(--accent); }
   .row-id {
-    font-family: 'JetBrains Mono', monospace; font-feature-settings: 'tnum';
+    font-family: var(--font-mono); font-feature-settings: 'tnum';
     color: var(--text-mute); font-size: 11px; min-width: 48px; flex-shrink: 0;
   }
   .row-title {
@@ -1023,7 +1023,7 @@
      column edge stays tidy across multiple rows of varying length. */
   .row-ts {
     flex-shrink: 0;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono);
     font-feature-settings: 'tnum';
     font-size: 10.5px;
     color: var(--text-mute);
@@ -1040,14 +1040,14 @@
     border-radius: 5px; font-weight: 700; font-size: 10px;
     letter-spacing: -0.02em; flex-shrink: 0;
     border: 1px solid transparent;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono);
   }
   .badge--view     { background: var(--bg-3); color: var(--text-1); border-color: var(--border); }
   .badge--editor   { background: var(--accent-soft); color: var(--src-editor); border-color: var(--border-accent-2); }
   .badge--github   { background: rgba(181, 132, 255, 0.10); color: var(--src-github);  border-color: rgba(181, 132, 255, 0.26); }
   .badge--jira     { background: rgba(79, 142, 255, 0.10);  color: var(--src-jira);    border-color: rgba(79, 142, 255, 0.26); }
   .badge--sentry   { background: rgba(232, 130, 100, 0.10); color: var(--src-sentry);  border-color: rgba(232, 130, 100, 0.26); }
-  .badge--claude   { background: rgba(232, 155, 125, 0.10); color: var(--src-claude);  border-color: rgba(232, 155, 125, 0.26); }
+  .badge--claude   { background: rgba(216, 210, 190, 0.10); color: var(--src-claude);  border-color: rgba(216, 210, 190, 0.26); }
   .badge--action   { background: var(--accent-soft); color: var(--accent-bright); border-color: var(--border-accent); }
 
   /* v7 — footer kbd hints. */
@@ -1065,7 +1065,7 @@
     display: inline-grid; place-items: center;
     height: 16px; min-width: 16px;
     padding: 0 4px;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono);
     font-size: 9.5px;
     background: var(--bg-3);
     border: 1px solid var(--border);

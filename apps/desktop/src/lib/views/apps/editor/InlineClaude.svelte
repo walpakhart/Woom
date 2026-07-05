@@ -64,6 +64,7 @@
   const linkedAgents = $derived.by(() => {
     const out: { sessionId: string; agentInstanceId: string; kind: 'claude'; title: string; sending: boolean; queueLen: number }[] = [];
     for (const s of sessionsState.list) {
+      if (s.archived) continue;
       if (linkKind === 'editor') {
         if (!s.linkedToEditor) continue;
         if (s.linkedToEditorInstanceId !== p.instanceId) continue;
@@ -105,7 +106,7 @@
       const tb = b.messages[b.messages.length - 1]?.at ?? '';
       return tb.localeCompare(ta);
     };
-    for (const s of [...sessionsState.list].sort(sortByActivity)) {
+    for (const s of sessionsState.list.filter((x) => !x.archived).sort(sortByActivity)) {
       const linkedHere =
         linkKind === 'editor'
           ? s.linkedToEditor && s.linkedToEditorInstanceId === p.instanceId
@@ -370,7 +371,7 @@
   .ic-brand svg { width: 13px; height: 13px; }
   .ic-title-block { flex: 1; display: flex; flex-direction: column; gap: 1px; min-width: 0; }
   .ic-title {
-    font-family: 'Geist', 'Inter', -apple-system, system-ui, sans-serif;
+    font-family: var(--font-mono);
     font-size: 16px; font-weight: 600; letter-spacing: -0.01em;
     color: var(--text-0); line-height: 1.1;
   }
@@ -480,13 +481,11 @@
     border-radius: 14px;
     background: color-mix(in srgb, var(--accent) 10%, var(--bg-2));
     color: var(--accent-bright);
-    box-shadow:
-      inset 0 0 0 1px color-mix(in srgb, var(--accent) 24%, transparent),
-      0 0 28px var(--accent-glow);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 24%, transparent), var(--shadow-3);
   }
   .ic-empty-icon svg { width: 26px; height: 26px; }
   .ic-empty-h {
-    font-family: 'Geist', 'Inter', -apple-system, system-ui, sans-serif;
+    font-family: var(--font-mono);
     font-size: 22px; font-weight: 600; letter-spacing: -0.015em;
     color: var(--text-0);
     margin: 0 0 10px;
@@ -503,9 +502,7 @@
     background: linear-gradient(180deg, var(--accent-bright), var(--accent));
     color: var(--accent-fg);
     border: none; cursor: pointer;
-    box-shadow:
-      0 6px 18px var(--accent-glow),
-      inset 0 1px 0 rgba(255, 255, 255, 0.20);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.20), var(--shadow-2);
     transition: transform 140ms;
   }
   .ic-cta:hover { transform: translateY(-1px); }
@@ -604,7 +601,7 @@
   }
   .ic-link-card[data-agent="claude"] .ic-pulse {
     background: var(--src-claude);
-    box-shadow: 0 0 6px color-mix(in srgb, var(--src-claude) 70%, transparent);
+    box-shadow: var(--shadow-1);
   }
   @keyframes ic-pulse {
     0%, 100% { opacity: 0.45; transform: scale(0.85); }
@@ -703,7 +700,7 @@
   }
   .ic-quick-send:hover:not(:disabled) {
     transform: translateY(-1px);
-    box-shadow: 0 3px 10px var(--accent-glow), inset 0 1px 0 rgba(255, 255, 255, 0.18);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18), var(--shadow-2);
   }
   .ic-quick-send:disabled { opacity: 0.45; cursor: not-allowed; box-shadow: none; }
   /* Queue variant — same shape, neutral fill so the user reads

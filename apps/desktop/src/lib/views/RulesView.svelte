@@ -32,7 +32,7 @@
   }
   .rules-header { padding: 8px 0 28px; max-width: 880px; margin: 0 auto; width: 100%; }
   .view-title {
-    font-family: 'Geist', 'Inter', -apple-system, system-ui, sans-serif;
+    font-family: var(--font-mono);
     font-size: 38px; font-weight: 600;
     
     letter-spacing: -0.02em;
@@ -42,7 +42,7 @@
   .view-sub { font-size: 14px; color: var(--text-2); margin: 0; line-height: 1.5; }
   .rules-header .view-sub code {
     background: var(--bg-2); padding: 1px 6px; border-radius: 4px;
-    font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', monospace;
+    font-family: var(--font-mono);
     font-size: 12px; color: var(--text-1);
   }
   .rules-body {
@@ -54,7 +54,7 @@
     background: var(--bg-1); border: 1px solid var(--border);
     border-radius: 14px; color: var(--text-0);
     padding: 18px 20px; font-size: 13px; line-height: 1.6;
-    font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', monospace;
+    font-family: var(--font-mono);
     resize: none;
     box-shadow: var(--shadow-1);
     transition: border-color 150ms, box-shadow 150ms;

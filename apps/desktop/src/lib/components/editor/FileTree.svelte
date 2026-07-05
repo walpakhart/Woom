@@ -611,16 +611,17 @@
   .tree { height: 100%; overflow: auto; padding: 4px 0; }
   .tree-state { padding: 8px 14px; font-size: 11.5px; color: var(--text-2); }
   .tree-error { color: var(--error); }
+  /* Mockup tree rows: 11.5px, radius 6, active = bg-nav fill. */
   .tree-row {
-    display: flex; align-items: center; gap: 6px;
-    width: 100%; padding: 3px 8px 3px 8px;
-    font-size: 12.5px; color: var(--text-1);
-    text-align: left; border-radius: 0;
+    display: flex; align-items: center; gap: 7px;
+    width: 100%; padding: 3.5px 8px;
+    font-size: 11.5px; color: var(--text-1);
+    text-align: left; border-radius: var(--r-btn);
     background: transparent;
     transition: background 80ms ease;
   }
-  .tree-row:hover { background: var(--bg-2); color: var(--text-0); }
-  .tree-row.selected { background: var(--accent-soft); color: var(--accent-bright); }
+  .tree-row:hover { background: var(--bg-hover); color: var(--text-0); }
+  .tree-row.selected { background: var(--bg-nav); color: var(--text-0); font-weight: 600; }
   .tree-row.dir { color: var(--text-0); font-weight: 500; }
   /* Folder the inline create input is nested under — highlight so it's
      unmistakable WHERE the new file/folder lands (VSCode-style). */
@@ -663,34 +664,36 @@
   .tree-row.selected .tree-icon { color: var(--accent-bright); }
   .tree-row.ignored .tree-icon { color: var(--text-mute); opacity: 0.55; }
   .tree-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+  /* Mockup: bare letter on the right, no pill background. */
   .tree-git {
     font-size: 10px; font-weight: 600;
-    padding: 0 5px;
-    border-radius: 3px;
+    padding: 0;
+    border-radius: 0;
     margin-left: 6px;
     flex-shrink: 0;
-    min-width: 14px; text-align: center;
+    min-width: 12px; text-align: right;
+    background: transparent;
   }
-  .tree-git--mod { color: var(--warning); background: rgba(217, 184, 110, 0.14); }
-  .tree-git--add { color: var(--success); background: rgba(204, 120, 92, 0.16); }
-  .tree-git--del { color: var(--error); background: rgba(232, 130, 100, 0.18); }
-  .tree-git--new { color: var(--accent-bright); background: var(--accent-soft); }
-  .tree-git--ren { color: var(--accent); background: var(--accent-soft); }
-  .tree-git--conflict { color: var(--error); background: rgba(232, 130, 100, 0.25); }
+  .tree-git--mod { color: var(--warn); }
+  .tree-git--add { color: var(--ok); }
+  .tree-git--del { color: var(--err); }
+  .tree-git--new { color: var(--ok); }
+  .tree-git--ren { color: var(--text-mute); }
+  .tree-git--conflict { color: var(--err); }
 
   /* Git state colours the row's NAME text (VS Code style) — no left rail,
      no dots, just the filename tinted + a letter badge on the right. The
      same status set drives files AND folders (folder = rolled-up code).
      `.selected` / `.ignored` still win since their rules come later /
      are more specific. Untracked (`new`) = accent, modified = `--warning`. */
-  .tree-row[data-git='mod'] .tree-name { color: var(--warning); }
-  .tree-row[data-git='add'] .tree-name { color: var(--success); }
-  .tree-row[data-git='del'] .tree-name { color: var(--error); }
-  .tree-row[data-git='ren'] .tree-name { color: var(--accent-bright); }
-  .tree-row[data-git='new'] .tree-name { color: var(--accent-bright); }
-  .tree-row[data-git='conflict'] .tree-name { color: var(--error); }
-  /* Selection keeps its own accent text so a selected changed row stays legible. */
-  .tree-row.selected .tree-name { color: var(--accent-bright); }
+  .tree-row[data-git='mod'] .tree-name { color: var(--warn); }
+  .tree-row[data-git='add'] .tree-name { color: var(--ok); }
+  .tree-row[data-git='del'] .tree-name { color: var(--err); }
+  .tree-row[data-git='ren'] .tree-name { color: var(--text-1); }
+  .tree-row[data-git='new'] .tree-name { color: var(--ok); }
+  .tree-row[data-git='conflict'] .tree-name { color: var(--err); }
+  /* Selection keeps ink text so a selected changed row stays legible. */
+  .tree-row.selected .tree-name { color: var(--text-0); }
 
   /* Inline rename input — sized to fit the row, takes the same font
      so the swap doesn't shift the row height. */
@@ -718,7 +721,7 @@
     background: var(--bg-3);
     border: 1px solid var(--border-neutral-hi);
     border-radius: 8px;
-    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.36);
+    box-shadow: var(--shadow-3);
   }
   .tree-ctx-item {
     display: block; width: 100%;

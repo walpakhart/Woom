@@ -355,37 +355,37 @@
 {/if}
 
 <style>
+  /* Quiet one-liner — the mockup has no cwd bar at all, so this
+     reads as a whisper under the header: text chips, no fills. */
   .wb {
-    flex: 0 0 38px;
+    flex: 0 0 32px;
     display: flex; align-items: center; gap: 8px;
     padding: 0 22px;
-    border-bottom: 1px solid var(--border);
-    background: var(--bg-1);
+    border-bottom: 1px solid var(--border-lo);
+    background: var(--bg-0);
     min-height: 0;
-    font-size: 11.5px;
-    color: var(--text-1);
+    font-size: 10.5px;
+    color: var(--text-mute);
   }
-  .wb--linked {
-    background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 4%, transparent), transparent);
-  }
+  .wb--linked { background: var(--bg-0); }
 
   .wb-chip {
     display: inline-flex; align-items: center; gap: 6px;
-    padding: 4px 10px;
-    border-radius: 7px;
-    background: var(--bg-2);
-    border: 1px solid var(--border);
-    color: var(--text-1);
-    font-size: 11.5px;
+    padding: 2px 8px;
+    border-radius: var(--r-chip);
+    background: transparent;
+    border: 1px solid var(--border-hi);
+    color: var(--text-mute);
+    font-size: 10.5px;
     cursor: pointer;
-    transition: border-color 140ms, background 140ms, color 140ms;
+    transition: border-color 140ms, color 140ms;
   }
-  .wb-chip:hover { color: var(--text-0); border-color: var(--border-hi); }
-  .wb-chip--has { color: var(--text-0); border-color: var(--border-hi); }
+  .wb-chip:hover { color: var(--text-0); border-color: var(--border-hi2); }
+  .wb-chip--has { color: var(--text-1); }
   .wb-chip--linked {
-    color: var(--accent-bright);
-    background: var(--accent-soft);
-    border-color: var(--border-accent-2);
+    color: var(--src-editor);
+    background: transparent;
+    border-color: color-mix(in srgb, var(--src-editor) 45%, transparent);
   }
   .wb-chip--muted { opacity: 0.6; }
   .wb-chip svg { width: 12px; height: 12px; flex-shrink: 0; }
@@ -493,7 +493,7 @@
     background: var(--bg-1);
     border: 1px solid var(--border-hi);
     border-radius: 9px;
-    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.40), 0 0 0 1px rgba(0,0,0,0.18);
+    box-shadow: 0 0 0 1px rgba(0,0,0,0.18), var(--shadow-3);
     overflow: hidden;
     z-index: 220;
   }

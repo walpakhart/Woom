@@ -464,7 +464,7 @@
   .rp-empty-p { font-size: 12.5px; line-height: 1.5; max-width: 280px; margin: 0; }
   .rp-empty-agent {
     color: var(--text-1);
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono);
     font-size: 12px;
   }
 
@@ -608,7 +608,7 @@
   .rp-dot--loading { background: var(--accent-bright); }
 
   .rp-row-tag {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono);
     font-size: 10px; font-weight: 700;
     padding: 1px 6px;
     border-radius: 4px;
@@ -625,7 +625,7 @@
     width: 16px; height: 16px;
     display: grid; place-items: center;
     border-radius: 4px;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono);
     font-size: 9.5px; font-weight: 700;
     color: var(--accent-fg);
     flex: 0 0 auto;

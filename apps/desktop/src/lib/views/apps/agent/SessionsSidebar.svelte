@@ -35,37 +35,30 @@
 
   type Session = (typeof sessionsState.list)[number];
 
-  const groups = $derived.by(() => {
+  /* Flat, newest-first — the paper mockup has no date groups; the
+     status dot + meta line carry the recency signal instead. */
+  const sorted = $derived.by(() => {
     const items = sessionsState.list.filter((s) => !s.archived);
-    const dayMs = 24 * 60 * 60 * 1000;
     const sessTime = (s: Session) => {
       const last = s.messages[s.messages.length - 1]?.at;
       return last ? new Date(last).getTime() : 0;
     };
-    const sorted = [...items].sort((a, b) => sessTime(b) - sessTime(a));
-    const today: Session[] = [];
-    const yesterday: Session[] = [];
-    const week: Session[] = [];
-    const older: Session[] = [];
-    for (const s of sorted) {
-      const t = sessTime(s);
-      if (t === 0) {
-        older.push(s);
-        continue;
-      }
-      const ageDays = Math.floor((now - t) / dayMs);
-      if (ageDays < 1) today.push(s);
-      else if (ageDays < 2) yesterday.push(s);
-      else if (ageDays < 7) week.push(s);
-      else older.push(s);
-    }
-    return [
-      { label: 'Today', items: today },
-      { label: 'Yesterday', items: yesterday },
-      { label: 'Earlier this week', items: week },
-      { label: 'Older', items: older }
-    ].filter((g) => g.items.length > 0);
+    return [...items].sort((a, b) => sessTime(b) - sessTime(a));
   });
+
+  /** Meta line per the mockup: `sonnet-4-6 · streaming · 2m` /
+   *  `idle · wt/branch` / `done · yesterday`. */
+  function sessMeta(sess: Session): string {
+    const parts: string[] = [];
+    const model = sess.claudeModel?.replace(/^claude-/, '');
+    if (model) parts.push(model);
+    parts.push(sess.sending ? 'streaming' : 'idle');
+    if (sess.worktreeBranch) parts.push(sess.worktreeBranch);
+    const lastAt = sess.messages[sess.messages.length - 1]?.at;
+    const t = shortTime(lastAt ?? undefined);
+    if (t) parts.push(t);
+    return parts.join(' · ');
+  }
 
   const totalCount = $derived(
     sessionsState.list.filter((s) => !s.archived).length
@@ -270,68 +263,45 @@
 
 <aside class="ssb app-pane">
   <div class="ssb-head">
-    <span class="ssb-logo" data-agent={kind} aria-hidden="true">
-      <BrandIcon kind={kind} size={16} />
-    </span>
-    <h2 class="ssb-h">{label}</h2>
-    <button class="ssb-headbtn" onclick={createNew} title="New chat (⌘N)">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
-    </button>
+    <span class="ssb-h">Sessions</span>
+    <button class="ssb-headbtn" onclick={createNew} title="New session (⌘N)">+</button>
   </div>
 
   <div class="ssb-list">
-    {#if groups.length === 0}
+    {#if sorted.length === 0}
       <div class="ssb-empty">
         <p class="ssb-empty-h serif">No {label} sessions yet</p>
         <p class="ssb-empty-p">
-          Click <strong>+ New chat</strong> to begin. Drop a Jira ticket,
+          Click <strong>+</strong> to begin. Drop a Jira ticket,
           PR, or file onto the chat to attach context.
         </p>
       </div>
     {:else}
-      {#each groups as g (g.label)}
-        <div class="ssb-group-label">{g.label}</div>
-        {#each g.items as sess (sess.id)}
-          {@const isActive = sess.id === sessionsState.activeIds.claude}
-          {@const lastMsg = sess.messages[sess.messages.length - 1]}
-          {@const lastAt = lastMsg?.at ?? null}
-          {@const msgCount = sess.messages.length}
-          <div
-            class="ssb-row"
-            class:active={isActive}
-            role="button"
-            tabindex="0"
-            onclick={() => pickSession(sess.id)}
-            onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') pickSession(sess.id); }}
-            oncontextmenu={(e) => openSessCtx(e, sess)}
-          >
-            <div class="ssb-icon">
-              <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2 L14.5 9.5 L22 12 L14.5 14.5 L12 22 L9.5 14.5 L2 12 L9.5 9.5 Z"/></svg>
-            </div>
-            <div class="ssb-body">
-              <div class="ssb-title">{sess.title || 'Untitled chat'}</div>
-              <div class="ssb-meta">
-                <span class="mono">{shortTime(lastAt ?? undefined) || relativeTime(lastAt ?? new Date().toISOString(), now)}</span>
-                <span class="ssb-dot">·</span>
-                <span>{msgCount} msgs</span>
-                {#if memCountFor(sess.id) > 0}
-                  <span class="ssb-dot">·</span>
-                  <span class="ssb-mem mono" title="{memCountFor(sess.id)} long-term memories saved from this chat">
-                    <svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                      <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
-                    </svg>
-                    <span>{memCountFor(sess.id)}</span>
-                  </span>
-                {/if}
-                {#if sess.sending}
-                  <span class="ssb-dot">·</span>
-                  <span class="ssb-running">◷ thinking</span>
-                {:else if sess.worktreeBranch}
-                  <span class="ssb-dot">·</span>
-                  <span class="ssb-link">☘ Editor</span>
-                {/if}
-              </div>
-            </div>
+      {#each sorted as sess (sess.id)}
+        {@const isActive = sess.id === sessionsState.activeIds.claude}
+        <div
+          class="ssb-row"
+          class:active={isActive}
+          role="button"
+          tabindex="0"
+          onclick={() => pickSession(sess.id)}
+          onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') pickSession(sess.id); }}
+          oncontextmenu={(e) => openSessCtx(e, sess)}
+        >
+          <div class="ssb-row-top">
+            <span
+              class="ssb-status"
+              class:pulse={sess.sending}
+              class:idle={!sess.sending}
+            ></span>
+            <span class="ssb-title" class:bold={isActive}>{sess.title || 'Untitled chat'}</span>
+            {#if memCountFor(sess.id) > 0}
+              <span class="ssb-mem" title="{memCountFor(sess.id)} long-term memories saved from this chat">
+                <svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
+                </svg>
+              </span>
+            {/if}
             <button
               class="ssb-del"
               title="Archive chat"
@@ -341,7 +311,8 @@
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8v13H3V8M1 3h22v5H1zM10 12h4"/></svg>
             </button>
           </div>
-        {/each}
+          <div class="ssb-meta">{sessMeta(sess)}</div>
+        </div>
       {/each}
     {/if}
 
@@ -397,15 +368,6 @@
       {/if}
     {/if}
 
-    <button class="ssb-new" onclick={createNew}>
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
-      New chat
-    </button>
-  </div>
-
-  <div class="ssb-foot mono" title="Total {label} sessions">
-    <span class="ssb-foot-pip"></span>
-    <span>{totalCount} sessions</span>
   </div>
 </aside>
 
@@ -418,257 +380,121 @@
   }
 
   .ssb-head {
-    display: flex; align-items: center;
-    padding: 16px 18px 12px;
-    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 18px 10px;
     flex-shrink: 0;
-    gap: 8px;
   }
-  /* Agent logo chip — Claude burst in the agent's ACTUAL brand color
-     (coral), not the app shell's accent. Brand identity stays
-     per-source even when the surrounding app paints in mint/sage. */
-  .ssb-logo {
-    width: 26px; height: 26px;
-    display: inline-flex; align-items: center; justify-content: center;
-    border-radius: 7px;
-    flex-shrink: 0;
-    line-height: 0;
-  }
-  .ssb-logo[data-agent="claude"] {
-    color: var(--src-claude);
-    background: color-mix(in srgb, var(--src-claude) 12%, var(--bg-2));
-    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--src-claude) 28%, transparent);
-  }
-  /* BrandIcon renders the SVG / IMG with its own width/height
-     attributes, so we just keep the centering rhythm and let the
-     glyph honour its intrinsic size. */
   .ssb-h {
-    font-family: 'Geist', 'Inter', -apple-system, system-ui, sans-serif;
-    font-size: 18px; font-weight: 600;
-    flex: 1;
-    letter-spacing: -0.01em;
-    color: var(--text-0);
-    margin: 0;
+    font-size: 9.5px; font-weight: 600;
+    letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--text-faint);
   }
   .ssb-headbtn {
-    width: 28px; height: 28px;
-    display: grid; place-items: center;
-    border-radius: 7px;
+    font-size: 12px;
+    color: var(--text-mute);
+    border: 1px solid var(--border-hi);
+    border-radius: var(--r-chip);
+    padding: 0 6px;
     background: transparent;
-    border: 0;
-    color: var(--text-2);
     cursor: pointer;
-    transition: background 120ms;
+    line-height: 1.5;
   }
-  .ssb-headbtn:hover { background: var(--bg-3); color: var(--text-0); }
-  .ssb-headbtn svg { width: 14px; height: 14px; }
+  .ssb-headbtn:hover { color: var(--text-0); border-color: var(--border-hi2); }
 
   .ssb-list {
     flex: 1; overflow-y: auto;
-    padding: 8px 8px 12px;
-  }
-
-  .ssb-group-label {
-    padding: 14px 10px 8px;
-    font-size: 9.5px; font-weight: 700;
-    letter-spacing: 0.10em;
-    text-transform: uppercase;
-    color: var(--text-mute);
+    padding: 0 10px 12px;
   }
 
   .ssb-row {
-    display: flex; align-items: flex-start; gap: 10px;
-    padding: 10px 11px;
-    border-radius: 9px;
-    margin-bottom: 2px;
-    position: relative;
-    transition: background 120ms, border-color 120ms;
-    border: 1px solid transparent;
+    display: block;
     width: 100%;
-    text-align: left;
+    padding: 9px 10px;
+    border-radius: 8px;
+    margin-bottom: 2px;
     background: transparent;
     cursor: pointer;
+    text-align: left;
+    transition: background 120ms;
   }
-  .ssb-row::before {
-    content: '';
-    position: absolute;
-    left: 4px; top: 12px; bottom: 12px;
-    width: 2px;
-    border-radius: 2px;
-    background: color-mix(in srgb, var(--app-tone, var(--src-claude)) 40%, transparent);
-    opacity: 0.5;
-    transition: opacity 200ms;
-  }
-  .ssb-row:hover { background: var(--bg-2); }
-  .ssb-row.active {
-    background: var(--bg-2);
-    border-color: var(--border-hi);
-  }
-  .ssb-row.active::before {
-    background: var(--app-tone, var(--src-claude));
-    opacity: 1;
-    box-shadow: 0 0 8px var(--app-tone, var(--src-claude));
-  }
+  .ssb-row:hover { background: var(--bg-hover); }
+  .ssb-row.active { background: var(--bg-nav); }
 
-  .ssb-icon {
-    width: 22px; height: 22px;
-    display: grid; place-items: center;
-    border-radius: 6px;
-    background: var(--bg-3);
-    color: var(--app-tone, var(--src-claude));
-    flex-shrink: 0;
-    margin-left: 4px;
-    margin-top: 2px;
+  .ssb-row-top { display: flex; align-items: center; gap: 7px; }
+  .ssb-status {
+    width: 6px; height: 6px; border-radius: 50%;
+    flex: none;
+    background: var(--text-faint);
   }
-  .ssb-icon svg { width: 12px; height: 12px; fill: currentColor; }
-
-  .ssb-body { flex: 1; min-width: 0; }
+  .ssb-status.pulse {
+    background: var(--src-claude);
+    animation: ssb-pulsedot 1.6s infinite;
+  }
   .ssb-title {
-    font-size: 13px; font-weight: 500;
-    color: var(--text-0);
+    font-size: 12px; color: var(--text-0);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    min-width: 0; flex: 1;
+  }
+  .ssb-title.bold { font-weight: 600; }
+  .ssb-meta {
+    font-size: 10px; color: var(--text-faint);
+    margin-top: 3px;
+    padding-left: 13px;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
-  .ssb-meta {
-    display: flex; align-items: center; gap: 6px;
-    margin-top: 3px;
-    font-size: 10.5px;
-    color: var(--text-mute);
-  }
-  .ssb-meta .mono { font-size: 10px; }
-  .ssb-dot { opacity: 0.6; }
-  .ssb-running { color: var(--app-tone, var(--accent-bright)); }
-  .ssb-link { color: var(--src-editor); }
-  /* Memory-presence badge — small inline pill with the bookmark
-     glyph + count. Mute tone so it doesn't compete with the running
-     /linked indicators next to it. */
-  .ssb-mem {
-    display: inline-flex;
-    align-items: center;
-    gap: 3px;
-    color: var(--text-mute);
-  }
-  .ssb-mem svg { flex-shrink: 0; opacity: 0.85; }
+  .ssb-mem { color: var(--text-faint); display: inline-flex; flex: none; }
 
-  /* Delete-X — sits on the right of the row, fades in on hover.
-     Hover state turns it red so the user feels the destructive
-     intent before clicking. */
   .ssb-del {
-    flex-shrink: 0;
-    width: 22px; height: 22px;
-    display: grid; place-items: center;
-    border-radius: 5px;
+    display: none;
+    width: 18px; height: 18px;
+    place-items: center;
+    border: 0; border-radius: 5px;
     background: transparent;
-    border: 0;
-    color: var(--text-mute);
+    color: var(--text-faint);
     cursor: pointer;
-    opacity: 0;
-    margin-left: 2px;
-    transition: opacity 100ms, background 100ms, color 100ms;
+    flex: none;
   }
   .ssb-del svg { width: 12px; height: 12px; }
-  .ssb-row:hover .ssb-del,
-  .ssb-row:focus-within .ssb-del { opacity: 0.85; }
-  .ssb-del:hover {
-    opacity: 1;
-    color: var(--error);
-    background: rgba(232, 130, 100, 0.10);
-  }
+  .ssb-row:hover .ssb-del { display: grid; }
+  .ssb-del:hover { color: var(--err); background: var(--bg-3); }
 
-  /* Archived section — collapsed by default, muted so it reads as a
-     secondary shelf below the live chats. */
+  .ssb-empty { padding: 22px 14px; }
+  .ssb-empty-h { font-size: 14px; color: var(--text-0); margin: 0 0 8px; }
+  .ssb-empty-p { font-size: 11.5px; color: var(--text-mute); line-height: 1.55; margin: 0; }
+
   .ssb-arch-toggle {
-    display: flex; align-items: center; gap: 7px;
-    width: calc(100% - 8px);
-    margin: 10px 4px 2px;
-    padding: 7px 10px;
+    display: flex; align-items: center; gap: 6px;
+    width: 100%;
+    margin-top: 12px;
+    padding: 6px 10px;
+    border: 0; border-radius: var(--r-item);
     background: transparent;
-    border: 0;
-    border-top: 1px solid var(--border);
-    border-radius: 0;
-    color: var(--text-mute);
-    font-size: 9.5px; font-weight: 700;
-    letter-spacing: 0.10em;
-    text-transform: uppercase;
+    font-size: 10px; font-weight: 600;
+    letter-spacing: 0.10em; text-transform: uppercase;
+    color: var(--text-faint);
     cursor: pointer;
-    transition: color 120ms;
   }
-  .ssb-arch-toggle:hover { color: var(--text-1); }
-  .ssb-arch-caret { transition: transform 140ms; flex-shrink: 0; }
+  .ssb-arch-toggle:hover { color: var(--text-1); background: var(--bg-hover); }
+  .ssb-arch-caret { transition: transform 140ms; }
   .ssb-arch-caret.open { transform: rotate(90deg); }
-  .ssb-arch-count {
-    margin-left: auto;
-    font-size: 10px;
-    color: var(--text-mute);
-    background: var(--bg-3);
-    border-radius: 8px;
-    padding: 0 6px;
-  }
-  .ssb-row--archived { opacity: 0.72; cursor: default; }
-  .ssb-row--archived:hover { opacity: 1; background: var(--bg-2); }
-  .ssb-row--archived .ssb-icon { color: var(--text-mute); }
+  .ssb-arch-count { margin-left: auto; }
+
+  .ssb-row--archived { opacity: 0.75; }
+  .ssb-row--archived:hover { opacity: 1; }
   .ssb-arch-act {
-    flex-shrink: 0;
-    width: 24px; height: 24px;
     display: grid; place-items: center;
-    border-radius: 5px;
+    width: 20px; height: 20px;
+    border: 0; border-radius: 5px;
     background: transparent;
-    border: 0;
-    color: var(--text-mute);
+    color: var(--text-faint);
     cursor: pointer;
-    opacity: 0;
-    transition: opacity 100ms, background 100ms, color 100ms;
+    flex: none;
   }
-  .ssb-row--archived:hover .ssb-arch-act,
-  .ssb-row--archived:focus-within .ssb-arch-act { opacity: 0.85; }
-  .ssb-arch-act:hover { opacity: 1; color: var(--text-0); background: var(--bg-3); }
-  .ssb-arch-act--danger:hover { color: var(--error); background: rgba(232, 130, 100, 0.10); }
+  .ssb-arch-act:hover { color: var(--text-0); background: var(--bg-3); }
+  .ssb-arch-act--danger:hover { color: var(--err); }
 
-  .ssb-new {
-    margin: 8px 4px;
-    padding: 11px;
-    display: flex; align-items: center; justify-content: center;
-    gap: 8px;
-    border: 1px dashed var(--border-neutral-hi);
-    border-radius: 9px;
-    color: var(--text-2);
-    font-size: 12.5px; font-weight: 500;
-    background: transparent;
-    cursor: pointer;
-    width: calc(100% - 8px);
-    transition: all 140ms;
-  }
-  .ssb-new svg { width: 13px; height: 13px; }
-  .ssb-new:hover {
-    color: var(--accent-bright);
-    border-color: var(--border-accent);
-    background: var(--accent-soft);
-  }
-
-  .ssb-foot {
-    flex: 0 0 auto;
-    display: flex; align-items: center; gap: 8px;
-    padding: 8px 16px;
-    border-top: 1px solid var(--border);
-    font-size: 10px; color: var(--text-mute);
-  }
-  .ssb-foot-pip {
-    width: 5px; height: 5px; border-radius: 50%;
-    background: var(--success);
-    box-shadow: 0 0 5px var(--success);
-  }
-
-  .ssb-empty {
-    text-align: center;
-    padding: 30px 18px;
-  }
-  .ssb-empty-h {
-    font-family: 'Geist', 'Inter', -apple-system, system-ui, sans-serif;
-    font-size: 20px; font-weight: 600; letter-spacing: -0.01em;
-    color: var(--text-0);
-    margin: 0 0 8px;
-  }
-  .ssb-empty-p {
-    font-size: 12px; color: var(--text-2);
-    line-height: 1.5; margin: 0;
+  @keyframes ssb-pulsedot {
+    0%, 100% { opacity: 0.35; }
+    50% { opacity: 1; }
   }
 </style>

@@ -351,7 +351,7 @@
     width: 720px; max-width: 92vw;
     max-height: 70vh;
     display: flex; flex-direction: column;
-    background: linear-gradient(180deg, var(--bg-2), var(--bg-1));
+    background: var(--bg-0);
     border: 1px solid var(--border-hi);
     border-radius: var(--r-modal, 16px);
     overflow: hidden;
@@ -463,7 +463,7 @@
     border-radius: 3px;
     padding: 0 5px;
     color: var(--text-1);
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono);
     font-size: 10px;
   }
 

@@ -154,7 +154,7 @@
     background: var(--bg-1);
     border: 1px solid var(--border-neutral);
     border-radius: 8px;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+    box-shadow: var(--shadow-2);
     z-index: 4;
     backdrop-filter: blur(6px);
   }

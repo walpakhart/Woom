@@ -408,7 +408,7 @@
     width: 760px; max-width: 92vw;
     max-height: 76vh;
     display: flex; flex-direction: column;
-    background: linear-gradient(180deg, var(--bg-2), var(--bg-1));
+    background: var(--bg-0);
     border: 1px solid var(--border-hi);
     border-radius: var(--r-modal, 16px);
     overflow: hidden;
@@ -469,7 +469,7 @@
     margin-left: 2px;
   }
   .sfo-meta {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono);
     font-size: 11px;
     color: var(--text-mute);
     flex-shrink: 0;
@@ -498,7 +498,7 @@
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   .sfo-group-count {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono);
     font-size: 10px;
     color: var(--text-mute);
     background: var(--bg-3);
@@ -544,7 +544,7 @@
     font-weight: 600;
   }
   .mono {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono);
   }
 
   .sfo-foot {
@@ -561,7 +561,7 @@
     display: inline-grid; place-items: center;
     height: 16px; min-width: 16px;
     padding: 0 4px;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono);
     font-size: 9.5px;
     background: var(--bg-3);
     border: 1px solid var(--border);

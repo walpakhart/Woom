@@ -8,6 +8,68 @@ release runbook (how this CHANGELOG feeds `latest-mac.json`) lives in
 
 ## Unreleased
 
+## 0.5.0 — 2026-07-05
+
+The paper redesign. Woom's entire visual language rebuilt from scratch:
+monochrome engraved-paper aesthetic, IBM Plex Mono everywhere, one
+seamless canvas instead of floating panels.
+
+### Changed
+
+- **Monochrome ink language** — the app speaks in paper, greys and ink
+  only. All per-source brand colours (Jira blue, GitHub violet, Sentry
+  plum, Canvas teal, Claude clay) retired across both themes; source
+  identity now reads from icons and labels. Status colours (ok / warn /
+  err) remain the only chromatic voices. The Claude sidebar mark is
+  rendered monochrome via a CSS mask over the brand silhouette.
+- **Light theme "dim paper"** — no pure white anywhere. The whole
+  surface ladder sits 4–5% dimmer (page `#EDEFF2`, cards/code
+  `#F3F5F7`) so large editor and code areas no longer burn.
+- **Dark theme "cool noir"** — deep blue-grey night surface
+  (`#0E1116` base) replacing the previous warm charcoal.
+- **Engraved shadows** — blur shadows replaced by stepped ink bands
+  (2/4/6/8px offsets, fading) across ~100 call sites, like an
+  etching's hatch.
+- **IBM Plex Mono everywhere** — single typeface for UI, code and
+  headings.
+- **One seamless canvas** — app padding/gaps collapsed to zero, panes
+  flattened, hairline separators instead of floating cards.
+- **Titlebar + collapsible sidebar** — 34px text-centred titlebar
+  aligned with native traffic lights; sidebar collapses 212 → 56px
+  with brand icons; status strip only appears while something runs.
+- **Claude solo** — flat sessions sidebar with activity dots,
+  single-line chat header, printed tool chips, 960px composer card
+  with ink Send.
+- **Editor** — quiet 36px activity bar in both layouts, tree header
+  shows `repo on branch`, code sits on the raised card surface,
+  whisper statusbar without a separator line.
+- **Terminal / Canvas** — terminal is a permanent dark inset reading
+  the shared `--dark-*` tokens; canvas gets the dotted-paper grid and
+  a proper header.
+- **Sentry** — graphite stack-trace inset + 24h sparklines end-to-end
+  (Rust `stats_24h` through to 10-bucket spark bars in the list).
+- **Home** — rewritten: hero, two-column inbox, agent activity feed,
+  dark background-task card.
+- **Model & effort picker** — canvas reactor replaced by a paper menu
+  (model list + ✓) and a stepped-ink effort slider.
+- **App window + icons** — window background follows the dim paper
+  tone; app icon set regenerated for the squircle mark.
+
+### Fixed
+
+- **Editor activity bar seam** — the bar was squashed to a 36×36 box
+  by a wrong flex basis (its buttons only rendered via overflow),
+  letting the pane's hairline peek through as a broken grey stripe.
+- **Archived chats resurfacing** — archived sessions no longer appear
+  in link pickers, linked-agent chips, docks or rails (editor, canvas,
+  terminal — 7 derivations now skip `archived`).
+- **Commit-card edits lost on stream replay** — user-edited commit
+  messages survive action-card re-renders (keep-by-id in addAction).
+- **Commit message history** — ↑/↓ in the commit composer walks
+  previously used messages (persisted per machine).
+- **Terminal blank-on-open** — font preload waited on the removed
+  JetBrains Mono face; now waits on IBM Plex Mono.
+
 ## 0.4.9 — 2026-06-19
 
 Bumps version 0.4.8 → 0.4.9 across `apps/desktop/package.json`,

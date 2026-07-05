@@ -1719,11 +1719,15 @@ export function getPendingEditEvents(
 }
 
 export function addAction(sessionId: string, action: ClaudeAction) {
-  sessionsState.list = sessionsState.list.map((s) =>
-    s.id === sessionId
-      ? { ...s, actions: [...s.actions.filter((a) => a.id !== action.id), action] }
-      : s
-  );
+  sessionsState.list = sessionsState.list.map((s) => {
+    if (s.id !== sessionId) return s;
+    /* Same tool_use id already present → keep the EXISTING card.
+       Stream replays (chat switch, resume rehydrate) re-emit the
+       original tool_use; overwriting here silently reverted any
+       message/body edits the user had typed into the card. */
+    if (s.actions.some((a) => a.id === action.id)) return s;
+    return { ...s, actions: [...s.actions, action] };
+  });
 }
 
 export function updateAction(

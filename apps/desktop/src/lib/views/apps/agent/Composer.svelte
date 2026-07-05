@@ -8,7 +8,7 @@
      anchored to the textarea, and OS / Editor drag drops accepted
      into the input as @-mentions. */
   import { sessionsState, setSessionInput, updateSession, attachPathsToSession } from '$lib/state/sessions.svelte';
-  import { quotaState, refreshPlanUsage } from '$lib/state/quota.svelte';
+  import { refreshPlanUsage } from '$lib/state/quota.svelte';
   import { isImagePath } from '$lib/format';
   import { convertFileSrc, invoke } from '@tauri-apps/api/core';
   import { open as openDialog } from '@tauri-apps/plugin-dialog';
@@ -29,9 +29,7 @@
     claudeEffort,
     claudeModels,
     detectTriggerPosition,
-    fmtPct,
     modelContextLimit,
-    pctClass,
     spliceTriggerInsertion,
   } from './composerHelpers';
 
@@ -773,40 +771,6 @@
     return () => ro?.disconnect();
   });
 
-  /* Force-refresh state for the 5H/7D quota pills (SDD Phase 3).
-   * Each pill keeps its own spin flag so a click on one doesn't
-   * spin the other. `forceRefreshQuota` ensures the animation is
-   * visible at least 800ms even on a fast-network response. */
-  let refreshSpin5h = $state(false);
-  let refreshSpin7d = $state(false);
-  async function forceRefreshQuota(bucket: '5h' | '7d') {
-    if (bucket === '5h') refreshSpin5h = true;
-    else refreshSpin7d = true;
-    const minVisibleMs = 800;
-    const t0 = Date.now();
-    try {
-      await refreshPlanUsage({ force: true });
-    } catch {
-      notify({
-        kind: 'error',
-        title: 'Quota refresh failed',
-        body: 'Try again in a minute — the endpoint may be rate-limiting.',
-      });
-    }
-    const elapsed = Date.now() - t0;
-    if (elapsed < minVisibleMs) {
-      await new Promise((r) => setTimeout(r, minVisibleMs - elapsed));
-    }
-    /* Hold the spin flag 200ms past the min-visible window so the
-     * CSS fade-out (when we add transition: opacity) has time to
-     * run. Direct flip is fine today since the animation is keyed
-     * on the class itself, not opacity. */
-    setTimeout(() => {
-      if (bucket === '5h') refreshSpin5h = false;
-      else refreshSpin7d = false;
-    }, 200);
-  }
-
   /** Snapshot of bundled / system RTK availability. Null until the
    *  initial `getRtkStatus()` resolves; the derive below treats null
    *  as "still probing" and renders the pill conservatively (on). */
@@ -864,9 +828,6 @@
   const RING_C = 50.27;
   const ctxRingOffset = $derived(RING_C * (1 - ctxPct / 100));
 
-  const fiveHour = $derived(quotaState.usage?.five_hour ?? null);
-  const sevenDay = $derived(quotaState.usage?.seven_day ?? null);
-
   /* Model catalogues + claudeEffort moved to ./composerHelpers.ts
    * (wave-1 phase-6 split). Edit the lists there when adding new
    * SKUs or changing labels — Composer just renders them. */
@@ -883,8 +844,6 @@
       thinkingEffort: (v as 'auto' | 'low' | 'medium' | 'high' | 'max' | 'ultracode' | null) ?? null
     });
   }
-
-  /* fmtPct + pctClass moved to ./composerHelpers.ts. */
 
   /* Attachments — only files / images dragged or pasted from OUTSIDE the
      app. In-app @-mentions (picker, editor-tree drag, line ranges) are
@@ -1086,42 +1045,6 @@
         </div>
       {/if}
 
-      <div class="cmp-row">
-        <div class="cmp-prefix">
-          <div class="cmp-attach-wrap">
-            <button
-              class="cmp-iconbtn"
-              class:active={attachMenu}
-              title="Attach files or folders"
-              aria-haspopup="menu"
-              aria-expanded={attachMenu}
-              onclick={() => (attachMenu = !attachMenu)}
-            >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M21.44 11.05 12.25 20.24a6 6 0 1 1-8.49-8.49l9.19-9.19a4 4 0 1 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.49"/></svg>
-            </button>
-            {#if attachMenu}
-              <button
-                class="cmp-attach-backdrop"
-                aria-label="Close attach menu"
-                onclick={() => (attachMenu = false)}
-              ></button>
-              <div class="cmp-attach-menu" role="menu">
-                <button class="cmp-attach-item" role="menuitem" onclick={() => void pickAttachments(false)}>
-                  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
-                  Files…
-                </button>
-                <button class="cmp-attach-item" role="menuitem" onclick={() => void pickAttachments(true)}>
-                  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 3h8a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
-                  Folder…
-                </button>
-              </div>
-            {/if}
-          </div>
-          <button class="cmp-iconbtn" title="@ mention" onclick={clickMention}>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="4"/><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.92 7.94"/></svg>
-          </button>
-        </div>
-
         <div class="cmp-area-wrap">
           <div class="cmp-area-backdrop" bind:this={backdropEl} aria-hidden="true">{@html backdropHtml(sess.input ?? '')}</div>
           <textarea
@@ -1135,8 +1058,8 @@
             onkeyup={() => { detectMentionTrigger(); detectSlashTrigger(); }}
             onscroll={syncBackdropScroll}
             placeholder={sess.sending
-              ? 'Type to queue — fires after the current Claude turn finishes.'
-              : 'Ask Claude anything…  Drop a Jira card / PR / file to attach context.'}
+              ? 'Type to queue — fires after the current turn finishes.'
+              : 'Reply…  ( / commands · @ mention · drag items here )'}
             rows="1"
             spellcheck="false"
             autocomplete="off"
@@ -1144,76 +1067,55 @@
           ></textarea>
         </div>
 
-        <div class="cmp-suffix">
-          <!-- Group 1 · usage — context ring + quota pills (read-at-a-glance). -->
-          <span class="cmp-grp">
-          <span class="cmp-ctx" title="Context window: {contextTokens.toLocaleString()} / {tokenLimit.toLocaleString()} tokens">
-            <svg class="cmp-ring" viewBox="0 0 20 20" aria-hidden="true">
-              <circle class="cmp-ring-bg" cx="10" cy="10" r="8"/>
-              <circle
-                class="cmp-ring-fg"
-                class:cmp-ring--warn={ctxPct >= 70 && ctxPct < 90}
-                class:cmp-ring--err={ctxPct >= 90}
-                cx="10" cy="10" r="8"
-                stroke-dasharray={RING_C}
-                stroke-dashoffset={ctxRingOffset}
-              />
-            </svg>
-            <span class="cmp-ctx-label mono">{ctxLabel}</span>
-          </span>
-
-          {#if fiveHour || sevenDay}
-            <span class="cmp-quotas">
-              {#if fiveHour}
-                <button
-                  type="button"
-                  class="cmp-q {pctClass(fiveHour)}"
-                  class:cmp-q--refreshing={refreshSpin5h}
-                  title="5-hour rolling usage — click to force-refresh"
-                  onclick={() => forceRefreshQuota('5h')}
-                  aria-label="Refresh 5-hour quota"
-                >
-                  <span class="cmp-q-tag mono">5h</span>
-                  <span class="cmp-q-val mono">{fmtPct(fiveHour)}</span>
-                </button>
-              {/if}
-              {#if sevenDay}
-                <button
-                  type="button"
-                  class="cmp-q {pctClass(sevenDay)}"
-                  class:cmp-q--refreshing={refreshSpin7d}
-                  title="7-day weekly usage — click to force-refresh"
-                  onclick={() => forceRefreshQuota('7d')}
-                  aria-label="Refresh 7-day quota"
-                >
-                  <span class="cmp-q-tag mono">7d</span>
-                  <span class="cmp-q-val mono">{fmtPct(sevenDay)}</span>
-                </button>
-              {/if}
-            </span>
-          {:else if p.kind === 'claude' && quotaState.error}
-            <!-- Plan-usage endpoint failed (e.g. /api/oauth/usage 403s
-                 token-wide on team-plan / session-scoped OAuth tokens).
-                 Show an explicit n/a pill instead of silently dropping
-                 the quota chips — the user notices "плашки пропали"
-                 long before they'd find the error in a tooltip-less UI. -->
-            <span class="cmp-quotas">
+        <div class="cmp-foot">
+          <div class="cmp-prefix">
+            <div class="cmp-attach-wrap">
               <button
-                type="button"
-                class="cmp-q cmp-q--na"
-                class:cmp-q--refreshing={refreshSpin5h}
-                title="Plan usage unavailable — {quotaState.error}. The OAuth usage endpoint rejects team-plan / re-scoped tokens (HTTP 403). Click to retry."
-                onclick={() => forceRefreshQuota('5h')}
-                aria-label="Retry plan-usage fetch"
+                class="cmp-iconbtn"
+                class:active={attachMenu}
+                title="Attach files or folders"
+                aria-haspopup="menu"
+                aria-expanded={attachMenu}
+                onclick={() => (attachMenu = !attachMenu)}
               >
-                <span class="cmp-q-tag mono">quota</span>
-                <span class="cmp-q-val mono">n/a</span>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M21.44 11.05 12.25 20.24a6 6 0 1 1-8.49-8.49l9.19-9.19a4 4 0 1 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.49"/></svg>
               </button>
-            </span>
-          {/if}
-          </span>
+              {#if attachMenu}
+                <button
+                  class="cmp-attach-backdrop"
+                  aria-label="Close attach menu"
+                  onclick={() => (attachMenu = false)}
+                ></button>
+                <div class="cmp-attach-menu" role="menu">
+                  <button class="cmp-attach-item" role="menuitem" onclick={() => void pickAttachments(false)}>
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
+                    Files…
+                  </button>
+                  <button class="cmp-attach-item" role="menuitem" onclick={() => void pickAttachments(true)}>
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 3h8a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+                    Folder…
+                  </button>
+                </div>
+              {/if}
+            </div>
+            <button class="cmp-iconbtn" title="@ mention" onclick={clickMention}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="4"/><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.92 7.94"/></svg>
+            </button>
+          </div>
 
-          <span class="cmp-divider" aria-hidden="true"></span>
+
+
+          <!-- Group 3 · model config — model picker + effort slider. -->
+          <span class="cmp-model">
+            <ModelEngine
+              model={sess.claudeModel ?? 'claude-sonnet-4-6'}
+              modelOptions={claudeModels}
+              effort={sess.thinkingEffort ?? 'auto'}
+              effortOptions={claudeEffort}
+              onModelChange={setModel}
+              onEffortChange={setEffort}
+            />
+          </span>
 
           <!-- Group 2 · launchers + toggles. Two semantic sub-clusters:
                launchers (/sdd /dw) are one-shot slash-command shortcuts —
@@ -1336,19 +1238,15 @@
           </span><!-- /cmp-toggles -->
           </span>
 
-          <span class="cmp-divider" aria-hidden="true"></span>
 
-          <!-- Group 3 · model config — model picker + effort slider. -->
-          <span class="cmp-model">
-            <ModelEngine
-              model={sess.claudeModel ?? 'claude-sonnet-4-6'}
-              modelOptions={claudeModels}
-              effort={sess.thinkingEffort ?? 'auto'}
-              effortOptions={claudeEffort}
-              onModelChange={setModel}
-              onEffortChange={setEffort}
-            />
-          </span>
+          <span class="cmp-spring" aria-hidden="true"></span>
+
+          <span
+            class="cmp-ctx-txt"
+            class:cmp-ctx-txt--warn={ctxPct >= 70 && ctxPct < 90}
+            class:cmp-ctx-txt--err={ctxPct >= 90}
+            title="Context window: {contextTokens.toLocaleString()} / {tokenLimit.toLocaleString()} tokens ({ctxLabel})"
+          >ctx {ctxPct}%</span>
 
           {#if (sess.pendingQueue?.length ?? 0) > 0}
             <div class="cmp-queue-wrap" bind:this={queueWrapEl}>
@@ -1419,7 +1317,6 @@
               <span class="cmp-send-kbd">⏎</span>
             </button>
           {/if}
-        </div>
       </div>
     </div>
 
@@ -1498,9 +1395,9 @@
 <style>
   .cmp {
     flex: 0 0 auto;
-    padding: 14px 22px;
-    background: linear-gradient(0deg, var(--bg-2) 30%, var(--bg-1));
-    border-top: 1px solid var(--border);
+    padding: 12px 22px 16px;
+    background: transparent;
+    border-top: 0;
     /* Stack the composer + statusline strip vertically so the strip
        sits as a sibling below the pill instead of overlapping it.
        Centering is reapplied on the pill itself via margin: auto. */
@@ -1614,25 +1511,24 @@
 
   .cmp-shell {
     width: 100%;
-    background: var(--bg-1);
+    max-width: 960px;
+    margin: 0 auto;
+    background: var(--bg-2);
     border: 1px solid var(--border-hi);
-    border-radius: var(--r-card);
-    /* Symmetric horizontal padding so the @-icons on the left and
-       the Send button on the right have the same breathing room. */
-    padding: 8px 12px;
-    box-shadow: 0 0 0 0 var(--accent-glow);
-    transition: box-shadow 200ms, border-color 200ms;
+    border-radius: var(--r-input);
+    padding: 10px 12px;
+    transition: border-color 200ms, box-shadow 200ms;
   }
   .cmp-shell:focus-within {
-    border-color: var(--border-accent);
-    box-shadow: 0 0 0 3px var(--accent-soft), 0 0 22px var(--accent-glow);
+    border-color: var(--border-hi2);
+    box-shadow: var(--shadow-1);
   }
   /* Drop target hint — terracotta dashed outline + soft glow while
      the user is dragging a file / ticket / PR / error onto us. */
   .cmp-shell--drop {
     border-color: var(--accent-bright);
     border-style: dashed;
-    box-shadow: 0 0 0 4px var(--accent-soft), 0 0 28px var(--accent-glow);
+    box-shadow: 0 0 0 4px var(--accent-soft), var(--shadow-3);
   }
 
   /* Attachments strip — externals only (OS drag, paste). Each chip is
@@ -1736,12 +1632,14 @@
      prefix/suffix remain vertically centered against the taller
      content — feels natural and avoids the "icons glued to the
      floor" look that `align-items: end` produced. */
-  .cmp-row {
-    display: grid;
-    grid-template-columns: auto 1fr auto;
-    align-items: center;
-    gap: 10px;
-    min-height: 32px;
+  /* Two-tier card per the paper mockup: textarea on top, control
+     row underneath separated by a hairline. */
+  .cmp-foot {
+    display: flex; align-items: center; gap: 10px;
+    border-top: 1px solid var(--border-lo);
+    padding-top: 8px;
+    margin-top: 8px;
+    min-height: 28px;
   }
   .cmp-prefix {
     display: flex; align-items: center; gap: 4px;
@@ -1774,7 +1672,7 @@
     background: var(--bg-1);
     border: 1px solid var(--border);
     border-radius: 8px;
-    box-shadow: 0 8px 24px rgba(0,0,0,0.28);
+    box-shadow: var(--shadow-3);
   }
   .cmp-attach-item {
     display: flex; align-items: center; gap: 8px;
@@ -1978,19 +1876,17 @@
   }
   .cmp-area:disabled { opacity: 0.5; cursor: not-allowed; }
 
-  .cmp-suffix {
-    display: flex; align-items: center; gap: 10px;
-  }
+  .cmp-suffix { display: contents; }
   /* Compact (agent dock, ~340px): the single row can't hold textarea +
      full control run. Go two-tier — textarea gets its own full-width
      line, controls drop to a second line below. Shed only the truly
      redundant noise: quota pills, numeric ctx label, group dividers.
      Keep ring + /sdd /dw + RTK/FAST + model + send — the second tier
      has room for them. Solo never gets `.cmp--compact`. */
-  .cmp--compact .cmp-quotas,
+
   .cmp--compact .cmp-ctx-label,
   .cmp--compact .cmp-divider { display: none; }
-  .cmp--compact .cmp-row {
+  .cmp--compact .cmp-foot {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
@@ -2001,12 +1897,7 @@
     flex: 1 1 100%;   /* tier 1 — textarea full width */
   }
   .cmp--compact .cmp-prefix { order: 2; }
-  .cmp--compact .cmp-suffix {
-    order: 3;
-    flex: 1 1 auto;
-    flex-wrap: wrap;
-    gap: 6px;
-  }
+  /* suffix flows inside .cmp-foot via display:contents */
   /* Send pinned to the right edge of tier 2; everything else flows left. */
   .cmp--compact .cmp-send,
   .cmp--compact .cmp-stop { margin-left: auto; }
@@ -2020,6 +1911,10 @@
     display: inline-flex; align-items: center; gap: 5px;
     min-width: 0;
   }
+  /* Mockup order: attach/@ + launchers + model LEFT, ctx + Send RIGHT.
+     The usage group (ctx ring) jumps to the right edge; Stop/Send trail it. */
+  .cmp-foot .cmp-grp:has(.cmp-ctx) { order: 8; margin-left: auto; }
+  .cmp-foot .cmp-stop { order: 9; }
   .cmp-divider {
     width: 1px; height: 16px;
     background: var(--border);
@@ -2047,23 +1942,18 @@
     box-shadow: inset 0 0 0 1.4px currentColor;
   }
 
-  .cmp-ctx {
-    display: inline-flex; align-items: center; gap: 5px;
+  /* Context readout — quiet text per the mockup ("ctx 38%"),
+     colour shifts as the window fills. */
+  .cmp-spring { flex: 1; }
+  .cmp-ctx-txt {
+    font-size: 10.5px;
     color: var(--text-mute);
     flex-shrink: 0;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
   }
-  .cmp-ring { width: 18px; height: 18px; transform: rotate(-90deg); }
-  .cmp-ring-bg { fill: none; stroke: var(--border); stroke-width: 2; }
-  .cmp-ring-fg {
-    fill: none;
-    stroke: var(--accent-bright);
-    stroke-width: 2;
-    stroke-linecap: round;
-    transition: stroke-dashoffset 240ms ease, stroke 200ms;
-  }
-  .cmp-ring-fg.cmp-ring--warn { stroke: var(--warning); }
-  .cmp-ring-fg.cmp-ring--err  { stroke: var(--error); }
-  .cmp-ctx-label { font-size: 10.5px; }
+  .cmp-ctx-txt--warn { color: var(--warn); }
+  .cmp-ctx-txt--err  { color: var(--err); }
 
   .cmp-quotas {
     display: inline-flex; align-items: center; gap: 4px;
@@ -2163,7 +2053,7 @@
     color: var(--accent-bright);
   }
   .cmp-sdd-glyph {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono);
     font-size: 10px;
     font-weight: 600;
     letter-spacing: 0.01em;
@@ -2191,7 +2081,7 @@
     color: #5bb3a8;
   }
   .cmp-dw-glyph {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono);
     font-size: 10px;
     font-weight: 600;
     letter-spacing: 0.01em;
@@ -2210,7 +2100,7 @@
     border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
     background: color-mix(in srgb, var(--accent) 12%, transparent);
     color: var(--accent-bright, var(--accent));
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono);
     font-size: 9.5px;
     font-weight: 700;
     letter-spacing: 0.12em;
@@ -2245,7 +2135,7 @@
     cursor: not-allowed;
   }
   .cmp-rtk-pill-glyph {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono);
     font-size: 9.5px;
     font-weight: 700;
     letter-spacing: 0.14em;
@@ -2265,7 +2155,7 @@
     border: 1px solid var(--border);
     background: transparent;
     color: var(--text-mute);
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono);
     font-size: 9.5px;
     font-weight: 700;
     letter-spacing: 0.14em;
@@ -2292,7 +2182,7 @@
     color: #f0c084;
   }
   .cmp-fast-chip-glyph {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono);
     font-size: 9.5px;
     font-weight: 700;
     letter-spacing: 0.14em;
@@ -2301,26 +2191,26 @@
     .cmp-fast-chip { transition: none; }
   }
 
+  /* Ink-inversion pill per the mockup, two-step engraved shadow. */
   .cmp-send {
     display: inline-flex; align-items: center; gap: 6px;
-    padding: 6px 12px;
-    border-radius: 7px;
-    font-size: 12px; font-weight: 600;
-    background: linear-gradient(180deg, var(--accent-bright), var(--accent));
+    padding: 5px 14px;
+    border-radius: var(--r-item);
+    font-size: 11px; font-weight: 600;
+    background: var(--text-0);
     color: var(--accent-fg);
     border: none; cursor: pointer;
-    box-shadow:
-      0 2px 8px var(--accent-glow),
-      inset 0 1px 0 rgba(255, 255, 255, 0.18);
+    box-shadow: var(--shadow-pill);
     transition: transform 120ms, box-shadow 200ms;
+    order: 10;
   }
   .cmp-send:hover:not(:disabled) {
-    transform: translateY(-1px);
-    box-shadow: 0 4px 14px var(--accent-glow), inset 0 1px 0 rgba(255, 255, 255, 0.18);
+    transform: translate(-1px, -1px);
+    box-shadow: var(--shadow-2);
   }
   .cmp-send:disabled { opacity: 0.45; cursor: not-allowed; box-shadow: none; }
   .cmp-send-kbd {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono);
     font-size: 10px;
     padding: 1px 5px;
     border-radius: 4px;
@@ -2392,7 +2282,7 @@
     background: var(--bg-1);
     border: 1px solid var(--border-hi);
     border-radius: 10px;
-    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.36), 0 0 0 1px rgba(0,0,0,0.12);
+    box-shadow: 0 0 0 1px rgba(0,0,0,0.12), var(--shadow-3);
     overflow: hidden;
     z-index: 200;
   }

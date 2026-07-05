@@ -674,7 +674,7 @@
           <div class="msg-body">
             {#if msg.thinking}
               <details class="thinking-pill">
-                <summary>thinking ✓</summary>
+                <summary>✳ thought</summary>
                 <pre class="thinking-body">{msg.thinking}</pre>
               </details>
             {/if}
@@ -934,8 +934,15 @@
   .ct {
     flex: 1; min-height: 0;
     overflow-y: auto;
-    padding: 28px 28px 12px;
+    padding: 20px 22px 8px;
     display: flex; flex-direction: column; gap: 24px;
+  }
+  /* Mockup: thread column capped at 760px, centred. */
+  .ct > :global(*) {
+    width: 100%;
+    max-width: 960px;
+    margin-left: auto;
+    margin-right: auto;
   }
   .ct-load-more {
     align-self: center;
@@ -994,7 +1001,7 @@
     color: var(--app-tone, var(--src-claude));
     text-transform: lowercase;
     letter-spacing: -0.01em;
-    font-family: 'Geist', 'Inter', -apple-system, system-ui, sans-serif;
+    font-family: var(--font-mono);
     font-size: 13px;
     font-weight: 600;
   }
@@ -1030,7 +1037,7 @@
   .msg-body :global(p:last-child) { margin-bottom: 0; }
   .msg-body :global(strong) { color: var(--text-0); font-weight: 600; }
   .msg-body :global(code) {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono);
     font-size: 12.5px;
     padding: 1px 6px;
     background: var(--bg-2);
@@ -1039,18 +1046,18 @@
     color: var(--accent-bright);
   }
 
-  /* User message — flat blockquote-style on the prose surface.
-     Same chrome grammar as SddCard / Markdown.svelte blockquote:
-     3px accent stripe + accent-soft tint + rounded only on the
-     right. No full border, no gradient bg. User's text reads as
-     part of the typographic surface, not as a chat bubble widget. */
+  /* User message — right-aligned paper bubble per the mockup:
+     bg-3 chip fill, 1px ink border, radius 10, 78% max width. */
   .msg--user .msg-body {
     position: relative;
-    padding: 8px 14px 9px;
-    background: var(--accent-soft);
-    border: 0;
-    border-left: 3px solid var(--accent);
-    border-radius: 0 6px 6px 0;
+    justify-self: end;
+    max-width: 78%;
+    padding: 10px 14px;
+    background: var(--bg-3);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    font-size: 12.5px;
+    line-height: 1.65;
   }
 
   /* Hover actions sit BELOW the bubble (not over it) — small, naked
@@ -1163,20 +1170,15 @@
      cluster; the inner per-step rows render as flat text lines on
      the prose surface, NOT as bordered widgets. Spec ref:
      "annotated text lines, not boxed widgets". */
+  /* Paper mockup: tool calls read as printed chips, so the cluster
+     wrapper stays invisible — no left rail. */
   .trace {
     display: block;
     margin: 6px 0;
-    /* Span the full message-body column so trace rows align with the
-     * Edit / Write diff cards rendered alongside — earlier 720px cap
-     * left bash / read / grep rows visually short of the right edge
-     * while edit-cards ran to the chat-column boundary, producing a
-     * jagged right-margin in the trace. Uniform width reads cleaner. */
-     width: 100%;
+    width: 100%;
     border: 0;
     background: transparent;
     border-radius: 0;
-    border-left: 2px solid color-mix(in srgb, var(--accent) 25%, transparent);
-    padding-left: 12px;
   }
   /* Outer "N steps" head — quiet text prefix above the run.
      Caret + label only, no bg, no border, no separator. Hidden via
@@ -1223,13 +1225,19 @@
   /* Step row — flat text line. No border, no bg, no hover panel; just
      glyph + label + target + scope + meta + caret on one baseline.
      `--step-tone` lives on for the glyph color only. */
+  /* Tool chip per the paper mockup: printed card (bg-2, 1px border,
+     radius 8, engraved step shadow), capped at 560px. */
   .trace-step {
-    --step-tone: var(--accent-bright);
+    --step-tone: var(--text-1);
     display: flex; flex-direction: column;
-    background: transparent;
-    border: 0;
-    border-radius: 0;
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 6px 11px;
+    max-width: none;
+    margin: 0 0 8px;
     overflow: hidden;
+    box-shadow: var(--shadow-1);
     transition: none;
   }
   .trace-step--has-output { cursor: pointer; }
@@ -1290,10 +1298,10 @@
   .trace-cmd-icon svg { width: 12px; height: 12px; }
   .trace-cmd-label {
     flex-shrink: 0;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 12px;
-    font-weight: 500;
-    color: var(--text-2);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-1);
     text-transform: lowercase;
     letter-spacing: 0;
     line-height: 1.55;
@@ -1304,7 +1312,7 @@
      *  stay readable end-to-end before truncation kicks in. Caller's
      *  `title=` attr preserves the full string for hover. */
     max-width: 140ch;
-    font-size: 12px;
+    font-size: 11px;
     /* Drop the inline-code chip chrome inherited from prose-level
      *  `code` styling (bg + border). Trace targets read as bare
      *  mono text — color carries the per-step tone via `--step-tone`
@@ -1394,7 +1402,7 @@
     margin: 2px 0 4px 20px;
     padding-left: 12px;
     border-left: 1px dashed color-mix(in srgb, var(--step-tone) 35%, transparent);
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono);
     font-size: 11.5px;
     line-height: 1.55;
     color: var(--text-2);
@@ -1412,7 +1420,7 @@
   }
   .trace-line :global(p) { margin: 0; }
   .trace-line :global(code) {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono);
     font-size: 11.5px;
     padding: 1px 6px;
     background: var(--bg-3);
@@ -1430,13 +1438,20 @@
      just a 2px editor-tone left stripe + 12px indent so the file
      edit reads as an annotation in the conversation. Expanded body
      (diff) keeps its content but loses the wrapper bg. */
+  /* Printed tool-chip grammar — same card as trace steps (bg-2,
+     hairline, r8, engraved step), replacing the old left-stripe
+     blockquote look. */
   .edit-card {
-    margin: 6px 0;
-    border-left: 2px solid color-mix(in srgb, var(--src-editor) 70%, transparent);
-    padding-left: 12px;
-    background: transparent;
-    border-radius: 0;
+    margin: 0 0 8px;
+    border: 1px solid var(--border);
+    border-left: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 6px 11px;
+    background: var(--bg-2);
+    max-width: none;
     font-size: 12.5px;
+    box-shadow: var(--shadow-1);
+    overflow: hidden;
   }
   .edit-card-head {
     display: flex; align-items: baseline;
@@ -1455,7 +1470,7 @@
   .edit-tag {
     display: inline-flex; align-items: baseline;
     padding: 0;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono);
     font-size: 11px;
     font-weight: 500;
     letter-spacing: 0;
@@ -1530,7 +1545,7 @@
   }
   .diff {
     display: block;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono);
     font-size: 11.5px;
     line-height: 1.55;
     /* Long lines extend the diff past the card width; the card body
@@ -1576,23 +1591,27 @@
   }
 
   /* Thinking pill (reasoning trace, collapsible) */
+  /* Thought line per the mockup — quiet italic text, no box. */
   .thinking-pill {
     margin-bottom: 10px;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    background: var(--bg-3);
+    border: 0;
+    background: transparent;
   }
   .thinking-pill summary {
-    padding: 6px 10px;
-    font-family: 'JetBrains Mono', monospace; font-size: 10.5px;
-    color: var(--text-mute);
+    padding: 0 0 2px;
+    font-family: var(--font-mono); font-size: 11px;
+    font-style: italic;
+    color: var(--text-faint);
     cursor: pointer;
     user-select: none;
+    list-style: none;
   }
+  .thinking-pill summary::-webkit-details-marker { display: none; }
+  .thinking-pill summary:hover { color: var(--text-mute); }
   .thinking-body {
     margin: 0; padding: 8px 12px;
     border-top: 1px solid var(--border);
-    font-family: 'JetBrains Mono', monospace; font-size: 11px;
+    font-family: var(--font-mono); font-size: 11px;
     color: var(--text-1); line-height: 1.5;
     white-space: pre-wrap;
     max-height: 320px; overflow: auto;
@@ -1636,7 +1655,7 @@
     max-width: 480px;
   }
   .ct-empty-h, .ct-welcome-h {
-    font-family: 'Geist', 'Inter', -apple-system, system-ui, sans-serif;
+    font-family: var(--font-mono);
     font-size: 26px; font-weight: 600; letter-spacing: -0.015em;
     color: var(--text-0);
     margin: 0 0 10px;
@@ -1646,7 +1665,7 @@
     line-height: 1.55; margin: 0;
   }
   .ct-welcome-p .mono {
-    font-family: 'JetBrains Mono', monospace; font-size: 11.5px;
+    font-family: var(--font-mono); font-size: 11.5px;
     padding: 1px 5px; background: var(--bg-2); border: 1px solid var(--border);
     border-radius: 4px;
     color: var(--accent-bright);

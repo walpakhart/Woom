@@ -845,7 +845,7 @@
     display: flex; align-items: center; gap: 10px;
     padding: 0 12px;
     border-bottom: 1px solid var(--border);
-    background: linear-gradient(180deg, var(--bg-2), var(--bg-1));
+    background: var(--bg-0);
   }
   .gl-act {
     display: inline-flex; align-items: center; gap: 5px;
@@ -988,9 +988,7 @@
   }
   .gl-toggle.active .gl-toggle-dot {
     background: var(--src-github);
-    box-shadow:
-      inset 0 0 0 1.5px var(--src-github),
-      0 0 6px color-mix(in srgb, var(--src-github) 60%, transparent);
+    box-shadow: inset 0 0 0 1.5px var(--src-github), var(--shadow-1);
   }
   .gl-toggle:disabled { opacity: 0.45; cursor: not-allowed; }
 
@@ -1044,7 +1042,7 @@
     letter-spacing: 0.10em;
     text-transform: uppercase;
     color: var(--text-mute);
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono);
     display: flex; align-items: center; gap: 8px;
   }
   .gl-group::after {
@@ -1056,39 +1054,23 @@
   .gl-card {
     position: relative;
     display: flex; flex-direction: column; gap: 5px;
-    padding: 10px 12px 11px 14px;
-    margin-bottom: 3px;
+    padding: 12px 20px;
+    margin: 0;
     width: 100%;
-    border-radius: 9px;
-    border: 1px solid transparent;
+    border-radius: 0;
+    border: 0;
+    border-bottom: 1px solid var(--border-lo);
+    border-left: 2px solid transparent;
     text-align: left;
     background: transparent;
     cursor: pointer;
-    transition: background 120ms, border-color 120ms, box-shadow 200ms;
+    transition: background 120ms;
     user-select: none;
   }
-  .gl-card::before {
-    content: ''; position: absolute; left: 0; top: 11px; bottom: 11px;
-    width: 2px; border-radius: 2px;
-    background: var(--src-github);
-    opacity: 0; transition: opacity 200ms;
-  }
-  .gl-card:hover { background: var(--bg-2); border-color: var(--border); }
-  .gl-card:hover::before { opacity: 0.5; }
+  .gl-card:hover { background: var(--bg-1); }
   .gl-card.active {
-    background: var(--bg-2);
-    border-color: var(--border-hi);
-    /* Theme-aware: ring tint follows `--src-github` (purple in dark,
-       deep violet in light), drop-shadow swaps to sage-on-cream via
-       `--shadow-2`. Hardcoded blacks were burning a halo on the cream
-       surface in the light theme. */
-    box-shadow:
-      0 0 0 1px color-mix(in srgb, var(--src-github) 32%, transparent),
-      var(--shadow-2);
-  }
-  .gl-card.active::before {
-    opacity: 1;
-    box-shadow: 0 0 10px color-mix(in srgb, var(--src-github) 40%, transparent);
+    background: var(--bg-sel);
+    border-left-color: var(--src-github);
   }
 
   .gl-card-top { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
@@ -1098,7 +1080,7 @@
     font-size: 9.5px; font-weight: 600;
     text-transform: uppercase; letter-spacing: 0.04em;
   }
-  .st--open    { color: var(--success); background: rgba(168, 217, 184, 0.10); border: 1px solid rgba(168, 217, 184, 0.24); }
+  .st--open    { color: var(--success); background: color-mix(in srgb, var(--ok) 10%, transparent); border: 1px solid color-mix(in srgb, var(--ok) 24%, transparent); }
   .st--draft   { color: var(--text-2); background: var(--bg-3); border: 1px solid var(--border-hi); }
   .st--merged  { color: #C9A0E0; background: rgba(181, 132, 255, 0.10); border: 1px solid rgba(181, 132, 255, 0.24); }
   .st--closed  { color: var(--text-mute); background: var(--bg-3); border: 1px solid var(--border); }
@@ -1204,7 +1186,7 @@
     margin: auto;
   }
   .gl-empty-h, .gl-error-h {
-    font-family: 'Geist', 'Inter', -apple-system, system-ui, sans-serif;
+    font-family: var(--font-mono);
     font-size: 22px; font-weight: 600; letter-spacing: -0.015em;
     color: var(--text-0);
     margin: 0 0 10px;

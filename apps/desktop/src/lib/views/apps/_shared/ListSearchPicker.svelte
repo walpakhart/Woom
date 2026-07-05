@@ -194,7 +194,7 @@
     background: var(--bg-2);
     border: 1px solid var(--border-hi);
     border-radius: 10px;
-    box-shadow: 0 14px 32px -8px rgba(0, 0, 0, 0.55);
+    box-shadow: var(--shadow-1);
     overflow: hidden;
     display: flex; flex-direction: column;
     max-height: 380px;

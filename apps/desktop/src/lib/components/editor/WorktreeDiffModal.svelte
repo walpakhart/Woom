@@ -139,7 +139,7 @@
     border: 1px solid var(--border-hi);
     border-radius: 12px;
     display: flex; flex-direction: column;
-    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+    box-shadow: var(--shadow-3);
     overflow: hidden;
   }
   .wdf-head {
@@ -194,7 +194,7 @@
     font-size: 10.5px; font-weight: 600;
     flex-shrink: 0;
   }
-  .wdf-s-add { color: var(--success); background: rgba(204, 120, 92, 0.15); }
+  .wdf-s-add { color: var(--success); background: rgba(62, 54, 32, 0.15); }
   .wdf-s-mod { color: var(--warning); background: rgba(217, 184, 110, 0.15); }
   .wdf-s-del { color: var(--error); background: rgba(232, 130, 100, 0.18); }
   .wdf-s-ren { color: var(--accent); background: var(--accent-soft); }
@@ -203,12 +203,12 @@
 
   .wdf-diff {
     overflow: auto;
-    font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', monospace;
+    font-family: var(--font-mono);
     font-size: 12.5px; line-height: 1.55;
     padding: 8px 0 40px;
   }
   .wdf-row { display: flex; white-space: pre; min-height: 18px; }
-  .wdf-row--add { background: rgba(204, 120, 92, 0.10); }
+  .wdf-row--add { background: rgba(62, 54, 32, 0.10); }
   .wdf-row--add .wdf-marker, .wdf-row--add .wdf-text { color: var(--success); }
   .wdf-row--del { background: rgba(232, 130, 100, 0.10); }
   .wdf-row--del .wdf-marker, .wdf-row--del .wdf-text { color: var(--error); }

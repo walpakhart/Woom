@@ -257,7 +257,7 @@
     background: var(--bg-1);
     border: 1px solid var(--border-hi);
     border-radius: 14px;
-    box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.02);
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.02), var(--shadow-3);
     overflow: hidden;
   }
 
@@ -268,7 +268,7 @@
     border-bottom: 1px solid var(--border);
   }
   .ad-h {
-    font-family: var(--font-serif, Georgia, serif);
+    font-family: var(--font-mono);
     font-size: 16px;
     color: var(--text-0);
   }

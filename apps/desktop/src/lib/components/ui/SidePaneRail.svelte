@@ -123,7 +123,7 @@
     position: absolute; top: -3px; right: -3px;
     min-width: 14px; height: 14px; padding: 0 3px;
     border-radius: 7px;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono);
     font-size: 9px; font-weight: 700;
     background: var(--accent-bright); color: var(--accent-fg);
     display: grid; place-items: center;

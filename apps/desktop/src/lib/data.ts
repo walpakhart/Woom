@@ -189,6 +189,8 @@ export interface SentryIssue {
   /** Type + message — mirrors the bold/secondary line in Sentry's UI. */
   metadata_type: string | null;
   metadata_value: string | null;
+  /** Hourly event counts (last 24h) — drives the list sparkline. */
+  stats_24h: number[];
 }
 
 export interface SentryProject {

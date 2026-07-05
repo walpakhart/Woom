@@ -230,7 +230,7 @@
     border: 1px solid var(--border-neutral);
     border-radius: 8px;
     padding: 4px;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+    box-shadow: var(--shadow-3);
     backdrop-filter: blur(6px);
     z-index: 5;
     user-select: none;
@@ -250,7 +250,7 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.45);
+    box-shadow: var(--shadow-1);
     z-index: 6;
   }
   .cv-minimap-close:hover {

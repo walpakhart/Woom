@@ -772,9 +772,7 @@
     background: var(--bg-1);
     border: 1px solid color-mix(in srgb, var(--accent) 16%, var(--border-neutral-hi));
     border-radius: 18px;
-    box-shadow:
-      0 32px 80px rgba(0, 0, 0, 0.5),
-      inset 0 1px 0 color-mix(in srgb, var(--accent) 12%, transparent);
+    box-shadow: inset 0 1px 0 color-mix(in srgb, var(--accent) 12%, transparent), var(--shadow-3);
     overflow: hidden;
     animation: woSlide var(--dur-slow) var(--ease-spring);
   }
@@ -799,7 +797,7 @@
   .wo-brand-text { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
   .wo-title {
     margin: 0;
-    font-family: 'Geist', system-ui, sans-serif;
+    font-family: var(--font-mono);
     font-size: 22px;
     font-weight: 600;
     letter-spacing: -0.02em;
@@ -896,7 +894,7 @@
   .wo-sec:last-of-type { border-bottom: 0; }
   .wo-sec-h {
     margin: 0 0 8px;
-    font-family: 'Geist', system-ui, sans-serif;
+    font-family: var(--font-mono);
     font-size: 19px;
     font-weight: 600;
     letter-spacing: -0.015em;
@@ -1058,7 +1056,7 @@
     border: 1px solid var(--border);
   }
   .wo-feat-num {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono);
     font-size: 11px;
     color: var(--accent-bright);
     background: color-mix(in srgb, var(--accent) 14%, var(--bg-3));
@@ -1143,7 +1141,7 @@
     background: var(--bg-3);
     border: 1px solid var(--border);
     color: var(--text-0);
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono);
     font-size: 10.5px;
     line-height: 1.4;
     white-space: nowrap;

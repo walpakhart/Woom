@@ -293,7 +293,7 @@
   }
   .connections-header { padding: 8px 0 28px; max-width: 880px; margin: 0 auto; }
   .view-title {
-    font-family: 'Geist', 'Inter', -apple-system, system-ui, sans-serif;
+    font-family: var(--font-mono);
     font-size: 38px; font-weight: 600;
     letter-spacing: -0.02em;
     color: var(--text-0);
@@ -314,7 +314,7 @@
     color: var(--text-mute); text-transform: uppercase;
   }
   .conn-category-head::after { content: ''; flex: 1; height: 1px; background: linear-gradient(90deg, var(--border), transparent); }
-  .conn-category-count { font-family: 'JetBrains Mono', monospace; color: var(--text-mute); font-size: 10.5px; letter-spacing: 0; }
+  .conn-category-count { font-family: var(--font-mono); color: var(--text-mute); font-size: 10.5px; letter-spacing: 0; }
 
   .conn-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
   .conn-card {
@@ -339,7 +339,7 @@
   .conn-icon.conn-icon--github { background: rgba(181, 132, 255, 0.14); color: var(--src-github); }
   .conn-icon.conn-icon--jira   { background: rgba(79, 142, 255, 0.14); color: var(--src-jira); }
   .conn-icon.conn-icon--sentry { background: rgba(232, 130, 100, 0.14); color: var(--src-sentry); }
-  .conn-icon.conn-icon--claude { background: rgba(232, 155, 125, 0.14); color: var(--src-claude); }
+  .conn-icon.conn-icon--claude { background: rgba(216, 210, 190, 0.14); color: var(--src-claude); }
   .conn-icon--svg svg {
     width: 20px; height: 20px;
     color: currentColor;
@@ -363,7 +363,7 @@
   .conn-status.connected::before {
     content: ''; display: inline-block;
     width: 6px; height: 6px; background: var(--success); border-radius: 50%;
-    box-shadow: 0 0 6px var(--success);
+    box-shadow: var(--shadow-1);
     animation: conn-status-blink 2s ease-in-out infinite;
   }
   @keyframes conn-status-blink {
@@ -392,10 +392,10 @@
   .conn-btn--connect {
     color: var(--accent-fg);
     background: linear-gradient(135deg, #A8D9B8, #7DC9B0);
-    box-shadow: 0 2px 8px rgba(168, 217, 184, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2), var(--shadow-1);
     font-weight: 600;
   }
-  .conn-btn--connect:hover { box-shadow: 0 4px 14px rgba(168, 217, 184, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.25); transform: translateY(-1px); }
+  .conn-btn--connect:hover { box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25), var(--shadow-2); transform: translateY(-1px); }
   .conn-btn--configure { background: transparent; color: var(--text-1); border: 1px solid var(--border-neutral-hi); }
   .conn-btn--configure:hover { background: var(--bg-3); color: var(--text-0); border-color: var(--border-hi); }
 
@@ -475,7 +475,7 @@
 
   .you-are {
     margin-top: 28px; padding: 14px 16px;
-    background: var(--bg-1); border: 1px solid rgba(168, 217, 184, 0.16);
+    background: var(--bg-1); border: 1px solid color-mix(in srgb, var(--ok) 16%, transparent);
     border-radius: 10px;
     display: flex; align-items: center; gap: 10px;
     font-size: 12.5px; color: var(--text-1);

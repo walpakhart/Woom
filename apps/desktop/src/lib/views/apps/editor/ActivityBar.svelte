@@ -97,15 +97,18 @@
 </aside>
 
 <style>
+  /* Quiet paper strip — the mockup has no activity bar, so this
+     narrows and fades into the sheet instead of reading as chrome. */
+  /* Fill the host pane (.se-activity is a flex COLUMN — a
+     `flex: 0 0 36px` here would set the HEIGHT basis, squashing the
+     bar to a 36px box whose buttons spill out via overflow while the
+     pane's border-right peeks through below). */
   .ab {
-    width: 44px; flex: 0 0 44px;
+    width: 100%; flex: 1;
     display: flex; flex-direction: column; align-items: center;
     gap: 4px;
     padding: 8px 0 10px;
-    background: var(--bg-glass, rgba(20, 24, 26, 0.66));
-    border-right: 1px solid var(--border);
-    backdrop-filter: blur(14px);
-    -webkit-backdrop-filter: blur(14px);
+    background: var(--bg-0);
   }
   .ab-btn {
     position: relative;
@@ -118,23 +121,15 @@
   }
   .ab-btn:hover { color: var(--text-0); background: var(--bg-elev, var(--bg-2)); }
   .ab-btn.active {
-    color: var(--accent-bright);
-    background: var(--accent-soft);
-    box-shadow: inset 0 0 0 1px var(--border-accent-2);
-  }
-  .ab-btn.active::before {
-    content: '';
-    position: absolute; left: -8px; top: 7px; bottom: 7px;
-    width: 2.5px; border-radius: 2px;
-    background: linear-gradient(180deg, var(--accent-bright), var(--accent-deep));
-    box-shadow: 0 0 10px var(--accent-glow);
+    color: var(--src-editor);
+    background: var(--bg-nav);
   }
   .ab-btn svg { width: 17px; height: 17px; stroke-linecap: round; stroke-linejoin: round; }
   .ab-badge {
     position: absolute; top: 1px; right: 1px;
     min-width: 14px; height: 14px; padding: 0 3px;
     border-radius: 7px;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono);
     font-size: 9px; font-weight: 700;
     background: var(--accent); color: var(--accent-fg);
     display: grid; place-items: center;
@@ -154,13 +149,13 @@
     inset: -1px;
     border-radius: 8px;
     pointer-events: none;
-    box-shadow: 0 0 0 0 var(--accent-glow, rgba(204, 120, 92, 0.6));
+    box-shadow: 0 0 0 0 var(--accent-glow, var(--accent-glow));
     animation: ab-pulse 2.4s ease-out infinite;
   }
   @keyframes ab-pulse {
-    0%   { box-shadow: 0 0 0 0 var(--accent-glow, rgba(204, 120, 92, 0.55)); }
-    70%  { box-shadow: 0 0 0 10px rgba(204, 120, 92, 0); }
-    100% { box-shadow: 0 0 0 0 rgba(204, 120, 92, 0); }
+    0%   { box-shadow: 0 0 0 0 var(--accent-glow, var(--accent-glow)); }
+    70%  { box-shadow: 0 0 0 10px transparent; }
+    100% { box-shadow: 0 0 0 0 transparent; }
   }
   .ab-spacer { flex: 1; }
 </style>

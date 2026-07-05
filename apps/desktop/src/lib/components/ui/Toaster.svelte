@@ -101,9 +101,9 @@
     position: absolute; left: 0; top: 0; bottom: 0;
     width: 2.5px;
     background: var(--toast-tone);
-    box-shadow: 0 0 10px var(--toast-glow);
+    box-shadow: var(--shadow-2);
   }
-  .toast--success { --toast-tone: var(--success); --toast-glow: rgba(168, 217, 184, 0.40); }
+  .toast--success { --toast-tone: var(--success); --toast-glow: color-mix(in srgb, var(--ok) 40%, transparent); }
   .toast--warning { --toast-tone: var(--warning); --toast-glow: rgba(217, 184, 110, 0.40); }
   .toast--error   { --toast-tone: var(--error);   --toast-glow: rgba(232, 130, 100, 0.42); }
   .toast--info    { --toast-tone: var(--info);    --toast-glow: rgba(136, 194, 221, 0.40); }

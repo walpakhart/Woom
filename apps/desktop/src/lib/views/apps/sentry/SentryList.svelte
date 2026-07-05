@@ -35,6 +35,20 @@
   }
   let p: Props = $props();
 
+  /** 24 hourly points → 10 sparkline buckets (mockup: 10 bars, 3-16px). */
+  function sparkBars(stats: number[] | undefined): number[] {
+    const pts = stats ?? [];
+    if (pts.length === 0) return [];
+    const buckets = 10;
+    const per = Math.max(1, Math.ceil(pts.length / buckets));
+    const out: number[] = [];
+    for (let i = 0; i < pts.length; i += per) {
+      out.push(pts.slice(i, i + per).reduce((a, b) => a + b, 0));
+    }
+    const max = Math.max(1, ...out);
+    return out.map((v) => 3 + Math.round((v / max) * 13));
+  }
+
   function clickSendToClaude(it: SentryIssue, e: MouseEvent) {
     e.stopPropagation();
     p.onSendToClaude(it);
@@ -412,6 +426,13 @@
               <span class="sl-card-time mono">{relativeTime(it.last_seen, p.now)}</span>
             </div>
             <div class="sl-card-title">{it.title}</div>
+            {#if sparkBars(it.stats_24h).length}
+              <div class="sl-spark" class:sl-spark--hot={it.level === 'error' || it.level === 'fatal'} aria-hidden="true">
+                {#each sparkBars(it.stats_24h) as h, i (i)}
+                  <span class="sl-spark-bar" style:height="{h}px"></span>
+                {/each}
+              </div>
+            {/if}
             <div class="sl-card-meta">
               <span class="sl-count mono" title={`${it.count} events`}>
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 12a9 9 0 0 1 18 0M3 12a9 9 0 0 0 18 0"/></svg>
@@ -459,7 +480,7 @@
     display: flex; align-items: center; gap: 10px;
     padding: 0 12px;
     border-bottom: 1px solid var(--border);
-    background: linear-gradient(180deg, var(--bg-2), var(--bg-1));
+    background: var(--bg-0);
   }
   .sl-icon {
     margin-left: auto;
@@ -555,9 +576,7 @@
   }
   .sl-toggle.active .sl-toggle-dot {
     background: var(--src-sentry);
-    box-shadow:
-      inset 0 0 0 1.5px var(--src-sentry),
-      0 0 6px color-mix(in srgb, var(--src-sentry) 60%, transparent);
+    box-shadow: inset 0 0 0 1.5px var(--src-sentry), var(--shadow-1);
   }
 
   .sl-dd { display: inline-flex; }
@@ -616,7 +635,7 @@
     letter-spacing: 0.10em;
     text-transform: uppercase;
     color: var(--text-mute);
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono);
     display: flex; align-items: center; gap: 8px;
   }
   .sl-group::after {
@@ -628,38 +647,23 @@
   .sl-card {
     position: relative;
     display: flex; flex-direction: column; gap: 5px;
-    padding: 10px 12px 11px 14px;
-    margin-bottom: 3px;
+    padding: 12px 20px;
+    margin: 0;
     width: 100%;
-    border-radius: 9px;
-    border: 1px solid transparent;
+    border-radius: 0;
+    border: 0;
+    border-bottom: 1px solid var(--border-lo);
+    border-left: 2px solid transparent;
     text-align: left;
     background: transparent;
     cursor: pointer;
-    transition: background 120ms, border-color 120ms, box-shadow 200ms;
+    transition: background 120ms;
     user-select: none;
   }
-  .sl-card::before {
-    content: ''; position: absolute; left: 0; top: 11px; bottom: 11px;
-    width: 2px; border-radius: 2px;
-    background: var(--src-sentry);
-    opacity: 0; transition: opacity 200ms;
-  }
-  .sl-card:hover { background: var(--bg-2); border-color: var(--border); }
-  .sl-card:hover::before { opacity: 0.5; }
+  .sl-card:hover { background: var(--bg-1); }
   .sl-card.active {
-    background: var(--bg-2);
-    border-color: var(--border-hi);
-    /* Tint follows the brand var (`--error` is sentry's pulse colour
-       on both themes); drop-shadow uses the theme's own `--shadow-2`
-       so the lift reads on cream as well as on noir. */
-    box-shadow:
-      0 0 0 1px color-mix(in srgb, var(--error) 32%, transparent),
-      var(--shadow-2);
-  }
-  .sl-card.active::before {
-    opacity: 1;
-    box-shadow: 0 0 10px color-mix(in srgb, var(--error) 40%, transparent);
+    background: var(--bg-sel);
+    border-left-color: var(--src-sentry);
   }
 
   .sl-card-top { display: flex; align-items: center; gap: 7px; }
@@ -714,7 +718,7 @@
     font-size: 9.5px; font-weight: 600;
     text-transform: uppercase; letter-spacing: 0.04em;
   }
-  .sl-status--resolved { color: var(--success); background: rgba(168, 217, 184, 0.10); border: 1px solid rgba(168, 217, 184, 0.24); }
+  .sl-status--resolved { color: var(--success); background: color-mix(in srgb, var(--ok) 10%, transparent); border: 1px solid color-mix(in srgb, var(--ok) 24%, transparent); }
   .sl-status--ignored { color: var(--text-mute); background: var(--bg-3); border: 1px solid var(--border); }
 
   /* Send-to-Claude chip — appears on hover/active in the
@@ -760,7 +764,7 @@
     margin: auto;
   }
   .sl-empty-h, .sl-error-h {
-    font-family: 'Geist', 'Inter', -apple-system, system-ui, sans-serif;
+    font-family: var(--font-mono);
     font-size: 22px; font-weight: 600; letter-spacing: -0.015em;
     color: var(--text-0);
     margin: 0 0 10px;
@@ -780,5 +784,19 @@
     border-top-color: var(--accent);
     border-radius: 50%;
     animation: sl-spin 0.7s linear infinite;
+  }
+  /* Mockup sparkline — 10 bars, 5px wide, ink alpha; hot issues in err. */
+  .sl-spark {
+    display: flex; align-items: flex-end; gap: 2px;
+    height: 16px;
+    margin-top: 5px;
+  }
+  .sl-spark-bar {
+    width: 5px;
+    border-radius: 1.5px;
+    background: color-mix(in srgb, var(--text-0) 22%, transparent);
+  }
+  .sl-spark--hot .sl-spark-bar {
+    background: color-mix(in srgb, var(--err) 45%, transparent);
   }
 </style>

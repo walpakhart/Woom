@@ -7,11 +7,14 @@
    surface, pane head, hero typography, empty state. */
 
 :root {
-  --app-r-pane: 14px;
-  --app-r-card: 10px;
-  --app-pad: 14px;
-  --app-gap: 14px;
-  --app-pane-head-h: 56px;
+  --app-r-pane: 0px;
+  --app-r-card: 9px;
+  /* Mockup: solos are ONE CONTINUOUS SHEET — panes butt together,
+     separated by hairlines. No outer padding, no gaps, no floating
+     cards. */
+  --app-pad: 0px;
+  --app-gap: 0px;
+  --app-pane-head-h: 44px;
 }
 
 /* Outer shell — grid container, fills the main area, brand halo
@@ -26,49 +29,47 @@
   padding: var(--app-pad);
   gap: var(--app-gap);
 }
-.app-shell::before {
-  content: '';
-  position: absolute; inset: 0;
-  background: radial-gradient(ellipse 1100px 700px at 0% 100%,
-    color-mix(in srgb, var(--app-tone, var(--accent)) 10%, transparent),
-    transparent 65%);
-  pointer-events: none;
-  z-index: 0;
-}
+/* Paper redesign: no brand halo washes — hierarchy lives on
+   borders and fills. */
 .app-shell > * { position: relative; z-index: 1; }
 
-/* Pane — every "panel" inside a solo (sidebar, main, side). */
+/* Pane — every "panel" inside a solo. Flat sheet per the mockup:
+   no card chrome; adjacency reads via a right hairline. */
 .app-pane {
   display: flex; flex-direction: column;
-  background: var(--bg-1);
-  border: 1px solid var(--border-neutral);
-  border-radius: var(--app-r-pane);
-  box-shadow: var(--shadow-1);
+  background: var(--bg-0);
+  border: 0;
+  border-right: 1px solid var(--border);
+  border-radius: 0;
+  box-shadow: none;
   overflow: hidden;
   min-height: 0; min-width: 0;
   position: relative;
 }
+.app-pane:last-child { border-right: 0; }
 
-/* Pane header — 56px, editorial serif title + actions. */
+/* Pane header — mockup: `jira` 13px/600 lowercase + meta + filter
+   chips right, 14px 22px padding, hairline bottom. */
 .app-pane-head {
   flex: 0 0 var(--app-pane-head-h);
-  display: flex; align-items: center; gap: 14px;
-  padding: 14px 20px 12px;
+  display: flex; align-items: center; gap: 12px;
+  padding: 0 22px;
   border-bottom: 1px solid var(--border);
-  background: linear-gradient(180deg, var(--bg-2), var(--bg-1));
+  background: var(--bg-0);
   min-height: var(--app-pane-head-h);
 }
 .app-pane-head-h {
-  font-family: 'Geist', 'Inter', -apple-system, system-ui, sans-serif;
-  font-size: 22px; font-weight: 600;
-  letter-spacing: -0.02em; line-height: 1.2;
+  font-family: var(--font-mono);
+  font-size: 13px; font-weight: 600;
+  text-transform: lowercase;
+  letter-spacing: 0; line-height: 1.2;
   color: var(--text-0);
   margin: 0;
-  flex: 1; min-width: 0;
+  flex: 0 0 auto; min-width: 0;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .app-pane-head-meta {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: var(--font-mono);
   font-size: 11px; color: var(--text-mute);
   padding: 2px 7px;
   background: var(--bg-3);
@@ -83,14 +84,14 @@
 
 /* Hero typography for empty states / detail headers. */
 .app-h1 {
-  font-family: 'Geist', 'Inter', -apple-system, system-ui, sans-serif;
+  font-family: var(--font-mono);
   font-size: 30px; font-weight: 600;
   letter-spacing: -0.02em; line-height: 1.18;
   color: var(--text-0);
   margin: 0;
 }
 .app-h2 {
-  font-family: 'Geist', 'Inter', -apple-system, system-ui, sans-serif;
+  font-family: var(--font-mono);
   font-size: 22px; font-weight: 600;
   letter-spacing: -0.02em; line-height: 1.2;
   color: var(--text-0);
@@ -101,36 +102,29 @@
 .app-empty {
   flex: 1;
   display: grid; place-items: center;
-  background:
-    radial-gradient(ellipse 900px 600px at 50% 100%,
-      color-mix(in srgb, var(--app-tone, var(--accent)) 10%, transparent),
-      transparent 60%);
 }
 .app-empty-card {
   max-width: 460px;
   padding: 36px 32px;
   text-align: center;
-  background: var(--bg-1);
+  background: var(--bg-2);
   border: 1px solid var(--border-hi);
-  border-radius: 16px;
-  box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--app-tone, var(--accent)) 14%, transparent),
-    var(--shadow-3);
+  border-radius: var(--r-panel);
+  box-shadow: var(--shadow-3);
 }
 .app-empty-icon {
   width: 56px; height: 56px;
   margin: 0 auto 16px;
   display: grid; place-items: center;
-  border-radius: 14px;
-  background: color-mix(in srgb, var(--app-tone, var(--accent)) 14%, var(--bg-2));
-  color: var(--app-tone, var(--accent-bright));
+  border-radius: var(--r-card);
+  background: color-mix(in srgb, var(--app-tone, var(--accent)) 10%, var(--bg-2));
+  color: var(--app-tone, var(--text-0));
   box-shadow:
-    inset 0 0 0 1px color-mix(in srgb, var(--app-tone, var(--accent)) 35%, transparent),
-    0 0 30px var(--app-glow, var(--accent-glow));
+    inset 0 0 0 1px color-mix(in srgb, var(--app-tone, var(--accent)) 35%, transparent);
 }
 .app-empty-icon svg { width: 26px; height: 26px; stroke: currentColor; fill: none; stroke-width: 1.5; }
 .app-empty-h {
-  font-family: 'Geist', 'Inter', -apple-system, system-ui, sans-serif;
+  font-family: var(--font-mono);
   font-size: 26px; font-weight: 600; letter-spacing: -0.02em;
   color: var(--text-0);
   margin: 0 0 10px;
@@ -163,10 +157,10 @@
 
 /* Universal section label — uppercase tracked caption. */
 .app-label {
-  font-size: 9.5px; font-weight: 700;
-  letter-spacing: 0.10em;
+  font-size: 9.5px; font-weight: 600;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: var(--text-mute);
+  color: var(--text-faint);
 }
 
 /* Square icon button — used in pane heads + secondary controls. */

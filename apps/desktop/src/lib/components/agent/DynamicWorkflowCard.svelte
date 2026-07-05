@@ -569,7 +569,7 @@
   }
   .dw-cell-diff {
     margin: 0;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono);
     font-size: 11px;
     white-space: pre;
     overflow-x: auto;
@@ -634,5 +634,5 @@
     white-space: pre-wrap;
     line-height: 1.5;
   }
-  .mono { font-family: 'JetBrains Mono', monospace; }
+  .mono { font-family: var(--font-mono); }
 </style>

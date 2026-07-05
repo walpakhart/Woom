@@ -325,7 +325,7 @@
     background: var(--bg-1);
     border: 1px solid var(--border-neutral-hi);
     border-radius: 14px;
-    box-shadow: 0 32px 64px rgba(0, 0, 0, 0.4);
+    box-shadow: var(--shadow-3);
     overflow: hidden;
   }
   .cheatsheet-head {

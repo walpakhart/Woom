@@ -1641,7 +1641,7 @@
     font-size: 12px;
   }
   .sdd-glyph {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono);
     font-size: 9.5px;
     font-weight: 700;
     letter-spacing: 0.14em;
@@ -1680,7 +1680,7 @@
     font-size: 10px;
     color: var(--text-mute);
     margin-left: auto;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono);
     opacity: 0.6;
   }
 
@@ -1793,7 +1793,7 @@
   .sdd-phase-pill {
     display: inline-flex; align-items: center;
     gap: 5px;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono);
     font-size: 10.5px;
     padding: 2px 8px;
     border-radius: 4px;
@@ -1980,7 +1980,7 @@
      * blur kills any residual focus-fighting from chat behind. */
     background: color-mix(in srgb, var(--bg-1) 96%, transparent);
     border-left: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
-    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35);
+    box-shadow: var(--shadow-3);
     border-radius: 8px;
     padding: 18px 28px 20px;
     overflow: hidden;
@@ -1992,7 +1992,7 @@
   .sdd-card--full:focus-within {
     background: var(--bg-1);
     border-left-color: var(--accent);
-    box-shadow: 0 14px 44px rgba(0, 0, 0, 0.45);
+    box-shadow: var(--shadow-3);
   }
   .sdd-card--full .sdd-body {
     flex: 1 1 0; min-height: 0;
@@ -2067,7 +2067,7 @@
     border-left: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
     background: color-mix(in srgb, var(--bg-0) 70%, transparent);
     color: var(--text-0);
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono);
     font-size: 12px;
     line-height: 1.55;
     resize: vertical;
@@ -2299,7 +2299,7 @@
     border-radius: 6px;
     border: 1px solid var(--border-neutral-hi);
     background: var(--bg-1);
-    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.28);
+    box-shadow: var(--shadow-3);
     display: flex; flex-direction: column;
     gap: 2px;
   }
@@ -2388,7 +2388,7 @@
     background: transparent;
     border: 0; padding: 0;
     margin-left: 6px;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono);
     font-size: 10px;
     color: var(--text-mute);
     cursor: pointer;

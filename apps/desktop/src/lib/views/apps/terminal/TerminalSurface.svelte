@@ -85,6 +85,7 @@
   const linkedSessions = $derived.by(() => {
     const out: { sessionId: string; title: string }[] = [];
     for (const s of sessionsState.list) {
+      if (s.archived) continue;
       if (s.linkedTerminalInstanceId !== instanceId) continue;
       out.push({ sessionId: s.id, title: s.title });
     }
@@ -95,6 +96,7 @@
    *  that editor's repoPath as the auto-cwd. Picks the first match deterministically. */
   const autoLinkedCwd = $derived.by(() => {
     for (const s of sessionsState.list) {
+      if (s.archived) continue;
       if (s.linkedTerminalInstanceId !== instanceId) continue;
       if (!s.linkedToEditor || !s.linkedToEditorInstanceId) continue;
       const slot = sessionsState.editorInstanceState[s.linkedToEditorInstanceId];
@@ -176,7 +178,7 @@
     if (!host) return;
 
     /* Wait for the terminal's monospace font before xterm measures
-       cell metrics. JetBrains Mono comes from Google Fonts — on the
+       cell metrics. IBM Plex Mono comes from Google Fonts — on the
        FIRST terminal mount after app launch it may still be in flight,
        so xterm would measure a fallback font and the WebGL glyph atlas
        would render blank/garbled ("terminal is empty until I leave and
@@ -184,7 +186,7 @@
        a (fallback-font) terminal instead of hanging forever. */
     try {
       await Promise.race([
-        document.fonts.load('12.5px "JetBrains Mono"'),
+        document.fonts.load('12.5px "IBM Plex Mono"'),
         new Promise((r) => setTimeout(r, 1500))
       ]);
     } catch {/* FontFaceSet unavailable — proceed with fallback */}
@@ -209,15 +211,18 @@
      * and the xterm canvas all settle on `--bg-1` so the terminal
      * reads as part of the chrome family instead of the deeper
      * `--bg-0` used by Editor / Agent / Sentry. */
+    /* Terminal is a DARK INSET driven by the --dark-* tokens (warm
+       charcoal on paper-light, cool noir on iconic). Read computed
+       values at mount; theme swaps re-open the surface anyway. */
     const css = getComputedStyle(document.documentElement);
     const v = (name: string, fallback: string) =>
       (css.getPropertyValue(name) || fallback).trim() || fallback;
-    const text0 = v('--text-0', '#EDE5D1');
-    const accentBright = v('--accent-bright', '#E8A33A');
-    const bg1 = v('--bg-1', '#131A23');
+    const text0 = v('--dark-text', '#D8D2BE');
+    const accentBright = v('--term-warn', '#E3C36B');
+    const bg1 = v('--dark-0', '#262218');
 
     term = new Terminal({
-      fontFamily: '"JetBrains Mono", "SF Mono", ui-monospace, monospace',
+      fontFamily: '"IBM Plex Mono", "SF Mono", ui-monospace, monospace',
       fontSize: 12.5,
       lineHeight: 1.25,
       cursorBlink: true,
@@ -241,24 +246,23 @@
         foreground: text0,
         cursor: accentBright,
         cursorAccent: bg1,
-        /* Selection halo — sage tint matching the new app accent. */
-        selectionBackground: 'rgba(176, 220, 200, 0.32)',
-        black: '#0E1112',
-        red: '#D4664A',
-        green: '#6FAE88',
-        yellow: '#D99540',
-        blue: '#6FA9F2',
-        magenta: '#B289F2',
-        cyan: '#7FD9D9',
-        white: '#C8CDC9',
-        brightBlack: '#5C6663',
-        brightRed: '#E48C70',
-        brightGreen: '#8FCAA0',
-        brightYellow: '#E5B574',
-        brightBlue: '#92BFFF',
-        brightMagenta: '#CBA9FF',
-        brightCyan: '#A1ECEC',
-        brightWhite: '#EBEFEC'
+        selectionBackground: 'rgba(216, 210, 190, 0.22)',
+        black: '#1E1B13',
+        red: '#DF8377',
+        green: '#9DBB84',
+        yellow: '#E3C36B',
+        blue: '#8FB0CE',
+        magenta: '#B0A0D6',
+        cyan: '#7FBFC9',
+        white: '#B5AE97',
+        brightBlack: '#8A8371',
+        brightRed: '#E89A8E',
+        brightGreen: '#B0CD98',
+        brightYellow: '#EDD289',
+        brightBlue: '#A6C3DC',
+        brightMagenta: '#C4B7E2',
+        brightCyan: '#9DD0D8',
+        brightWhite: '#EAE4D0'
       }
     });
     fit = new FitAddon();
@@ -284,7 +288,7 @@
        * still works, just slower. Silent fallback. */
     }
 
-    /* Late-font safety net: if JetBrains Mono finishes loading after
+    /* Late-font safety net: if IBM Plex Mono finishes loading after
        the timeout above let us proceed with a fallback font, rebuild
        the glyph atlas + refit once the FontFaceSet settles so the
        terminal self-heals instead of staying mis-rendered. */
@@ -523,7 +527,7 @@
 
 <style>
   .terminal-surface {
-    background: var(--bg-1);
+    background: var(--dark-0);
     width: 100%; height: 100%;
     flex: 1 1 auto; min-width: 0; min-height: 0;
     display: flex; flex-direction: column;
@@ -556,7 +560,7 @@
     border-top: 1px solid rgba(229, 113, 92, 0.32);
     color: var(--error);
     font-size: 11px;
-    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-family: var(--font-mono);
     pointer-events: none;
   }
 </style>

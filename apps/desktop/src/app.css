@@ -3,119 +3,276 @@
 @import url('./lib/views/apps/_shared/app.css');
 
 :root {
-  /* Woom palette — sage/mint brand language (v8 logo refresh).
-     Pivots from the prior warm-clay system to the new W-mark's
-     cool sage+mint duotone. Surfaces are near-black with a faint
-     teal undertone (no longer warm-brown), text is a cool off-white,
-     and the accent ramps from light mint → sage → deep teal. Source
-     brand colours stay distinct so Jira/GitHub/Sentry/Claude
-     all keep their own identity against the cool app surface. */
+  /* Woom palette — Paper Redesign. Warm cream paper surfaces, warm
+     ink text, muted per-source accents, charcoal insets. Light
+     (paper) is the default; `[data-theme='iconic']` below flips the
+     same token names to the warm-charcoal dark variant. Token names
+     are unchanged from the previous sage/mint system so components
+     keep reading `var(--bg-0)` / `var(--accent)` untouched. */
 
-  /* Surfaces — cool noir, progressively lifted. */
-  --bg-0: #0E1112;
-  --bg-1: #14181A;
-  --bg-2: #1B2125;
-  --bg-3: #232A2F;
-  --bg-4: #2C353C;
-  --bg-glass: rgba(20, 24, 26, 0.70);
-  --bg-elev: rgba(235, 240, 238, 0.045);
+  /* Surfaces — dim paper, progressively raised. NO pure white
+     anywhere: the brightest surface (cards/code) tops out at
+     ~L95 so large editor/code areas don't burn. */
+  --bg-0: #EDEFF2;              /* page */
+  --bg-1: #E7EAED;              /* titlebar, sidebar, row hover */
+  --bg-2: #F3F5F7;              /* cards, code bg, composer */
+  --bg-3: #DFE3E7;              /* chips, user bubble */
+  --bg-4: #D3D9DE;              /* meter tracks, blocked buttons */
+  --bg-sel: #E2E6EA;            /* selected list row */
+  --bg-nav: #D9DEE3;            /* active nav item / session / tab */
+  --bg-hover: #E1E5E9;          /* nav + tree hover */
+  --bg-glass: rgba(237, 239, 242, 0.86);
+  --bg-elev: rgba(31, 35, 40, 0.05);
 
-  /* Borders — cool off-white at low opacities + mint-tinted accent borders. */
-  --border:        rgba(235, 240, 238, 0.07);
-  --border-hi:     rgba(235, 240, 238, 0.13);
-  --border-hi2:    rgba(235, 240, 238, 0.22);
-  --border-accent: rgba(166, 212, 194, 0.42);
-  --border-accent-2: rgba(166, 212, 194, 0.22);
-  --border-neutral: rgba(235, 240, 238, 0.06);
-  --border-neutral-hi: rgba(235, 240, 238, 0.14);
+  /* Charcoal insets — SAME in both themes (terminal, status strip,
+     bg-task card, Sentry stack trace). */
+  --dark-0: #17191C;
+  --dark-1: #1E2126;
+  --dark-text: #D5DAE0;
+  --dark-text-2: #98A0A8;
+  --dark-mute: #6B7278;
 
-  /* Text — cool off-white stack with hint of green warmth. */
-  --text-0: #EBEFEC;
-  --text-1: #C5CDC9;
-  --text-2: #8C9692;
-  --text-mute: #5C6663;
+  /* Text — warm ink. */
+  --text-0: #24292F;
+  --text-1: #454C54;
+  --text-2: #363C43;
+  --text-mute: #6E7781;
+  --text-faint: #9AA4AE;
+  --text-linenum: #B4BCC4;
 
-  /* Sage / mint accent — the brand's W-mark gradient.
-     `accent` = mid-sage (closest to the darker logo stroke)
-     `accent-bright` = light mint (matches the lighter stroke + glow)
-     `accent-deep` = pressed/active deep teal-sage
-     `accent-fg` = very dark green-black for chip-text contrast. */
-  --accent: #8FB5A4;
-  --accent-bright: #B0DCC8;
-  --accent-deep: #5C8678;
-  --accent-soft: rgba(176, 220, 200, 0.10);
-  --accent-glow: rgba(176, 220, 200, 0.42);
-  --accent-fg: #0E1B16;
+  /* Borders — ink at low alpha. */
+  --border:        rgba(31, 35, 40, 0.12);
+  --border-lo:     rgba(31, 35, 40, 0.07);
+  --border-hi:     rgba(31, 35, 40, 0.18);
+  --border-hi2:    rgba(31, 35, 40, 0.25);
+  --border-solid:  rgba(31, 35, 40, 0.85);
+  --border-neutral: rgba(31, 35, 40, 0.07);
+  --border-neutral-hi: rgba(31, 35, 40, 0.14);
+  --border-accent:   rgba(31, 35, 40, 0.5);
+  --border-accent-2: rgba(31, 35, 40, 0.25);
+  --canvas-dot: rgba(31, 35, 40, 0.13);
 
-  /* Legacy `--blue*` aliases — older callsites still reference them.
-     Repointed to mint tones so palette stays unified without touching
-     every site. */
-  --blue: #B0DCC8;
-  --blue-bright: #C8E8DA;
-  --blue-deep: #5C8678;
+  /* Accent — in the paper system the accent IS the ink. Primary
+     actions render as inversion: ink fill, paper text. */
+  --accent: #24292F;
+  --accent-bright: #363C43;
+  --accent-deep: #14171A;
+  --accent-soft: rgba(31, 35, 40, 0.08);
+  --accent-glow: rgba(31, 35, 40, 0.18);
+  --accent-fg: #F0F2F5;
 
-  /* Per-source brand colours — first-class. Used by Rail glow,
-     column stripes, conn-icon variants. Saturated enough to triage
-     a column at a glance, calm enough to live next to the sage accent.
-     Editor + Claude stay warm so they read as warm partners on the
-     cool app surface; Canvas shifts toward cool aqua so it doesn't
-     bleed into the new accent green. */
-  --src-jira:    #4F8EFF;
-  --src-jira-2:  #75A8FF;
-  --src-github:  #B584FF;
-  --src-github-2:#D5B7FF;
-  --src-sentry:  #6E509B;
-  --src-sentry-2:#9D85D6;
-  --src-claude:  #E89B7D;
-  --src-claude-2:#F2B89E;
-  --src-canvas:  #7DC2D5;
-  --src-canvas-2:#A8DAE8;
-  --src-editor:  #CC785C;
-  --src-term:    #E5EAE8;
+  /* Legacy `--blue*` aliases — repointed at ink. */
+  --blue: #1F2328;
+  --blue-bright: #363C43;
+  --blue-deep: #6E7781;
 
-  /* Vivid IDE syntax palette. Used by the editor + diff hunks. */
-  --tk-key:    #B98AD9;
-  --tk-fn:     #B0DCC8;
-  --tk-str:    #A8D9B8;
-  --tk-num:    #88C2DD;
-  --tk-type:   #D9B86E;
-  --tk-prop:   #88B5A4;
-  --tk-cmt:    #5C6663;
-  --tk-punc:   #8C9692;
-  --tk-tag:    #D98AA9;
-  --tk-attr:   #B98AD9;
-  --tk-ghost:  rgba(176, 220, 200, 0.55);
+  /* Per-source brand colours — muted, inky. Distinct per source
+     (identity per solo is a feature), calm on cream. */
+  /* MONOCHROME accent language (user call 2026-07-04): the app
+     speaks in ink shades only — white paper, greys, blacks. Source
+     identity reads from icons + labels, not hue. Status colours
+     (ok/warn/err) stay chromatic. */
+  --src-jira:    #454C54;   --src-jira-2:  #6E7781;
+  --src-github:  #454C54;   --src-github-2:#6E7781;
+  --src-sentry:  #454C54;   --src-sentry-2:#6E7781;
+  --src-claude:  #1F2328;   --src-claude-2:#454C54;
+  --src-canvas:  #454C54;   --src-canvas-2:#6E7781;
+  --src-editor:  #454C54;
+  --src-term:    #D5DAE0;
+  --src-mono:    #6E7781;
+  --src-jira-border:   rgba(31, 35, 40, 0.35);
+  --src-github-border: rgba(31, 35, 40, 0.35);
+  --src-sentry-border: rgba(31, 35, 40, 0.35);
+  --src-claude-border: rgba(31, 35, 40, 0.4);
+  --src-canvas-border: rgba(31, 35, 40, 0.35);
+
+  /* Syntax palette (editor + inline code) — light paper set. */
+  --tk-key:    #CF222E;
+  --tk-fn:     #0550AE;
+  --tk-str:    #116329;
+  --tk-num:    #8250DF;
+  --tk-type:   #953800;
+  --tk-prop:   #0550AE;
+  --tk-cmt:    #6E7781;
+  --tk-punc:   #57606A;
+  --tk-tag:    #CF222E;
+  --tk-attr:   #8250DF;
+  --tk-plain:  #24292F;
+  --tk-ghost:  rgba(31, 35, 40, 0.4);
+  --tk-hl-line: rgba(26, 127, 55, 0.10);
 
   /* Diff. */
-  --diff-add: rgba(168, 217, 184, 0.10);
-  --diff-add-stroke: #A8D9B8;
-  --diff-rem: rgba(232, 130, 100, 0.10);
-  --diff-rem-stroke: #E88264;
-  /* GitHub-style diff palette for the side-by-side `DiffView`. The
-   * `--diff-*-stroke` greens / clays above are theme-personality
-   * colors (used by chip badges, change-bar gutters, sticky-note
-   * surfaces); they're too pale + WRONG hue for actual diff bodies.
-   *
-   * Match GitHub's primer-dark palette EXACTLY: both line-wash and
-   * token-highlight derive from the SAME base hue (success-emphasis
-   * #2ea043 / danger-emphasis #f85149), the only difference is alpha
-   * — 15% for whole-line wash, 40% for inline tokens. Earlier we
-   * used two unrelated opaque hex values where the token was a far
-   * more saturated green/red than the line, which made char-level
-   * highlights "вырвиглазны". Same-hue + alpha keeps the eye on
-   * "what changed", not on the color shift between line and token.
-   *
-   * Translucent values stack on the editor background (--bg-1)
-   * instead of competing with it — exactly how GitHub renders
-   * .blob-code-addition vs .x.added-line-bg. */
+  --diff-add: rgba(26, 127, 55, 0.10);
+  --diff-add-stroke: #116329;
+  --diff-rem: rgba(207, 34, 46, 0.10);
+  --diff-rem-stroke: #CF222E;
+  /* GitHub primer-light palette for the side-by-side DiffView —
+     opaque washes so long chunks don't stack into solid blocks. */
+  --diff-add-line: #ddf0e2;
+  --diff-add-token: #a8e2b6;
+  --diff-rem-line: #f5e2e0;
+  --diff-rem-token: #efa9a3;
+  --diff-tok-keyword: #cf222e;
+  --diff-tok-string: #0a3069;
+  --diff-tok-comment: #6e7781;
+  --diff-tok-number: #0550ae;
+  --diff-tok-type: #953800;
+  --diff-tok-function: #8250df;
+  --diff-tok-property: #0550ae;
+  --diff-tok-name: #1f2328;
+  --diff-tok-tag: #116329;
+  --diff-tok-punct: #24292f;
+
+  /* Semantic. */
+  --success: #1A7F37;   --ok: #1A7F37;   --ok-border: rgba(26, 127, 55, 0.45);
+  --warning: #9A6700;   --warn: #9A6700; --warn-border: rgba(154, 103, 0, 0.45);
+  --error:   #CF222E;   --err: #CF222E;  --err-border: rgba(207, 34, 46, 0.45);
+  --info:    #0969DA;
+  --running: var(--text-0);
+
+  /* Terminal colours (inside --dark-0, same both themes). */
+  --term-ok: #7CC08A;  --term-warn: #D9B96A;  --term-err: #E58B80;
+
+  /* Traffic lights (muted). */
+  --light-red: #E58B80;  --light-yellow: #D9B96A;  --light-green: #8CC694;
+
+  /* Modal & popover backdrop — ink haze. */
+  --backdrop: rgba(31, 35, 40, 0.32);
+
+  /* Scrollbars / desk. */
+  --scrollbar: rgba(31, 35, 40, 0.16);
+  --scrollbar-hover: rgba(31, 35, 40, 0.3);
+  --desk: #DCE0E4;
+
+  /* Typography — one face everywhere. */
+  --font-mono: 'IBM Plex Mono', ui-monospace, Menlo, monospace;
+
+  /* Radii — chip 5 · btn 6 · item 7 · card 9 · panel 10 · input 11. */
+  --r-chip: 5px;
+  --r-btn:  6px;
+  --r-item: 7px;
+  --r-card: 9px;
+  --r-panel: 10px;
+  --r-pane: 10px;
+  --r-modal: 10px;
+  --r-input: 11px;
+
+  /* Engraved shadows — stepped ink bands instead of blur, like an
+     etching's hatch. Offsets 2/4/6/8px, fading. shadow-1 = quiet
+     2-step, shadow-2 = 3-step, shadow-3 = full 4-step plate. */
+  --ink-shadow: 46, 42, 30;
+  --shadow-1:
+    2px 2px 0 -1px rgba(var(--ink-shadow), 0.20),
+    4px 4px 0 -1px rgba(var(--ink-shadow), 0.10);
+  --shadow-2:
+    2px 2px 0 -1px rgba(var(--ink-shadow), 0.24),
+    4px 4px 0 -1px rgba(var(--ink-shadow), 0.16),
+    6px 6px 0 -1px rgba(var(--ink-shadow), 0.09);
+  --shadow-3:
+    2px 2px 0 -1px rgba(var(--ink-shadow), 0.26),
+    4px 4px 0 -1px rgba(var(--ink-shadow), 0.18),
+    6px 6px 0 -1px rgba(var(--ink-shadow), 0.11),
+    8px 8px 0 -1px rgba(var(--ink-shadow), 0.05);
+  /* Dark pill (primary/inverted buttons) — two-step. */
+  --shadow-pill:
+    2px 2px 0 rgba(var(--ink-shadow), 0.30),
+    4px 4px 0 rgba(var(--ink-shadow), 0.12);
+  --shadow-glow-clay:
+    0 0 0 1px rgba(var(--ink-shadow), 0.10),
+    2px 2px 0 -1px rgba(var(--ink-shadow), 0.20),
+    4px 4px 0 -1px rgba(var(--ink-shadow), 0.12);
+}
+
+/* ---- Dark (iconic) — cool noir ----
+ * Deep blue-grey darkness (Cursor-like), NOT warm chocolate. The
+ * paper-light stays the default; this flips the same token names to
+ * a cold dark. Charcoal insets get a cool override here too so the
+ * terminal / status strip blend with the night surface. */
+:root[data-theme='iconic'] {
+  --bg-0: #0E1116;
+  --bg-1: #12161C;
+  --bg-2: #171C23;
+  --bg-3: #1F252E;
+  --bg-4: #29313C;
+  --bg-sel: #1C232D;
+  --bg-nav: #232B36;
+  --bg-hover: #1A2028;
+  --bg-glass: rgba(14, 17, 22, 0.82);
+  --bg-elev: rgba(230, 237, 243, 0.05);
+
+  /* Cool insets — terminal / status strip / stack traces. */
+  --dark-0: #0B0E12;
+  --dark-1: #12161C;
+  --dark-text: #C9D1D9;
+  --dark-text-2: #8B949E;
+  --dark-mute: #6E7681;
+
+  --text-0: #E6EDF3;
+  --text-1: #B7C0C9;
+  --text-2: #C9D1D9;
+  --text-mute: #7C8791;
+  --text-faint: #566069;
+  --text-linenum: #49525B;
+
+  --border:        rgba(230, 237, 243, 0.10);
+  --border-lo:     rgba(230, 237, 243, 0.06);
+  --border-hi:     rgba(230, 237, 243, 0.18);
+  --border-hi2:    rgba(230, 237, 243, 0.28);
+  --border-solid:  rgba(230, 237, 243, 0.55);
+  --border-neutral: rgba(230, 237, 243, 0.06);
+  --border-neutral-hi: rgba(230, 237, 243, 0.14);
+  --border-accent:   rgba(230, 237, 243, 0.45);
+  --border-accent-2: rgba(230, 237, 243, 0.22);
+  --canvas-dot: rgba(230, 237, 243, 0.09);
+
+  --accent: #E6EDF3;
+  --accent-bright: #FFFFFF;
+  --accent-deep: #B7C0C9;
+  --accent-soft: rgba(230, 237, 243, 0.08);
+  --accent-glow: rgba(230, 237, 243, 0.18);
+  --accent-fg: #0E1116;
+
+  --blue: #E6EDF3;
+  --blue-bright: #FFFFFF;
+  --blue-deep: #7C8791;
+
+  /* Monochrome accents — grey ladder on cold dark. */
+  --src-jira:    #B7C0C9;   --src-jira-2:  #8B949E;
+  --src-github:  #B7C0C9;   --src-github-2:#8B949E;
+  --src-sentry:  #B7C0C9;   --src-sentry-2:#8B949E;
+  --src-claude:  #E6EDF3;   --src-claude-2:#B7C0C9;
+  --src-canvas:  #B7C0C9;   --src-canvas-2:#8B949E;
+  --src-editor:  #B7C0C9;
+  --src-term:    #C9D1D9;
+  --src-mono:    #8C9692;
+  --src-jira-border:   rgba(230, 237, 243, 0.3);
+  --src-github-border: rgba(230, 237, 243, 0.3);
+  --src-sentry-border: rgba(230, 237, 243, 0.3);
+  --src-claude-border: rgba(230, 237, 243, 0.35);
+  --src-canvas-border: rgba(230, 237, 243, 0.3);
+
+  --tk-key:    #FF7B72;
+  --tk-fn:     #D2A8FF;
+  --tk-str:    #A5D6FF;
+  --tk-num:    #79C0FF;
+  --tk-type:   #FFA657;
+  --tk-prop:   #79C0FF;
+  --tk-cmt:    #6E7681;
+  --tk-punc:   #8B949E;
+  --tk-tag:    #7EE787;
+  --tk-attr:   #D2A8FF;
+  --tk-plain:  #C9D1D9;
+  --tk-ghost:  rgba(230, 237, 243, 0.4);
+  --tk-hl-line: rgba(126, 231, 135, 0.08);
+
+  --diff-add: rgba(46, 160, 67, 0.12);
+  --diff-add-stroke: #7EE787;
+  --diff-rem: rgba(248, 81, 73, 0.12);
+  --diff-rem-stroke: #FF7B72;
   --diff-add-line: rgba(46, 160, 67, 0.15);
   --diff-add-token: rgba(46, 160, 67, 0.40);
   --diff-rem-line: rgba(248, 81, 73, 0.15);
   --diff-rem-token: rgba(248, 81, 73, 0.40);
-
-  /* Syntax-highlight palette for DiffView's grid renderer. Tuned to
-   * stay readable on top of the diff line washes above (15% red/green)
-   * and the neutral `--bg-0` body. GitHub-dark-ish tones. */
   --diff-tok-keyword: #ff7b72;
   --diff-tok-string: #a5d6ff;
   --diff-tok-comment: #8b949e;
@@ -127,221 +284,80 @@
   --diff-tok-tag: #7ee787;
   --diff-tok-punct: #c9d1d9;
 
-  /* Semantic. */
-  --success: #A8D9B8;
-  --warning: #D9B86E;
-  --error:   #E88264;
-  --info:    #88C2DD;
-  --running: #B0DCC8;
+  --success: #7EC699;   --ok: #7EC699;   --ok-border: rgba(126, 198, 153, 0.5);
+  --warning: #D9B86E;   --warn: #D9B86E; --warn-border: rgba(217, 184, 110, 0.5);
+  --error:   #E88264;   --err: #E88264;  --err-border: rgba(232, 130, 100, 0.5);
+  --info:    #79C0FF;
+  --running: var(--text-0);
 
-  /* Modal & popover backdrop — cool noir glass. */
-  --backdrop: rgba(6, 8, 9, 0.74);
+  --term-ok: #7EC699;  --term-warn: #D9B86E;  --term-err: #E88264;
 
-  /* Radii. Calm-premium bump: card 12→14, pane 14→16 (softer, more
-     spacious). Conservative starting values — single-token retune. */
-  --r-card: 14px;
-  --r-pane: 16px;
-  --r-modal: 16px;
-  --r-chip: 6px;
-  --r-btn:  8px;
+  --backdrop: rgba(4, 6, 9, 0.66);
 
-  /* Elevation shadows. Near-black on cool noir reads as natural depth;
-     Light theme overrides below with a sage halo for cream surfaces. */
-  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.32), 0 2px 6px rgba(0, 0, 0, 0.22);
-  --shadow-2: 0 8px 24px rgba(0, 0, 0, 0.42), 0 1px 0 rgba(255, 255, 255, 0.025) inset;
-  --shadow-3: 0 24px 64px rgba(0, 0, 0, 0.58), 0 1px 0 rgba(255, 255, 255, 0.04) inset;
-  --shadow-glow-clay: 0 0 0 1px rgba(176, 220, 200, 0.12), 0 12px 32px rgba(176, 220, 200, 0.24);
+  --scrollbar: rgba(230, 237, 243, 0.14);
+  --scrollbar-hover: rgba(230, 237, 243, 0.28);
+  --desk: #090B0E;
+
+  /* Engraved shadows in dark — deep black steps. */
+  --ink-shadow: 0, 0, 0;
+  --shadow-1:
+    2px 2px 0 -1px rgba(var(--ink-shadow), 0.45),
+    4px 4px 0 -1px rgba(var(--ink-shadow), 0.22);
+  --shadow-2:
+    2px 2px 0 -1px rgba(var(--ink-shadow), 0.50),
+    4px 4px 0 -1px rgba(var(--ink-shadow), 0.32),
+    6px 6px 0 -1px rgba(var(--ink-shadow), 0.18);
+  --shadow-3:
+    2px 2px 0 -1px rgba(var(--ink-shadow), 0.55),
+    4px 4px 0 -1px rgba(var(--ink-shadow), 0.36),
+    6px 6px 0 -1px rgba(var(--ink-shadow), 0.22),
+    8px 8px 0 -1px rgba(var(--ink-shadow), 0.11);
+  --shadow-pill:
+    2px 2px 0 rgba(var(--ink-shadow), 0.60),
+    4px 4px 0 rgba(var(--ink-shadow), 0.26);
+  --shadow-glow-clay:
+    0 0 0 1px rgba(230, 237, 243, 0.10),
+    2px 2px 0 -1px rgba(var(--ink-shadow), 0.45),
+    4px 4px 0 -1px rgba(var(--ink-shadow), 0.24);
 }
 
-/* ---- Light theme ----
- * Tint (off-white with sage hint) surfaces + Shade (deep teal-green)
- * text & accent. Picked from the new W-mark's logo: light mint surfaces
- * pair with deep sage text. Only colour variables are overridden —
- * every layout / spacing / radius rule stays shared, so swap-on-the-fly
- * is paint-only.
- */
-:root[data-theme='light'] {
-  --bg-0: #F1F5F2;
-  --bg-1: #E5EDE7;
-  --bg-2: #D5E2D8;
-  --bg-3: #BFD3C6;
-  --bg-4: #A8C0B2;
-  /* Cream-glass — used by ActivityBar / Rail / popovers. The dark
-     theme defines a near-black `rgba(20,24,26,0.70)` for this token;
-     without an override every glass surface in the light theme would
-     fall back to that and punch a black bar on cream (the bug that
-     made the ActivityBar look like a dark sliver). */
-  --bg-glass: rgba(241, 245, 242, 0.78);
-  /* Elevation tint for hover backgrounds on cream — a translucent
-     SAGE wash so the underlying mint shows through. The dark theme
-     uses a translucent cream wash; we invert it for light. */
-  --bg-elev: rgba(20, 38, 30, 0.06);
-
-  --border: rgba(20, 38, 30, 0.14);
-  --border-hi: rgba(20, 38, 30, 0.32);
-  --border-hi2: rgba(20, 38, 30, 0.50);
-  --border-neutral: rgba(20, 38, 30, 0.10);
-  --border-neutral-hi: rgba(20, 38, 30, 0.20);
-  /* Sage-tinted accent borders. Mirror the structure of the dark
-     theme (`rgba(166,212,194,0.42)` / `0.22`) but flip the hue to
-     deep sage so they read on cream. Without these the active
-     ActivityBar tab loses its inset 1px ring entirely. */
-  --border-accent:   rgba(46, 90, 74, 0.42);
-  --border-accent-2: rgba(46, 90, 74, 0.22);
-
-  --text-0: #0E1B16;
-  --text-1: #234A3C;
-  --text-2: #4A6B5E;
-  --text-mute: #7A938A;
-
-  --accent: #2E5A4A;
-  --accent-bright: #0E1B16;
-  /* Pressed / gradient-end accent. Used by ActivityBar's active tab
-     stripe (`linear-gradient(--accent-bright, --accent-deep)`) and a
-     handful of buttons. Pick a darker sage so the gradient reads as
-     "deep ↘ deeper", not "deep ↘ undefined → invalid". */
-  --accent-deep: #1A3328;
-  --accent-soft: rgba(46, 90, 74, 0.10);
-  --accent-glow: rgba(46, 90, 74, 0.22);
-
-  /* Sage halo for hero cards (HomeApp tiles, command-palette pop).
-     Dark theme's `--shadow-glow-clay` uses warm-clay; on cream we
-     swap to deep-sage so it doesn't read as a peach smear. */
-  --shadow-glow-clay: 0 0 0 1px rgba(46, 90, 74, 0.10), 0 12px 32px rgba(46, 90, 74, 0.18);
-
-  --blue: #2E5A4A;
-  --blue-bright: #0E1B16;
-  --blue-deep: #98B8A8;
-
-  --success: #4F7A5F;
-  --warning: #8E5A1A;
-  --error: #A33A22;
-
-  /* Light: accent is deep sage, so accent-fg must be light mint for
-     AA contrast. Backdrop is a soft sage haze — pulls modals forward
-     without washing out cream. */
-  --accent-fg: #F1F5F2;
-  --backdrop: rgba(20, 38, 30, 0.32);
-
-  /* Sage shadows for the cream surface — black would punch a
-     visible halo. Slightly stronger opacity than the dark themes
-     because sage-on-mint needs more density to read as depth. */
-  --shadow-1: 0 1px 2px rgba(20, 38, 30, 0.10), 0 2px 6px rgba(20, 38, 30, 0.10);
-  --shadow-2: 0 2px 4px rgba(20, 38, 30, 0.14), 0 8px 22px rgba(20, 38, 30, 0.12);
-  --shadow-3: 0 4px 10px rgba(20, 38, 30, 0.18), 0 22px 50px rgba(20, 38, 30, 0.18);
-
-  /* Source tokens default to the dark-theme pastels (`--src-claude:
-     #E89B7D`, `--src-canvas: #7DC2D5`, …) which look fine on a deep
-     surface but read as pale washes on cream. Override each with a
-     deeper, saturated cousin in the same hue family — same vocabulary
-     ("Claude is warm rust", "Canvas is teal"), enough contrast to
-     stay legible against `--bg-0` / `--bg-1`.
-
-     The `*-2` variant stays close to the base so callers that mix
-     the two (e.g. column glow) still get a continuous gradient. */
-  --src-jira:    #2A5FCC;
-  --src-jira-2:  #4A7FE6;
-  --src-github:  #6B3FCC;
-  --src-github-2:#8458D9;
-  --src-sentry:  #4A2E70;
-  --src-sentry-2:#6E4A99;
-  --src-claude:  #B85A35;
-  --src-claude-2:#D4754D;
-  --src-canvas:  #2A6F85;
-  --src-canvas-2:#4690A6;
-  --src-editor:  #8B3F22;
-  --src-term:    #3A4A42;
-
-  /* Vivid IDE syntax palette — re-tuned for cream surface. The dark
-     palette uses high-luminance pastels; on light bg we need
-     mid-luminance saturated tones (otherwise `string` and `keyword`
-     pastel-green vanish into the mint background). */
-  --tk-key:    #6B3FCC;
-  --tk-fn:     #2E5A4A;
-  --tk-str:    #2E6B3A;
-  --tk-num:    #2A5FCC;
-  --tk-type:   #8B5A1A;
-  --tk-prop:   #3A6B5A;
-  --tk-cmt:    #7A938A;
-
-  /* Bump the mid-tone text colors one notch toward `--text-0` so
-     they don't blend into `--bg-1`. `--text-2` was tuned for the
-     dark theme's contrast budget — on cream, the same hex reads as
-     "almost background". */
-  --text-2: #345A4C;
-  --text-mute: #5C7A6F;
-
-  /* Diff palette for cream surface. Same OPAQUE strategy as the dark
-   * theme — borrowed from GitHub's primer-light primitives. Pale
-   * sage-leaning green for added lines, pale rose for removed; deeper
-   * variants for inline-token highlights. Translucent layers would
-   * stack into solid blocks of color when a chunk has many changed
-   * lines in a row; opaque keeps the wash even regardless of chunk
-   * size, like GitHub.com. */
-  --diff-add-line: #e6ffec;
-  --diff-add-token: #abf2bc;
-  --diff-rem-line: #ffebe9;
-  --diff-rem-token: #ffafa9;
-
-  /* GitHub light syntax palette — Primer/light defaults. */
-  --diff-tok-keyword: #cf222e;
-  --diff-tok-string: #0a3069;
-  --diff-tok-comment: #6e7781;
-  --diff-tok-number: #0550ae;
-  --diff-tok-type: #953800;
-  --diff-tok-function: #8250df;
-  --diff-tok-property: #0550ae;
-  --diff-tok-name: #1f2328;
-  --diff-tok-tag: #116329;
-  --diff-tok-punct: #24292f;
-}
-
-/* (The previous separate `:root[data-theme='dark']` block has been
-   retired — Iconic is already the dark variant under the new W-mark
-   palette so a separate "dark" was redundant. Persisted `'dark'`
-   theme values from older builds migrate to `iconic` at boot, see
-   theme.svelte.ts.) */
+/* Legacy alias: persisted `light` theme maps to the default paper
+   :root values — block kept so `data-theme="light"` stays valid. */
+:root[data-theme='light'] {}
 
 * { box-sizing: border-box; }
 
 html, body {
   margin: 0;
-  /* Primary UI typeface: Geist — modern geometric sans-serif designed
-     for developer tools (Vercel). Inter is the fallback when Geist
-     isn't available (offline / restricted networks); both are loaded
-     via app.html's Google Fonts link. System sans is the final fallback. */
-  font-family: 'Geist', 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
-  font-feature-settings: 'ss01', 'ss03', 'cv11';
+  /* One typeface everywhere — IBM Plex Mono. The paper redesign
+     sets UI, code and headings in the same mono face; hierarchy
+     comes from size/weight/case, not family changes. */
+  font-family: var(--font-mono);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   background: var(--bg-0);
   color: var(--text-0);
   height: 100vh;
   overflow: hidden;
-  font-size: 13.5px;
+  font-size: 12.5px;
   line-height: 1.5;
-  letter-spacing: -0.005em;
 }
 
 .mono {
-  /* Geist Mono pairs cleanly with Geist for technical content;
-     JetBrains Mono is the fallback chain. */
-  font-family: 'Geist Mono', 'JetBrains Mono', ui-monospace, 'SF Mono', monospace;
-  font-feature-settings: 'zero', 'ss01';
+  font-family: var(--font-mono);
+  font-feature-settings: 'zero';
 }
 
 /* Display / editorial headings (welcome, app-empty, ct-empty, etc.).
-   Switched from Instrument Serif (warm editorial pause) to Geist Bold
-   for a more modern, professional, developer-tools-native feel that
-   matches the new W-mark. The `.serif` class name is kept so existing
-   markup doesn't need to be touched. */
+   Same face, heavier weight. The `.serif` class name is kept so
+   existing markup doesn't need to be touched. */
 .serif {
-  font-family: 'Geist', 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  font-family: var(--font-mono);
   font-weight: 700;
-  letter-spacing: -0.025em;
+  letter-spacing: -0.01em;
 }
 
-h1, h2, h3 { margin: 0; letter-spacing: -0.02em; font-weight: 600; }
+h1, h2, h3 { margin: 0; letter-spacing: -0.01em; font-weight: 600; }
 
 button, input {
   font-family: inherit; font-size: inherit;
@@ -352,18 +368,22 @@ input:focus { outline: none; }
 
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--border-neutral-hi); border-radius: 4px; }
-::-webkit-scrollbar-thumb:hover { background: var(--border-hi); }
+::-webkit-scrollbar-thumb { background: var(--scrollbar); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-hover); }
 
 kbd {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: var(--font-mono);
   font-size: 10.5px;
   padding: 2px 6px;
   background: var(--bg-2);
-  border: 1px solid var(--border-neutral-hi);
+  border: 1px solid var(--border-hi);
   border-radius: 4px;
   color: var(--text-1);
-  box-shadow: inset 0 -1px 0 rgba(0,0,0,0.3);
+  /* Engraved instrument key — stepped ink bands, no blur. */
+  box-shadow:
+    1px 1px 0 rgba(var(--ink-shadow), 0.28),
+    2px 2px 0 rgba(var(--ink-shadow), 0.14),
+    3px 3px 0 rgba(var(--ink-shadow), 0.06);
 }
 
 .i {
@@ -424,134 +444,10 @@ kbd {
    GitHub app, Jira solo, Agent solo, Editor solo, Modals, etc.
    ============================================================ */
 
-/* Per-app tonal accents.
-   Each full-screen `.app-shell` re-points the global `--accent-*`
-   tokens to its source's brand colour. Components downstream
-   (focus rings, button glows, link chips, hover stripes…) already
-   read `--accent-*`, so the tint propagates without site-by-site
-   patches.
-
-   The light-theme block earlier in this file rewrites `--accent`
-   for whole-document scope; these per-shell rules SHADOW it inside
-   each app surface only — the rest of the chrome (rail, modals,
-   toasts) stays on the unified mint accent. */
-.app-shell.sj-shell {
-  --accent: #4F8EFF;
-  --accent-bright: #75A8FF;
-  --accent-deep: #2E5FBF;
-  --accent-soft: rgba(79, 142, 255, 0.12);
-  --accent-glow: rgba(79, 142, 255, 0.42);
-  --accent-fg: #0D162E;
-}
-.app-shell.sg-shell {
-  --accent: #B584FF;
-  --accent-bright: #D5B7FF;
-  --accent-deep: #835EBF;
-  --accent-soft: rgba(181, 132, 255, 0.12);
-  --accent-glow: rgba(181, 132, 255, 0.42);
-  --accent-fg: #1B1530;
-}
-.app-shell.ssn-shell {
-  /* Sentry — the brand mark is a deep purple but the user reads
-     it best as purple-pink in chrome (more saturation than the
-     plum brand swatch alone). */
-  --accent: #B26199;
-  --accent-bright: #D38AC0;
-  --accent-deep: #7A3D6C;
-  --accent-soft: rgba(178, 97, 153, 0.12);
-  --accent-glow: rgba(178, 97, 153, 0.42);
-  --accent-fg: #1F0F19;
-}
-.app-shell.sa[data-kind="claude"] {
-  --accent: #E89B7D;
-  --accent-bright: #F2B89E;
-  --accent-deep: #B86E54;
-  --accent-soft: rgba(232, 155, 125, 0.12);
-  --accent-glow: rgba(232, 155, 125, 0.42);
-  --accent-fg: #1F1410;
-}
-.app-shell.se-shell {
-  --accent: #CC785C;
-  --accent-bright: #E89B7D;
-  --accent-deep: #8C4F3D;
-  --accent-soft: rgba(204, 120, 92, 0.12);
-  --accent-glow: rgba(204, 120, 92, 0.42);
-  --accent-fg: #1A0E08;
-}
-.app-shell.sc-shell {
-  --accent: #7DC2D5;
-  --accent-bright: #A8DAE8;
-  --accent-deep: #4D8A9E;
-  --accent-soft: rgba(125, 194, 213, 0.12);
-  --accent-glow: rgba(125, 194, 213, 0.42);
-  --accent-fg: #0A1A20;
-}
-
-/* Per-shell accent overrides for the LIGHT theme.
- *
- * On dark theme, `--accent-bright` is the PASTEL flavour of the
- * source's hue (peach for Claude, lavender for GitHub, …) — that's
- * the right call when the bright accent sits as text on a deep
- * surface. On cream, the same pastel reads as a wash: dropdown row
- * with `color: var(--accent-bright); background: var(--accent-soft)`
- * becomes "pale peach on pale peach" and the label vanishes until
- * you scroll past the highlighted row.
- *
- * Each block here pushes `--accent-bright` DOWN the value scale
- * (towards the deep-saturated end of the same hue) so accent text
- * has real contrast against `--bg-0` / `--bg-1`. The translucent
- * `--accent-soft` follows so highlight rows still read as "tinted",
- * not opaque. `--accent-fg` flips to a light tone so primary buttons
- * (filled with `--accent-bright`) still have readable foreground.
- */
-:root[data-theme='light'] .app-shell.sj-shell {
-  --accent: #2A5FCC;
-  --accent-bright: #1A3D85;
-  --accent-deep: #0D245C;
-  --accent-soft: rgba(42, 95, 204, 0.12);
-  --accent-glow: rgba(42, 95, 204, 0.30);
-  --accent-fg: #F1F5F2;
-}
-:root[data-theme='light'] .app-shell.sg-shell {
-  --accent: #6B3FCC;
-  --accent-bright: #4A2A99;
-  --accent-deep: #2E195F;
-  --accent-soft: rgba(107, 63, 204, 0.12);
-  --accent-glow: rgba(107, 63, 204, 0.30);
-  --accent-fg: #F1F5F2;
-}
-:root[data-theme='light'] .app-shell.ssn-shell {
-  --accent: #6E4A99;
-  --accent-bright: #4A2E70;
-  --accent-deep: #2E1B4A;
-  --accent-soft: rgba(110, 74, 153, 0.12);
-  --accent-glow: rgba(110, 74, 153, 0.30);
-  --accent-fg: #F1F5F2;
-}
-:root[data-theme='light'] .app-shell.sa[data-kind="claude"] {
-  --accent: #B85A35;
-  --accent-bright: #7A3D24;
-  --accent-deep: #4D2614;
-  --accent-soft: rgba(184, 90, 53, 0.12);
-  --accent-glow: rgba(184, 90, 53, 0.30);
-  --accent-fg: #FCF7F0;
-}
-:root[data-theme='light'] .app-shell.se-shell {
-  --accent: #8B3F22;
-  --accent-bright: #5A2A18;
-  --accent-deep: #3A1B0F;
-  --accent-soft: rgba(139, 63, 34, 0.12);
-  --accent-glow: rgba(139, 63, 34, 0.30);
-  --accent-fg: #FCF7F0;
-}
-:root[data-theme='light'] .app-shell.sc-shell {
-  --accent: #2A6F85;
-  --accent-bright: #1B4A5A;
-  --accent-deep: #102E3A;
-  --accent-soft: rgba(42, 111, 133, 0.12);
-  --accent-glow: rgba(42, 111, 133, 0.30);
-  --accent-fg: #F1F5F2;
-}
+/* Per-app tonal accents — RETIRED (monochrome language, 2026-07-04).
+   Source identity reads from icons + labels, not hue; every shell
+   inherits the root ink accent (light) / light-ink accent (iconic).
+   Status colours (ok/warn/err) remain the only chromatic voices. */
 
 .claude-col {
   flex: 1.3 1 420px;
@@ -561,8 +457,8 @@ kbd {
   transition: background 180ms, box-shadow 180ms;
 }
 .claude-col.drag-over {
-  background: rgba(168, 217, 184, 0.05);
-  box-shadow: inset 0 0 0 2px rgba(168, 217, 184, 0.4);
+  background: color-mix(in srgb, var(--ok) 5%, transparent);
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--ok) 40%, transparent);
 }
 .claude-col .inbox-brand { border-bottom: 1px solid var(--border-neutral); }
 
@@ -577,8 +473,8 @@ kbd {
   transition: all 220ms;
 }
 .claude-drop.drag-over {
-  border-color: rgba(168, 217, 184, 0.55);
-  background: radial-gradient(ellipse at center, rgba(168, 217, 184, 0.08), transparent 70%);
+  border-color: color-mix(in srgb, var(--ok) 55%, transparent);
+  background: radial-gradient(ellipse at center, color-mix(in srgb, var(--ok) 8%, transparent), transparent 70%);
   transform: scale(1.01);
 }
 .claude-drop-title {
@@ -616,7 +512,7 @@ kbd {
   width: 4px; height: 4px; border-radius: 50%;
   background: var(--accent-bright);
   margin-right: 5px;
-  box-shadow: 0 0 4px var(--accent-glow);
+  box-shadow: var(--shadow-1);
 }
 
 /* Brand-row icon — small sibling of .conn-icon (used in ConnectionsView). Keeps
@@ -708,9 +604,7 @@ kbd {
   background: var(--bg-2);
   border-color: var(--border-hi);
   border-left-color: var(--accent);
-  box-shadow:
-    0 0 0 1px var(--border-accent-2),
-    0 12px 24px rgba(0, 0, 0, 0.30);
+  box-shadow: 0 0 0 1px var(--border-accent-2), var(--shadow-3);
 }
 .inbox-item:active { cursor: grabbing; transform: scale(0.99); }
 .inbox-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
@@ -838,7 +732,7 @@ kbd {
    haven't migrated yet. Kept intentionally distinct from state-pill
    so the new pill style doesn't accidentally override the legacy
    look on a pre-migration card mid-rollout. */
-.mini-tag.tag--open   { color: var(--accent-bright); background: var(--accent-soft); border: 1px solid rgba(168, 217, 184, 0.22); }
+.mini-tag.tag--open   { color: var(--accent-bright); background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--ok) 22%, transparent); }
 .mini-tag.tag--closed { color: #8b96ab; background: rgba(139, 150, 171, 0.08); border: 1px solid rgba(139, 150, 171, 0.2); }
 .mini-tag.tag--merged { color: #D5B7FF; background: rgba(181, 132, 255, 0.08); border: 1px solid rgba(181, 132, 255, 0.24); }
 .mini-tag.tag--draft  { color: #E4C885; background: rgba(217, 184, 110, 0.06); border: 1px solid rgba(217, 184, 110, 0.2); }
@@ -859,7 +753,7 @@ kbd {
 .focus-branches { font-size: 11.5px; color: var(--text-2); background: var(--bg-1); padding: 2px 8px; border-radius: 5px; border: 1px solid var(--border-neutral); }
 
 .focus-title {
-  font-family: 'Geist', 'Inter', -apple-system, system-ui, sans-serif;
+  font-family: var(--font-mono);
   font-size: 30px; line-height: 1.18; letter-spacing: -0.02em;
   font-weight: 400;
   margin-bottom: 16px; max-width: 720px;
@@ -870,7 +764,7 @@ kbd {
    detail-pane page titles. Inter stays for dense UI; serif lives only
    on the moments that benefit from a slower, editorial pace. */
 .serif {
-  font-family: 'Geist', 'Inter', -apple-system, system-ui, sans-serif;
+  font-family: var(--font-mono);
   font-weight: 400;
   letter-spacing: -0.015em;
 }
@@ -910,7 +804,7 @@ kbd {
   color: var(--text-1);
 }
 .detail-tab.active .tab-count { background: var(--accent-soft); color: var(--accent-bright); }
-.tab-count--ok { background: rgba(168, 217, 184, 0.18); color: #A8D9B8; }
+.tab-count--ok { background: color-mix(in srgb, var(--ok) 18%, transparent); color: #A8D9B8; }
 .tab-count--err { background: rgba(232, 130, 100, 0.18); color: #F0A38A; }
 .tab-count--pending { background: rgba(234, 179, 8, 0.16); color: #E4C885; }
 
@@ -936,7 +830,7 @@ kbd {
   border: 1px solid var(--border-neutral);
 }
 .check-pill--total { background: var(--bg-2); color: var(--text-1); }
-.check-pill--ok { background: rgba(168, 217, 184, 0.12); color: #A8D9B8; border-color: rgba(168, 217, 184, 0.3); }
+.check-pill--ok { background: color-mix(in srgb, var(--ok) 12%, transparent); color: #A8D9B8; border-color: color-mix(in srgb, var(--ok) 30%, transparent); }
 .check-pill--err { background: rgba(232, 130, 100, 0.12); color: #F0A38A; border-color: rgba(232, 130, 100, 0.3); }
 .check-pill--pending { background: rgba(234, 179, 8, 0.12); color: #E4C885; border-color: rgba(234, 179, 8, 0.3); }
 .check-pill--skip { background: var(--bg-2); color: var(--text-mute); }
@@ -955,7 +849,7 @@ kbd {
   font-size: 12px; font-weight: 700;
   flex-shrink: 0;
 }
-.check-icon--success { background: rgba(168, 217, 184, 0.15); color: #A8D9B8; }
+.check-icon--success { background: color-mix(in srgb, var(--ok) 15%, transparent); color: #A8D9B8; }
 .check-icon--failure { background: rgba(232, 130, 100, 0.15); color: #F0A38A; }
 .check-icon--pending { background: rgba(234, 179, 8, 0.15); color: #E4C885; animation: check-spin 1.6s linear infinite; }
 .check-icon--skipped,
@@ -1006,7 +900,7 @@ kbd {
 }
 .meta-time { margin-left: auto; color: var(--text-mute); font-size: 11px; }
 
-.review-item.rev--approved .review-state { color: var(--accent-bright); background: var(--accent-soft); border-color: rgba(168, 217, 184, 0.3); }
+.review-item.rev--approved .review-state { color: var(--accent-bright); background: var(--accent-soft); border-color: color-mix(in srgb, var(--ok) 30%, transparent); }
 .review-item.rev--changes .review-state { color: #F0A38A; background: rgba(232, 130, 100, 0.08); border-color: rgba(232, 130, 100, 0.28); }
 .review-item.rev--commented .review-state { color: var(--blue-bright); background: rgba(79, 142, 255, 0.08); border-color: rgba(79, 142, 255, 0.24); }
 .review-item.rev--approved { border-left: 3px solid var(--accent); }
@@ -1046,7 +940,7 @@ kbd {
 .commit-rest {
   font-size: 12px; color: var(--text-2); margin-top: 3px;
   white-space: pre-wrap;
-  font-family: 'JetBrains Mono', monospace; line-height: 1.5;
+  font-family: var(--font-mono); line-height: 1.5;
   max-height: 80px; overflow: hidden;
 }
 .commit-meta {
@@ -1077,7 +971,7 @@ kbd {
   font-size: 10px; font-weight: 700; text-transform: uppercase;
   letter-spacing: 0.06em; padding: 2px 7px; border-radius: 4px;
 }
-.file-status--added    { color: var(--accent-bright); background: var(--accent-soft); border: 1px solid rgba(168, 217, 184, 0.24); }
+.file-status--added    { color: var(--accent-bright); background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--ok) 24%, transparent); }
 .file-status--modified { color: var(--blue-bright); background: rgba(79, 142, 255, 0.08); border: 1px solid rgba(79, 142, 255, 0.22); }
 .file-status--removed  { color: #F0A38A; background: rgba(232, 130, 100, 0.08); border: 1px solid rgba(232, 130, 100, 0.22); }
 .file-status--renamed  { color: #E4C885; background: rgba(217, 184, 110, 0.06); border: 1px solid rgba(217, 184, 110, 0.22); }
@@ -1100,7 +994,7 @@ kbd {
   background: var(--bg-0);
 }
 .diff-body {
-  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-family: var(--font-mono);
   font-size: 12px; line-height: 1.65;
   width: fit-content; min-width: 100%;
 }
@@ -1120,8 +1014,8 @@ kbd {
   position: sticky; left: 0;
 }
 .diff-line-content { padding: 0 14px; white-space: pre; color: var(--text-1); }
-.diff-line.add .diff-line-content { background: rgba(168, 217, 184, 0.08); color: #A8DEC8; }
-.diff-line.add .diff-line-num { background: rgba(168, 217, 184, 0.12); color: #A8DEC8; }
+.diff-line.add .diff-line-content { background: color-mix(in srgb, var(--ok) 8%, transparent); color: #A8DEC8; }
+.diff-line.add .diff-line-num { background: color-mix(in srgb, var(--ok) 12%, transparent); color: #A8DEC8; }
 .diff-line.del .diff-line-content { background: rgba(232, 130, 100, 0.07); color: #F0A38A; }
 .diff-line.del .diff-line-num { background: rgba(232, 130, 100, 0.1); color: #F0A38A; }
 
@@ -1161,37 +1055,35 @@ kbd {
 
 /* Buttons */
 .btn {
-  padding: 8px 14px; border-radius: 8px;
+  padding: 8px 14px; border-radius: var(--r-item);
   font-size: 12.5px; font-weight: 500;
   transition: all 120ms;
   display: inline-flex; align-items: center; gap: 6px;
 }
-.btn--ghost { color: var(--text-1); background: transparent; border: 1px solid var(--border-neutral-hi); }
+.btn--ghost { color: var(--text-1); background: transparent; border: 1px solid var(--border-hi); }
 .btn--ghost:hover:not(:disabled) { background: var(--bg-1); color: var(--text-0); border-color: var(--border-hi2); }
+/* Primary = ink inversion: ink fill, paper text, two-step engraved
+   pill shadow (no gradients, no gloss). */
 .btn--primary {
   color: var(--accent-fg);
-  background: linear-gradient(180deg, var(--accent-bright), var(--accent));
-  box-shadow:
-    0 6px 18px var(--accent-glow),
-    inset 0 1px 0 rgba(255, 255, 255, 0.20);
+  background: var(--text-0);
+  box-shadow: var(--shadow-pill);
   font-weight: 600;
 }
 .btn--primary:hover:not(:disabled) {
-  transform: translateY(-1px);
-  box-shadow:
-    0 8px 22px var(--accent-glow),
-    inset 0 1px 0 rgba(255, 255, 255, 0.24);
+  transform: translate(-1px, -1px);
+  box-shadow: var(--shadow-2);
 }
 .btn--danger {
-  color: #ffe4e4;
-  background: linear-gradient(135deg, #E88264, #b91c1c);
-  border: 1px solid rgba(232, 130, 100, 0.4);
-  box-shadow: 0 4px 14px rgba(232, 130, 100, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.14);
+  color: var(--bg-0);
+  background: var(--err);
+  border: 1px solid var(--err-border);
+  box-shadow: var(--shadow-pill);
   font-weight: 600;
 }
 .btn--danger:hover:not(:disabled) {
-  transform: translateY(-1px);
-  box-shadow: 0 6px 20px rgba(232, 130, 100, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  transform: translate(-1px, -1px);
+  box-shadow: var(--shadow-2);
 }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .btn--small { padding: 6px 12px; font-size: 12px; justify-content: flex-start; }
@@ -1206,8 +1098,9 @@ kbd {
 .btn-tiny:hover:not(:disabled) { background: var(--bg-3); color: var(--text-0); }
 .btn-tiny:disabled { opacity: 0.4; cursor: default; }
 .btn-tiny--primary {
-  background: var(--accent); color: var(--accent-fg);
+  background: var(--text-0); color: var(--accent-fg);
   border-color: transparent; font-weight: 600;
+  box-shadow: var(--shadow-pill);
 }
 .btn-tiny--primary:hover:not(:disabled) { background: var(--accent-bright); }
 
@@ -1282,7 +1175,7 @@ kbd {
 .cwd-chip:hover { border-color: var(--border-hi); color: var(--text-0); }
 .cwd-chip.has-cwd {
   border-style: solid;
-  border-color: rgba(168, 217, 184, 0.25);
+  border-color: color-mix(in srgb, var(--ok) 25%, transparent);
   background: var(--accent-soft);
   color: var(--accent-bright);
 }
@@ -1417,12 +1310,12 @@ kbd {
   background: var(--accent-glow);
   color: var(--accent-fg);
   transform: translateY(-1px);
-  box-shadow: 0 4px 14px var(--accent-glow);
+  box-shadow: var(--shadow-2);
 }
 .linked-pill-dot {
   width: 7px; height: 7px; border-radius: 50%;
   background: var(--accent-bright);
-  box-shadow: 0 0 8px var(--accent-glow);
+  box-shadow: var(--shadow-1);
   animation: linked-pulse 2s ease-in-out infinite;
   flex-shrink: 0;
 }
@@ -1501,7 +1394,7 @@ kbd {
 .link-editor-btn:hover:not(:disabled) {
   border-style: solid;
   background: var(--accent-soft);
-  box-shadow: 0 0 0 1px var(--border-hi), 0 4px 12px rgba(232, 163, 58, 0.15);
+  box-shadow: 0 0 0 1px var(--border-hi), var(--shadow-2);
 }
 .link-editor-btn:disabled { opacity: 0.4; cursor: not-allowed; border-color: var(--border-neutral-hi); color: var(--text-mute); }
 
@@ -1528,7 +1421,7 @@ kbd {
 .wt-dot {
   width: 7px; height: 7px; border-radius: 50%;
   background: var(--accent-bright);
-  box-shadow: 0 0 8px var(--accent-glow);
+  box-shadow: var(--shadow-1);
   animation: wt-pulse 1.6s ease-in-out infinite;
 }
 @keyframes wt-pulse {
@@ -1730,23 +1623,23 @@ img.chat-avatar { padding: 0; }
   border-radius: 10px;
   color: var(--accent-fg);
   background: linear-gradient(135deg, #A8D9B8, #7DC9B0);
-  box-shadow: 0 2px 8px rgba(168, 217, 184, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2), var(--shadow-1);
   display: inline-flex; align-items: center; justify-content: center;
   transition: all 120ms;
 }
 .chat-send:hover:not(:disabled) {
-  box-shadow: 0 4px 14px rgba(168, 217, 184, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25), var(--shadow-2);
   transform: translateY(-1px);
 }
 .chat-send:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .chat-stop {
   background: linear-gradient(135deg, #f87171, #E88264);
-  box-shadow: 0 2px 8px rgba(232, 130, 100, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2), var(--shadow-1);
   color: #fff;
 }
 .chat-stop:hover {
-  box-shadow: 0 4px 14px rgba(232, 130, 100, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25), var(--shadow-2);
   transform: translateY(-1px);
 }
 
@@ -1893,7 +1786,7 @@ img.chat-avatar { padding: 0; }
 .conn-icon--github { background: rgba(181, 132, 255, 0.1);  color: #D5B7FF; border: 1px solid rgba(181, 132, 255, 0.22); }
 .conn-icon--sentry { background: rgba(248, 143, 116, 0.08); color: #f8a994; border: 1px solid rgba(248, 143, 116, 0.2); }
 .conn-icon--slack  { background: rgba(236, 72, 153, 0.1);  color: #f472b6; border: 1px solid rgba(236, 72, 153, 0.22); }
-.conn-icon--claude { background: rgba(168, 217, 184, 0.12); color: #A8D9B8; border: 1px solid rgba(168, 217, 184, 0.24); }
+.conn-icon--claude { background: color-mix(in srgb, var(--ok) 12%, transparent); color: #A8D9B8; border: 1px solid color-mix(in srgb, var(--ok) 24%, transparent); }
 .conn-icon--codex  { background: rgba(255, 255, 255, 0.05); color: #e5ebf4; border: 1px solid rgba(255, 255, 255, 0.1); }
 .conn-icon--aider  { background: rgba(167, 139, 250, 0.08); color: #D5B7FF; border: 1px solid rgba(167, 139, 250, 0.2); }
 .conn-icon--copilot{ background: rgba(100, 116, 139, 0.1); color: #8b96ab; border: 1px solid rgba(255, 255, 255, 0.12); }
@@ -1915,7 +1808,7 @@ img.chat-avatar { padding: 0; }
 }
 .modal {
   width: 480px; max-width: 90vw;
-  background: linear-gradient(180deg, var(--bg-2), var(--bg-1));
+  background: var(--bg-0);
   border: 1px solid var(--border-hi);
   border-radius: var(--r-modal, 16px);
   box-shadow:
@@ -1936,13 +1829,13 @@ img.chat-avatar { padding: 0; }
   flex-shrink: 0;
 }
 .modal-title {
-  font-family: 'Geist', 'Inter', -apple-system, system-ui, sans-serif;
+  font-family: var(--font-mono);
   font-size: 22px; font-weight: 600;
   letter-spacing: -0.015em; line-height: 1.2;
   color: var(--text-0);
 }
 .modal-sub {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: var(--font-mono);
   font-size: 10.5px; color: var(--text-mute);
   margin-top: 4px;
   letter-spacing: 0.06em; text-transform: uppercase;
@@ -2137,7 +2030,7 @@ img.chat-avatar { padding: 0; }
   word-break: break-all;
   background: transparent;
   border: none;
-  font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', monospace;
+  font-family: var(--font-mono);
 }
 .cmd-copy {
   display: inline-flex; align-items: center; justify-content: center; gap: 4px;

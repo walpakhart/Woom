@@ -32,7 +32,6 @@
   let newComment = $state('');
   let addingComment = $state(false);
 
-  let showTransitions = $state(false);
 
   // Assignee edit popover
   let showAssigneePicker = $state(false);
@@ -120,7 +119,6 @@
 
   async function transitionTo(id: string, toStatus: string) {
     if (!detail) return;
-    showTransitions = false;
     statusBusy = true;
     try {
       await invoke('jira_transition_issue', { key: issueKey, transitionId: id });
@@ -466,28 +464,23 @@
       <!-- Status transitions -->
       <section class="jdp-section">
         <div class="jdp-meta-label">Status</div>
+        <!-- Mockup transitions row: current status = quiet filled tag,
+             first (likely) transition = primary ink pill, the rest are
+             outline chips — all inline, no dropdown. -->
         <div class="jdp-transition-row">
-          <!-- Current status is always shown — the Move-to button only
-               transitions to NEW states, so without this tag the user has
-               to scroll back up to the header to see where the ticket is. -->
-          <span class="jdp-status-current mini-tag {jiraStatusClass(detail.status_category)}">
-            {detail.status.toLowerCase()}
-          </span>
+          <span class="jdp-status-current">{detail.status}</span>
           {#if detail.transitions.length}
-            <button class="jdp-btn" onclick={() => (showTransitions = !showTransitions)} disabled={statusBusy}>
-              Move to…
-              <svg class="i i-sm" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" /></svg>
-            </button>
-            {#if showTransitions}
-              <div class="jdp-transitions">
-                {#each detail.transitions as t (t.id)}
-                  <button class="jdp-transition" onclick={() => transitionTo(t.id, t.to_status)} disabled={statusBusy}>
-                    <span class="jdp-transition-name">{t.name}</span>
-                    {#if t.to_status}<span class="mini-tag {jiraStatusClass(t.to_status_category)}">{t.to_status.toLowerCase()}</span>{/if}
-                  </button>
-                {/each}
-              </div>
-            {/if}
+            {#each detail.transitions as t, i (t.id)}
+              <button
+                class="jdp-transition"
+                class:jdp-transition--primary={i === 0}
+                onclick={() => transitionTo(t.id, t.to_status)}
+                disabled={statusBusy}
+                title={t.to_status ? `→ ${t.to_status}` : t.name}
+              >
+                {t.name}
+              </button>
+            {/each}
           {:else}
             <span class="jdp-meta-muted">no transitions available</span>
           {/if}
@@ -712,7 +705,7 @@
   }
   .jdp-summary:hover { background: var(--bg-1); }
   .jdp-summary-text {
-    font-family: 'Geist', 'Inter', -apple-system, system-ui, sans-serif;
+    font-family: var(--font-mono);
     font-size: 30px; font-weight: 600; color: var(--text-0);
     letter-spacing: -0.02em;
     line-height: 1.18; margin: 0;
@@ -802,37 +795,38 @@
     position: relative;
     display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
   }
+  /* Mockup grammar: current = quiet fill (bg-3, mute), primary next
+     step = ink inversion pill, remaining = outline chips. */
   .jdp-status-current {
-    /* Slightly chunkier than the inline transition pills so the current
-       status reads as "the anchor" rather than one option among many. */
-    padding: 4px 10px;
+    padding: 5px 12px;
     font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    font-weight: 600;
+    border-radius: var(--r-item);
+    background: var(--bg-3);
+    color: var(--text-mute);
   }
   .jdp-meta-muted { color: var(--text-mute); font-size: 12px; }
-  .jdp-transitions {
-    position: absolute; top: 100%; left: 0;
-    margin-top: 4px;
-    min-width: 280px;
-    background: var(--bg-2);
-    border: 1px solid var(--border-hi);
-    border-radius: 8px;
-    z-index: 10;
-    box-shadow: var(--shadow-2);
-    padding: 4px;
-  }
   .jdp-transition {
-    display: flex; align-items: center; justify-content: space-between;
-    gap: 8px;
-    width: 100%; padding: 6px 10px;
-    border-radius: 5px;
-    font-size: 12px; color: var(--text-1);
-    text-align: left;
+    display: inline-flex; align-items: center;
+    padding: 5px 12px;
+    border-radius: var(--r-item);
+    border: 1px solid var(--border-hi);
+    font-size: 11px; color: var(--text-1);
+    background: transparent;
+    cursor: pointer;
+    transition: background 120ms, color 120ms;
   }
-  .jdp-transition:hover:not(:disabled) { background: var(--bg-3); color: var(--text-0); }
-  .jdp-transition-name { font-weight: 500; }
+  .jdp-transition:hover:not(:disabled) { background: var(--bg-hover); color: var(--text-0); }
+  .jdp-transition--primary {
+    background: var(--text-0);
+    color: var(--accent-fg);
+    border-color: transparent;
+    font-weight: 600;
+    box-shadow: var(--shadow-pill);
+  }
+  .jdp-transition--primary:hover:not(:disabled) {
+    background: var(--accent-bright);
+    color: var(--accent-fg);
+  }
 
   .jdp-desc-input {
     width: 100%; padding: 10px 14px;
@@ -885,7 +879,7 @@
     padding: 2px 7px; border-radius: 4px;
     color: var(--accent-bright);
     background: var(--accent-soft);
-    border: 1px solid rgba(204, 120, 92, 0.22);
+    border: 1px solid rgba(62, 54, 32, 0.22);
   }
   .jdp-worklog-time { margin-left: auto; font-size: 11px; color: var(--text-mute); }
   .jdp-worklog-del {

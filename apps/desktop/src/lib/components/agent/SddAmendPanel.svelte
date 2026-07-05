@@ -59,7 +59,7 @@
     border-radius: 4px;
     background: color-mix(in srgb, var(--bg-0) 70%, transparent);
     color: var(--text-0);
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono);
     font-size: 12.5px;
     line-height: 1.55;
     resize: vertical;

@@ -171,5 +171,5 @@
     background: var(--bg-3);
     border-color: var(--border-hi);
   }
-  .mono { font-family: 'JetBrains Mono', monospace; }
+  .mono { font-family: var(--font-mono); }
 </style>

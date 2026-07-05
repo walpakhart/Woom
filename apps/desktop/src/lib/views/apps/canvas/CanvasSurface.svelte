@@ -114,6 +114,7 @@
     if (!activeCanvasId) return [];
     const out: { sessionId: string; title: string; kind: 'claude' }[] = [];
     for (const s of sessionsState.list) {
+      if (s.archived) continue;
       if (s.linkedCanvasId !== activeCanvasId) continue;
       out.push({ sessionId: s.id, title: s.title, kind: 'claude' });
     }
@@ -1822,7 +1823,7 @@
   .canvas-surface[data-bg='dot'] {
     background-image: radial-gradient(
       circle at 1px 1px,
-      color-mix(in srgb, var(--text-mute) 28%, transparent) 1px,
+      var(--canvas-dot) 1px,
       transparent 1.5px
     );
     background-size: var(--cv-bg-size) var(--cv-bg-size);
@@ -1857,7 +1858,7 @@
     font-size: 12px; font-weight: 600;
     pointer-events: none;
     z-index: 2000;
-    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+    box-shadow: var(--shadow-2);
   }
 
   .stage {

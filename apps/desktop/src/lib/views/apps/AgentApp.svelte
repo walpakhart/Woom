@@ -447,8 +447,11 @@
     display: flex; flex-direction: column;
     align-items: center;
     gap: 4px;
-    padding: 8px 0;
+    /* 6px top + 32px button centres the chevron in the same 44px
+       band as the open panes' pane-head collapse buttons. */
+    padding: 6px 0;
     height: 100%;
+    border-left: 1px solid var(--border);
   }
   .sa-rail-btn {
     width: 32px; height: 32px;

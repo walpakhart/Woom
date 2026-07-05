@@ -85,9 +85,9 @@
      each per-component selector with its own hash, so these are
      isolated to this file even though the names look shared). */
   .ev-tabbar {
-    display: flex; align-items: center; gap: 6px;
-    padding: 8px 10px 6px;
-    min-height: 42px;
+    display: flex; align-items: center; gap: 2px;
+    padding: 0 12px;
+    min-height: 36px;
     background: var(--bg-1);
     overflow-x: auto;
     flex-shrink: 0;
@@ -99,43 +99,39 @@
     font-size: 12px; color: var(--text-mute);
     white-space: nowrap;
   }
+  /* Mockup tabs: flat text tabs, active = 600 weight + 2px editor
+     underline; modification dot in claude tone. No pill chrome. */
   .ev-tab-wrap {
     display: inline-flex; align-items: center; gap: 0;
-    height: 28px;
-    padding: 0 4px 0 10px;
-    background: var(--bg-2);
-    border: 1px solid var(--border);
-    border-radius: 7px;
+    height: 34px;
+    padding: 0 6px 0 13px;
+    background: transparent;
+    border: 0;
+    border-bottom: 2px solid transparent;
+    border-radius: 0;
     flex-shrink: 0;
     max-width: 260px;
-    transition: background 120ms, border-color 120ms;
+    transition: color 120ms, border-color 120ms;
     cursor: pointer;
   }
-  .ev-tab-wrap:hover { background: var(--bg-3); border-color: var(--border-hi); }
+  .ev-tab-wrap:hover { background: var(--bg-hover); }
   .ev-tab-wrap.active {
-    background: var(--bg-3);
-    border-color: var(--border-hi);
-    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent);
+    background: transparent;
+    border-bottom-color: var(--src-editor);
   }
-  /* Leading brand dot — terracotta on active, muted on inactive,
-     amber on dirty unsaved buffer. */
+  .ev-tab-wrap.active .ev-tab-name { font-weight: 600; }
+  /* Modification dot — claude tone when dirty, hidden otherwise. */
   .ev-tab-wrap::before {
     content: '';
     flex-shrink: 0;
     width: 6px; height: 6px;
     border-radius: 50%;
     margin-right: 7px;
-    background: var(--text-mute);
-    transition: background 140ms, box-shadow 140ms;
+    background: transparent;
+    transition: background 140ms;
   }
-  .ev-tab-wrap.active::before {
-    background: var(--accent-bright);
-    box-shadow: 0 0 6px var(--accent-glow);
-  }
-  .ev-tab-wrap.dirty::before {
-    background: var(--warning);
-    box-shadow: 0 0 6px rgba(217, 184, 110, 0.45);
-  }
+  .ev-tab-wrap.active::before { background: var(--src-editor); }
+  .ev-tab-wrap.dirty::before { background: var(--src-claude); }
   .ev-tab-btn {
     display: inline-flex; align-items: center; gap: 6px;
     padding: 0;
@@ -146,7 +142,7 @@
   }
   .ev-tab-wrap.active .ev-tab-btn { color: var(--text-0); }
   .ev-tab-name {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono);
     font-size: 11.5px;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
@@ -165,7 +161,7 @@
   .ev-tab-x :global(svg) { width: 10px; height: 10px; }
   /* Inline dirty dot inside the close-button slot — only used when
      the buffer is unsaved and the user hasn't hovered the row yet. */
-  .ev-tab-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--warning); box-shadow: 0 0 6px rgba(217,184,110,0.4); }
+  .ev-tab-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--warning); box-shadow: var(--shadow-1); }
   .ev-tab-diff-icon {
     color: var(--accent-bright); font-weight: 700;
     width: 14px; text-align: center;

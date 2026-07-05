@@ -520,7 +520,7 @@
     display: flex; flex-direction: column; gap: 18px;
   }
   .sdp-title {
-    font-family: 'Geist', 'Inter', -apple-system, system-ui, sans-serif;
+    font-family: var(--font-mono);
     font-size: 30px; line-height: 1.18; font-weight: 400;
     color: var(--text-0); letter-spacing: -0.02em;
     margin: 0;
@@ -550,7 +550,7 @@
     text-transform: uppercase; letter-spacing: 0.10em; font-weight: 700;
   }
   .sdp-stat-v {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono);
     font-size: 18px; font-weight: 600;
     color: var(--text-0); margin-top: 4px;
     line-height: 1;
@@ -579,7 +579,7 @@
   }
   .sdp-event-row:hover { background: var(--bg-2); color: var(--text-0); }
   .sdp-event-row--active {
-    background: var(--accent-soft); border-color: rgba(204, 120, 92, 0.3);
+    background: var(--accent-soft); border-color: rgba(62, 54, 32, 0.3);
     color: var(--text-0);
   }
   .sdp-event-id { color: var(--text-2); font-size: 11px; min-width: 70px; }
@@ -612,53 +612,56 @@
   }
   .sdp-exception-head { font-size: 13px; color: var(--text-0); overflow-wrap: anywhere; }
 
-  .sdp-frames { display: flex; flex-direction: column; gap: 4px; }
-  .sdp-frame {
-    background: var(--bg-2); border: 1px solid var(--border);
-    border-radius: 8px; overflow: hidden;
+  /* Mockup: the stack trace is a CHARCOAL INSET — same --dark-1 in
+     both themes; app frames pop in warm var(--dark-text), library frames stay
+     muted cream. */
+  .sdp-frames {
+    display: flex; flex-direction: column; gap: 0;
+    background: var(--dark-1);
+    border: 1px solid rgba(0, 0, 0, 0.25);
+    border-radius: var(--r-card);
+    overflow: hidden;
+    box-shadow: var(--shadow-1);
+    padding: 6px 0;
   }
-  .sdp-frame.in-app {
-    border-color: var(--border-accent-2);
-    background: linear-gradient(180deg, var(--bg-2),
-      color-mix(in srgb, var(--bg-2) 85%, var(--accent-soft)));
-  }
+  .sdp-frame { background: transparent; border: 0; overflow: hidden; }
+  .sdp-frame.in-app { background: transparent; border: 0; }
   .sdp-frame-summary {
-    list-style: none; cursor: pointer; padding: 7px 12px;
-    font-size: 11.5px; color: var(--text-1);
+    list-style: none; cursor: pointer; padding: 4px 14px;
+    font-size: 11px; color: var(--dark-text);
     display: flex; align-items: center; gap: 8px;
     overflow-wrap: anywhere;
   }
+  .sdp-frame.in-app .sdp-frame-summary { color: var(--dark-text); }
   .sdp-frame-summary::-webkit-details-marker { display: none; }
-  .sdp-frame[open] .sdp-frame-summary {
-    background: var(--bg-2); color: var(--text-0);
-    border-bottom: 1px solid var(--border-neutral);
-  }
+  .sdp-frame[open] .sdp-frame-summary { color: var(--dark-text); }
+  .sdp-frame:not(.in-app) .sdp-frame-summary { color: var(--dark-text-2); }
   .sdp-frame-fn { flex: 1; }
   .sdp-frame-tag {
     font-size: 9px; font-weight: 700;
     padding: 1px 6px; border-radius: 3px;
-    background: var(--accent-soft); color: var(--accent-bright);
+    background: rgba(232, 180, 144, 0.14); color: var(--dark-text);
     text-transform: uppercase; letter-spacing: 0.05em;
   }
   .sdp-frame-open {
-    font-size: 10px; color: var(--text-mute);
+    font-size: 10px; color: var(--dark-mute);
     padding: 1px 6px; border-radius: 3px;
-    background: transparent; border: 1px solid var(--border-neutral);
+    background: transparent; border: 1px solid rgba(216, 210, 190, 0.2);
     cursor: pointer; transition: all 100ms;
   }
-  .sdp-frame-open:hover { color: var(--accent-bright); border-color: var(--accent); }
+  .sdp-frame-open:hover { color: var(--dark-text); border-color: rgba(216, 210, 190, 0.4); }
   .sdp-frame-source {
     margin: 0; padding: 8px 0;
-    background: var(--bg-0);
-    font-size: 11.5px; line-height: 1.5;
-    overflow-x: auto; color: var(--text-1);
+    background: var(--dark-0);
+    font-size: 11px; line-height: 1.5;
+    overflow-x: auto; color: var(--dark-text-2);
     white-space: pre;
   }
   .sdp-src-line { display: inline-block; min-width: 100%; padding: 0 14px; }
-  .sdp-src-line.active { background: rgba(204, 120, 92, 0.08); }
+  .sdp-src-line.active { background: rgba(232, 180, 144, 0.10); }
   .sdp-src-num {
     display: inline-block; min-width: 36px;
-    color: var(--text-mute); margin-right: 12px;
+    color: var(--dark-mute); margin-right: 12px;
     text-align: right;
   }
 

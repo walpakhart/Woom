@@ -15,7 +15,7 @@
      Esc cancels. Empty falls back to "Untitled chat". */
   import { sessionsState, updateSession, dismissInterrupted } from '$lib/state/sessions.svelte';
   import { invoke } from '@tauri-apps/api/core';
-  import { sessionUsageTotals, sessionTurnSeries, formatTokens, formatCostUsd } from '$lib/usage';
+  import { sessionUsageTotals, formatTokens, formatCostUsd } from '$lib/usage';
   import { sessionDwTotals } from '$lib/state/dw.svelte';
   import BudgetPopover from '$lib/components/agent/BudgetPopover.svelte';
   import { notify } from '$lib/state/toaster.svelte';
@@ -43,37 +43,6 @@
   const dwTotals = $derived(sess ? sessionDwTotals(sess.id) : { costUsd: 0, runs: 0 });
   const chipCostUsd = $derived(budget.costUsd + dwTotals.costUsd);
   const totalTokens = $derived(budget.input + budget.output);
-
-  /* Per-turn series → ribbon bars. Height normalises to the costliest
-   *  turn so the tallest bar always fills; when no turn carries a USD
-   *  cost, fall back to token counts so the ribbon still reads as
-   *  relative effort instead of flatlining. */
-  const turns = $derived(sessionTurnSeries(sess));
-  const ribbon = $derived.by(() => {
-    const maxCost = Math.max(0, ...turns.map((t) => t.costUsd));
-    const useCost = maxCost > 0;
-    const maxTok = Math.max(1, ...turns.map((t) => t.tokens));
-    return turns.map((t) => {
-      const ratio = useCost ? t.costUsd / maxCost : t.tokens / maxTok;
-      /* Tier drives bar colour so height AND hue both read effort:
-       *  the costliest third glows accent-bright, the cheapest stays
-       *  faint. A glance at the ribbon shows where the spend went. */
-      const tier = ratio > 0.66 ? 'hi' : ratio > 0.33 ? 'mid' : 'lo';
-      return {
-        pct: Math.max(20, Math.round(ratio * 100)),
-        hasTool: t.hasTool,
-        costUsd: t.costUsd,
-        tokens: t.tokens,
-        tier,
-      };
-    });
-  });
-
-  /* Hover readout — which ribbon bar the pointer is over (null = none).
-   *  Drives the floating label so each bar is legible without a native
-   *  tooltip delay. */
-  let hoveredTurn = $state<number | null>(null);
-  const hoveredBar = $derived(hoveredTurn != null ? ribbon[hoveredTurn] ?? null : null);
 
   const elapsed = $derived.by(() => {
     const startedAt = sess ? p.thinkingStartedAt[sess.id] ?? null : null;
@@ -274,172 +243,131 @@
 </script>
 
 <header class="ch">
-  <!-- HEAD — title + spend sub-line -->
-  <div class="ch-head">
-    {#if sess}
-      {#if editingSessionId === sess.id}
-        <input
-          bind:this={inputEl}
-          class="ch-name ch-name-input"
-          bind:value={draftTitle}
-          onkeydown={onTitleKey}
-          onblur={commitRename}
-          maxlength="120"
-          aria-label="Chat title"
-          spellcheck="false"
-        />
-      {:else}
-        <button class="ch-name-btn" onclick={startRename} title="Rename chat" aria-label="Rename chat">
-          <span class="ch-name" class:ch-name--empty={!sess.title}>{sess.title || 'Untitled chat'}</span>
-        </button>
-      {/if}
+  {#if sess}
+    {#if editingSessionId === sess.id}
+      <input
+        bind:this={inputEl}
+        class="ch-name ch-name-input"
+        bind:value={draftTitle}
+        onkeydown={onTitleKey}
+        onblur={commitRename}
+        maxlength="120"
+        aria-label="Chat title"
+        spellcheck="false"
+      />
     {:else}
-      <span class="ch-name ch-name--empty">No session</span>
+      <button class="ch-name-btn" onclick={startRename} title="Rename chat" aria-label="Rename chat">
+        <span class="ch-name" class:ch-name--empty={!sess.title}>{sess.title || 'Untitled chat'}</span>
+      </button>
     {/if}
-
-    {#if sess && (budget.turns > 0 || dwTotals.runs > 0)}
-      <div class="ch-sub">
-        <span class="ch-sub-stat"><b>{budget.turns}</b> turns</span>
-        <span class="ch-sub-dot" aria-hidden="true"></span>
-        <button
-          class="ch-spend"
-          class:ch-spend--high={chipCostUsd >= 1}
-          class:ch-spend--open={budgetPopoverOpen}
-          onclick={toggleBudgetPopover}
-          title="Session token budget — click for the breakdown"
-          aria-label="Session token budget"
-          aria-expanded={budgetPopoverOpen}
-        >
-          {#if chipCostUsd > 0}<span class="ch-spend-usd mono">{formatCostUsd(chipCostUsd)}</span>{/if}
-          <span class="ch-spend-tok mono">{formatTokens(totalTokens)} tok</span>
-        </button>
-        {#if budgetPopoverOpen}
-          <div class="ch-budget-pop-anchor" bind:this={budgetPopoverEl}>
-            <BudgetPopover session={sess} onClose={closeBudgetPopover} />
-          </div>
-        {/if}
-      </div>
-    {/if}
-  </div>
-
-  <!-- RIBBON — the session's story, one bar per turn -->
-  {#if sess && (ribbon.length > 0 || sess.sending)}
-    <div class="ch-ribbon-wrap">
-      {#if hoveredBar}
-        <div class="ch-readout">
-          <span class="ch-readout-n mono">turn {(hoveredTurn ?? 0) + 1}</span>
-          {#if hoveredBar.costUsd > 0}
-            <span class="ch-readout-usd mono">{formatCostUsd(hoveredBar.costUsd)}</span>
-          {/if}
-          <span class="ch-readout-tok mono">{formatTokens(hoveredBar.tokens)} tok</span>
-          {#if hoveredBar.hasTool}<span class="ch-readout-tool">tools</span>{/if}
-        </div>
-      {/if}
-      <div
-        class="ch-ribbon"
-        role="img"
-        aria-label="{ribbon.length} turns timeline"
-        onmouseleave={() => (hoveredTurn = null)}
-      >
-        {#each ribbon as bar, i (i)}
-          <span
-            class="ch-turn ch-turn--{bar.tier}"
-            class:ch-turn--tool={bar.hasTool}
-            class:ch-turn--hovered={hoveredTurn === i}
-            style:height="{bar.pct}%"
-            onmouseenter={() => (hoveredTurn = i)}
-            role="presentation"
-          ></span>
-        {/each}
-        {#if sess.sending}
-          <span class="ch-turn ch-turn--live" style:height="62%"></span>
-        {/if}
-      </div>
-    </div>
   {:else}
-    <div class="ch-ribbon-wrap"></div>
+    <span class="ch-name ch-name--empty">No session</span>
   {/if}
 
-  <!-- NOW — memory chip + live state -->
-  <div class="ch-now">
-    {#if sess?.sending}
-      <span class="ch-running">
-        <span class="ch-pip" aria-hidden="true"></span>
-        <span class="mono">{elapsed || 'thinking'}</span>
-      </span>
-      <button class="ch-stop" onclick={p.onStop} title="Stop generation" aria-label="Stop generation">
-        <svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>
+  {#if sess?.sending}
+    <span class="ch-state ch-state--live">streaming{elapsed ? ` · ${elapsed}` : ''}</span>
+    <button class="ch-stop" onclick={p.onStop} title="Stop generation" aria-label="Stop generation">
+      <svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>
+    </button>
+  {/if}
+
+  <div class="ch-spring"></div>
+
+  {#if sess && (budget.turns > 0 || dwTotals.runs > 0)}
+    <div class="ch-spend-wrap">
+      <button
+        class="ch-spend"
+        class:ch-spend--open={budgetPopoverOpen}
+        onclick={toggleBudgetPopover}
+        title="Session token budget — click for the breakdown"
+        aria-label="Session token budget"
+        aria-expanded={budgetPopoverOpen}
+      >
+        {budget.turns} turns{#if chipCostUsd > 0}&nbsp;· {formatCostUsd(chipCostUsd)}{/if} · {formatTokens(totalTokens)} tok
       </button>
-    {:else if memHits.length > 0}
-      <div class="ch-mem-wrap">
-        <button
-          class="ch-mem"
-          class:ch-mem--open={memPopoverOpen}
-          onclick={toggleMemPopover}
-          title="Memories matched to this project — click to preview"
-          aria-label="Show project memories"
-          aria-expanded={memPopoverOpen}
-        >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true">
-            <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" stroke-linejoin="round"/>
-          </svg>
-          <span class="ch-mem-count">{memHits.length}</span>
-        </button>
-        {#if memPopoverOpen}
-          <div bind:this={memPopoverEl} class="ch-mem-pop" role="dialog" aria-label="Project memories">
-            <div class="ch-mem-pop-head">
-              <span class="ch-mem-pop-title">
-                {memHits.length} {memHits.length === 1 ? 'memory' : 'memories'} for
-                <span class="ch-mem-pop-cwd mono">{cwdBasename}</span>
-              </span>
-              <button class="ch-mem-pop-close" onclick={closeMemPopover} aria-label="Close">
-                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
-                  <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-                </svg>
-              </button>
-            </div>
-            <div class="ch-mem-pop-list">
-              {#each memHits as hit (hit.id)}
-                {@const isOpen = memExpandedId === hit.id}
-                <div class="ch-mem-row" class:ch-mem-row--open={isOpen}>
-                  <button class="ch-mem-row-head" onclick={() => toggleMemExpanded(hit.id)} type="button">
-                    <span class="ch-mem-row-id mono">#{hit.id}</span>
-                    <span class="ch-mem-row-kind mono">{hit.kind}</span>
-                    <span class="ch-mem-row-date mono">{memDate(hit.created_at)}</span>
-                    <svg
-                      class="ch-mem-row-caret"
-                      class:ch-mem-row-caret--open={isOpen}
-                      viewBox="0 0 24 24" width="10" height="10"
-                      fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"
-                    ><path d="M6 9l6 6 6-6"/></svg>
-                  </button>
-                  {#if isOpen}
-                    <div class="ch-mem-row-body">
-                      <p>{hit.content}</p>
-                      <div class="ch-mem-row-actions">
-                        {#if hit.tags}
-                          <span class="ch-mem-row-tags mono" title={hit.tags}>{hit.tags}</span>
-                        {/if}
-                        <button class="ch-mem-row-copy" onclick={() => void copyMemContent(hit.content)} type="button">
-                          <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                            <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
-                            <path d="M9 2h6a1 1 0 0 1 1 1v2H8V3a1 1 0 0 1 1-1z"/>
-                          </svg>
-                          Copy
-                        </button>
-                      </div>
-                    </div>
-                  {:else}
-                    <div class="ch-mem-row-preview">{hit.content.replace(/\s+/g, ' ').slice(0, 140)}</div>
-                  {/if}
-                </div>
-              {/each}
-            </div>
+      {#if budgetPopoverOpen}
+        <div class="ch-budget-pop-anchor" bind:this={budgetPopoverEl}>
+          <BudgetPopover session={sess} onClose={closeBudgetPopover} />
+        </div>
+      {/if}
+    </div>
+  {/if}
+
+  {#if memHits.length > 0}
+    <div class="ch-mem-wrap">
+      <button
+        class="ch-mem"
+        class:ch-mem--open={memPopoverOpen}
+        onclick={toggleMemPopover}
+        title="Memories matched to this project — click to preview"
+        aria-label="Show project memories"
+        aria-expanded={memPopoverOpen}
+      >
+        <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true">
+          <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" stroke-linejoin="round"/>
+        </svg>
+        <span>{memHits.length}</span>
+      </button>
+      {#if memPopoverOpen}
+        <div bind:this={memPopoverEl} class="ch-mem-pop" role="dialog" aria-label="Project memories">
+          <div class="ch-mem-pop-head">
+            <span class="ch-mem-pop-title">
+              {memHits.length} {memHits.length === 1 ? 'memory' : 'memories'} for
+              <span class="ch-mem-pop-cwd mono">{cwdBasename}</span>
+            </span>
+            <button class="ch-mem-pop-close" onclick={closeMemPopover} aria-label="Close">
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+                <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+              </svg>
+            </button>
           </div>
-        {/if}
-      </div>
-    {/if}
-  </div>
+          <div class="ch-mem-pop-list">
+            {#each memHits as hit (hit.id)}
+              {@const isOpen = memExpandedId === hit.id}
+              <div class="ch-mem-row" class:ch-mem-row--open={isOpen}>
+                <button class="ch-mem-row-head" onclick={() => toggleMemExpanded(hit.id)} type="button">
+                  <span class="ch-mem-row-id mono">#{hit.id}</span>
+                  <span class="ch-mem-row-kind mono">{hit.kind}</span>
+                  <span class="ch-mem-row-date mono">{memDate(hit.created_at)}</span>
+                  <svg
+                    class="ch-mem-row-caret"
+                    class:ch-mem-row-caret--open={isOpen}
+                    viewBox="0 0 24 24" width="10" height="10"
+                    fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"
+                  ><path d="M6 9l6 6 6-6"/></svg>
+                </button>
+                {#if isOpen}
+                  <div class="ch-mem-row-body">
+                    <p>{hit.content}</p>
+                    <div class="ch-mem-row-actions">
+                      {#if hit.tags}
+                        <span class="ch-mem-row-tags mono" title={hit.tags}>{hit.tags}</span>
+                      {/if}
+                      <button class="ch-mem-row-copy" onclick={() => void copyMemContent(hit.content)} type="button">
+                        <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                          <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
+                          <path d="M9 2h6a1 1 0 0 1 1 1v2H8V3a1 1 0 0 1 1-1z"/>
+                        </svg>
+                        Copy
+                      </button>
+                    </div>
+                  </div>
+                {:else}
+                  <div class="ch-mem-row-preview">{hit.content.replace(/\s+/g, ' ').slice(0, 140)}</div>
+                {/if}
+              </div>
+            {/each}
+          </div>
+        </div>
+      {/if}
+    </div>
+  {/if}
+
+  {#if cwdBasename}
+    <span class="ch-linked" title={effCwd}>
+      linked: <span class="ch-linked-src">{sess?.linkedToEditor ? 'editor · ' : ''}{cwdBasename}</span>{#if sess?.worktreeBranch}&nbsp;· worktree {sess.worktreeBranch}{/if}
+    </span>
+  {/if}
 </header>
 
 {#if sess?.interrupted}
@@ -466,37 +394,30 @@
 {/if}
 
 <style>
+  /* Single-line header per the paper mockup: title + streaming chip
+     left, spend / memory / linked right. */
   .ch {
-    flex: 0 0 58px;
-    display: flex; align-items: stretch; gap: 0;
+    flex: none;
+    display: flex; align-items: center; gap: 10px;
+    padding: 12px 22px;
     border-bottom: 1px solid var(--border);
-    background: linear-gradient(180deg, var(--bg-2), var(--bg-1));
+    background: var(--bg-1);
     min-height: 0;
   }
+  .ch-spring { flex: 1; }
 
-  /* HEAD */
-  .ch-head {
-    flex-shrink: 0;
-    display: flex; flex-direction: column; justify-content: center;
-    gap: 2px;
-    padding: 0 16px 0 22px;
-    border-right: 1px solid var(--border);
-    min-width: 0; max-width: 320px;
-    position: relative;
-  }
   .ch-name-btn {
     display: inline-flex; align-items: center;
-    max-width: 100%; min-width: 0;
+    max-width: 340px; min-width: 0;
     background: transparent; border: 0; padding: 2px 6px;
     margin-left: -6px;
-    border-radius: 7px;
+    border-radius: var(--r-item);
     cursor: text; color: inherit; font: inherit;
     transition: background 140ms;
   }
-  .ch-name-btn:hover { background: var(--bg-3, var(--bg-2)); }
+  .ch-name-btn:hover { background: var(--bg-hover); }
   .ch-name {
-    font-family: 'Geist', 'Inter', -apple-system, system-ui, sans-serif;
-    font-size: 14px; font-weight: 600; letter-spacing: -0.015em;
+    font-size: 13px; font-weight: 600;
     color: var(--text-0);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     min-width: 0;
@@ -505,152 +426,70 @@
   .ch-name-input {
     min-width: 180px; max-width: 300px; width: auto;
     background: var(--bg-2);
-    border: 1px solid var(--accent);
-    border-radius: 7px;
+    border: 1px solid var(--border-solid);
+    border-radius: var(--r-item);
     padding: 2px 8px;
     color: var(--text-0);
-    font-family: 'Geist', system-ui, sans-serif;
-    font-size: 14px; font-weight: 600; letter-spacing: -0.015em;
+    font-size: 13px; font-weight: 600;
     outline: none;
   }
-  .ch-name-input:focus {
-    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 60%, transparent);
-  }
 
-  .ch-sub {
-    display: flex; align-items: center; gap: 8px;
-    font-size: 11px; color: var(--text-mute);
-    position: relative;
-  }
-  .ch-sub-stat b { color: var(--text-1); font-weight: 600; font-variant-numeric: tabular-nums; }
-  .ch-sub-dot { width: 2px; height: 2px; border-radius: 50%; background: var(--text-mute); opacity: 0.6; }
-  .ch-spend {
-    display: inline-flex; align-items: baseline; gap: 6px;
-    background: transparent; border: 0; padding: 1px 4px;
-    margin: 0 -4px;
-    border-radius: 5px;
-    cursor: pointer; font: inherit; color: var(--text-mute);
-    transition: background 140ms, color 140ms;
-  }
-  .ch-spend:hover, .ch-spend--open { background: var(--bg-3, var(--bg-2)); color: var(--text-1); }
-  .ch-spend-usd { color: var(--accent-bright); font-weight: 600; }
-  .ch-spend-tok { color: var(--text-mute); font-variant-numeric: tabular-nums; }
-  .ch-spend--high .ch-spend-usd { color: var(--warm, #e0b16c); }
-  .ch-budget-pop-anchor { position: absolute; top: calc(100% + 8px); left: 0; z-index: 200; }
-
-  /* RIBBON */
-  .ch-ribbon-wrap {
-    flex: 1; min-width: 0;
-    align-self: stretch;
-    position: relative;
-    display: flex; align-items: flex-end;
-  }
-  .ch-ribbon {
-    flex: 1; min-width: 0;
-    height: 100%;
-    display: flex; align-items: flex-end; gap: 2px;
-    padding: 11px 16px 13px;
-    overflow: hidden;
-  }
-  .ch-turn {
-    flex: 1 1 auto; min-width: 2px; max-width: 13px;
-    border-radius: 2px 2px 0 0;
-    cursor: pointer;
-    position: relative;
-    transition: background 140ms, transform 140ms, box-shadow 140ms;
-    transform-origin: bottom;
-  }
-  /* Cost tiers — faint → accent → bright, so hue tracks spend. */
-  .ch-turn--lo  { background: color-mix(in srgb, var(--accent) 26%, transparent); }
-  .ch-turn--mid { background: color-mix(in srgb, var(--accent) 55%, transparent); }
-  .ch-turn--hi  { background: var(--accent-bright); }
-  .ch-turn:hover,
-  .ch-turn--hovered {
-    transform: scaleY(1.06);
-    box-shadow: 0 0 8px -2px var(--accent-bright);
-    filter: brightness(1.15);
-  }
-  .ch-turn--tool::after {
-    content: ""; position: absolute; top: -5px; left: 50%;
-    transform: translateX(-50%);
-    width: 3px; height: 3px; border-radius: 50%;
-    background: var(--warm, #e0b16c);
-  }
-  .ch-turn--live {
-    background: var(--accent-bright);
-    animation: ch-grow 1.2s ease-in-out infinite alternate;
-  }
-  @keyframes ch-grow {
-    from { opacity: 0.55; }
-    to   { opacity: 1; }
-  }
-
-  /* Floating hover readout — replaces the native tooltip with an
-     instant, on-brand label pinned to the ribbon's top-left. */
-  .ch-readout {
-    position: absolute; top: 4px; left: 16px; z-index: 3;
-    display: inline-flex; align-items: baseline; gap: 8px;
+  /* Streaming chip — outline, claude tone, per the mockup. */
+  .ch-state {
+    font-size: 10px; font-weight: 500;
     padding: 2px 8px;
-    background: color-mix(in srgb, var(--bg-3) 94%, transparent);
-    border: 1px solid var(--border-hi);
-    border-radius: 6px;
-    font-size: 10.5px; color: var(--text-2);
-    pointer-events: none;
-    box-shadow: var(--shadow-1, 0 4px 14px rgba(0,0,0,0.3));
+    border-radius: var(--r-chip);
+    white-space: nowrap;
   }
-  .ch-readout-n { color: var(--text-1); font-weight: 600; }
-  .ch-readout-usd { color: var(--accent-bright); font-weight: 600; }
-  .ch-readout-tok { color: var(--text-mute); }
-  .ch-readout-tool {
-    color: var(--warm, #e0b16c);
-    text-transform: uppercase; letter-spacing: 0.05em; font-size: 9px;
+  .ch-state--live {
+    border: 1px solid var(--src-claude-border);
+    color: var(--src-claude);
   }
 
-  /* NOW */
-  .ch-now {
-    flex-shrink: 0;
-    display: flex; align-items: center; gap: 8px;
-    padding: 0 18px 0 14px;
-    border-left: 1px solid var(--border);
-  }
-
-  .ch-running {
-    display: inline-flex; align-items: center; gap: 6px;
-    font-size: 11px; color: var(--accent-bright);
-  }
-  .ch-pip {
-    width: 6px; height: 6px; border-radius: 50%;
-    background: var(--app-tone, var(--accent-bright));
-    box-shadow: 0 0 7px var(--app-glow, var(--accent-glow));
-    animation: ch-pulse 1.4s infinite;
-  }
-  @keyframes ch-pulse {
-    0%, 100% { opacity: 0.45; transform: scale(0.85); }
-    50%      { opacity: 1;    transform: scale(1.15); }
-  }
   .ch-stop {
-    width: 26px; height: 26px;
+    width: 22px; height: 22px;
     display: grid; place-items: center;
-    border-radius: 7px;
-    background: rgba(232, 130, 100, 0.10);
-    border: 1px solid rgba(232, 130, 100, 0.32);
-    color: var(--error);
+    border-radius: var(--r-btn);
+    background: transparent;
+    border: 1px solid var(--err-border);
+    color: var(--err);
     cursor: pointer;
     transition: background 140ms;
   }
-  .ch-stop:hover { background: rgba(232, 130, 100, 0.18); }
-  .ch-stop svg { width: 11px; height: 11px; }
+  .ch-stop:hover { background: color-mix(in srgb, var(--err) 10%, transparent); }
+  .ch-stop svg { width: 10px; height: 10px; }
+
+  .ch-spend-wrap { position: relative; }
+  .ch-spend {
+    background: transparent; border: 0; padding: 1px 4px;
+    border-radius: var(--r-chip);
+    cursor: pointer; font: inherit;
+    font-size: 10.5px; color: var(--text-mute);
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+    transition: background 140ms, color 140ms;
+  }
+  .ch-spend:hover, .ch-spend--open { background: var(--bg-hover); color: var(--text-1); }
+  .ch-budget-pop-anchor { position: absolute; top: calc(100% + 8px); right: 0; z-index: 200; }
+
+  .ch-linked {
+    font-size: 10.5px; color: var(--text-mute);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    max-width: 340px;
+  }
+  .ch-linked-src { color: var(--src-editor); }
 
   /* Memory chip + popover */
+
   .ch-mem-wrap { position: relative; }
   .ch-mem {
     display: inline-flex; align-items: center; gap: 5px;
-    height: 24px; padding: 0 8px;
-    background: var(--bg-2);
-    border: 1px solid var(--border);
-    border-radius: 999px;
+    height: 20px; padding: 0 7px;
+    background: transparent;
+    border: 1px solid var(--border-hi);
+    border-radius: var(--r-chip);
     color: var(--text-mute);
-    font-size: 11px;
+    font-size: 10.5px;
     cursor: pointer;
     transition: color 140ms, background 140ms, border-color 140ms;
   }

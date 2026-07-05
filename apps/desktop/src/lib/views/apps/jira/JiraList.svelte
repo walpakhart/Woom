@@ -539,16 +539,16 @@
             oncontextmenu={(e) => openCtxMenu(e, it)}
           >
             <div class="jl-card-top">
-              <span class="jl-card-status {jiraStatusClass(it.status_category)}" title={it.status}></span>
               <span class="jl-card-key mono">{it.key}</span>
-              <span class="jl-card-time mono">{relativeTime(it.updated, p.now)}</span>
+              <span class="type {typeClass(it.issue_type)}">{it.issue_type}</span>
+              <span class="jl-card-chip {jiraStatusClass(it.status_category)}">{it.status}</span>
             </div>
             <div class="jl-card-title">{it.summary}</div>
             <div class="jl-card-meta">
+              <span class="jl-card-time mono">{relativeTime(it.updated, p.now)}</span>
               {#if it.priority}
                 <span class="pri {priorityClass(it.priority)}">{it.priority}</span>
               {/if}
-              <span class="type {typeClass(it.issue_type)}">{it.issue_type}</span>
               {#if it.assignee}
                 {#if it.assignee.avatar_url}
                   <img
@@ -607,7 +607,7 @@
     display: flex; align-items: center; gap: 10px;
     padding: 0 12px;
     border-bottom: 1px solid var(--border);
-    background: linear-gradient(180deg, var(--bg-2), var(--bg-1));
+    background: var(--bg-0);
   }
   .jl-act {
     display: inline-flex; align-items: center; gap: 5px;
@@ -684,52 +684,37 @@
     margin: 0 2px;
   }
 
+  /* Mockup filter chips: OUTLINE-only, radius 6, active = source
+     colour text + border, transparent fill. */
   .jl-toggle {
     display: inline-flex; align-items: center; gap: 6px;
-    padding: 4px 10px 4px 8px;
-    border-radius: 999px;
-    background: var(--bg-2);
-    border: 1px solid var(--border);
-    color: var(--text-1);
-    font-size: 11px; font-weight: 500;
+    padding: 3px 9px;
+    border-radius: var(--r-btn);
+    background: transparent;
+    border: 1px solid var(--border-hi);
+    color: var(--text-mute);
+    font-size: 10.5px; font-weight: 500;
     cursor: pointer;
     transition: all 140ms;
     user-select: none;
     white-space: nowrap;
   }
-  .jl-toggle-dot {
-    width: 8px; height: 8px;
-    border-radius: 50%;
-    background: transparent;
-    box-shadow: inset 0 0 0 1.5px var(--text-mute);
-    transition: all 140ms;
-    flex-shrink: 0;
-  }
+  .jl-toggle-dot { display: none; }
   .jl-toggle:hover:not(:disabled):not(.active) {
-    color: var(--text-0); background: var(--bg-3); border-color: var(--border-hi);
-  }
-  .jl-toggle:hover:not(:disabled):not(.active) .jl-toggle-dot {
-    box-shadow: inset 0 0 0 1.5px var(--text-1);
+    color: var(--text-0); border-color: var(--border-hi2);
   }
   .jl-toggle.active {
-    color: var(--accent-bright);
-    background: color-mix(in srgb, var(--src-jira) 14%, transparent);
-    border-color: color-mix(in srgb, var(--src-jira) 40%, transparent);
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--src-jira) 8%, transparent);
-  }
-  .jl-toggle.active .jl-toggle-dot {
-    background: var(--src-jira);
-    box-shadow:
-      inset 0 0 0 1.5px var(--src-jira),
-      0 0 6px color-mix(in srgb, var(--src-jira) 60%, transparent);
+    color: var(--src-jira);
+    background: transparent;
+    border-color: var(--src-jira-border);
   }
   .jl-toggle:disabled { opacity: 0.45; cursor: not-allowed; }
 
   .jl-dd { display: inline-flex; }
   .jl-dd :global(.dd-trigger) {
-    border-radius: 999px;
-    border: 1px solid var(--border);
-    background: var(--bg-2);
+    border-radius: var(--r-btn);
+    border: 1px solid var(--border-hi);
+    background: transparent;
     color: var(--text-1);
     font-size: 11px;
     height: auto;
@@ -770,7 +755,7 @@
     letter-spacing: 0.10em;
     text-transform: uppercase;
     color: var(--text-mute);
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono);
     display: flex; align-items: center; gap: 8px;
   }
   .jl-group::after {
@@ -779,70 +764,61 @@
   }
   .jl-group .mono { opacity: 0.5; }
 
+  /* Mockup list row: flat, hairline bottom border, selection =
+     bg-sel fill + solid 2px source stripe on the left edge. */
   .jl-card {
     position: relative;
     display: flex; flex-direction: column; gap: 5px;
-    padding: 10px 12px 11px 14px;
-    margin-bottom: 3px;
+    padding: 12px 20px;
+    margin: 0;
     width: 100%;
-    border-radius: 9px;
-    border: 1px solid transparent;
+    border-radius: 0;
+    border: 0;
+    border-bottom: 1px solid var(--border-lo);
+    border-left: 2px solid transparent;
     text-align: left;
     background: transparent;
     cursor: pointer;
-    transition: background 120ms, border-color 120ms, box-shadow 200ms;
+    transition: background 120ms;
     user-select: none;
   }
-  .jl-card::before {
-    content: ''; position: absolute; left: 0; top: 11px; bottom: 11px;
-    width: 2px; border-radius: 2px;
-    background: var(--src-jira);
-    opacity: 0; transition: opacity 200ms;
-  }
-  .jl-card:hover { background: var(--bg-2); border-color: var(--border); }
-  .jl-card:hover::before { opacity: 0.5; }
+  .jl-card:hover { background: var(--bg-1); }
   .jl-card.active {
-    background: var(--bg-2);
-    border-color: var(--border-hi);
-    /* Use color-mix on the source brand var so the inset ring and the
-       lift shadow re-paint with the theme. Hardcoded `rgba(0,0,0,0.28)`
-       drops a black halo on cream; `var(--shadow-2)` is sage-on-cream
-       in light and black in dark — same depth, right hue. */
-    box-shadow:
-      0 0 0 1px color-mix(in srgb, var(--src-jira) 32%, transparent),
-      var(--shadow-2);
-  }
-  .jl-card.active::before {
-    opacity: 1;
-    box-shadow: 0 0 10px color-mix(in srgb, var(--src-jira) 40%, transparent);
+    background: var(--bg-sel);
+    border-left-color: var(--src-jira);
   }
 
-  .jl-card-top { display: flex; align-items: center; gap: 7px; }
-  .jl-card-status {
-    width: 7px; height: 7px; border-radius: 50%;
-    background: var(--text-mute);
-    flex-shrink: 0;
-  }
-  .jl-card-status.tag--inprogress { background: var(--accent); }
-  .jl-card-status.tag--done { background: var(--success); }
-  .jl-card-status.tag--open { background: var(--info); }
+  .jl-card-top { display: flex; align-items: center; gap: 8px; }
   .jl-card-key {
-    font-size: 11px; color: var(--text-2); font-weight: 500;
+    font-size: 11px; color: var(--src-jira); font-weight: 600;
   }
-  .jl-card-time {
+  /* Outline status chip per the mockup (To Do neutral / In Progress
+     jira / In Review warn / Done ok). */
+  .jl-card-chip {
     margin-left: auto;
-    font-size: 10px; color: var(--text-mute);
+    font-size: 10px; font-weight: 500;
+    padding: 2px 7px;
+    border-radius: var(--r-chip);
+    border: 1px solid var(--border-hi);
+    color: var(--text-mute);
+    white-space: nowrap;
+  }
+  .jl-card-chip.tag--inprogress { border-color: var(--src-jira-border); color: var(--src-jira); }
+  .jl-card-chip.tag--done { border-color: var(--ok-border); color: var(--ok); }
+  .jl-card-chip.tag--open { border-color: var(--border-hi); color: var(--text-mute); }
+  .jl-card-time {
+    font-size: 10.5px; color: var(--text-faint);
   }
 
   .jl-card-title {
-    font-size: 13px; color: var(--text-0); font-weight: 500;
-    line-height: 1.4;
+    font-size: 12.5px; color: var(--text-0); font-weight: 400;
+    line-height: 1.45;
     display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical;
     overflow: hidden;
   }
   .jl-card-meta {
     display: flex; align-items: center; gap: 5px; flex-wrap: wrap;
-    font-size: 10.5px; color: var(--text-2);
+    font-size: 10.5px; color: var(--text-faint);
   }
 
   .pri {
@@ -852,9 +828,9 @@
     font-size: 10px; font-weight: 500;
     text-transform: capitalize;
   }
-  .pri--high { color: #F0A38A; background: rgba(232, 130, 100, 0.10); border: 1px solid rgba(232, 130, 100, 0.24); }
-  .pri--med  { color: #D9B86E; background: rgba(217, 184, 110, 0.08); border: 1px solid rgba(217, 184, 110, 0.22); }
-  .pri--low  { color: #88C2DD; background: rgba(136, 194, 221, 0.08); border: 1px solid rgba(136, 194, 221, 0.20); }
+  .pri--high { color: var(--err); background: transparent; border: 1px solid var(--err-border); }
+  .pri--med  { color: var(--warn); background: transparent; border: 1px solid var(--warn-border); }
+  .pri--low  { color: var(--info); background: transparent; border: 1px solid var(--border-hi); }
 
   .type {
     display: inline-flex; align-items: center;
@@ -866,9 +842,9 @@
     border: 1px solid var(--border);
     text-transform: capitalize;
   }
-  .type.type--bug { color: #D9B86E; border-color: rgba(217, 184, 110, 0.22); background: rgba(217, 184, 110, 0.06); }
-  .type.type--story { color: #A8DEC8; border-color: rgba(168, 222, 200, 0.22); background: rgba(168, 222, 200, 0.06); }
-  .type.type--epic { color: #C9A0E0; border-color: rgba(181, 132, 255, 0.22); background: rgba(181, 132, 255, 0.06); }
+  .type.type--bug { color: var(--err); border-color: var(--err-border); background: transparent; }
+  .type.type--story { color: var(--ok); border-color: var(--ok-border); background: transparent; }
+  .type.type--epic { color: var(--src-sentry); border-color: var(--src-sentry-border); background: transparent; }
   .type.type--task { color: var(--src-jira-2); border-color: rgba(117, 168, 255, 0.22); background: rgba(117, 168, 255, 0.06); }
 
   .ava {
@@ -942,7 +918,7 @@
     margin: auto;
   }
   .jl-empty-h, .jl-error-h {
-    font-family: 'Geist', 'Inter', -apple-system, system-ui, sans-serif;
+    font-family: var(--font-mono);
     font-size: 22px; font-weight: 600; letter-spacing: -0.015em;
     color: var(--text-0);
     margin: 0 0 10px;

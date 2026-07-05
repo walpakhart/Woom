@@ -284,7 +284,7 @@
   .prose :global(ol ol) { margin-top: 0.3em; margin-bottom: 0.3em; }
 
   .prose :global(code) {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono);
     font-size: 12px;
     padding: 1px 6px;
     border-radius: 4px;
@@ -327,7 +327,7 @@
   }
   .prose :global(pre.diff-block code) {
     display: block;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono);
   }
   .prose :global(.diff-line) {
     display: block;
@@ -394,7 +394,7 @@
   .prose :global(input[type="checkbox"]) { margin-right: 6px; }
   .prose :global(del) { color: var(--text-2); }
   .prose :global(kbd) {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono);
     font-size: 11px;
     padding: 1px 6px;
     background: var(--bg-2);
@@ -408,9 +408,9 @@
     background: var(--accent-soft);
     padding: 1px 6px;
     border-radius: 4px;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono);
     font-size: 0.92em;
-    border: 1px solid rgba(168, 217, 184, 0.22);
+    border: 1px solid color-mix(in srgb, var(--ok) 22%, transparent);
     font-weight: 500;
   }
   /* File / folder mentions are clickable — show the pointer and a mild

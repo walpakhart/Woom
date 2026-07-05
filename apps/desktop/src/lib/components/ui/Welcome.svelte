@@ -172,7 +172,7 @@
   }
   .welcome-panel {
     width: 100%; max-width: 640px;
-    background: linear-gradient(180deg, var(--bg-2), var(--bg-1));
+    background: var(--bg-0);
     border: 1px solid var(--border-hi);
     border-radius: var(--r-modal, 16px);
     box-shadow: var(--shadow-3), 0 0 0 1px var(--border-accent-2);
@@ -186,14 +186,14 @@
   .welcome-head-text { flex: 1; min-width: 0; }
   .welcome-title {
     margin: 0;
-    font-family: 'Geist', 'Inter', -apple-system, system-ui, sans-serif;
+    font-family: var(--font-mono);
     font-size: 28px; font-weight: 600;
     letter-spacing: -0.02em; line-height: 1.18;
     color: var(--text-0);
   }
   .welcome-sub {
     margin: 4px 0 0;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono);
     font-size: 10.5px; color: var(--text-mute);
     letter-spacing: 0.10em; text-transform: uppercase;
   }
@@ -259,8 +259,8 @@
   }
   .welcome-source:hover { border-color: var(--border-hi2); background: var(--bg-2); }
   .welcome-source.connected {
-    border-color: rgba(168, 217, 184, 0.40);
-    background: rgba(168, 217, 184, 0.06);
+    border-color: color-mix(in srgb, var(--ok) 40%, transparent);
+    background: color-mix(in srgb, var(--ok) 6%, transparent);
   }
   .welcome-source-name { font-size: 13px; color: var(--text-0); font-weight: 500; }
   .welcome-source-status { font-size: 11px; color: var(--text-2); text-transform: uppercase; letter-spacing: 0.04em; }
@@ -289,9 +289,7 @@
     background: linear-gradient(180deg, var(--accent-bright), var(--accent));
     color: var(--accent-fg);
     font-weight: 600;
-    box-shadow:
-      0 6px 18px var(--accent-glow),
-      inset 0 1px 0 rgba(255, 255, 255, 0.20);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.20), var(--shadow-2);
   }
   .welcome-next:hover { transform: translateY(-1px); }
 </style>

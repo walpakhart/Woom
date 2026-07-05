@@ -207,7 +207,7 @@
     display: block;
     /* Soft shadow lifts the image off the checkerboard so the eye
        reads "the image" not "the surrounding noise". */
-    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.35);
+    box-shadow: var(--shadow-3);
     pointer-events: none;
     will-change: transform;
   }

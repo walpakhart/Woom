@@ -215,7 +215,7 @@
     border-left: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
     background: color-mix(in srgb, var(--bg-0) 70%, transparent);
     color: var(--text-0);
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono);
     font-size: 12px;
     line-height: 1.5;
     resize: vertical;

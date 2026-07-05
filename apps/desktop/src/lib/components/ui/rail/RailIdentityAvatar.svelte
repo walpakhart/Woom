@@ -126,7 +126,7 @@
     border-radius: 10px;
     color: var(--text-0);
     font-size: 11.5px;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+    box-shadow: var(--shadow-3);
     opacity: 0;
     transform: translateY(4px) scale(0.98);
     transition:

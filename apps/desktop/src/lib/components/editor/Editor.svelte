@@ -1101,9 +1101,12 @@
 </div>
 
 <style>
-  .ed { position: relative; height: 100%; display: flex; flex-direction: column; overflow: hidden; background: var(--bg-0); }
+  /* Mockup: code sits on the raised card tone (bg-2), not the page. */
+  .ed { position: relative; height: 100%; display: flex; flex-direction: column; overflow: hidden; background: var(--bg-2); }
+  .ed :global(.cm-editor) { background: var(--bg-2); }
+  .ed :global(.cm-gutters) { background: var(--bg-2); border-right: 0; }
   .ed-surface { flex: 1; overflow: hidden; min-height: 0; }
-  .ed-surface :global(.cm-editor) { height: 100%; font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', monospace; font-size: 13px; }
+  .ed-surface :global(.cm-editor) { height: 100%; font-family: var(--font-mono); font-size: 13px; }
   .ed-surface :global(.cm-editor.cm-focused) { outline: none; }
   .ed-surface :global(.cm-scroller) { font-family: inherit; }
 
@@ -1243,7 +1246,7 @@
     background: var(--bg-2);
     border: 1px solid var(--border-hi);
     border-radius: 8px;
-    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+    box-shadow: var(--shadow-3);
     overflow: hidden;
     display: flex;
     flex-direction: column;
@@ -1275,7 +1278,7 @@
     overflow: auto;
     max-height: 260px;
     padding: 4px 0;
-    font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', monospace;
+    font-family: var(--font-mono);
     font-size: 12px;
     line-height: 1.55;
   }

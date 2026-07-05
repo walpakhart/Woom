@@ -446,7 +446,7 @@
             secondaryColor: '#2a221d',
             tertiaryColor: '#3b3027'
           },
-          fontFamily: '-apple-system, system-ui, sans-serif'
+          fontFamily: '"IBM Plex Mono", ui-monospace, monospace'
         });
         const id = `mermaid-${shape.id.replace(/[^a-zA-Z0-9]/g, '')}`;
         const { svg } = await m.default.render(id, source);
@@ -481,7 +481,7 @@
     yellow: 'rgba(244, 196, 48, 0.20)',
     pink: 'rgba(232, 78, 158, 0.18)',
     blue: 'rgba(79, 142, 255, 0.18)',
-    green: 'rgba(168, 217, 184, 0.18)',
+    green: 'color-mix(in srgb, var(--ok) 18%, transparent)',
     gray: 'rgba(168, 172, 180, 0.16)'
   };
   const STICKY_BORDER: Record<string, string> = {
@@ -489,7 +489,7 @@
     yellow: 'rgba(244, 196, 48, 0.55)',
     pink: 'rgba(232, 78, 158, 0.55)',
     blue: 'rgba(79, 142, 255, 0.55)',
-    green: 'rgba(168, 217, 184, 0.55)',
+    green: 'color-mix(in srgb, var(--ok) 55%, transparent)',
     gray: 'rgba(168, 172, 180, 0.45)'
   };
   const stickyBg = $derived(STICKY_BG[pSticky.tint] ?? STICKY_BG.forge);
@@ -803,7 +803,7 @@
      drag-translate signal) but a faint accent shadow to telegraph
      "double-click does something". */
   .cv-shape--openable:hover :global(.cv-card) {
-    box-shadow: 0 0 0 1px var(--accent), 0 4px 12px rgba(232, 130, 100, 0.15);
+    box-shadow: 0 0 0 1px var(--accent), var(--shadow-2);
   }
 
   .cv-shape svg {
@@ -919,7 +919,7 @@
   .cv-shape-edit--sticky { background: var(--sticky-bg, rgba(232, 130, 100, 0.18)); }
   .cv-shape-edit--mermaid,
   .cv-shape-edit--code {
-    font-family: 'JetBrains Mono', 'Geist Mono', ui-monospace, monospace;
+    font-family: var(--font-mono);
     background: var(--bg-1);
     white-space: pre;
   }
@@ -932,7 +932,7 @@
   .cv-sticky :global(em) { color: var(--text-0);  }
   .cv-sticky :global(a) { color: var(--accent-bright, var(--accent)); }
   .cv-sticky :global(code) {
-    font-family: -ui-monospace, 'JetBrains Mono', 'Geist Mono', monospace;
+    font-family: var(--font-mono);
     background: rgba(0, 0, 0, 0.25);
     padding: 1px 4px;
     border-radius: 3px;
@@ -1013,7 +1013,7 @@
     border: 1px solid var(--border-neutral);
     background: var(--bg-1);
     color: var(--text-0);
-    font-family: 'JetBrains Mono', 'Geist Mono', ui-monospace, monospace;
+    font-family: var(--font-mono);
     font-size: 12px;
     line-height: 1.5;
     overflow: hidden;

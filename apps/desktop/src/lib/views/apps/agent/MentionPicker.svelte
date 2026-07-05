@@ -612,7 +612,7 @@
     width: 7px; height: 7px;
     border-radius: 50%;
     flex-shrink: 0;
-    box-shadow: 0 0 6px currentColor;
+    box-shadow: var(--shadow-1);
   }
   .mp-title {
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;

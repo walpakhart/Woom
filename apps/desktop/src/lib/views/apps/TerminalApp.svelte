@@ -69,6 +69,7 @@
   const linkedAgents = $derived.by(() => {
     const out: { sessionId: string; agentInstanceId: string; title: string }[] = [];
     for (const s of sessionsState.list) {
+      if (s.archived) continue;
       if (s.linkedTerminalInstanceId !== p.instanceId) continue;
       const agentInstanceId = s.agentInstanceId ?? APP_INSTANCE_IDS.claude;
       if (kindForInstanceId(agentInstanceId) !== 'claude') continue;
@@ -137,6 +138,15 @@
   }
 </script>
 
+{#snippet termHead()}
+  <header class="st-head">
+    <span class="st-head-title">terminal</span>
+    <span class="st-head-meta">zsh{p.cwd ? ` · ${p.cwd.replace(/^\/Users\/[^/]+/, '~')}` : ''} · drivable by agents via MCP</span>
+    <span class="st-head-spring"></span>
+    <span class="st-head-name">{instanceLabel}</span>
+  </header>
+{/snippet}
+
 <section
   class="app-shell st-shell"
   class:st-shell--rail={!sideOpen}
@@ -153,6 +163,7 @@
     >
       {#snippet start()}
         <section class="app-pane st-main">
+          {@render termHead()}
           <TerminalSurface
             instanceId={p.instanceId}
             cwd={p.cwd ?? null}
@@ -219,6 +230,7 @@
     </Splitter>
   {:else}
     <section class="app-pane st-main">
+      {@render termHead()}
       <TerminalSurface
         instanceId={p.instanceId}
         cwd={p.cwd ?? null}
@@ -297,15 +309,31 @@
      to whatever the splitter assigns instead of locking to its own. */
   .st-shell :global(.ic) { width: 100%; flex: 1; }
 
+  /* Mockup terminal header — charcoal strip over the inset. */
+  .st-head {
+    flex: none;
+    display: flex; align-items: center; gap: 10px;
+    height: 36px;
+    padding: 0 16px;
+    background: var(--dark-0);
+    border-bottom: 1px solid rgba(0, 0, 0, 0.3);
+    font-size: 11px;
+  }
+  .st-head-title { font-size: 12px; font-weight: 600; color: var(--dark-text); }
+  .st-head-meta { color: var(--dark-mute); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .st-head-spring { flex: 1; }
+  .st-head-name { color: var(--dark-text-2); font-size: 10.5px; }
+
   .st-main {
-    display: flex;
+    display: flex; flex-direction: column;
     overflow: hidden;
-    background: var(--bg-0);
+    /* Charcoal inset — same in both themes per the mockup. */
+    background: var(--dark-0);
     position: relative;
     height: 100%;
   }
   .st-main :global(.terminal-surface) {
-    background: var(--bg-0) !important;
+    background: var(--dark-0) !important;
     flex: 1 1 auto;
   }
   /* Clear-screen pill — sits one slot below the show-side toggle so
@@ -318,9 +346,10 @@
     width: 26px; height: 26px;
     display: grid; place-items: center;
     border-radius: 6px;
-    background: rgba(20, 24, 26, 0.7);
-    border: 1px solid var(--border);
-    color: var(--text-2);
+    /* Sits over the terminal's charcoal inset — always dark. */
+    background: color-mix(in srgb, var(--dark-1) 78%, transparent);
+    border: 1px solid rgba(216, 210, 190, 0.14);
+    color: var(--dark-text-2);
     cursor: pointer;
     backdrop-filter: blur(8px);
     opacity: 0;
@@ -333,9 +362,9 @@
   }
   .st-clear:hover {
     opacity: 1;
-    color: var(--accent-bright);
-    border-color: color-mix(in srgb, var(--accent) 38%, var(--border));
-    background: rgba(20, 24, 26, 0.92);
+    color: var(--dark-text);
+    border-color: rgba(216, 210, 190, 0.3);
+    background: var(--dark-1);
   }
   .st-clear svg { width: 13px; height: 13px; }
 
@@ -355,7 +384,7 @@
     background: var(--bg-2);
     border: 1px solid var(--border-hi);
     border-radius: 7px;
-    box-shadow: 0 6px 20px -6px rgba(0, 0, 0, 0.55), 0 1px 0 0 rgba(0, 0, 0, 0.1);
+    box-shadow: 0 1px 0 0 rgba(0, 0, 0, 0.1), var(--shadow-1);
     white-space: nowrap;
   }
   .st-apply-pop-btn {

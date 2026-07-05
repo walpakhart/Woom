@@ -246,7 +246,7 @@
     background: var(--bg-1);
     border: 1px solid var(--border-hi);
     border-radius: 8px;
-    box-shadow: 0 6px 22px rgba(0, 0, 0, 0.22);
+    box-shadow: var(--shadow-3);
     color: var(--text-1);
     font-size: 12px;
   }
@@ -369,5 +369,5 @@
     padding: 0;
   }
   .bp-csv:hover { color: var(--text-1); text-decoration: underline; }
-  .mono { font-family: 'JetBrains Mono', monospace; }
+  .mono { font-family: var(--font-mono); }
 </style>

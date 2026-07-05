@@ -72,6 +72,52 @@
   const isError = $derived(action.status === 'error');
   const isEditable = $derived(action.status === 'pending' || action.status === 'error');
 
+  /* ---- Commit-message history (↑/↓ in the subject input). ----
+     Persisted globally; newest first, capped. `histIdx === -1` means
+     "not browsing" — the first ArrowUp stashes the live draft so
+     ArrowDown can return to it. */
+  const MSG_HISTORY_KEY = 'woom:commit-msg-history:v1';
+  const MSG_HISTORY_CAP = 50;
+  function readMsgHistory(): string[] {
+    try {
+      const raw = localStorage.getItem(MSG_HISTORY_KEY);
+      const arr = raw ? JSON.parse(raw) : [];
+      return Array.isArray(arr) ? arr.filter((s) => typeof s === 'string') : [];
+    } catch { return []; }
+  }
+  function pushMsgHistory(msg: string) {
+    const m = msg.trim();
+    if (!m) return;
+    try {
+      const next = [m, ...readMsgHistory().filter((s) => s !== m)].slice(0, MSG_HISTORY_CAP);
+      localStorage.setItem(MSG_HISTORY_KEY, JSON.stringify(next));
+    } catch { /* ignore */ }
+  }
+  let histIdx = $state(-1);
+  let histStash = $state('');
+  function onSubjectKey(e: KeyboardEvent) {
+    if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+    if (action.kind !== 'commit') return;
+    const hist = readMsgHistory();
+    if (hist.length === 0) return;
+    e.preventDefault();
+    if (e.key === 'ArrowUp') {
+      if (histIdx === -1) histStash = action.message;
+      const next = Math.min(histIdx + 1, hist.length - 1);
+      histIdx = next;
+      onUpdate({ message: hist[next] } as Partial<Action>);
+    } else {
+      if (histIdx === -1) return;
+      const next = histIdx - 1;
+      histIdx = next;
+      onUpdate({ message: next === -1 ? histStash : hist[next] } as Partial<Action>);
+    }
+  }
+  function handleExecute() {
+    if (action.kind === 'commit') pushMsgHistory(action.message);
+    onExecute();
+  }
+
   // Live head-branch readout for PR cards. We re-query when cwd changes or
   // the card moves between executing/error states (a failed PR is often
   // followed by the user manually `git checkout`-ing into a different
@@ -158,9 +204,10 @@
         <input
           class="cac-input cac-input--subject"
           value={action.message}
-          oninput={(e) => onUpdate({ message: e.currentTarget.value })}
+          oninput={(e) => { histIdx = -1; onUpdate({ message: e.currentTarget.value }); }}
+          onkeydown={onSubjectKey}
           disabled={!isEditable}
-          placeholder="commit subject (imperative, ≤72 chars)"
+          placeholder="commit subject (↑/↓ история, imperative, ≤72 chars)"
         />
       </label>
       <label class="cac-label">
@@ -301,7 +348,7 @@
       <button class="cac-btn cac-btn--ghost" onclick={onDismiss}>Close</button>
     {:else}
       <button class="cac-btn cac-btn--ghost" onclick={onDismiss} disabled={isBusy}>Dismiss</button>
-      <button class="cac-btn cac-btn--primary" onclick={onExecute} disabled={isBusy || !isEditable}>
+      <button class="cac-btn cac-btn--primary" onclick={handleExecute} disabled={isBusy || !isEditable}>
         {#if isBusy}
           Working…
         {:else if action.kind === 'commit'}
@@ -337,19 +384,24 @@
    *  surface as the prose, instead of a tinted panel sitting on top.
    *  Hover lifts a 4% tint so the active proposal is still findable
    *  by the eye when scanning the thread. */
+  /* Paper redesign: printed tool card — bg-2, hairline border,
+     radius 8, engraved step shadow. Same chip language as the
+     trace-step rows in the thread. */
   .cac {
     --cac-tone: var(--app-tone, var(--accent));
-    border-left: 2px solid color-mix(in srgb, var(--cac-tone) 75%, transparent);
-    background: transparent;
-    padding: 4px 0 6px 14px;
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 12px 10px;
     display: flex; flex-direction: column; gap: 8px;
-    transition: background 160ms, border-left-color 160ms;
+    transition: border-color 160ms;
     color: var(--text-1);
-    font-size: 13.5px;
+    font-size: 12.5px;
     line-height: 1.55;
+    box-shadow: var(--shadow-1);
   }
-  .cac:hover { background: color-mix(in srgb, var(--cac-tone) 4%, transparent); }
-  .cac:focus-within { border-left-color: var(--cac-tone); }
+  .cac:hover { border-color: var(--border-hi); }
+  .cac:focus-within { border-color: color-mix(in srgb, var(--cac-tone) 45%, var(--border)); }
   .cac-input--cmd { background: var(--bg-0); }
   .cac--done   { opacity: 0.72; }
   .cac--error  {
@@ -401,7 +453,7 @@
     font-size: 13px; font-family: inherit;
   }
   .cac-input:focus { outline: none; border-color: var(--border-hi2); }
-  .cac-input--subject { font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', monospace; font-size: 12.5px; }
+  .cac-input--subject { font-family: var(--font-mono); font-size: 12.5px; }
   .cac-readonly {
     padding: 7px 10px;
     background: var(--bg-1); border: 1px solid var(--border-neutral);
@@ -420,7 +472,7 @@
     background: var(--bg-2);
     border-radius: 5px;
     font-size: 11.5px; color: var(--text-1);
-    font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', monospace;
+    font-family: var(--font-mono);
     line-height: 1.5;
     white-space: pre-wrap;
     word-break: break-word;
