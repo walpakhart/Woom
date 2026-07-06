@@ -870,13 +870,17 @@
                       {:else}
                         <span class="edit-path mono" title={ev.filePath}>{displayEditPath(ev.filePath)}</span>
                       {/if}
+                      <!-- Spring keeps the path button sized to its text —
+                           a stretched button swallowed clicks "next to the
+                           name" that should toggle the diff body instead. -->
+                      <span class="edit-spring" aria-hidden="true"></span>
                       <span class="edit-stats mono">
                         <span class="add">+{stats.add}</span>
                         <span class="rem">−{stats.rem}</span>
                       </span>
                       <span class="edit-status mono">{ev.status}</span>
-                      <span class="edit-expand">
-                        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg>
+                      <span class="edit-expand" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg>
                       </span>
                     </summary>
                     <div class="edit-card-body" use:overlayScrollbars>
@@ -1465,7 +1469,19 @@
   .edit-card-head::-webkit-details-marker { display: none; }
   .edit-card-head::marker { content: ''; }
   /* No head bg on open — flat continuation into the diff body. */
-  .edit-card[open] .edit-expand svg { transform: rotate(180deg); }
+  /* Caret mirrors .trace-cmd-caret (same glyph size, muted tone,
+     vertically centred) so edit cards and trace steps share one
+     chevron language. */
+  .edit-expand {
+    flex-shrink: 0;
+    display: inline-grid; place-items: center;
+    align-self: center;
+    color: var(--text-mute);
+    transition: transform 140ms;
+    opacity: 0.6;
+  }
+  .edit-card[open] .edit-expand { transform: rotate(180deg); opacity: 0.9; }
+  .edit-spring { flex: 1; }
   /* Tag reads as a lowercase mono prefix, not a chip. */
   .edit-tag {
     display: inline-flex; align-items: baseline;
@@ -1485,7 +1501,9 @@
   .edit-path {
     font-size: 12px;
     color: var(--text-1);
-    flex: 1;
+    /* Size to the text — a `flex: 1` button stretched across the row
+       and swallowed "toggle the diff" clicks next to the name. */
+    flex: 0 1 auto;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     direction: rtl;
     text-align: left;

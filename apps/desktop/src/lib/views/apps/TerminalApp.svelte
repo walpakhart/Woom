@@ -286,7 +286,17 @@
 </section>
 
 <style>
-  .st-shell { display: block; padding: var(--app-pad, 14px); }
+  /* Single-cell GRID, not block — every other solo shell is a grid
+     and renders reliably; the block variant was the odd one out and
+     the only solo whose whole subtree (head + surface + side pane,
+     all inside the Splitter) intermittently came up invisible. A grid
+     cell gives the Splitter a definite stretch context in both axes. */
+  .st-shell {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+    padding: var(--app-pad, 14px);
+  }
   /* Rail-collapsed: 2-col grid (terminal pane + 44px rail). */
   .st-shell.st-shell--rail {
     display: grid;

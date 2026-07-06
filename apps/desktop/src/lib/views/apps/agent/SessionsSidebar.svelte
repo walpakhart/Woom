@@ -404,7 +404,9 @@
   .ssb-list {
     flex: 1; overflow-y: auto;
     padding: 0 10px 12px;
+    scrollbar-width: none;
   }
+  .ssb-list::-webkit-scrollbar { display: none; }
 
   .ssb-row {
     display: block;
@@ -479,8 +481,22 @@
   .ssb-arch-caret.open { transform: rotate(90deg); }
   .ssb-arch-count { margin-left: auto; }
 
-  .ssb-row--archived { opacity: 0.75; }
+  /* Archived rows keep the icon + body + actions layout — the base
+     .ssb-row went display:block in the paper redesign, which let the
+     unsized archive SVG blow up to full row width. */
+  .ssb-row--archived {
+    opacity: 0.75;
+    display: flex; align-items: center; gap: 8px;
+  }
   .ssb-row--archived:hover { opacity: 1; }
+  .ssb-icon {
+    flex: none; display: grid; place-items: center;
+    width: 16px; height: 16px;
+    color: var(--text-faint);
+  }
+  .ssb-icon svg { width: 14px; height: 14px; }
+  .ssb-body { flex: 1; min-width: 0; }
+  .ssb-row--archived .ssb-meta { padding-left: 0; }
   .ssb-arch-act {
     display: grid; place-items: center;
     width: 20px; height: 20px;

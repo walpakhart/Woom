@@ -49,3 +49,6 @@ pnpm-debug.log*
 
 # Claude Code local state
 .claude/
+
+# playwright MCP debug artifacts
+.playwright-mcp/

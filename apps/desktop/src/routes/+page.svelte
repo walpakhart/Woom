@@ -1057,6 +1057,15 @@
        with default `:root` vars, this flips `<html data-theme="…">`
        so the saved palette wins on first paint. */
     initTheme();
+    /* Surface uncaught JS errors as toasts. In a packaged WKWebView
+       there is no devtools console — a mount-time crash otherwise
+       reads as "the view is just black" with zero signal to report. */
+    window.addEventListener('error', (e) => {
+      notify({ kind: 'error', title: 'JS error', body: String(e.message ?? e.error ?? 'unknown'), ttlMs: 15000 });
+    });
+    window.addEventListener('unhandledrejection', (e) => {
+      notify({ kind: 'error', title: 'Unhandled rejection', body: String(e.reason ?? 'unknown'), ttlMs: 15000 });
+    });
     /* Updater auto-check default — OFF for now. Phase 1 of the SDD
      * update-system workspace (`sdd-2508eeb82e`) lands the manifest +
      * pubkey scaffolding; Phase 3 reads this key from a real Rust
@@ -2064,16 +2073,15 @@
       notify({ kind: 'error', title: 'File not found', body: path });
       return;
     }
-    let eid = sess?.linkedToEditor ? (sess.linkedToEditorInstanceId ?? '') : '';
+    /* STRICT: only the session's linked editor may receive the file.
+       No roots-match / active-instance fallback — opening a chat file
+       into an unrelated editor instance hijacks someone else's repo
+       view (user call 2026-07-06). No link → no open. */
+    const eid = sess?.linkedToEditor ? (sess.linkedToEditorInstanceId ?? '') : '';
     if (!eid) {
-      for (const iid of Object.keys(sessionsState.editorInstanceState)) {
-        if (editorRoots(iid).some((r) => resolved === r || resolved.startsWith(r + '/'))) {
-          eid = iid;
-          break;
-        }
-      }
+      notify({ kind: 'info', title: 'No linked editor', body: 'Link an editor to this chat to open files from it.' });
+      return;
     }
-    if (!eid) eid = layoutState.activeInstance.editor;
     openFileInEditor(resolved, { preferInstanceId: eid });
     if (!opts?.stayOnView) {
       setActiveInstance('editor', eid);
@@ -3293,7 +3301,6 @@
   </div>
 
   <StatusStrip
-    {claudeBusy}
     {githubBadge}
     {sentryBadge}
     onGoClaude={() => (view = 'claudeApp')}

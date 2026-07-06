@@ -53,9 +53,15 @@ export const skillsState = $state<{
 
 /** Discover skills for a given cwd. Cheap (Rust just walks a small
  *  number of dirs), but throttled per-cwd so the Composer's $effect
- *  doesn't re-fire on every keystroke that mutates `s.cwd`. */
+ *  doesn't re-fire on every keystroke that mutates `s.cwd`.
+ *
+ *  Guard MUST key on lastCwd alone: the old `list.length > 0` clause
+ *  meant an empty discovery (or invoke failure in browser preview)
+ *  re-armed on every $effect flush, and since each round assigned a
+ *  fresh `list` array the calling effect re-fired forever — a runaway
+ *  loop that saturated the main thread. */
 export async function refreshSkills(cwd: string | null): Promise<void> {
-  if (skillsState.lastCwd === cwd && skillsState.list.length > 0) return;
+  if (skillsState.lastCwd === cwd) return;
   skillsState.loading = true;
   skillsState.lastCwd = cwd;
   try {

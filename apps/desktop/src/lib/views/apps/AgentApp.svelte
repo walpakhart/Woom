@@ -23,6 +23,7 @@
   import Splitter from '$lib/components/ui/Splitter.svelte';
   import { onMount } from 'svelte';
   import { bgTasksState } from '$lib/state/bgTasks.svelte';
+  import { sessionsState } from '$lib/state/sessions.svelte';
   import type { ClaudeAction } from '$lib/types';
 
   type Kind = 'claude';
@@ -191,21 +192,28 @@
                 onRemoveWorktree={p.onRemoveWorktree}
                 worktreeBusy={p.worktreeBusy}
               />
-              <ChatThread
-                kind={p.kind}
-                thinkingStartedAt={p.thinkingStartedAt}
-                thinkingTick={p.thinkingTick}
-                onUpdateAction={p.onUpdateAction}
-                onRemoveAction={p.onRemoveAction}
-                onExecuteAction={p.onExecuteAction}
-                onOpenPrInWoom={p.onOpenPrInWoom}
-                onStartEditMessage={p.onStartEditMessage}
-                onResendMessage={p.onResendMessage}
-                onOpenFile={p.onOpenFile}
-                onSddAdvance={p.onSddAdvance}
-                onDwVerify={p.onDwVerify}
-              onResumeAfterQuota={p.onResumeAfterQuota}
-  />
+              <!-- {#key}: the thread MUST remount per session — the
+                   windowed lazy-mount (IntersectionObserver) keeps DOM
+                   nodes observed; a reused subtree never re-fires the
+                   initial intersection, leaving visible messages stuck
+                   as truncated stubs after a session switch. -->
+              {#key sessionsState.activeIds[p.kind]}
+                <ChatThread
+                  kind={p.kind}
+                  thinkingStartedAt={p.thinkingStartedAt}
+                  thinkingTick={p.thinkingTick}
+                  onUpdateAction={p.onUpdateAction}
+                  onRemoveAction={p.onRemoveAction}
+                  onExecuteAction={p.onExecuteAction}
+                  onOpenPrInWoom={p.onOpenPrInWoom}
+                  onStartEditMessage={p.onStartEditMessage}
+                  onResendMessage={p.onResendMessage}
+                  onOpenFile={p.onOpenFile}
+                  onSddAdvance={p.onSddAdvance}
+                  onDwVerify={p.onDwVerify}
+                  onResumeAfterQuota={p.onResumeAfterQuota}
+                />
+              {/key}
               <Composer
                 kind={p.kind}
                 onSend={p.onSend}
@@ -263,21 +271,23 @@
               onRemoveWorktree={p.onRemoveWorktree}
               worktreeBusy={p.worktreeBusy}
             />
-            <ChatThread
-              kind={p.kind}
-              thinkingStartedAt={p.thinkingStartedAt}
-              thinkingTick={p.thinkingTick}
-              onUpdateAction={p.onUpdateAction}
-              onRemoveAction={p.onRemoveAction}
-              onExecuteAction={p.onExecuteAction}
-              onOpenPrInWoom={p.onOpenPrInWoom}
-              onStartEditMessage={p.onStartEditMessage}
-              onResendMessage={p.onResendMessage}
-              onOpenFile={p.onOpenFile}
-              onSddAdvance={p.onSddAdvance}
+            {#key sessionsState.activeIds[p.kind]}
+              <ChatThread
+                kind={p.kind}
+                thinkingStartedAt={p.thinkingStartedAt}
+                thinkingTick={p.thinkingTick}
+                onUpdateAction={p.onUpdateAction}
+                onRemoveAction={p.onRemoveAction}
+                onExecuteAction={p.onExecuteAction}
+                onOpenPrInWoom={p.onOpenPrInWoom}
+                onStartEditMessage={p.onStartEditMessage}
+                onResendMessage={p.onResendMessage}
+                onOpenFile={p.onOpenFile}
+                onSddAdvance={p.onSddAdvance}
                 onDwVerify={p.onDwVerify}
-              onResumeAfterQuota={p.onResumeAfterQuota}
-/>
+                onResumeAfterQuota={p.onResumeAfterQuota}
+              />
+            {/key}
             <Composer
               kind={p.kind}
               onSend={p.onSend}

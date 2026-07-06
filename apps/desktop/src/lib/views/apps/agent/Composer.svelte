@@ -15,7 +15,7 @@
   import { notify } from '$lib/state/toaster.svelte';
   import ModelEngine from './ModelEngine.svelte';
   import MentionPicker from './MentionPicker.svelte';
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import type { Mention } from '$lib/types';
   import {
     KNOWN_SLASH_COMMANDS,
@@ -496,7 +496,10 @@
    *  a handful of dirs); `refreshSkills` no-ops if cwd hasn't moved. */
   $effect(() => {
     const cwd = sess?.worktreePath ?? sess?.cwd ?? null;
-    void refreshSkills(cwd);
+    /* untrack: refreshSkills sync-reads its own store (guard) before the
+       first await — without untrack those reads register as deps of THIS
+       effect and every store write re-fires it. */
+    untrack(() => void refreshSkills(cwd));
   });
 
   $effect(() => {

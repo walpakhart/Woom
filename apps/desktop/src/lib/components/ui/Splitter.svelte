@@ -1,6 +1,5 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
-  import { onMount } from 'svelte';
 
   interface Props {
     /** `horizontal` = side-by-side (vertical divider), `vertical` = stacked (horizontal divider). */
@@ -32,20 +31,26 @@
     end
   }: Props = $props();
 
-  let size = $state<number>(0);
+  /* Resolve the initial size SYNCHRONOUSLY. The previous flow started
+     at 0 and fixed it in onMount — but onMount runs after the whole
+     subtree mounts, so a heavy first render (long chat thread, xterm
+     boot) left the fixed pane at `width: 0px` for seconds: sidebar
+     "missing", terminal solo reading as a black void. */
+  function resolveInitial(): number {
+    if (persistKey) {
+      try {
+        const saved = localStorage.getItem(`woom:splitter:${persistKey}`);
+        if (saved) {
+          const n = parseFloat(saved);
+          if (!isNaN(n) && n >= min && n <= max) return n;
+        }
+      } catch { /* privacy mode — fall through */ }
+    }
+    return initial;
+  }
+  let size = $state<number>(resolveInitial());
   let containerEl: HTMLDivElement;
   let dragging = $state(false);
-
-  onMount(() => {
-    size = initial;
-    if (persistKey) {
-      const saved = localStorage.getItem(`woom:splitter:${persistKey}`);
-      if (saved) {
-        const n = parseFloat(saved);
-        if (!isNaN(n) && n >= min && n <= max) size = n;
-      }
-    }
-  });
 
   function startDrag(e: PointerEvent) {
     if (e.button !== 0) return;

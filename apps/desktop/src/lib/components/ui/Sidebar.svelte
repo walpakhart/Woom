@@ -10,6 +10,7 @@
   import RailIdentityAvatar from './rail/RailIdentityAvatar.svelte';
   import { SVG_GITHUB, SVG_JIRA, SVG_SENTRY } from '$lib/data';
   import { layoutState, setActiveInstance, type AppKind } from '$lib/state/layout.svelte';
+  import { sessionsState } from '$lib/state/sessions.svelte';
   import { updateState, installNow, snooze } from '$lib/state/updates.svelte';
   import { dragState, requestCanvasRailDrop } from '$lib/state/drag.svelte';
   import type {
@@ -142,6 +143,21 @@
     return layoutState.instances[kind] ?? [];
   }
 
+  /** Editor instances get the open repo's folder name next to the
+   *  curated mark — five "Vermeer / Hokusai / …" rows say nothing
+   *  about WHICH repo each one holds. */
+  function instanceHint(kind: AppKind, id: string): string {
+    if (kind !== 'editor') return '';
+    const slot = sessionsState.editorInstanceState[id];
+    const roots = slot?.repoPaths?.length
+      ? slot.repoPaths
+      : slot?.repoPath ? [slot.repoPath] : [];
+    return roots
+      .map((r) => r.split('/').filter(Boolean).pop() ?? '')
+      .filter(Boolean)
+      .join(' + ');
+  }
+
   /* ----- update card ----- */
   const updateReady = $derived.by(() => {
     const p = updateState.phase;
@@ -233,6 +249,9 @@
         onclick={() => setActiveInstance(it.kind!, inst.id)}
       >
         <span class="sb-sub-tick">·</span>{inst.name}
+        {#if instanceHint(it.kind, inst.id)}
+          <span class="sb-sub-hint" title={instanceHint(it.kind, inst.id)}>{instanceHint(it.kind, inst.id)}</span>
+        {/if}
       </button>
     {/each}
   {/if}
@@ -426,6 +445,14 @@
   .sb-sub:hover { background: var(--bg-hover); color: var(--text-1); }
   .sb-sub.active { color: var(--text-0); }
   .sb-sub-tick { color: var(--text-faint); }
+  .sb-sub-hint {
+    margin-left: auto;
+    padding-left: 8px;
+    font-size: 10px;
+    color: var(--text-faint);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    min-width: 0;
+  }
 
   .sb-foot {
     flex: none;

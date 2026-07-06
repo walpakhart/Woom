@@ -1,20 +1,17 @@
 <script lang="ts">
   /* Paper redesign status strip — 34px charcoal band across the
      bottom (same --dark-0 in both themes, per the mockup's "dark
-     insets don't theme" rule). Left: running background task +
-     busy-agent chip. Right: source counters. */
+     insets don't theme" rule). Shows ONLY while a background task
+     runs — a busy agent already reads as activity inside the chat
+     itself, so it does NOT summon the strip. */
   import { bgTasksState } from '$lib/state/bgTasks.svelte';
 
   interface Props {
-    claudeBusy?: boolean;
-    claudeLabel?: string | null;
     githubBadge?: number;
     sentryBadge?: number;
     onGoClaude?: () => void;
   }
   let {
-    claudeBusy = false,
-    claudeLabel = null,
     githubBadge = 0,
     sentryBadge = 0,
     onGoClaude
@@ -28,21 +25,13 @@
   );
 </script>
 
-{#if runningTask || claudeBusy}
+{#if runningTask}
 <footer class="ss">
-  {#if runningTask}
-    <button class="ss-item" onclick={() => onGoClaude?.()}>
-      <span class="ss-spin" aria-hidden="true"></span>
-      <span class="ss-strong">$ {runningTask.cmd}</span>
-      {#if runningCount > 1}<span>+{runningCount - 1} more</span>{/if}
-    </button>
-  {/if}
-  {#if claudeBusy}
-    <button class="ss-item" onclick={() => onGoClaude?.()}>
-      <span class="ss-pulse"></span>
-      <span>claude{claudeLabel ? ` — ${claudeLabel}` : ' — working'}</span>
-    </button>
-  {/if}
+  <button class="ss-item" onclick={() => onGoClaude?.()}>
+    <span class="ss-spin" aria-hidden="true"></span>
+    <span class="ss-strong">$ {runningTask.cmd}</span>
+    {#if runningCount > 1}<span>+{runningCount - 1} more</span>{/if}
+  </button>
   <div class="ss-spring"></div>
   {#if sentryBadge}<span class="ss-meta">{sentryBadge} issues</span>{/if}
   {#if githubBadge}<span class="ss-meta">↑{githubBadge}</span>{/if}
@@ -84,14 +73,5 @@
     border-radius: 50%;
     animation: ss-spin 0.9s linear infinite;
   }
-  .ss-pulse {
-    width: 6px; height: 6px; border-radius: 50%;
-    background: var(--src-claude);
-    animation: ss-pulsedot 1.6s infinite;
-  }
   @keyframes ss-spin { to { transform: rotate(360deg); } }
-  @keyframes ss-pulsedot {
-    0%, 100% { opacity: 0.35; }
-    50% { opacity: 1; }
-  }
 </style>

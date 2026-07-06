@@ -8,6 +8,57 @@ release runbook (how this CHANGELOG feeds `latest-mac.json`) lives in
 
 ## Unreleased
 
+## 0.5.1 — 2026-07-06
+
+Stability patch for the paper redesign: the terminal blank-screen bug is
+dead (root-caused to a runaway effect loop), session switching is solid,
+and a batch of polish landed across the shell.
+
+### Fixed
+
+- **Runaway skills-discovery loop** — an effect guard keyed on a
+  non-empty skill list meant any empty or failed discovery re-armed on
+  every reactive flush, assigning a fresh array each round and re-firing
+  the composer effect forever. The loop saturated the main thread and
+  was the root cause of the terminal solo painting blank and the Claude
+  app lagging after visiting the terminal. Guard now keys on the last
+  discovered cwd alone and the composer effect no longer tracks the
+  store's internals.
+- **Terminal blank on open** — three more layers hardened while hunting
+  the loop: the terminal shell now lays out as a grid cell (its `height:
+  100%` chain was ambiguous under `display: block`), teardown releases
+  the WebGL context immediately (`loseContext`) so WKWebView's context
+  pool can't hand the next mount a dead canvas, and a dead context at
+  boot falls back to the DOM renderer instead of drawing nothing.
+- **Splitter width-0 flash** — pane sizes resolved only in `onMount`,
+  so heavy mounts (long chat threads, xterm boot) rendered the fixed
+  pane at zero width for seconds — seen as a black terminal and a
+  missing sessions sidebar. Sizes now resolve synchronously from
+  persisted or initial values.
+- **Chat bodies stuck as stubs** — the windowed lazy-mount thread lost
+  its `{#key}` wrap during the redesign, so switching sessions reused
+  DOM and the IntersectionObserver never re-armed; message bodies froze
+  as collapsed placeholders.
+- **Sessions sidebar** — archived-session icons no longer blow up to
+  full width (the redesign turned rows into blocks; unsized SVGs
+  stretched), and the list scrollbar is hidden.
+- **Terminal font wait** — each mount awaited `document.fonts.load` for
+  up to 1.5 s; now a synchronous `fonts.check()` boots xterm instantly
+  once the font is cached.
+
+### Changed
+
+- **Status strip** — no longer appears while Claude is thinking; the
+  chat already shows that. The strip is reserved for background tasks.
+- **Edit chips** — chevron matches trace-step chips and sits centred;
+  clicking the file name opens the file strictly in the session's
+  linked editor (no fallback hijacking); clicking anywhere else on the
+  row toggles the diff.
+- **Sidebar editor rows** — each editor instance now shows its open
+  repo folder name, so multiple editors are tellable apart.
+- **Error surfacing** — uncaught errors and unhandled rejections now
+  surface as red toasts in release builds where no console exists.
+
 ## 0.5.0 — 2026-07-05
 
 The paper redesign. Woom's entire visual language rebuilt from scratch:

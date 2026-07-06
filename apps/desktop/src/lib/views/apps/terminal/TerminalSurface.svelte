@@ -185,10 +185,16 @@
        come back"). Bounded by a timeout so an offline host still gets
        a (fallback-font) terminal instead of hanging forever. */
     try {
-      await Promise.race([
-        document.fonts.load('12.5px "IBM Plex Mono"'),
-        new Promise((r) => setTimeout(r, 1500))
-      ]);
+      /* `check` is synchronous — after the first app-lifetime load the
+         font is cached, so every later terminal mount (view switches
+         remount the solo) skips the await entirely instead of eating
+         the full race (up to 1.5s of black terminal per open). */
+      if (!document.fonts.check('12.5px "IBM Plex Mono"')) {
+        await Promise.race([
+          document.fonts.load('12.5px "IBM Plex Mono"'),
+          new Promise((r) => setTimeout(r, 1500))
+        ]);
+      }
     } catch {/* FontFaceSet unavailable — proceed with fallback */}
     /* One settle frame so fit() measures the host AFTER the solo's
        layout (splitter widths, grid) has been applied — a zero-size
@@ -282,7 +288,21 @@
         if (webgl === gl) webgl = null;
       });
       term.loadAddon(gl);
-      webgl = gl;
+      /* Born-dead context check. Every solo remount creates a fresh
+         WebGL context while the previous one is only released at GC —
+         WKWebView caps live contexts, so every OTHER mount could get a
+         context that is lost from birth. xterm then paints an empty
+         canvas and `onContextLoss` never fires (there was no live
+         context to lose) — the deterministic "terminal is blank every
+         second open". If the context is already lost, drop the addon
+         and let the DOM renderer take over. */
+      const glCanvas = host.querySelector<HTMLCanvasElement>('.xterm-screen canvas');
+      const glCtx = glCanvas?.getContext('webgl2') ?? glCanvas?.getContext('webgl');
+      if (glCtx?.isContextLost()) {
+        gl.dispose();
+      } else {
+        webgl = gl;
+      }
     } catch {
       /* WebGL unavailable (rare on macOS WKWebView) — DOM renderer
        * still works, just slower. Silent fallback. */
@@ -477,7 +497,19 @@
     unsubClear?.();
     unsubOutput = unsubExit = unsubError = unsubClear = null;
     if (clearSelectionRef) clearSelectionRef.fn = null;
+    /* Release the WebGL context IMMEDIATELY instead of waiting for GC.
+       `term.dispose()` detaches the canvas but the context stays alive
+       until collection — WKWebView's live-context cap then hands the
+       NEXT mount a born-dead context (blank terminal every other
+       open). `WEBGL_lose_context.loseContext()` frees the slot now. */
+    const canvases = host ? Array.from(host.querySelectorAll('canvas')) : [];
     term?.dispose();
+    for (const c of canvases) {
+      try {
+        const ctx = c.getContext('webgl2') ?? c.getContext('webgl');
+        (ctx?.getExtension('WEBGL_lose_context'))?.loseContext();
+      } catch {/* 2D canvas or context already gone */}
+    }
     term = null;
     fit = null;
     webgl = null;
