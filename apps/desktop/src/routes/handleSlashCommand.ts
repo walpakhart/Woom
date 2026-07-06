@@ -102,9 +102,8 @@ export async function handleSlashCommand(
       }
       /* Visible bubble: literal text the user typed (prose + skill
        *  token, e.g. "make me a hero section /frontend-design").
-       *  Agent receives the expanded SKILL.md body silently — same
-       *  pattern `/sdd` uses to avoid dumping the template into the
-       *  visible transcript. */
+       *  Agent receives the expanded SKILL.md body silently to avoid
+       *  dumping the template into the visible transcript. */
       appendSessionMessage(session.id, {
         role: 'user',
         content: text,
@@ -113,60 +112,6 @@ export async function handleSlashCommand(
       updateSession(session.id, { input: rendered.rendered });
       await Promise.resolve();
       await deps.sendClaudeMessage({ silent: true });
-      return true;
-    }
-  }
-  /* Inline `/sdd` scanner — same shape as the inline-skill detector
-   * above. Matches `/sdd` anywhere in the input followed by either
-   * whitespace+args, end-of-string, or punctuation. The remainder of
-   * the input (text before AND after the token, minus the token
-   * itself) becomes the SDD ask, so a user can type:
-   *
-   *   "implement an inbox redesign /sdd"
-   *   "/sdd, attached mock for reference"
-   *   "build /sdd this thing"
-   *
-   * — and the workspace prompt picks up the prose around it. Without
-   * this, /sdd only worked when typed at the start of an otherwise-
-   * empty composer, which made it impossible to combine with attached
-   * photos / @-mentions the user typed first. */
-  const inlineSddRe = /(^|\s)\/sdd(?=[\s.,!?;:]|$)/i;
-  const sddMatch = inlineSddRe.exec(text);
-  if (sddMatch) {
-    const tokenStart = sddMatch.index + (sddMatch[1] ? sddMatch[1].length : 0);
-    const tokenEnd = tokenStart + 4; // '/sdd'
-    const beforeToken = text.slice(0, tokenStart).replace(/\s+$/, '');
-    const afterToken = text.slice(tokenEnd).replace(/^[\s.,!?;:]+/, '').replace(/\s+$/, '');
-    const ask = [beforeToken, afterToken].filter((s) => s.length > 0).join(' ').trim();
-    if (ask.length > 0 || (session.mentions?.length ?? 0) > 0) {
-      setSessionInput(session.id, '');
-      /* Visible user bubble — original full text so the chat reads
-       * naturally. The agent receives the kickoff via the silent
-       * sendClaudeMessage call below. */
-      appendSessionMessage(session.id, {
-        role: 'user',
-        content: text,
-        at: new Date().toISOString(),
-      });
-      const { startSddFromSlash } = await import('$lib/services/slashCommands');
-      /* Pass attached image mentions into the kickoff ask so the
-       * agent's first turn (spec writing) has the visual reference.
-       * Image paths get appended as `@<path>` tokens so the existing
-       * mention-extraction pipeline picks them up as multimodal
-       * attachments. Non-image mentions (@PR, @ticket, …) are left
-       * to the regular sendClaudeMessage path. */
-      const imageRefs = (session.mentions ?? [])
-        .filter((m) => m.source === 'file' && !!m.body && /\.(png|jpg|jpeg|gif|webp|bmp)$/i.test(m.body))
-        .map((m) => `@${m.body}`)
-        .join(' ');
-      const askWithImages = imageRefs ? `${ask}\n\n${imageRefs}`.trim() : ask;
-      const rendered = await startSddFromSlash(session, askWithImages);
-      if (rendered) {
-        updateSession(session.id, { input: rendered });
-        await Promise.resolve();
-        await deps.sendClaudeMessage({ silent: true });
-      }
-      void deps.scrollChatBottom();
       return true;
     }
   }
@@ -183,29 +128,11 @@ export async function handleSlashCommand(
     } else if (withArgs.name === 'loop') {
       await startLoopFromSlash(session, withArgs.args);
       void deps.scrollChatBottom();
-    } else if (withArgs.name === 'sdd') {
-      /* /sdd <prompt> — split the visible user-message from the
-       *  agent-facing template. User's ASK appears in the chat as
-       *  a normal user bubble (the thing they actually typed). The
-       *  multi-paragraph spec-writer template is sent SILENTLY via
-       *  `sendClaudeMessage({ silent: true })` — agent's CLI sees
-       *  it through --resume history, the visible thread skips it.
-       *  Card progress is the user-facing indicator from here on. */
-      appendSessionMessage(session.id, {
-        role: 'user',
-        content: withArgs.args,
-        at: new Date().toISOString(),
-      });
-      const { startSddFromSlash } = await import('$lib/services/slashCommands');
-      const rendered = await startSddFromSlash(session, withArgs.args);
-      if (rendered) {
-        updateSession(session.id, { input: rendered });
-        await Promise.resolve();
-        await deps.sendClaudeMessage({ silent: true });
-      }
-      void deps.scrollChatBottom();
     } else if (withArgs.name === 'dw') {
       await runDwFromSlash(session, withArgs.args, deps);
+      void deps.scrollChatBottom();
+    } else if (withArgs.name === 'ledger') {
+      await runLedgerFromSlash(session, withArgs.args, deps);
       void deps.scrollChatBottom();
     }
     return true;
@@ -310,5 +237,70 @@ export async function runDwFromSlash(
   // Programmatic send via `prompt` (NOT updateSession({ input })): the
   // brief is hidden orchestration traffic and must not clobber whatever
   // the user is typing in the composer (architecture rule, commit 24ffc4c).
+  await deps.sendClaudeMessage({ silent: true, prompt: brief });
+}
+
+/** `/ledger <ask>` runner — the sequential machine-checked sibling of
+ *  `/dw`. Creates an empty `building` ledger, then a silent build brief
+ *  drives the MAIN chat agent to construct the checklist live
+ *  (ledger_set_task → ledger_add_item ×N → ledger_launch). The user
+ *  approves the checklist on the card; execution runs items one by one
+ *  in a shared worktree, each verified by its check command. */
+export async function runLedgerFromSlash(
+  session: ClaudeSession,
+  userPrompt: string,
+  deps: SlashCommandDeps,
+): Promise<void> {
+  appendSessionMessage(session.id, {
+    role: 'user',
+    content: `/ledger ${userPrompt}`,
+    at: new Date().toISOString(),
+  });
+  const cwd = session.worktreePath ?? session.cwd ?? null;
+  let workflowId: string;
+  try {
+    workflowId = await invoke('ledger_create', {
+      sessionId: session.id,
+      task: userPrompt,
+      cwd,
+      model: session.claudeModel ?? null,
+    });
+  } catch (e) {
+    appendSessionMessage(session.id, {
+      role: 'assistant',
+      content: `_Ledger create failed: ${String(e)}_`,
+      at: new Date().toISOString(),
+    });
+    return;
+  }
+  appendSessionMessage(session.id, {
+    role: 'assistant',
+    content: '',
+    at: new Date().toISOString(),
+    ledgerWorkflowId: workflowId,
+  });
+  const brief =
+    `You are building Ledger \`${workflowId}\` for this task:\n\n${userPrompt}\n\n` +
+    `A ledger is a machine-checked checklist: items run in order in one shared worktree, ` +
+    `each executed by a fresh agent context and verified by a machine check; consecutive ` +
+    `parallel-safe items run concurrently as a wave.\n\n` +
+    `RESEARCH FIRST (read-only tools): read the key files the task touches, find the repo's ` +
+    `real build/test/lint commands, and VERIFY each check command you plan to use actually ` +
+    `runs here (you may execute it) — a checklist with broken checks is worthless. For large ` +
+    `tasks spend several tool calls here; the checklist quality is decided in this phase.\n\n` +
+    `Then build:\n` +
+    `1. mcp__app__ledger_set_task — workflowId "${workflowId}", a one-line task summary.\n` +
+    `2. mcp__app__ledger_add_item — workflowId "${workflowId}", once per item IN EXECUTION ORDER. ` +
+    `Each item: \`title\` = one-line requirement (what must become true), \`detail\` = precise ` +
+    `instructions incl. relevant file paths from your research, \`check_cmd\` = shell command ` +
+    `from the repo root whose exit code proves the item (test run, build, grep — ALWAYS provide ` +
+    `one when possible; omit only for judgment-call items, those get an LLM grader), ` +
+    `\`parallel\` = true ONLY when the item touches files no other item touches (consecutive ` +
+    `parallel items run concurrently; when unsure, false).\n` +
+    `3. mcp__app__ledger_launch — workflowId "${workflowId}" once the checklist is complete.\n` +
+    `Sizing: 2-8 items for most tasks, up to 15 for large features (cap 30) — split big items; ` +
+    `each should be one coherent change a single focused turn can land. If the task is trivial ` +
+    `(one obvious edit), SKIP the ledger — say so and just do it directly instead of calling ` +
+    `the tools.\nKeep it tight — no long preamble, just build it.`;
   await deps.sendClaudeMessage({ silent: true, prompt: brief });
 }

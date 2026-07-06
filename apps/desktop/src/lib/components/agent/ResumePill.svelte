@@ -1,6 +1,6 @@
 <script lang="ts">
   /* Resume pill — rendered below an interrupted assistant message
-   * (SDD `sdd-98a42f3bdb` Phase 2). Two states:
+   * Two states:
    *   - countdown — `now < session.resumeAt` → disabled button with
    *     live "Resume in 12m 34s" text.
    *   - active — `now >= session.resumeAt` → `▶ Resume` button. Click

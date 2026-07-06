@@ -201,8 +201,7 @@ export function sessionTurnSeries(sess: ClaudeSession | null): {
  *  bash output goes into the agent's input on the NEXT turn, but rate
  *  parity makes the rough number reasonable). Below 3 bash calls we
  *  return zeros — the heuristic is too noisy for tiny sessions and
- *  the popover hides the line. See SDD `sdd-98a42f3bdb` Phase 3 plan
- *  for the rationale + open question on instrumented telemetry. */
+ *  the popover hides the line. */
 export function estimateRtkSavings(sess: ClaudeSession | null): {
   tokensSaved: number;
   usdSaved: number;

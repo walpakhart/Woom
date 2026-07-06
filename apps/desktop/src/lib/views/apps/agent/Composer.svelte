@@ -1121,41 +1121,16 @@
           </span>
 
           <!-- Group 2 · launchers + toggles. Two semantic sub-clusters:
-               launchers (/sdd /dw) are one-shot slash-command shortcuts —
+               launchers (/dw) are one-shot slash-command shortcuts —
                styled as mono command chips with a leading slash so it's
                obvious they just type a command. Toggles (RTK/FAST) are
                persistent session modes — styled as on/off pills with a
                status dot. -->
           <span class="cmp-grp">
           <span class="cmp-launchers">
-          <!-- SDD button — prefills `/sdd ` into the composer so the
-               user can type their ask + hit Enter. Same code path as
-               typing the slash command manually (`startSddFromSlash`
-               in services/slashCommands.ts); this is purely an
-               affordance hint that SDD mode exists. Tooltip explains
-               what happens. -->
-          <button
-            class="cmp-sdd-btn"
-            onclick={() => {
-              if (!sess) return;
-              updateSession(sess.id, { input: '/sdd ' });
-              queueMicrotask(() => {
-                if (ta) {
-                  ta.selectionStart = ta.value.length;
-                  ta.selectionEnd = ta.value.length;
-                  ta.focus();
-                }
-              });
-            }}
-            aria-label="Start a Spec-Driven Development workflow"
-            title="SDD — agent writes spec/plan/phases to a temp folder and executes them step-by-step. Won't touch your repo until you approve."
-          >
-            <span class="cmp-sdd-glyph">/sdd</span>
-          </button>
-
-          <!-- DW button — prefills `/dw ` into the composer, mirroring
-               the SDD launcher. Same code path as typing the slash
-               command (`runDwFromSlash` in routes/handleSlashCommand.ts). -->
+          <!-- DW button — prefills `/dw ` into the composer. Same code
+               path as typing the slash command (`runDwFromSlash` in
+               routes/handleSlashCommand.ts). -->
           <button
             class="cmp-dw-btn"
             onclick={() => {
@@ -1175,11 +1150,26 @@
             <span class="cmp-dw-glyph">/dw</span>
           </button>
 
-          <!-- SDD history moved to ChatHeader chip (next to memory).
-               Removed the [HISTORY] composer button on user feedback:
-               "I thought history would be where memory is in the
-               header so it opens a menu". -->
-
+          <!-- Ledger button — prefills `/ledger `. Same code path as the
+               slash command (`runLedgerFromSlash`). -->
+          <button
+            class="cmp-dw-btn"
+            onclick={() => {
+              if (!sess) return;
+              updateSession(sess.id, { input: '/ledger ' });
+              queueMicrotask(() => {
+                if (ta) {
+                  ta.selectionStart = ta.value.length;
+                  ta.selectionEnd = ta.value.length;
+                  ta.focus();
+                }
+              });
+            }}
+            aria-label="Start a Ledger workflow"
+            title="Ledger — the agent decomposes the task into a machine-checked checklist you can edit, then fresh-context workers land items one by one (waves run in parallel), each verified by its check command with auto-retry. Review the diff, apply."
+          >
+            <span class="cmp-dw-glyph">/ledger</span>
+          </button>
 
           </span><!-- /cmp-launchers -->
           <span class="cmp-toggles">
@@ -1884,7 +1874,7 @@
      full control run. Go two-tier — textarea gets its own full-width
      line, controls drop to a second line below. Shed only the truly
      redundant noise: quota pills, numeric ctx label, group dividers.
-     Keep ring + /sdd /dw + RTK/FAST + model + send — the second tier
+     Keep ring + /dw + RTK/FAST + model + send — the second tier
      has room for them. Solo never gets `.cmp--compact`. */
 
   .cmp--compact .cmp-ctx-label,
@@ -1924,9 +1914,9 @@
     flex-shrink: 0;
   }
   /* Two sub-clusters inside the launchers+toggles group. Launchers
-     (/sdd /dw) and toggles (RTK/FAST) sit a hair apart so the
-     "command shortcut" pair reads distinctly from the "session mode"
-     pair without a hard divider between them. */
+     (/dw) and toggles (RTK/FAST) sit a hair apart so the
+     "command shortcut" cluster reads distinctly from the "session
+     mode" pair without a hard divider between them. */
   .cmp-launchers, .cmp-toggles {
     display: inline-flex; align-items: center; gap: 4px;
   }
@@ -1970,7 +1960,7 @@
     border: 1px solid var(--border);
     font-size: 10px;
     color: var(--text-1);
-    /* Button-element reset — the click-to-refresh wiring (SDD Phase 3)
+    /* Button-element reset — the click-to-refresh wiring
        changes the tag from <span> to <button>; explicit overrides keep
        the visual identical while making the affordance clickable. */
     font-family: inherit;
@@ -2030,43 +2020,8 @@
     display: inline-flex; align-items: center; gap: 4px;
   }
 
-  /* SDD button — quiet rest state with the "SDD" glyph since it's a
-   *  one-shot launcher (no toggle states). Hover lifts to the accent
-   *  tint so users discover what it does without the button itself
-   *  shouting. */
-  .cmp-sdd-btn {
-    display: inline-flex; align-items: center;
-    padding: 2px 7px;
-    border-radius: 5px;
-    border: 1px solid transparent;
-    background: transparent;
-    color: var(--text-mute);
-    cursor: pointer;
-    flex-shrink: 0;
-    transition: background 120ms, border-color 120ms, color 120ms;
-  }
-  .cmp-sdd-btn:hover {
-    background: color-mix(in srgb, var(--accent) 14%, transparent);
-    border-color: color-mix(in srgb, var(--accent) 35%, transparent);
-    color: var(--accent-bright);
-  }
-  .cmp-sdd-btn--active {
-    background: color-mix(in srgb, var(--accent) 22%, transparent);
-    border-color: color-mix(in srgb, var(--accent) 50%, transparent);
-    color: var(--accent-bright);
-  }
-  .cmp-sdd-glyph {
-    font-family: var(--font-mono);
-    font-size: 10px;
-    font-weight: 600;
-    letter-spacing: 0.01em;
-  }
-
-  /* DW button — same one-shot-launcher chassis as SDD, but tinted
-   *  teal instead of the rust accent so the two fan-out launchers
-   *  read as distinct affordances side-by-side (SDD = sequential
-   *  phases, DW = parallel subagents). `#5bb3a8` matches the canvas
-   *  brand-accent family. */
+  /* DW button — quiet one-shot-launcher chassis, tinted teal.
+   *  `#5bb3a8` matches the canvas brand-accent family. */
   .cmp-dw-btn {
     display: inline-flex; align-items: center;
     padding: 2px 7px;

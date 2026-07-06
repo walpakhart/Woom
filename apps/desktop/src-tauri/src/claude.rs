@@ -328,8 +328,7 @@ pub struct AskArgs<'a> {
     /// When true AND the model is Opus 4.8-family, signals Anthropic's
     /// Fast mode (2.5× faster output at 2× cost via a dedicated
     /// endpoint). Surfaced through `ANTHROPIC_USE_FAST_MODE=1` env —
-    /// CLI surface is uncertain at writing (see SDD workspace
-    /// `sdd-98a42f3bdb` Phase 1 open-question). Adjust the env-set in
+    /// CLI surface is uncertain at writing. Adjust the env-set in
     /// `spawn_claude_armed` when Anthropic stabilises the flag.
     pub fast_mode: bool,
     /// Thinking-budget hint from the composer effort dropdown. Maps to

@@ -21,8 +21,6 @@
 //! the plugin's `check()` may say "yes there's 1.4.2", but if the user
 //! snoozed it until tomorrow we emit `Snoozed` instead of `Available`
 //! so the UI doesn't re-prompt.
-//!
-//! Phase reference: SDD workspace `sdd-2508eeb82e`, phase 3.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -38,8 +36,7 @@ const POLL_INTERVAL_SECS: u64 = 6 * 60 * 60;
 const STATE_EVENT: &str = "update:state";
 const SETTINGS_FILE: &str = "updater-settings.json";
 
-/// Lifecycle state for the update flow. Mirrors the diagram in the
-/// SDD plan's "Update lifecycle" section. Serialised with
+/// Lifecycle state for the update flow. Serialised with
 /// `serde(tag = "kind", rename_all = "snake_case")` so the JS side
 /// reads it as `{ kind: 'available', version: '…', … }`.
 #[derive(Clone, Debug, Serialize, Deserialize)]

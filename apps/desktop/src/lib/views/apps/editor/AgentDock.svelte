@@ -51,7 +51,6 @@
     onExecuteAction: (sessionId: string, action: ClaudeAction) => void;
     onOpenPrInWoom: (url: string, action: (ClaudeAction & { kind: 'pr' }) | null) => void;
     onOpenFile?: (path: string) => void;
-    onSddAdvance?: (sessionId: string, prompt: string) => void;
     onDwVerify?: (workflowId: string) => void;
     onResumeAfterQuota?: (sessionId: string) => void;
   }
@@ -288,7 +287,6 @@
             onStartEditMessage={p.dock.onStartEditMessage}
             onResendMessage={p.dock.onResendMessage}
             onOpenFile={p.dock.onOpenFile}
-            onSddAdvance={p.dock.onSddAdvance}
             onDwVerify={p.dock.onDwVerify}
             onResumeAfterQuota={p.dock.onResumeAfterQuota}
           />

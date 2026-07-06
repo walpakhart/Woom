@@ -3,7 +3,7 @@
 //
 // Prompt-cache rule: this builder returns TWO strings.
 //   `system` — stable across turns (header, nav guide, discipline
-//      blocks, gated SDD section, auto-memory, CLAUDE.md). The caller
+//      blocks, auto-memory, CLAUDE.md). The caller
 //      passes it as `--append-system-prompt`, so it caches as a byte-
 //      stable prefix and the whole conversation reads from cache.
 //   `turn` — volatile every turn (solo-layout snapshot, one-shot
@@ -19,7 +19,6 @@ import { sessionsState, editorRoots } from '$lib/state/sessions.svelte';
 import { canvasState, ensureCanvasLoaded, type Shape, type Edge } from '$lib/state/canvas.svelte';
 import { getCachedClaudeMd } from '$lib/state/claudemd.svelte';
 import { getCachedAutoMemoryBlock } from '$lib/state/autoMemory.svelte';
-import { getSddPhaseForSession as sddPhaseForSession } from '$lib/state/sdd.svelte';
 
 /** Build the per-turn app-context string we hand the agent as a
  *  system-prompt suffix. Lists each solo singleton (kind + id), the
@@ -29,13 +28,7 @@ import { getSddPhaseForSession as sddPhaseForSession } from '$lib/state/sdd.svel
 export function buildAgentAppContext(callingSessionId: string): { system: string; turn: string } {
   const lines: string[] = [];
 
-  /* SDD relevance gate. The two SDD blocks below (live-log + orchestrator)
-     are only meaningful when THIS session is driving a running SDD phase.
-     Computed once here and reused for the layout-row marker later, so a
-     normal chat/editor session doesn't carry ~430 tokens of dead SDD
-     instruction in its cached prefix on every turn. */
   const calling = sessionsState.list.find((s) => s.id === callingSessionId);
-  const callingSdd = calling ? sddPhaseForSession(calling.id) : null;
 
   // ── Static section: header + navigation tool guide. Same bytes on
   // every turn (modulo a Woom deploy) so prompt caches eat it.
@@ -187,62 +180,6 @@ export function buildAgentAppContext(callingSessionId: string): { system: string
       + 'hostage.'
   );
 
-  // SDD-phase live activity. When the calling session is linked to a
-  // running SDD phase, the user already sees a real-time feed of
-  // every tool_use / tool_result in the SddCard. Telling the agent
-  // about this is two-fold: (a) save tokens by not echoing
-  // "I'm reading X now…" (the user has the feed); (b) give it an
-  // anchor for status messages — the agent can reply with the
-  // OUTCOME ("read X, found nothing relevant") instead of the
-  // PROCESS, which the feed already covers.
-  if (callingSdd) {
-  lines.push('');
-  lines.push(
-    'SDD Phase live log: when you\'re inside an SDD-managed phase '
-      + '(look for `linked_to_sdd_phase=…` in the layout below), the '
-      + 'user already sees a real-time feed of your tool_use events '
-      + 'in the SDD card. Do NOT echo the same in chat ("I\'m reading '
-      + 'X now…"). Save tokens — they see the feed. Reply with '
-      + 'OUTCOMES (what you found, what you decided), not PROCESS '
-      + '(what file you opened next).'
-  );
-
-  // SDD orchestrator MCP surface (phase 6). When linked to an SDD
-  // phase, the agent has structured tools to drive the workflow
-  // instead of editing markdown frontmatter by hand. The discipline
-  // block below explains which tools are read-only / mutating and
-  // which actions REMAIN user-only (approve spec/plan).
-  lines.push('');
-  lines.push(
-    '## SDD orchestrator\n'
-      + 'When your linked session is running an SDD workflow, the '
-      + 'layout snapshot below shows `linked_to_sdd_phase=<wsid>:<phase>`. '
-      + 'In that state:\n'
-      + '- Read state via `mcp__app__sdd_get` / `mcp__app__sdd_list_phases` '
-      + '/ `mcp__app__sdd_get_phase` / `mcp__app__sdd_get_action_log` / '
-      + '`mcp__app__sdd_get_results` — cheap, no audit cost.\n'
-      + '- To close a phase, call `mcp__app__sdd_log_phase_done(id, phase, '
-      + 'summary, files_changed)` — the orchestrator does the rest '
-      + '(writes result.md, runs the verifier, commits to git). Do NOT '
-      + 'manually edit the phase frontmatter when this tool is available.\n'
-      + '- Do NOT echo your tool_use events in chat ("I\'m reading X '
-      + 'now…") — the SDD card already shows the user a real-time feed.\n'
-      + '- Do NOT call `mcp__app__sdd_advance_phase` / `_retry_phase` / '
-      + '`_skip_phase` unless `sdd_autonomy=semi-auto` is in your '
-      + 'context. In default mode the user gates phase transitions via '
-      + 'the failure / pending-approval card.\n'
-      + '- Approve spec / plan are USER-ONLY actions — there are NO MCP '
-      + 'tools for that (the JSON-RPC layer would return method-not-found '
-      + 'even if you guessed the name). If your work is ready for '
-      + 'approval, finish your turn cleanly and the user will press '
-      + 'Approve.\n'
-      + '- Every mutating call requires a `reason` ≥ 5 characters — it '
-      + 'lands in the workspace audit log alongside who/what/when. Write '
-      + 'a real sentence ("verifier flaked, retrying once") not a token '
-      + '("ok").'
-  );
-  }
-
   const callingInstanceId = calling?.agentInstanceId ?? null;
 
   /* Auto-memory — long-term `user` + `feedback` entries from the
@@ -371,15 +308,6 @@ export function buildAgentAppContext(callingSessionId: string): { system: string
             if (termInst) {
               meta.push(`linked_to_terminal=${termInst.name} (id=${termInst.id})`);
             }
-          }
-          /* SDD phase link — only stamped when the session has an SDD
-             workspace currently in `phase_running`. The marker lets the
-             agent know its tool-use stream is being mirrored into a
-             live feed, so the "Long-wait / SDD Phase live log"
-             discipline above kicks in. */
-          const sddPhase = sddPhaseForSession(sess.id);
-          if (sddPhase) {
-            meta.push(`linked_to_sdd_phase=${sddPhase.workspaceId}:phase-${sddPhase.phase}`);
           }
         }
       }

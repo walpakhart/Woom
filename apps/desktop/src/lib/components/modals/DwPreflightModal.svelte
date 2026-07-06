@@ -1,5 +1,5 @@
 <script lang="ts">
-  /* Dynamic Workflows preflight modal (SDD `sdd-98a42f3bdb` Phase 4).
+  /* Dynamic Workflows preflight modal.
    * Surfaces the planner output + cost estimate BEFORE the user
    * commits to firing fan-out. Editable budget cap so they can raise
    * above the $5 default if the workflow needs more headroom. */

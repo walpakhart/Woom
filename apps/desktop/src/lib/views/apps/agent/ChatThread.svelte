@@ -10,11 +10,11 @@
   import Markdown from '$lib/components/ui/Markdown.svelte';
   import ClaudeActionCard from '$lib/components/agent/ClaudeActionCard.svelte';
   import QuestionCard from '$lib/components/agent/QuestionCard.svelte';
-  import SddCard from '$lib/components/agent/SddCard.svelte';
   import DynamicWorkflowCard from '$lib/components/agent/DynamicWorkflowCard.svelte';
   import ResumePill from '$lib/components/agent/ResumePill.svelte';
-  import { workspaceForSession, isSddCardHidden } from '$lib/state/sdd.svelte';
   import { activeWorkflowForSession, isWorkflowActive } from '$lib/state/dw.svelte';
+  import { activeLedgerForSession, isLedgerActive } from '$lib/state/ledger.svelte';
+  import LedgerCard from '$lib/components/agent/LedgerCard.svelte';
   import CardContextMenu, { type MenuItem } from '$lib/views/apps/_shared/CardContextMenu.svelte';
   import { notify } from '$lib/state/toaster.svelte';
   import { setDragPayload } from '$lib/state/drag.svelte';
@@ -46,12 +46,8 @@
      *  worktree / linked editor, so all we have to do here is plumb
      *  the path through. */
     onOpenFile?: (path: string) => void;
-    /** SDD card "advance" → stamp the next prompt into composer + fire
-     *  the same send pipeline a manual user message uses. Wired up from
-     *  +page.svelte; null when the parent hasn't plumbed it (e.g. tests). */
-    onSddAdvance?: (sessionId: string, prompt: string) => void;
     onDwVerify?: (workflowId: string) => void;
-    /** Quota-resume click (SDD Phase 2). Drains the session's
+    /** Quota-resume click. Drains the session's
      *  pendingQueue[0] and fires `sendClaudeMessage`. Owned by the
      *  parent so ResumePill stays decoupled from the send-pipeline. */
     onResumeAfterQuota?: (sessionId: string) => void;
@@ -68,9 +64,9 @@
    *  with rendered message count. Show the last `visibleCount` of
    *  the *non-hidden* messages by default; "Show N earlier" button
    *  unfurls more in WINDOW_STEP chunks. Budgeted by non-hidden so
-   *  SDD-heavy sessions (every phase prompt + response is `hidden`
-   *  orchestration traffic) don't end up with a window of all-hidden
-   *  entries and a blank chat. Reset on session switch. */
+   *  sessions heavy on `hidden` orchestration traffic don't end up
+   *  with a window of all-hidden entries and a blank chat. Reset on
+   *  session switch. */
   const WINDOW_STEP = 30;
   let visibleCount = $state(WINDOW_STEP);
   $effect(() => {
@@ -505,7 +501,7 @@
       </div>
     {/if}
 
-    <!-- Inline cards (SDD + question / propose_*) live INSIDE the
+    <!-- Inline cards (question / propose_*) live INSIDE the
          current message's body so they inherit the byline-column
          indent and scroll naturally with the prose, instead of
          floating full-width below the conversation. Rendered once,
@@ -514,31 +510,22 @@
       {#if activeWorkflowForSession(sess.id)}
         {@const activeDw = activeWorkflowForSession(sess.id)}
         {#if activeDw}
-          <!-- Active DW pinned to follow the conversation bottom (same
-               slot grammar as the SDD card). Terminal workflows render
-               at their origin message instead. -->
+          <!-- Active DW pinned to follow the conversation bottom.
+               Terminal workflows render at their origin message
+               instead. -->
           <div class="action-wrap">
             <DynamicWorkflowCard workflowId={activeDw.id} onVerify={() => p.onDwVerify?.(activeDw.id)} />
           </div>
         {/if}
       {/if}
-      {#if workspaceForSession(sess.id)}
-        {@const sddWs = workspaceForSession(sess.id)}
-        {#if sddWs && !isSddCardHidden(sddWs.id)}
+      {#if activeLedgerForSession(sess.id)}
+        {@const activeLedger = activeLedgerForSession(sess.id)}
+        {#if activeLedger}
           <div class="action-wrap">
-            <SddCard
-              workspace={sddWs}
-              onAdvance={(prompt) => p.onSddAdvance?.(sess.id, prompt)}
-            />
+            <LedgerCard workflowId={activeLedger.id} />
           </div>
         {/if}
-        <!-- When hidden via the card's "—" button the SDD card is
-             removed from the thread entirely. Re-open it from the
-             SDD chip in the ChatHeader (which calls `showSddCard`
-             alongside `openStandaloneView`). Workspace files on
-             disk are untouched. -->
       {/if}
-
       {#each sess.actions as action (action.id)}
         {#if action.kind === 'question' && anchoredQuestionIds.has(action.id)}
           <!-- Already rendered inline at its `_ask_` trace step.
@@ -580,8 +567,8 @@
     {#each visibleMessages as msg, sliceI (windowStart + sliceI)}
       {@const i = windowStart + sliceI}
       {#if msg.hidden}
-        <!-- Hidden orchestration traffic (SDD phase prompts) — agent
-             CLI sees it via --resume, the user doesn't. Skipped entirely. -->
+        <!-- Hidden orchestration traffic — agent CLI sees it via
+             --resume, the user doesn't. Skipped entirely. -->
       {:else if msg.role === 'user'}
         <article
           class="msg msg--user"
@@ -636,7 +623,7 @@
             {#if i === lastVisibleIndex}{@render inlineActions()}{/if}
           </div>
         </article>
-      {:else if msg.role === 'assistant' && !(msg.dwWorkflowId && !msg.content?.trim() && !msg.thinking && isWorkflowActive(msg.dwWorkflowId))}
+      {:else if msg.role === 'assistant' && !(msg.dwWorkflowId && !msg.content?.trim() && !msg.thinking && isWorkflowActive(msg.dwWorkflowId)) && !(msg.ledgerWorkflowId && !msg.content?.trim() && !msg.thinking && isLedgerActive(msg.ledgerWorkflowId))}
         <!-- Skip the empty DW-host bubble while its workflow is active:
              the live card renders in the pinned slot, so this would
              otherwise show as a blank "claude" byline. Once terminal it
@@ -682,8 +669,11 @@
               <!-- Terminal workflows stay as a record at their origin
                    message. The ACTIVE one renders in the pinned
                    bottom-following slot (inlineActions) so it stays
-                   visible like the SDD card instead of scrolling away. -->
+                   visible instead of scrolling away. -->
               <DynamicWorkflowCard workflowId={msg.dwWorkflowId} onVerify={() => p.onDwVerify?.(msg.dwWorkflowId!)} />
+            {/if}
+            {#if msg.ledgerWorkflowId && !isLedgerActive(msg.ledgerWorkflowId)}
+              <LedgerCard workflowId={msg.ledgerWorkflowId} />
             {/if}
             {#if !shouldRenderBody(i)}
               <!-- Off-viewport placeholder. Approximate height keeps the
@@ -1025,6 +1015,12 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    /* max-width beats the nowrap text's min-content contribution —
+       without it a long single-line stub widens its article past the
+       pane, drags every sibling (inline cards!) with it and puts a
+       horizontal scrollbar on the whole thread. */
+    max-width: 100%;
+    min-width: 0;
     min-height: 22px;
     opacity: 0.6;
     font-style: italic;
@@ -1663,7 +1659,10 @@
     font-size: 10px; color: var(--text-mute);
   }
 
-  .action-wrap { width: 100%; }
+  /* min/max-width beat the grid default of min-width:auto — as a grid
+     item (msg--system hosts it directly) the wrap otherwise inflates
+     its cell to the card's min-content width and overflows the pane. */
+  .action-wrap { width: 100%; min-width: 0; max-width: 100%; }
 
 
   .ct-empty, .ct-welcome {

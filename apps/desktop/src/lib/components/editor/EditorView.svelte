@@ -11,6 +11,7 @@
   import HistoryPanel from '$lib/components/editor/HistoryPanel.svelte';
   import DiffView from '$lib/components/editor/DiffView.svelte';
   import ReviewPane from '$lib/components/editor/ReviewPane.svelte';
+  import TerminalSurface from '$lib/views/apps/terminal/TerminalSurface.svelte';
   import MarkdownPreview from '$lib/components/editor/MarkdownPreview.svelte';
   import ImagePreview from '$lib/components/editor/ImagePreview.svelte';
   import Splitter from '$lib/components/ui/Splitter.svelte';
@@ -138,7 +139,6 @@
     linkedAgents.length > 0 ? 'claude' : null
   );
 
-  let showLinkPicker = $state(false);
 
   /** Effective open-root set. Single-root callers pass no `repoPaths`, so we
       fall back to `[repoPath]` — every downstream loop then behaves exactly
@@ -293,6 +293,39 @@
      users opening logs / CSV-ish text don't want wrap helping them
      misread columns. */
   let wordWrap = $state(false);
+
+  /* Integrated terminal (vscode-style bottom panel). One dedicated PTY
+     per editor instance — `ensureTerminalSession` keeps it alive across
+     open/close toggles so scrollback survives. Height is drag-resizable
+     via the grip; both open-state and height persist per instance. */
+  const termOpenKey = () => `woom:edterm-open:${instanceId}`;
+  const termHKey = () => `woom:edterm-h:${instanceId}`;
+  let termOpen = $state(false);
+  let termH = $state(260);
+  onMount(() => {
+    termOpen = localStorage.getItem(termOpenKey()) === '1';
+    const h = Number(localStorage.getItem(termHKey()));
+    if (Number.isFinite(h) && h >= 120 && h <= 800) termH = h;
+  });
+  function toggleTerm(): void {
+    termOpen = !termOpen;
+    try { localStorage.setItem(termOpenKey(), termOpen ? '1' : '0'); } catch {/* private mode */}
+  }
+  function startTermDrag(e: PointerEvent): void {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startH = termH;
+    const move = (ev: PointerEvent) => {
+      termH = Math.min(800, Math.max(120, startH + (startY - ev.clientY)));
+    };
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      try { localStorage.setItem(termHKey(), String(termH)); } catch {/* private mode */}
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  }
 
   /* Live mirror of the editor's text — fed into MarkdownPreview when
      in split / only mode so the preview tracks edits without us
@@ -1127,45 +1160,8 @@
                 <span class="ev-root-branch">on <b>{gitBranch}</b></span>
               {/if}
             </div>
-            {#if onLinkToAgent && agentInstances.length > 0}
-              <div class="ev-link-wrap">
-                <button
-                  class="ev-icon-btn"
-                  class:has-links={linkedAgents.length > 0}
-                  onclick={() => {
-                    if (agentInstances.length === 1) {
-                      onLinkToAgent?.(agentInstances[0].id, agentInstances[0].sessionId);
-                    } else {
-                      showLinkPicker = !showLinkPicker;
-                    }
-                  }}
-                  title={linkedAgents.length > 0
-                    ? `${linkedAgents.length} chat${linkedAgents.length === 1 ? '' : 's'} linked — click to add another`
-                    : 'Link an AI chat to this folder'}
-                  aria-label="Link to chat"
-                >
-                  <svg class="i i-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M9 17H7A5 5 0 1 1 7 7h2M15 7h2a5 5 0 1 1 0 10h-2M8 12h8"/></svg>
-                  {#if linkedAgents.length > 0}
-                    <span class="ev-link-badge">{linkedAgents.length}</span>
-                  {/if}
-                </button>
-                {#if showLinkPicker && agentInstances.length > 1}
-                  <div class="ev-link-menu" role="menu">
-                    <div class="ev-link-menu-head">Link this folder to…</div>
-                    {#each agentInstances as a (a.sessionId ?? a.id + ':empty')}
-                      <button
-                        class="ev-link-menu-item"
-                        role="menuitem"
-                        onclick={() => { onLinkToAgent?.(a.id, a.sessionId); showLinkPicker = false; }}
-                      >
-                        <span class="ev-link-menu-kind" data-kind="claude">Claude</span>
-                        <span class="ev-link-menu-name">{a.name}</span>
-                      </button>
-                    {/each}
-                  </div>
-                {/if}
-              </div>
-            {/if}
+            <!-- Chat linking lives in the right-side AgentDock — the old
+                 tree-head chain button duplicated it and confused. -->
             <button class="ev-icon-btn" onclick={pickFolder} title="Open another folder">
               <svg class="i i-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 7v11a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-7L10 5H5a2 2 0 0 0-2 2z" /></svg>
             </button>
@@ -1589,25 +1585,59 @@
             {/if}
           </div>
 
+          <!-- Integrated terminal — vscode-style bottom panel. Dedicated
+               PTY per editor instance, cwd = the open repo root. The
+               surface keeps the PTY alive across toggles (scrollback
+               survives close/open). -->
+          {#if termOpen}
+            <div class="ev-term" style="height: {termH}px">
+              <div
+                class="ev-term-grip"
+                onpointerdown={startTermDrag}
+                role="separator"
+                aria-orientation="horizontal"
+                aria-label="Resize terminal"
+              ></div>
+              <div class="ev-term-body">
+                <TerminalSurface instanceId={`edterm:${instanceId}`} cwd={repoPath || null} />
+              </div>
+            </div>
+          {/if}
+
           <!-- Status bar: language · cursor position · encoding · line
                endings · git branch. Single horizontal strip pinned to the
-               bottom of the editor pane. Hidden when nothing is open. -->
-          {#if activePath || diffTarget}
+               bottom of the editor pane. Always visible — it hosts the
+               terminal toggle; file segments render only with a file open. -->
             <div class="ev-statusbar mono">
-              <span class="ev-status-seg">{languageLabel(diffTarget?.path ?? activePath)}</span>
-              <span class="ev-status-sep">·</span>
-              {#if cursorInfo}
-                <span class="ev-status-seg">Ln {cursorInfo.line}, Col {cursorInfo.col}</span>
+              {#if activePath || diffTarget}
+                <span class="ev-status-seg">{languageLabel(diffTarget?.path ?? activePath)}</span>
                 <span class="ev-status-sep">·</span>
-                <span class="ev-status-seg">UTF-8</span>
-                <span class="ev-status-sep">·</span>
-                <span class="ev-status-seg">{cursorInfo.lineEndings.toUpperCase()}</span>
-                <span class="ev-status-sep">·</span>
-                <span class="ev-status-seg">{fmtBytes(cursorInfo.bytes)}</span>
-              {:else}
-                <span class="ev-status-seg ev-status-dim">UTF-8</span>
+                {#if cursorInfo}
+                  <span class="ev-status-seg">Ln {cursorInfo.line}, Col {cursorInfo.col}</span>
+                  <span class="ev-status-sep">·</span>
+                  <span class="ev-status-seg">UTF-8</span>
+                  <span class="ev-status-sep">·</span>
+                  <span class="ev-status-seg">{cursorInfo.lineEndings.toUpperCase()}</span>
+                  <span class="ev-status-sep">·</span>
+                  <span class="ev-status-seg">{fmtBytes(cursorInfo.bytes)}</span>
+                {:else}
+                  <span class="ev-status-seg ev-status-dim">UTF-8</span>
+                {/if}
               {/if}
               <span class="ev-status-spacer"></span>
+              <button
+                class="ev-status-action"
+                class:ev-status-action--on={termOpen}
+                onclick={toggleTerm}
+                title={termOpen ? 'Hide integrated terminal' : 'Open integrated terminal'}
+                aria-pressed={termOpen}
+              >
+                <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M4 17l6-5-6-5"/><path d="M12 19h8"/>
+                </svg>
+                Terminal
+              </button>
+              <span class="ev-status-sep">·</span>
               {#if activePath && !diffTarget && !isImagePath}
                 <button
                   class="ev-status-action"
@@ -1650,7 +1680,6 @@
                 {gitBranch || '—'}
               </span>
             </div>
-          {/if}
         </main>
       {/snippet}
     </Splitter>
@@ -1797,22 +1826,7 @@
     transition: background 120ms, color 120ms;
   }
   .ev-icon-btn:hover { background: var(--bg-3); color: var(--text-0); }
-  .ev-icon-btn.has-links { color: var(--accent-bright); }
-  .ev-link-badge {
-    position: absolute;
-    top: -2px; right: -2px;
-    min-width: 12px; height: 12px;
-    padding: 0 3px;
-    border-radius: 7px;
-    background: var(--accent);
-    color: var(--accent-fg);
-    font-family: var(--font-mono);
-    font-size: 8.5px; font-weight: 700;
-    display: inline-flex; align-items: center; justify-content: center;
-    box-shadow: 0 0 0 2px var(--bg-2);
-  }
 
-  .ev-link-wrap { position: relative; display: inline-flex; }
 
   /* "Linked apps" row — one quiet line under the head. Brand dot per
      kind, mono session label, hover-only × to unlink. */
@@ -1860,55 +1874,6 @@
   .ev-linked-x:hover { color: var(--error); background: var(--bg-3); }
   .ev-linked-x svg { width: 10px; height: 10px; }
 
-  .ev-link-menu {
-    position: absolute; top: calc(100% + 6px); right: 0;
-    min-width: 280px; max-width: 360px;
-    background: var(--bg-1);
-    border: 1px solid var(--border-hi);
-    border-radius: 11px;
-    box-shadow: var(--shadow-3);
-    z-index: 20;
-    padding: 6px;
-    display: flex; flex-direction: column; gap: 1px;
-  }
-  .ev-link-menu-head {
-    font-size: 9.5px; font-weight: 700;
-    color: var(--text-mute);
-    text-transform: uppercase; letter-spacing: 0.10em;
-    padding: 8px 10px 6px;
-    border-bottom: 1px solid var(--border);
-    margin-bottom: 4px;
-  }
-  .ev-link-menu-item {
-    display: flex; align-items: center; gap: 9px;
-    padding: 8px 10px;
-    border-radius: 7px;
-    font-size: 12.5px; color: var(--text-1);
-    text-align: left;
-    transition: background 100ms, color 100ms;
-    cursor: pointer;
-    background: transparent;
-    border: 0;
-    width: 100%;
-  }
-  .ev-link-menu-item:hover { background: var(--bg-2); color: var(--text-0); }
-  .ev-link-menu-kind {
-    flex-shrink: 0;
-    font-family: var(--font-mono);
-    font-size: 9.5px; font-weight: 700;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    padding: 2px 7px;
-    border-radius: 4px;
-    background: color-mix(in srgb, var(--src-claude) 14%, var(--bg-3));
-    color: var(--src-claude);
-    border: 1px solid color-mix(in srgb, var(--src-claude) 28%, transparent);
-  }
-  .ev-link-menu-name {
-    flex: 1; min-width: 0;
-    font-size: 12.5px; color: var(--text-0);
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  }
 
   /* Sidebar body fills the remaining vertical space — tabs sit pinned
      at the bottom under it so the active pane gets the maximum room. */
@@ -2059,6 +2024,34 @@
     background: color-mix(in srgb, var(--accent) 14%, transparent);
   }
   .ev-status-action :global(svg) { width: 11px; height: 11px; }
+
+  /* Integrated terminal panel — permanent dark inset (terminal is the
+     one surface that stays night-side in both themes), hairline top
+     border, drag grip on the upper edge. */
+  .ev-term {
+    position: relative;
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    min-height: 120px;
+    border-top: 1px solid var(--border);
+    background: var(--dark-bg-0, #17191c);
+  }
+  .ev-term-grip {
+    position: absolute;
+    top: -3px;
+    left: 0;
+    right: 0;
+    height: 7px;
+    cursor: row-resize;
+    z-index: 3;
+  }
+  .ev-term-grip:hover { background: color-mix(in srgb, var(--accent) 18%, transparent); }
+  .ev-term-body {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+  }
 
   /* ── Markdown preview toolbar + split layout ──────── */
   .ev-md-toolbar {

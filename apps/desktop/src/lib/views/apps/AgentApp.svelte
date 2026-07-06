@@ -87,7 +87,6 @@
     /** Click on a file/dir reference inside a chat bubble — opens it
      *  in the linked editor (or the active editor instance). */
     onOpenFile?: (path: string) => void;
-    onSddAdvance?: (sessionId: string, prompt: string) => void;
     onDwVerify?: (workflowId: string) => void;
     onResumeAfterQuota?: (sessionId: string) => void;
   }
@@ -209,7 +208,6 @@
                   onStartEditMessage={p.onStartEditMessage}
                   onResendMessage={p.onResendMessage}
                   onOpenFile={p.onOpenFile}
-                  onSddAdvance={p.onSddAdvance}
                   onDwVerify={p.onDwVerify}
                   onResumeAfterQuota={p.onResumeAfterQuota}
                 />
@@ -283,7 +281,6 @@
                 onStartEditMessage={p.onStartEditMessage}
                 onResendMessage={p.onResendMessage}
                 onOpenFile={p.onOpenFile}
-                onSddAdvance={p.onSddAdvance}
                 onDwVerify={p.onDwVerify}
                 onResumeAfterQuota={p.onResumeAfterQuota}
               />

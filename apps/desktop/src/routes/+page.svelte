@@ -50,7 +50,7 @@
     REPO_PATH_KEYS_DEEP,
     str as _mcpStr,
   } from './mcpInputParse';
-  import { handleCanvasOrSddMcp } from './appNavigationCanvas';
+  import { handleCanvasMcp } from './appNavigationCanvas';
   import { handleInboxOrViewMcp } from './appNavigationInbox';
   import { handleSlashCommand as handleSlashCommandImpl, runDwFromSlash } from './handleSlashCommand';
   import * as _modalActions from './modalActions';
@@ -226,22 +226,9 @@
   import { initScale } from '$lib/state/scale.svelte';
   import { initDensity, toggleDensity } from '$lib/state/density.svelte';
   import { initBgTasks } from '$lib/state/bgTasks.svelte';
-  import {
-    initSdd,
-    workspaceForSession,
-    refreshSdd,
-    sddState,
-    closeStandaloneView,
-    saveSddPhasePlan,
-    completeSddPhaseImplement,
-    saveSddPhaseVerify,
-    approveSddPhasePlan,
-    discardSddPhasePlan,
-    setSddAutoFireDispatcher
-  } from '$lib/state/sdd.svelte';
   import { dwState, addWorkflow, getWorkflow, updateWorkflow, loadPersistedWorkflows } from '$lib/state/dw.svelte';
+  import { upsertLedger, loadPersistedLedgers, type LedgerWorkflow } from '$lib/state/ledger.svelte';
   import type { DynamicWorkflow } from '$lib/types';
-  import SddCard from '$lib/components/agent/SddCard.svelte';
   import {
     initUpdatesStore,
     updateState as updatesPhaseStore,
@@ -779,6 +766,7 @@
   let dwCreatedUnlistenRef: UnlistenFn | null = null;
   let dwUpdatedUnlistenRef: UnlistenFn | null = null;
   let dwRecoverUnlistenRef: UnlistenFn | null = null;
+  const ledgerUnlistenRefs: UnlistenFn[] = [];
   let beforeUnloadHandler: (() => void) | null = null;
   let closeFlushInProgress = false;
 
@@ -850,8 +838,7 @@
   /* Auto-update UX wiring — drives the sticky toast + release-notes
    * pane off the `updateState.phase` store from `$lib/state/updates`.
    * Sticky toast appears when a new version is available; clicking
-   * "View" opens the UpdateNotesPane lightbox. Phase 4 of the SDD
-   * update-system workspace (`sdd-2508eeb82e`). */
+   * "View" opens the UpdateNotesPane lightbox. */
   let showUpdateNotesPane = $state(false);
   let lastToastedVersion = $state<string | null>(null);
   let lastFailedReason = $state<string | null>(null);
@@ -914,7 +901,7 @@
     });
   });
 
-  /* Quota guard watchdog (SDD `sdd-98a42f3bdb` Phase 2). 30s polling
+  /* Quota guard watchdog. 30s polling
    * gated on "any session is sending OR awaiting resume". On tick:
    * (a) refresh quota snapshot, (b) for each session, trip the SIGTERM
    * path if utilization crossed 95% mid-stream, or clear the resume
@@ -1059,18 +1046,53 @@
     initTheme();
     /* Surface uncaught JS errors as toasts. In a packaged WKWebView
        there is no devtools console — a mount-time crash otherwise
-       reads as "the view is just black" with zero signal to report. */
+       reads as "the view is just black" with zero signal to report.
+       Both handlers ALSO append to the app log file (`log_write` →
+       `<app_data>/logs/woom.log`) so Settings → Logs has a durable
+       record the user can send us. */
     window.addEventListener('error', (e) => {
-      notify({ kind: 'error', title: 'JS error', body: String(e.message ?? e.error ?? 'unknown'), ttlMs: 15000 });
+      const msg = String(e.message ?? e.error ?? 'unknown');
+      notify({ kind: 'error', title: 'JS error', body: msg, ttlMs: 15000 });
+      void invoke('log_write', { level: 'error', source: 'webview', msg }).catch(() => {});
     });
     window.addEventListener('unhandledrejection', (e) => {
-      notify({ kind: 'error', title: 'Unhandled rejection', body: String(e.reason ?? 'unknown'), ttlMs: 15000 });
+      const msg = String(e.reason ?? 'unknown');
+      notify({ kind: 'error', title: 'Unhandled rejection', body: msg, ttlMs: 15000 });
+      void invoke('log_write', { level: 'error', source: 'webview', msg: `unhandled rejection: ${msg}` }).catch(() => {});
     });
-    /* Updater auto-check default — OFF for now. Phase 1 of the SDD
-     * update-system workspace (`sdd-2508eeb82e`) lands the manifest +
-     * pubkey scaffolding; Phase 3 reads this key from a real Rust
-     * settings store. Until then we set a localStorage default so any
-     * Phase 4 UI that gates on the flag finds an explicit value
+    /* Mirror console.error / console.warn into the app log. Wrapped
+       exactly once (onMount runs once for the root page); `inLogHook`
+       guards recursion in case the invoke path itself warns. Args are
+       serialized best-effort and the line is capped at 4000 chars so
+       a giant object dump can't bloat the log. */
+    {
+      let inLogHook = false;
+      const fmtArg = (a: unknown): string => {
+        if (typeof a === 'string') return a;
+        if (a instanceof Error) return a.stack ?? String(a);
+        try {
+          return JSON.stringify(a) ?? String(a);
+        } catch {
+          return String(a);
+        }
+      };
+      const wrapConsole = (level: 'error' | 'warn', orig: (...args: unknown[]) => void) =>
+        (...args: unknown[]) => {
+          orig(...args);
+          if (inLogHook) return;
+          inLogHook = true;
+          try {
+            const msg = args.map(fmtArg).join(' ').slice(0, 4000);
+            void invoke('log_write', { level, source: 'console', msg }).catch(() => {});
+          } finally {
+            inLogHook = false;
+          }
+        };
+      console.error = wrapConsole('error', console.error.bind(console));
+      console.warn = wrapConsole('warn', console.warn.bind(console));
+    }
+    /* Updater auto-check default — OFF for now. We set a localStorage
+     * default so any UI that gates on the flag finds an explicit value
      * instead of `null`. NEVER overwrite an existing setting — the
      * user may have flipped it on after we ship. */
     try {
@@ -1087,23 +1109,6 @@
     // listener so the Preview pane (right side of the Claude solo)
     // refreshes when a process spawns / exits anywhere in the app.
     void initBgTasks();
-    /* Register the auto-fire dispatcher BEFORE initSdd so hydrate-time
-     *  catch-up (workspace left mid-substep across app restart) can
-     *  reach the chat send pipeline immediately. */
-    setSddAutoFireDispatcher(async (sessionId, prompt) => {
-      const s = sessionsState.list.find((x) => x.id === sessionId);
-      if (!s) return;
-      if (s.sending) {
-        /* Active turn in flight — park in the silent slot and let the
-         *  end-of-turn drain fire it. Same lane SddCard's Approve
-         *  click uses while a turn is running. */
-        const { setPendingSilent } = await import('$lib/state/sdd.svelte');
-        setPendingSilent(sessionId, prompt);
-        return;
-      }
-      await onSddAdvance(sessionId, prompt);
-    });
-    void initSdd();
     /* Updater state store — subscribes to the `update:state` Tauri
      * event so the Settings card + the Phase 4 toast read live state
      * from the Rust-side background poll. No-op if init has already
@@ -1542,6 +1547,25 @@
       if (getWorkflow(wf.id)) updateWorkflow(wf.id, wf);
       else addWorkflow(wf);
     });
+
+    // Ledger workflows — every backend transition ships the FULL
+    // workflow snapshot, so one upsert handler covers created/updated/
+    // review/done alike. `ledger:item_done` is a slim ping (no
+    // snapshot); the paired `ledger:updated` carries the state.
+    void loadPersistedLedgers();
+    for (const ev of [
+      'ledger:created',
+      'ledger:updated',
+      'ledger:awaiting_review',
+      'ledger:workflow_done',
+    ]) {
+      ledgerUnlistenRefs.push(
+        await listen<LedgerWorkflow>(ev, (e) => {
+          const wf = e.payload as LedgerWorkflow;
+          if (wf?.id && wf.items !== undefined) upsertLedger(wf);
+        })
+      );
+    }
   });
 
   /* formatBytesShort moved to ./page_helpers.ts */
@@ -1562,6 +1586,7 @@
     dwCreatedUnlistenRef?.();
     dwUpdatedUnlistenRef?.();
     dwRecoverUnlistenRef?.();
+    for (const u of ledgerUnlistenRefs) u();
     if (beforeUnloadHandler && typeof window !== 'undefined') {
       window.removeEventListener('beforeunload', beforeUnloadHandler);
       beforeUnloadHandler = null;
@@ -2280,35 +2305,6 @@
   // queueSavedDrafts moved into the sendClaudeMessage factory deps
   // (wave-39); shim below declares + passes it.
 
-  /** SDD card "Approve & continue" / "Next phase" click handler.
-   *  Pushes the next-stage prompt into the agent's CLI session
-   *  SILENTLY — the giant phase/plan/spec template is recorded in the
-   *  agent's `--resume` transcript so context inheritance works, but
-   *  the visible chat thread skips it via `hidden: true`. Agent's
-   *  reply stays visible (usually a short "Phase N done.").
-   *
-   *  We still go through `sendClaudeMessage` (with `silent: true`) so
-   *  all the post-turn plumbing — sending=false, statusline refresh,
-   *  SDD refresh, queue drain — runs identically to a manual user
-   *  turn. SDD shouldn't fork a parallel pipeline; it just gets to
-   *  borrow the existing one. */
-  async function onSddAdvance(sessionId: string, prompt: string): Promise<void> {
-    const s = sessionsState.list.find((x) => x.id === sessionId);
-    if (!s) return;
-    /* Pin the active-session pointers to the SDD session BEFORE the
-     *  send fires. `sendClaudeMessage` resolves its target via
-     *  `activeSession` (= `activeClaudeId`); without this, if the
-     *  user switched chats during the streaming phase the silent
-     *  send would target the wrong session and leave the SDD
-     *  session's `input` populated with the orchestrator prompt
-     *  while the spinner stays up on no actual run. */
-    sessionsState.activeClaudeId = sessionId;
-    sessionsState.activeIds.claude = sessionId;
-    /* opts.prompt, not session.input — the orchestrator prompt must not
-     * clobber whatever the user is typing while phases chain. */
-    await sendClaudeMessage({ silent: true, kind: 'claude', prompt });
-  }
-
   /** Run a DW verifier as a VISIBLE streamed chat turn (Phase 2b), then
    *  finalise the workflow. The conclusion streams in chat (thinking →
    *  answer) instead of arriving silently from a backend oneshot. */
@@ -2400,23 +2396,21 @@
     const str = (k: string): string => _mcpStr(input, k);
     const num = (k: string): number => _mcpNum(input, k);
     const pick = (...keys: string[]): string => pickFrom(input, ...keys);
-    /* Agent-initiated workflow kickoff. `start_sdd` / `start_dw` route
-     * straight through the same slash pipeline a user types, so spec /
-     * plan / budget approval gates still apply — the agent starts the
-     * workflow but can't bypass the user's go-ahead. */
-    if (name === 'mcp__app__start_sdd' || name === 'mcp__app__start_dw') {
+    /* Agent-initiated workflow kickoff. `start_dw` routes straight
+     * through the same slash pipeline a user types, so plan / budget
+     * approval gates still apply — the agent starts the workflow but
+     * can't bypass the user's go-ahead. */
+    if (name === 'mcp__app__start_dw') {
       const session = sessionsState.list.find((s) => s.id === _sessionId);
       const prompt = str('prompt').trim();
-      const which = name === 'mcp__app__start_sdd' ? 'start_sdd' : 'start_dw';
       if (session && prompt) {
-        const slash = name === 'mcp__app__start_sdd' ? `/sdd ${prompt}` : `/dw ${prompt}`;
-        void handleSlashCommand(slash, session);
+        void handleSlashCommand(`/dw ${prompt}`, session);
       } else if (session) {
         /* Sidecar already acked "Starting…" to the agent, so a silent
          * no-op here would lie. Surface why nothing happened. */
         appendSessionMessage(session.id, {
           role: 'system',
-          content: `_${which} ignored — empty prompt._`,
+          content: `_start_dw ignored — empty prompt._`,
           at: new Date().toISOString(),
         });
       }
@@ -2439,9 +2433,31 @@
       void invoke('dw_launch', { workflowId: str('workflow_id'), verifierPrompt: vp || null });
       return;
     }
+    /* Live Ledger build — same shape as the DW build tools; each invoke
+     * mutates Rust state + emits ledger:created / ledger:updated which
+     * the global listeners fold into ledgerState. */
+    if (name === 'mcp__app__ledger_set_task') {
+      void invoke('ledger_set_task', { workflowId: str('workflow_id'), task: str('task') });
+      return;
+    }
+    if (name === 'mcp__app__ledger_add_item') {
+      void invoke('ledger_add_item', {
+        workflowId: str('workflow_id'),
+        title: str('title'),
+        detail: str('detail') || null,
+        checkCmd: str('check_cmd') || null,
+        maxAttempts: null,
+        parallel: input?.parallel === true,
+      });
+      return;
+    }
+    if (name === 'mcp__app__ledger_launch') {
+      void invoke('ledger_launch', { workflowId: str('workflow_id') });
+      return;
+    }
     // parseEdgeSpec moved to ./mcpInputParse.ts (wave-30 split).
     // Inbox/view/instance cases moved to ./appNavigationInbox.ts
-    // (wave-32 split). Canvas + SDD cases moved to
+    // (wave-32 split). Canvas cases moved to
     // ./appNavigationCanvas.ts (wave-31 split).
     if (handleInboxOrViewMcp(_sessionId, name, input, {
       setView: (v) => { view = v as View; },
@@ -2456,7 +2472,7 @@
       isSentryLevel,
       parseSprintScopes,
     })) return;
-    if (handleCanvasOrSddMcp(_sessionId, name, input, { linkedCanvasIdFor })) return;
+    if (handleCanvasMcp(_sessionId, name, input, { linkedCanvasIdFor })) return;
   }
 
   /** Resolve which canvas a session is linked to. Returns null when the
@@ -3202,7 +3218,6 @@
           onDragOver={(e) => onAgentDragOver(APP_INSTANCE_IDS.claude, e)}
           onDrop={(e) => onAgentDrop(APP_INSTANCE_IDS.claude, e)}
           onDragLeave={() => onAgentDragLeave(APP_INSTANCE_IDS.claude)}
-          onSddAdvance={onSddAdvance}
           onDwVerify={onDwVerify}
           onResumeAfterQuota={onResumeAfterQuota}
           onOpenFile={openChatFileInEditor}
@@ -3234,7 +3249,6 @@
             onRemoveAction: dismissAction,
             onExecuteAction: executeAction,
             onOpenPrInWoom: openPrUrlInWoom,
-            onSddAdvance,
             onDwVerify,
             onResumeAfterQuota,
             /* Dock lives inside the editor already — resolve relatives
@@ -3397,22 +3411,6 @@
       view = 'claudeApp';
     }}
   />
-{/if}
-
-<!-- Standalone read-only SDD overlay — opened from the header history
-     popover. Renders as a top-level fullscreen card with only a Close
-     button (no Discard / Approve), so the user can read past specs
-     without touching the active chat. -->
-{#if sddState.standaloneViewWorkspaceId}
-  {@const standaloneWs = sddState.workspaces.find((w) => w.id === sddState.standaloneViewWorkspaceId)}
-  {#if standaloneWs}
-    <SddCard
-      workspace={standaloneWs}
-      viewOnly={true}
-      onClose={closeStandaloneView}
-      onAdvance={() => {}}
-    />
-  {/if}
 {/if}
 
 <style>

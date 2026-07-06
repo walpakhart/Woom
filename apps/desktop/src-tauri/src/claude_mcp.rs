@@ -182,45 +182,19 @@ pub(crate) fn build_mcp_config(
         allowed.push("mcp__app__terminal_buffer".into());
         allowed.push("mcp__app__propose_bash".into());
         allowed.push("mcp__app__propose_switch_cwd".into());
-        // SDD orchestrator tools (phase 6: self-driving MCP). Read-tools
-        // are auto-allow because they're cheap and always-safe; mutating
-        // tools have a server-side `reason ≥ 5 chars` gate so the agent
-        // can't quietly bypass the user. Approve-spec / approve-plan are
-        // INTENTIONALLY absent — the user-only gate means even if the
-        // agent guessed the tool name, JSON-RPC would return method-not-
-        // found.
-        allowed.push("mcp__app__sdd_get".into());
-        allowed.push("mcp__app__sdd_list_phases".into());
-        allowed.push("mcp__app__sdd_get_phase".into());
-        allowed.push("mcp__app__sdd_get_action_log".into());
-        allowed.push("mcp__app__sdd_get_results".into());
-        allowed.push("mcp__app__sdd_advance_phase".into());
-        allowed.push("mcp__app__sdd_retry_phase".into());
-        allowed.push("mcp__app__sdd_skip_phase".into());
-        allowed.push("mcp__app__sdd_pause".into());
-        allowed.push("mcp__app__sdd_resume".into());
-        allowed.push("mcp__app__sdd_log_phase_done".into());
-        allowed.push("mcp__app__sdd_log_action".into());
-        // Three-call execution mode close-out tools (spec-1). Each
-        // validates input in the sidecar; the frontend `handleAppNavigation`
-        // observer triggers the actual Tauri command that mutates the
-        // workspace (write plan.md / verify.json, advance substep state,
-        // flip phase frontmatter, emit `sdd:changed`).
-        allowed.push("mcp__app__sdd_save_phase_plan".into());
-        allowed.push("mcp__app__sdd_complete_phase_implement".into());
-        allowed.push("mcp__app__sdd_save_phase_verify".into());
-        allowed.push("mcp__app__sdd_approve_phase_plan".into());
-        allowed.push("mcp__app__sdd_discard_phase_plan".into());
-        // Workflow kickoff (0.2.6) — let the agent START an SDD / DW
-        // when the user asks it to. Without these in the allowlist the
-        // `--allowedTools` filter strips them: the agent sees the tools
+        // Workflow kickoff (0.2.6) — let the agent START a DW when the
+        // user asks it to. Without this in the allowlist the
+        // `--allowedTools` filter strips it: the agent sees the tool
         // in its catalog but every call is rejected.
-        allowed.push("mcp__app__start_sdd".into());
         allowed.push("mcp__app__start_dw".into());
         // Live DW build (0.2.16) — agent constructs the workflow itself.
         allowed.push("mcp__app__dw_set_task".into());
         allowed.push("mcp__app__dw_add_subagent".into());
         allowed.push("mcp__app__dw_launch".into());
+        // Live Ledger build — sequential machine-checked checklist.
+        allowed.push("mcp__app__ledger_set_task".into());
+        allowed.push("mcp__app__ledger_add_item".into());
+        allowed.push("mcp__app__ledger_launch".into());
     }
 
     // Merge in any third-party MCP servers the user has installed via

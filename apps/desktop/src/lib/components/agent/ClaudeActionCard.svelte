@@ -368,7 +368,7 @@
 </div>
 
 <style>
-  /* Inline action card — same visual language as SddCard / QuestionCard:
+  /* Inline action card — same visual language as QuestionCard:
    *  blockquote-shaped (left accent stripe + tint + rounded only on
    *  the right) so the card reads as RICH CONTENT in the chat thread,
    *  not as a modal proposal pinned on top. Previous "premium tactile"
@@ -484,7 +484,7 @@
   }
   .cac-link:hover { text-decoration: underline; }
 
-  /* Actions row mirrors SddCard: text-buttons for secondary actions
+  /* Actions row: text-buttons for secondary actions
    *  (Dismiss / Close), one accent-filled pill for the primary CTA.
    *  Keeps the row visually quiet — it's the body content (form
    *  inputs) that should carry the user's attention, not the action

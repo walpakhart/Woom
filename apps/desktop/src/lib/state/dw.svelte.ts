@@ -1,4 +1,4 @@
-// Dynamic Workflow state (SDD `sdd-98a42f3bdb` Phase 4). One reactive
+// Dynamic Workflow state. One reactive
 // singleton holding every live + recently-finished workflow. Card +
 // preflight modal read straight from this; backend events feed in via
 // `tauri::emit` listeners wired in `+page.svelte`.
@@ -36,8 +36,8 @@ export function getWorkflow(id: string): DynamicWorkflow | null {
 
 /** Statuses where the workflow is still in-flight (not a terminal
  *  record). The pinned, bottom-following card slot renders the active
- *  workflow here so it stays visible like the SDD card, instead of
- *  scrolling away at its origin message. */
+ *  workflow here so it stays visible instead of scrolling away at
+ *  its origin message. */
 const ACTIVE_DW_STATUSES = new Set([
   'building',
   'awaiting_launch',

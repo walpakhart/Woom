@@ -8,6 +8,70 @@ release runbook (how this CHANGELOG feeds `latest-mac.json`) lives in
 
 ## Unreleased
 
+## 0.6.0 — 2026-07-06
+
+The Ledger release: a new checklist-driven deep-work engine replaces
+SDD, the editor gains a built-in terminal panel, and Woom now keeps a
+proper log file.
+
+### Added
+
+- **Ledger workflow** (`/ledger <task>`, or the composer button) — the
+  new engine for big features and tickets, superseding SDD:
+  - The agent researches the repo first, then builds a **checklist**
+    live on the card. Every item pairs a requirement with a **shell
+    verification command** — exit 0 decides "done", not prose.
+  - The checklist is **editable before launch**: rewrite title, detail
+    or check command, reorder, delete, add items, mark items parallel.
+  - Items run **sequentially in one worktree** with a fresh-context
+    worker per item; a passing check commits that item's diff
+    (granular rollback), a failing one resets and **auto-retries with
+    feedback** up to 3 times before stop-the-line (retry / skip / edit).
+  - Adjacent parallel items run as **waves** — up to 4 isolated
+    worktrees off a shared HEAD, diffs merged in order; any wave
+    failure degrades that item to the sequential path.
+  - Workers hand knowledge forward via a **notes chain**, and every
+    tool call streams onto the card as a live feed.
+  - Items without a command get an **independent LLM grader** — the
+    worker that wrote the code never grades itself.
+  - All items green → **review gate**: full branch diff with stats on
+    the card, Apply or Discard. On apply a detached turn distills a
+    **delta-spec** of what became true into project memory.
+  - Quota-pause, persistence and restart recovery work like DW.
+- **Editor terminal panel** — a `Terminal` button in the editor status
+  bar opens a VS Code-style bottom panel with drag resize. Each editor
+  instance gets its own PTY rooted at the repo; scrollback survives
+  closing and reopening the panel.
+- **File logging** — everything Woom logs (Rust, frontend, panics) now
+  lands in `<app data>/logs/woom.log` with 5 MB rotation and stderr
+  mirroring. New **Settings → Logs** card: view the tail, reveal the
+  file, copy the path, clear.
+
+### Fixed
+
+- **Terminal-open crash** — opening a terminal could throw
+  `TypeError: undefined is not an object (evaluating
+  '…_isDisposed')` and freeze view switching (editors refused to open
+  or close). The WebGL addon is now disposed before the terminal and a
+  guard drops context-loss events that arrive after teardown.
+- **Cost tracking** — multi-step turns overwrote usage instead of
+  accumulating it, so long sessions reported absurd numbers (e.g.
+  $61 against "12k tokens"). Token buckets now sum across steps;
+  context size stays a level, not a flow.
+- Ledger: retry/skip during a live run no longer spawns a second
+  run-loop; cancelling mid-run is no longer overwritten to "failed".
+- Flaky Rust tests — parallel test threads could collide on
+  nanosecond-named temp dirs (macOS clock granularity) and trample
+  each other's files; names now carry an atomic counter.
+
+### Removed
+
+- **SDD workflow** — fully excised (~40 files: the Rust engine,
+  prompts, cards, stores, `/sdd`, sidecar tools). Ledger supersedes
+  it with machine-verified checkpoints instead of markdown gates.
+- Editor: the chat-link button in the file-tree header (chats link
+  from the right dock).
+
 ## 0.5.1 — 2026-07-06
 
 Stability patch for the paper redesign: the terminal blank-screen bug is

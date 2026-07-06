@@ -2369,31 +2369,6 @@ impl App {
         run_or_fallback("question", params, fallback).await
     }
 
-    // ---- SDD orchestrator tools -----------------------------------------
-    // Phase 6: surface for an agent driving its own SDD workspace. Each
-    // tool is a thin validator — the actual mutation happens on the
-    // desktop side, where the frontend's stream parser intercepts the
-    // tool_use event, calls the underlying Tauri command, and writes the
-    // audit-log row. We deliberately omit `sdd_approve_spec` /
-    // `sdd_approve_plan` so the agent CANNOT bypass the user's approval
-    // gate — the JSON-RPC layer will return `method-not-found` if it
-    // tries.
-
-    #[tool(
-        description = "Kick off a NEW Spec-Driven-Development workspace for the current session from a natural-language ask — same as the user typing `/sdd <prompt>`. Use when the user asks you to 'run SDD' / 'start an SDD' / 'do this as an SDD workflow'. The user still approves the generated spec + each phase plan (you cannot bypass those gates). `prompt` is the full task brief."
-    )]
-    async fn start_sdd(
-        &self,
-        Parameters(StartWorkflowParams { prompt }): Parameters<StartWorkflowParams>,
-    ) -> Result<CallToolResult, ErrorData> {
-        if prompt.trim().is_empty() {
-            return Err(ErrorData::invalid_params("prompt must not be empty", None));
-        }
-        Ok(CallToolResult::success(vec![Content::text(
-            "Starting SDD workspace. The desktop side runs the spec-writer; the user approves the spec + each phase plan.",
-        )]))
-    }
-
     #[tool(
         description = "Kick off a NEW Dynamic Workflow (parallel subagent fan-out + verifier synthesis) for the current session — same as the user typing `/dw <prompt>`. Use when the user asks you to 'run DW' / 'start a dynamic workflow' / 'fan this out in parallel'. The user still approves the plan + budget cap before fan-out fires. `prompt` is the full task brief."
     )]
@@ -2461,268 +2436,57 @@ impl App {
     }
 
     #[tool(
-        description = "Read the full SDD workspace snapshot (stage, phases, recovery state). Use to refresh your view of what's running, what's done, what's failed. Read-only — no audit cost. Pass `id` from the `linked_to_sdd_phase=<wsid>:<phase>` line in your layout preamble."
+        description = "Set/refine the task description of a LEDGER workflow you're BUILDING live (status `building`). Pass the `workflowId` from your 'Building ledger <id>' brief. Call this once you understand the task, before adding items."
     )]
-    async fn sdd_get(
+    async fn ledger_set_task(
         &self,
-        Parameters(SddIdParams { id }): Parameters<SddIdParams>,
+        Parameters(DwSetTaskParams { workflow_id, task }): Parameters<DwSetTaskParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        sdd_check_workspace_id(&id)?;
-        Ok(CallToolResult::success(vec![Content::text(format!(
-            "Reading SDD workspace `{id}`. The desktop side will return the full snapshot on the frontend's stream-parser dispatch."
-        ))]))
+        if workflow_id.trim().is_empty() || task.trim().is_empty() {
+            return Err(ErrorData::invalid_params("workflowId and task required", None));
+        }
+        Ok(CallToolResult::success(vec![Content::text(
+            "Task set. Now add checklist items with ledger_add_item (in execution order), then ledger_launch.",
+        )]))
     }
 
     #[tool(
-        description = "List phases in the SDD workspace as a compact array — number, slug, title, status, tasks_done/tasks_total, has_acceptance_passed. Cheap; no audit cost. Use before `sdd_get_phase` to scan which phase is current."
+        description = "Add ONE checklist item to a Ledger workflow you're building. Call repeatedly, in EXECUTION ORDER — items run sequentially in one shared worktree, each by a fresh agent context; consecutive `parallel: true` items run concurrently as a wave. `title` = one-line requirement (what must become true). `detail` = optional expanded instructions (include relevant file paths). `check_cmd` = shell command run from the repo root whose exit code verifies the item (exit 0 = pass) — ALWAYS provide one when possible (test run, grep, build); items without it fall back to a slower LLM grader. `parallel` = true ONLY when the item touches files no other item touches. Survey the repo FIRST so checks are real commands that exist."
     )]
-    async fn sdd_list_phases(
+    async fn ledger_add_item(
         &self,
-        Parameters(SddIdParams { id }): Parameters<SddIdParams>,
+        Parameters(LedgerAddItemParams {
+            workflow_id,
+            title,
+            detail: _,
+            check_cmd: _,
+            parallel: _,
+        }): Parameters<LedgerAddItemParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        sdd_check_workspace_id(&id)?;
-        Ok(CallToolResult::success(vec![Content::text(format!(
-            "Listing phases for `{id}`."
-        ))]))
-    }
-
-    #[tool(
-        description = "Read phase `phase`'s body + acceptance results from the workspace. Returns Goal, Context, Tasks, Acceptance criteria, Verification commands, plus the latest acceptance.json (per-check pass/fail/exit_code). Read-only. Call this BEFORE doing the work and BEFORE calling `sdd_log_phase_done`."
-    )]
-    async fn sdd_get_phase(
-        &self,
-        Parameters(SddPhaseRefParams { id, phase }): Parameters<SddPhaseRefParams>,
-    ) -> Result<CallToolResult, ErrorData> {
-        sdd_check_workspace_id(&id)?;
-        Ok(CallToolResult::success(vec![Content::text(format!(
-            "Reading phase {phase} of `{id}`."
-        ))]))
-    }
-
-    #[tool(
-        description = "Read the last `tail` entries (default 50) from phase `phase`'s action log. Useful when investigating a failed phase — the verifier surfaces the last 5 in the failure card, but for full forensics you'll want the longer tail."
-    )]
-    async fn sdd_get_action_log(
-        &self,
-        Parameters(SddActionLogParams { id, phase, tail }): Parameters<SddActionLogParams>,
-    ) -> Result<CallToolResult, ErrorData> {
-        sdd_check_workspace_id(&id)?;
-        Ok(CallToolResult::success(vec![Content::text(format!(
-            "Reading action log of `{id}` phase {phase} (tail={}).",
-            tail.unwrap_or(50)
-        ))]))
-    }
-
-    #[tool(
-        description = "Read the result summary + acceptance.json for phase `phase`. Use to inspect what a previously-completed phase actually did, e.g. when picking up a workspace mid-flight or auditing whether a skipped phase left a real result. Read-only."
-    )]
-    async fn sdd_get_results(
-        &self,
-        Parameters(SddPhaseRefParams { id, phase }): Parameters<SddPhaseRefParams>,
-    ) -> Result<CallToolResult, ErrorData> {
-        sdd_check_workspace_id(&id)?;
-        Ok(CallToolResult::success(vec![Content::text(format!(
-            "Reading results of `{id}` phase {phase}."
-        ))]))
-    }
-
-    #[tool(
-        description = "Open the gate for phase `phase` so it transitions PendingApproval → Running. Equivalent to the user clicking 'Start phase'. ONLY call when `sdd_autonomy=semi-auto` is in your context (default mode keeps approval with the user). The previous phase MUST be `done` or `skipped`. `reason` ≥ 5 chars — appended to the audit log so the user can see why you advanced."
-    )]
-    async fn sdd_advance_phase(
-        &self,
-        Parameters(SddMutatingPhaseParams { id, phase, reason }): Parameters<SddMutatingPhaseParams>,
-    ) -> Result<CallToolResult, ErrorData> {
-        sdd_check_workspace_id(&id)?;
-        let r = sdd_check_reason(&reason)?;
-        Ok(CallToolResult::success(vec![Content::text(format!(
-            "Advancing `{id}` to phase {phase} (reason: {r})."
-        ))]))
-    }
-
-    #[tool(
-        description = "Reset phase `phase` to `pending` so the next advance re-runs it. Use after a verifier failure when you've fixed the root cause and want a clean attempt. Also bumps `retry_count`. ONLY in semi-auto. `reason` ≥ 5 chars."
-    )]
-    async fn sdd_retry_phase(
-        &self,
-        Parameters(SddMutatingPhaseParams { id, phase, reason }): Parameters<SddMutatingPhaseParams>,
-    ) -> Result<CallToolResult, ErrorData> {
-        sdd_check_workspace_id(&id)?;
-        let r = sdd_check_reason(&reason)?;
-        Ok(CallToolResult::success(vec![Content::text(format!(
-            "Retrying `{id}` phase {phase} (reason: {r})."
-        ))]))
-    }
-
-    #[tool(
-        description = "Mark phase `phase` as `skipped` and persist the reason on the phase frontmatter + meta + audit log. Use ONLY when the phase is genuinely out of scope or blocked by something out of band — never to dodge a verifier failure you could fix. ONLY in semi-auto. `reason` ≥ 5 chars."
-    )]
-    async fn sdd_skip_phase(
-        &self,
-        Parameters(SddMutatingPhaseParams { id, phase, reason }): Parameters<SddMutatingPhaseParams>,
-    ) -> Result<CallToolResult, ErrorData> {
-        sdd_check_workspace_id(&id)?;
-        let r = sdd_check_reason(&reason)?;
-        Ok(CallToolResult::success(vec![Content::text(format!(
-            "Skipping `{id}` phase {phase} (reason: {r})."
-        ))]))
-    }
-
-    #[tool(
-        description = "Pause the workspace — stops the orchestrator from scheduling new phases until `sdd_resume`. The current phase, if running, finishes naturally. Idempotent. `reason` ≥ 5 chars (e.g. \"need to investigate flaky test before continuing\")."
-    )]
-    async fn sdd_pause(
-        &self,
-        Parameters(SddMutatingWorkspaceParams { id, reason }): Parameters<SddMutatingWorkspaceParams>,
-    ) -> Result<CallToolResult, ErrorData> {
-        sdd_check_workspace_id(&id)?;
-        let r = sdd_check_reason(&reason)?;
-        Ok(CallToolResult::success(vec![Content::text(format!(
-            "Pausing `{id}` (reason: {r})."
-        ))]))
-    }
-
-    #[tool(
-        description = "Resume a paused workspace — clears the pause control file and lets the orchestrator schedule the next phase. Idempotent. `reason` ≥ 5 chars."
-    )]
-    async fn sdd_resume(
-        &self,
-        Parameters(SddMutatingWorkspaceParams { id, reason }): Parameters<SddMutatingWorkspaceParams>,
-    ) -> Result<CallToolResult, ErrorData> {
-        sdd_check_workspace_id(&id)?;
-        let r = sdd_check_reason(&reason)?;
-        Ok(CallToolResult::success(vec![Content::text(format!(
-            "Resuming `{id}` (reason: {r})."
-        ))]))
-    }
-
-    #[tool(
-        description = "Close phase `phase`: orchestrator writes the result summary, runs the verifier, commits to git, and flips the phase frontmatter to `status: done`. THIS IS THE PREFERRED WAY to finish a phase — do NOT manually edit phase frontmatter when this tool is available. `summary` is 2-3 sentences. `files_changed` is the repo-relative paths you touched."
-    )]
-    async fn sdd_log_phase_done(
-        &self,
-        Parameters(SddLogPhaseDoneParams { id, phase, summary, files_changed }): Parameters<SddLogPhaseDoneParams>,
-    ) -> Result<CallToolResult, ErrorData> {
-        sdd_check_workspace_id(&id)?;
-        if summary.trim().is_empty() {
+        if workflow_id.trim().is_empty() || title.trim().is_empty() {
             return Err(ErrorData::invalid_params(
-                "`summary` is empty — write 2-3 sentences describing what observably changed.",
+                "workflowId and title required",
                 None,
             ));
         }
-        Ok(CallToolResult::success(vec![Content::text(format!(
-            "Closing `{id}` phase {phase} ({} files changed). Orchestrator will write result.md, run verifier, commit.",
-            files_changed.len()
-        ))]))
+        Ok(CallToolResult::success(vec![Content::text(
+            "Item added. Add more in order, or ledger_launch when the checklist is complete.",
+        )]))
     }
 
     #[tool(
-        description = "Push a milestone marker into phase `phase`'s action log as an `sdd_event` row. Use SPARINGLY for genuinely user-visible milestones inside a long phase (e.g. \"finished refactor of auth module\", \"all tests green\"). Tool-call events already auto-log; don't double-log."
+        description = "Finish building a Ledger workflow (≥1 item added). This does NOT start the run — it parks the checklist for the USER to review and press 'run' on the card. Call once all items are added; then stop and let the user approve."
     )]
-    async fn sdd_log_action(
+    async fn ledger_launch(
         &self,
-        Parameters(SddLogActionParams { id, phase, summary, detail }): Parameters<SddLogActionParams>,
+        Parameters(LedgerLaunchParams { workflow_id }): Parameters<LedgerLaunchParams>,
     ) -> Result<CallToolResult, ErrorData> {
-        sdd_check_workspace_id(&id)?;
-        let s = summary.trim();
-        if s.is_empty() {
-            return Err(ErrorData::invalid_params(
-                "`summary` is empty — pass a one-line milestone label (≤ 80 chars).",
-                None,
-            ));
+        if workflow_id.trim().is_empty() {
+            return Err(ErrorData::invalid_params("workflowId required", None));
         }
-        Ok(CallToolResult::success(vec![Content::text(format!(
-            "Logging action on `{id}` phase {phase}: {s}{}.",
-            detail.as_deref().map(|_| " (with detail)").unwrap_or("")
-        ))]))
-    }
-
-    #[tool(
-        description = "Three-call mode — persist the plan-pass body to `phases/<slug>/plan.md` and advance the substep checkpoint from `Plan` → `Implement` (or stay on `Plan` when `plan_gate=true`). Call this as the FINAL step of the plan pass. `body` is the full markdown plan."
-    )]
-    async fn sdd_save_phase_plan(
-        &self,
-        Parameters(SddSavePhasePlanParams { id, phase, body }): Parameters<SddSavePhasePlanParams>,
-    ) -> Result<CallToolResult, ErrorData> {
-        sdd_check_workspace_id(&id)?;
-        if body.trim().is_empty() {
-            return Err(ErrorData::invalid_params(
-                "`body` is empty — write the plan markdown (Approach / Step-by-step / Files / Tests / Risks).",
-                None,
-            ));
-        }
-        Ok(CallToolResult::success(vec![Content::text(format!(
-            "Saved plan for `{id}` phase {phase} ({} chars). Substep advances to Implement (or stays on Plan if plan_gate=true).",
-            body.len()
-        ))]))
-    }
-
-    #[tool(
-        description = "Three-call mode — close out the implement pass: advance the substep checkpoint from `Implement` → `Verify` so the next agent turn fires the verify-pass prompt. Persists `summary` + `files_changed` on the phase frontmatter (verify pass quotes them). Phase status STAYS `running` — verify pass is the one that flips done/failed. Call this as the FINAL step of the implement pass."
-    )]
-    async fn sdd_complete_phase_implement(
-        &self,
-        Parameters(SddCompletePhaseImplementParams { id, phase, summary, files_changed }): Parameters<SddCompletePhaseImplementParams>,
-    ) -> Result<CallToolResult, ErrorData> {
-        sdd_check_workspace_id(&id)?;
-        if summary.trim().is_empty() {
-            return Err(ErrorData::invalid_params(
-                "`summary` is empty — write 2-3 sentences describing observable changes from the implement pass.",
-                None,
-            ));
-        }
-        Ok(CallToolResult::success(vec![Content::text(format!(
-            "Closing implement pass for `{id}` phase {phase} ({} files changed). Substep advances to Verify; next turn fires verify-pass prompt.",
-            files_changed.len()
-        ))]))
-    }
-
-    #[tool(
-        description = "Three-call mode — persist the verify-pass JSON to `phases/<slug>/verify.json`, fill phase frontmatter `summary`, flip phase status to `done` (no deviations) or `failed { trigger: verify_failed }` (deviations present), clear the substep checkpoint. Call this as the FINAL step of the verify pass. `raw_json` is the verdict JSON (markdown fences are tolerated)."
-    )]
-    async fn sdd_save_phase_verify(
-        &self,
-        Parameters(SddSavePhaseVerifyParams { id, phase, raw_json }): Parameters<SddSavePhaseVerifyParams>,
-    ) -> Result<CallToolResult, ErrorData> {
-        sdd_check_workspace_id(&id)?;
-        if raw_json.trim().is_empty() {
-            return Err(ErrorData::invalid_params(
-                "`raw_json` is empty — pass the verify-pass JSON verdict (schema: summary, task_compliance, deviations[], notes, files_changed[]).",
-                None,
-            ));
-        }
-        Ok(CallToolResult::success(vec![Content::text(format!(
-            "Saved verify verdict for `{id}` phase {phase} ({} bytes). Phase status will flip done/failed based on deviations.",
-            raw_json.len()
-        ))]))
-    }
-
-    #[tool(
-        description = "Three-call mode with `plan_gate=true` — approve the plan-pass output for `phase` and advance the substep checkpoint from `Plan` → `Implement`. Only useful when the workspace's `plan_gate` is enabled. `reason` ≥ 5 chars — audit log line."
-    )]
-    async fn sdd_approve_phase_plan(
-        &self,
-        Parameters(SddApprovePhasePlanParams { id, phase, reason }): Parameters<SddApprovePhasePlanParams>,
-    ) -> Result<CallToolResult, ErrorData> {
-        sdd_check_workspace_id(&id)?;
-        let r = sdd_check_reason(&reason)?;
-        Ok(CallToolResult::success(vec![Content::text(format!(
-            "Approving plan for `{id}` phase {phase} (reason: {r}). Substep advances to Implement."
-        ))]))
-    }
-
-    #[tool(
-        description = "Three-call mode — discard the plan-pass output for `phase` and mark the phase `failed { trigger: plan_discarded }`. Use when the planned approach is wrong (wrong architecture, missed dependency) and you want a clean retry rather than implementing a flawed plan. `reason` ≥ 5 chars — persisted to phase frontmatter + audit log."
-    )]
-    async fn sdd_discard_phase_plan(
-        &self,
-        Parameters(SddDiscardPhasePlanParams { id, phase, reason }): Parameters<SddDiscardPhasePlanParams>,
-    ) -> Result<CallToolResult, ErrorData> {
-        sdd_check_workspace_id(&id)?;
-        let r = sdd_check_reason(&reason)?;
-        Ok(CallToolResult::success(vec![Content::text(format!(
-            "Discarding plan for `{id}` phase {phase} (reason: {r}). Phase flips to failed; clear retry path."
-        ))]))
+        Ok(CallToolResult::success(vec![Content::text(
+            "Ledger built. Parked for the user to review the checklist and press 'run' on the card. You're done building; stop here.",
+        )]))
     }
 
     #[tool(
@@ -2975,27 +2739,11 @@ struct BgStdinParams {
     text: String,
 }
 
-// ---- SDD orchestrator params ---------------------------------------------
-// Phase 6: shape the MCP surface that lets an agent drive its own SDD
-// workflow. Read-tools (`sdd_get*`) are pure observability; mutating
-// tools (`sdd_advance_phase` etc.) require a `reason: String` ≥ 5 chars
-// after trim, and the frontend stream parser writes the corresponding
-// audit-log entry on every successful call. `sdd_approve_spec` /
-// `sdd_approve_plan` are NOT exposed — those gates are user-only.
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct SddIdParams {
-    /// SDD workspace id (e.g. `sdd-ec99a5aeae`). Pull it out of the
-    /// `linked_to_sdd_phase=<wsid>:<phase>` line in the layout snapshot
-    /// at the top of your system prompt.
-    id: String,
-}
-
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct StartWorkflowParams {
     /// The task / ask to drive the workflow. Same text the user would
-    /// type after `/sdd ` or `/dw `. Be specific — this is the whole
-    /// brief the spec-writer (SDD) or planner (DW) works from.
+    /// type after `/dw `. Be specific — this is the whole brief the
+    /// planner works from.
     prompt: String,
 }
 
@@ -3030,152 +2778,29 @@ struct DwLaunchParams {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct SddPhaseRefParams {
-    id: String,
-    /// Phase number, 1-indexed.
-    phase: u32,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct SddActionLogParams {
-    id: String,
-    phase: u32,
-    /// Tail length — most-recent N entries. Default 50.
-    #[serde(default)]
-    tail: Option<u32>,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct SddMutatingPhaseParams {
-    id: String,
-    phase: u32,
-    /// Why you're advancing / retrying / skipping. Required, ≥ 5 chars
-    /// after trim. The audit log persists this verbatim — write a real
-    /// sentence ("verifier flaked on flaky test, retrying once" ⩾
-    /// "ok"). Min length is enforced server-side, not just here.
-    reason: String,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct SddMutatingWorkspaceParams {
-    id: String,
-    /// Why. Same rules as `SddMutatingPhaseParams::reason`.
-    reason: String,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct SddLogPhaseDoneParams {
-    id: String,
-    phase: u32,
-    /// 2-3 sentence summary of what changed during this phase, in the
-    /// same shape the result.md `## Summary` section expects.
-    summary: String,
-    /// Repo-relative paths the phase touched. Used by the auto-generated
-    /// result file's `files_changed:` frontmatter list.
-    #[serde(default)]
-    files_changed: Vec<String>,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct SddLogActionParams {
-    id: String,
-    phase: u32,
-    /// Free-form milestone label (≤ 80 chars). Shows up in the live
-    /// action feed as a bold `sdd_event` row so the user can see what
-    /// the agent calls a "milestone" mid-phase.
-    summary: String,
-    #[serde(default)]
+struct LedgerAddItemParams {
+    /// Ledger workflow id you're building.
+    workflow_id: String,
+    /// One-line requirement — what must become TRUE when this item is done.
+    title: String,
+    /// Optional expanded instructions handed to the item's worker verbatim.
+    #[allow(dead_code)]
     detail: Option<String>,
+    /// Shell command run from the repo root that verifies the item; exit 0
+    /// = pass. Provide one whenever possible — objective checks beat LLM
+    /// grading. The desktop side reads this from the tool input.
+    #[allow(dead_code)]
+    check_cmd: Option<String>,
+    /// True ONLY when this item touches files no other item touches —
+    /// consecutive parallel items run concurrently as a wave.
+    #[allow(dead_code)]
+    parallel: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct SddSavePhasePlanParams {
-    id: String,
-    phase: u32,
-    /// Markdown body of the plan — written verbatim to
-    /// `phases/<slug>/plan.md`. Should mirror the Plan template
-    /// from the plan-pass prompt (Approach / Step-by-step / Files
-    /// to touch / Tests / Risks).
-    body: String,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct SddCompletePhaseImplementParams {
-    id: String,
-    phase: u32,
-    /// 2-3 sentence summary of observable changes — written to the
-    /// phase frontmatter so the verify pass can quote it.
-    summary: String,
-    /// Repo-relative paths the implement-pass touched.
-    #[serde(default)]
-    files_changed: Vec<String>,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct SddSavePhaseVerifyParams {
-    id: String,
-    phase: u32,
-    /// Raw JSON output from the verify-pass agent. Backend
-    /// `VerifyOutput::parse_or_fallback` tolerates markdown fences
-    /// and falls back to a deviations sentinel on parse failure.
-    raw_json: String,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct SddApprovePhasePlanParams {
-    id: String,
-    phase: u32,
-    /// Why the plan is approved. Audit-log line. ≥ 5 chars.
-    reason: String,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct SddDiscardPhasePlanParams {
-    id: String,
-    phase: u32,
-    /// Why the plan is discarded. Persisted to phase frontmatter +
-    /// audit log as `plan_discarded` trigger. ≥ 5 chars.
-    reason: String,
-}
-
-/// Shared reason-validation gate for the mutating SDD tools. Mirrors the
-/// server-side `sdd::audit::validate_reason` so the agent gets a clean
-/// error message before the request even touches the desktop process.
-fn sdd_check_reason(reason: &str) -> Result<String, ErrorData> {
-    let trimmed = reason.trim();
-    if trimmed.len() < 5 {
-        return Err(ErrorData::invalid_params(
-            format!(
-                "`reason` is too short ({} chars after trim) — explain why you're \
-                 mutating the SDD workflow. Min 5 chars. Examples: \"verifier \
-                 flaked, retrying\", \"manual smoke confirmed phase complete\", \
-                 \"user asked to skip — out of scope\".",
-                trimmed.len()
-            ),
-            None,
-        ));
-    }
-    Ok(trimmed.to_string())
-}
-
-/// Sanity-check the workspace id looks like an SDD id (`sdd-` + ≥ 6 hex
-/// chars). Cheap defense against the agent passing a stage name or the
-/// repo path by mistake. Best-effort — the actual existence check
-/// happens on the desktop side when the Tauri command resolves the
-/// registry.
-fn sdd_check_workspace_id(id: &str) -> Result<(), ErrorData> {
-    let trimmed = id.trim();
-    if !trimmed.starts_with("sdd-") || trimmed.len() < "sdd-".len() + 6 {
-        return Err(ErrorData::invalid_params(
-            format!(
-                "`id` does not look like an SDD workspace id (expected `sdd-XXXXXX…`, \
-                 got `{trimmed}`). The id appears in your layout preamble as \
-                 `linked_to_sdd_phase=<wsid>:<phase>`."
-            ),
-            None,
-        ));
-    }
-    Ok(())
+struct LedgerLaunchParams {
+    /// Ledger workflow id to park for user approval (≥1 item added).
+    workflow_id: String,
 }
 
 #[tool_handler]

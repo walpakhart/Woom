@@ -577,14 +577,19 @@ mod tests {
     /// real user files. Uses the process id + nanos so concurrent
     /// `cargo test` runs don't collide.
     fn tempdir() -> std::path::PathBuf {
+        // nanos alone collide under parallel test threads (macOS clock
+        // granularity ~1µs) — the counter guarantees uniqueness.
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
         let dir = std::env::temp_dir().join(format!(
-            "woom-fs-test-{}-{}",
+            "woom-fs-test-{}-{}-{}",
             std::process::id(),
-            nanos
+            nanos,
+            seq
         ));
         std::fs::create_dir_all(&dir).unwrap();
         dir

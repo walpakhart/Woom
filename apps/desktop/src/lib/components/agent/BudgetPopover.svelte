@@ -1,5 +1,5 @@
 <script lang="ts">
-  /* Budget popover (SDD `sdd-98a42f3bdb` Phase 3). Renders a per-bucket
+  /* Budget popover. Renders a per-bucket
    * cost breakdown for the current session, plus RTK savings estimate
    * (when ≥3 bash calls have run), a per-turn cost sparkline, and a
    * CSV-export footer link.

@@ -1,4 +1,4 @@
-//! Dynamic Workflows (SDD `sdd-98a42f3bdb` Phase 4). Planner → fan-out
+//! Dynamic Workflows. Planner → fan-out
 //! → verifier pipeline replicating Anthropic's research-preview feature
 //! locally so it works on any Max plan (not just Enterprise / Team).
 //!
@@ -258,7 +258,7 @@ fn atomic_write(target: &Path, data: &[u8]) -> std::io::Result<()> {
 }
 
 /// Best-effort write: serialize + atomic rename. Disk failure is
-/// logged via `eprintln!` and otherwise swallowed — never crash a
+/// logged (app log + stderr) and otherwise swallowed — never crash a
 /// running workflow just because the OS couldn't write.
 pub(crate) fn persist_workflow(app: &AppHandle, wf: &DynamicWorkflow) {
     let root = match workflow_storage_root(app) {
@@ -269,12 +269,20 @@ pub(crate) fn persist_workflow(app: &AppHandle, wf: &DynamicWorkflow) {
     let bytes = match serde_json::to_vec_pretty(wf) {
         Ok(b) => b,
         Err(e) => {
-            eprintln!("[dw] serialize workflow {} failed: {}", wf.id, e);
+            crate::logging::log_line(
+                "error",
+                "dw",
+                &format!("serialize workflow {} failed: {}", wf.id, e),
+            );
             return;
         }
     };
     if let Err(e) = atomic_write(&path, &bytes) {
-        eprintln!("[dw] persist workflow {} failed: {}", wf.id, e);
+        crate::logging::log_line(
+            "error",
+            "dw",
+            &format!("persist workflow {} failed: {}", wf.id, e),
+        );
     }
 }
 
@@ -303,13 +311,21 @@ pub(crate) fn load_workflows(root: &Path) -> Vec<DynamicWorkflow> {
         let bytes = match std::fs::read(&path) {
             Ok(b) => b,
             Err(e) => {
-                eprintln!("[dw] read workflow {:?} failed: {}", path, e);
+                crate::logging::log_line(
+                    "error",
+                    "dw",
+                    &format!("read workflow {:?} failed: {}", path, e),
+                );
                 continue;
             }
         };
         match serde_json::from_slice::<DynamicWorkflow>(&bytes) {
             Ok(wf) => out.push(wf),
-            Err(e) => eprintln!("[dw] parse workflow {:?} failed: {}", path, e),
+            Err(e) => crate::logging::log_line(
+                "error",
+                "dw",
+                &format!("parse workflow {:?} failed: {}", path, e),
+            ),
         }
     }
     out
@@ -343,7 +359,11 @@ pub(crate) fn cleanup_stale_workflows(app: &AppHandle, retain_days: u32) -> usiz
         }
         let path = workflow_path(&root, &wf.id);
         if let Err(e) = std::fs::remove_file(&path) {
-            eprintln!("[dw] remove stale workflow {:?} failed: {}", path, e);
+            crate::logging::log_line(
+                "error",
+                "dw",
+                &format!("remove stale workflow {:?} failed: {}", path, e),
+            );
             continue;
         }
         removed += 1;
@@ -392,7 +412,11 @@ pub(crate) async fn recover_on_startup(app: AppHandle) {
     // Sweep stale workflows once on startup.
     let removed = cleanup_stale_workflows(&app, 7);
     if removed > 0 {
-        eprintln!("[dw] startup sweep removed {} stale workflows", removed);
+        crate::logging::log_line(
+            "info",
+            "dw",
+            &format!("startup sweep removed {} stale workflows", removed),
+        );
     }
 }
 
@@ -1155,7 +1179,7 @@ pub async fn dw_finalize(
 // Instead of a hidden planner oneshot + pre-flight modal, the MAIN chat
 // agent builds the workflow visibly: `dw_create` makes an empty shell,
 // then the agent calls `dw_set_task` / `dw_add_subagent` (one per slice)
-// and `dw_launch` — the card grows live like an SDD workspace.
+// and `dw_launch` — the card grows live as the agent builds it.
 
 /// Create an empty `building` workflow. Returns its id for the agent to
 /// pass into the build tools.
@@ -1598,9 +1622,9 @@ mod tests {
     fn estimate_workflow_cost_opus48_3sub_reasonable() {
         let p = sample_plan(3);
         let c = estimate_workflow_cost(&p, "claude-opus-4-8", false);
-        // n=3, (3 × 3K × $5/M + 3 × 3K × $25/M + 5K × $5/M + 5K × $25/M) × 1.2
-        // = (0.045 + 0.225 + 0.025 + 0.125) × 1.2 = 0.42 × 1.2 = 0.504
-        assert!((c - 0.504).abs() < 0.01, "expected ~0.504, got {}", c);
+        // n=3, (3 × 12K × $5/M + 3 × 10K × $25/M + 12K × $5/M + 6K × $25/M) × 1.2
+        // = (0.18 + 0.75 + 0.06 + 0.15) × 1.2 = 1.14 × 1.2 = 1.368
+        assert!((c - 1.368).abs() < 0.01, "expected ~1.368, got {}", c);
     }
 
     #[test]
@@ -1717,14 +1741,20 @@ mod persistence {
     struct TestDir(PathBuf);
     impl TestDir {
         fn new() -> Self {
+            // nanos alone collide: macOS clock granularity is ~1µs and
+            // parallel test threads start simultaneously, so two tests
+            // can share a dir (create_dir_all won't complain).
+            static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let nanos = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_nanos();
             let path = std::env::temp_dir().join(format!(
-                "woom-dw-test-{}-{}",
+                "woom-dw-test-{}-{}-{}",
                 std::process::id(),
-                nanos
+                nanos,
+                seq
             ));
             std::fs::create_dir_all(&path).unwrap();
             TestDir(path)

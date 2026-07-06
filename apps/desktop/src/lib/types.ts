@@ -145,6 +145,9 @@ export type ClaudeMessage = {
    *  user's `/dw <prompt>` echo so the chat stays readable when the
    *  card is collapsed / off-screen. */
   dwWorkflowId?: string;
+  /** When set, this assistant message hosts a Ledger workflow —
+   *  ChatThread renders `<LedgerCard>` reading from `ledgerState`. */
+  ledgerWorkflowId?: string;
   /** Concatenated `thinking` content blocks the agent emitted before the
       final answer. Surfaced as a collapsed "Thinking ✓" pill in the UI
       that the user can expand to read. Only set on assistant messages
@@ -173,10 +176,9 @@ export type ClaudeMessage = {
   /** When true, the chat thread DOES NOT render this message — it's
    *  invisible orchestration traffic that the agent's CLI transcript
    *  needs to see (so `--resume` history stays correct) but the user
-   *  shouldn't have to scroll past. Set by SDD when phase prompts are
-   *  injected: the giant spec/plan/phase template lives on the agent's
-   *  side but stays out of the user's visible chat. Pure UX filter —
-   *  search / export / hydrate all treat hidden + visible alike. */
+   *  shouldn't have to scroll past (e.g. workflow build briefs). Pure
+   *  UX filter — search / export / hydrate all treat hidden + visible
+   *  alike. */
   hidden?: boolean;
 };
 
@@ -502,7 +504,7 @@ export interface RepoInfo {
   missing: boolean;
 }
 
-/* Dynamic Workflows (SDD `sdd-98a42f3bdb` Phase 4) — Anthropic's
+/* Dynamic Workflows — Anthropic's
  * research-preview feature replicated locally. Planner emits a JSON
  * plan with up to 20 subagents; each runs in an isolated git worktree;
  * verifier synthesises the final answer. State lives in

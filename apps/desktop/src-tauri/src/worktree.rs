@@ -571,8 +571,8 @@ fn walk_size(p: &Path) -> u64 {
     total
 }
 
-/// Dynamic Workflow per-subagent worktree (SDD `sdd-98a42f3bdb`
-/// Phase 4). Each DW subagent runs in an isolated branch off HEAD so
+/// Dynamic Workflow per-subagent worktree (also hosts Ledger's shared
+/// + wave worktrees). Each subagent runs in an isolated branch off HEAD so
 /// concurrent claude spawns don't trample shared working-tree state.
 /// Branch name: `woom/dw-<wf>-<sub>`. Path: `<storage_root>/dw/<wf>/<sub>/`.
 /// Sequential creation only — `git worktree add` takes a repo-level

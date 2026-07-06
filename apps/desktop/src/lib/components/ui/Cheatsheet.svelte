@@ -123,14 +123,6 @@
       ]
     },
     {
-      title: 'SDD — Spec-Driven Development',
-      rows: [
-        { keys: '/sdd <task>', label: 'Drafts a spec, plans phases, then executes each phase as a chained agent turn. Workspace lives outside the repo so trial work never pollutes git.' },
-        { keys: 'SDD card', label: 'Pause / Resume / Stop the run; click a phase to refine, restart, or jump back to spec / plan' },
-        { keys: 'workspace path', label: '~/Library/Application Support/com.woom.desktop/sdd-workspaces/<id>/' }
-      ]
-    },
-    {
       title: 'Auto-updates',
       rows: [
         { keys: 'Settings → Updates', label: 'Current version, channel, last check time, latest release notes' },

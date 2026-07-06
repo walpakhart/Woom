@@ -1,5 +1,5 @@
 <script lang="ts">
-  /* Quota-pause modal (SDD `sdd-98a42f3bdb` Phase 2). Opens when
+  /* Quota-pause modal. Opens when
    * `sendClaudeMessage` detects 5H or 7D utilization ≥ 95%. The user
    * chooses between «wait» (queue the prompt + auto-fire on reset)
    * or «cancel» (drop the input). Modal owns a live 1s countdown so

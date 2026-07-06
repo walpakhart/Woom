@@ -284,7 +284,11 @@
     try {
       const gl = new WebglAddon();
       gl.onContextLoss(() => {
-        gl.dispose();
+        /* Fires async — possibly AFTER onDestroy already disposed the
+           terminal (our teardown forces loseContext). Never touch a
+           dead terminal from here. */
+        if (destroyed) return;
+        try { gl.dispose(); } catch {/* addon already detached */}
         if (webgl === gl) webgl = null;
       });
       term.loadAddon(gl);
@@ -501,9 +505,18 @@
        `term.dispose()` detaches the canvas but the context stays alive
        until collection — WKWebView's live-context cap then hands the
        NEXT mount a born-dead context (blank terminal every other
-       open). `WEBGL_lose_context.loseContext()` frees the slot now. */
+       open). `WEBGL_lose_context.loseContext()` frees the slot now.
+
+       ORDER MATTERS: dispose the webgl ADDON before the terminal and
+       before forcing context loss. loseContext() fires the addon's
+       own `webglcontextlost` listener asynchronously; if the addon is
+       still wired to an already-disposed terminal at that point, its
+       handler reads `this._terminal._core._store._isDisposed` off
+       undefined and the uncaught throw wedges the whole view. */
     const canvases = host ? Array.from(host.querySelectorAll('canvas')) : [];
-    term?.dispose();
+    try { webgl?.dispose(); } catch {/* already torn down */}
+    webgl = null;
+    try { term?.dispose(); } catch {/* already torn down */}
     for (const c of canvases) {
       try {
         const ctx = c.getContext('webgl2') ?? c.getContext('webgl');
@@ -512,7 +525,6 @@
     }
     term = null;
     fit = null;
-    webgl = null;
   });
 
   /**

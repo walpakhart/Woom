@@ -1,8 +1,7 @@
-// Canvas + SDD MCP-tool dispatchers extracted from
+// Canvas MCP-tool dispatchers extracted from
 // `handleAppNavigation` in `+page.svelte` (wave-31 split). Every case
 // resolves through `linkedCanvasIdFor` (passed in via deps) and
-// delegates to the matching canvas-store operation. SDD cases fan
-// out to the same SDD store helpers the SddCard buttons call.
+// delegates to the matching canvas-store operation.
 //
 // The caller hands in a `deps` object built once at page-script
 // setup; this module never imports from `+page.svelte` so the
@@ -41,13 +40,6 @@ import {
   type ShapeKind,
 } from '$lib/state/canvas.svelte';
 import { applyLayout as canvasApplyLayout, type LayoutAlgorithm } from '$lib/services/canvasLayout';
-import {
-  approveSddPhasePlan,
-  completeSddPhaseImplement,
-  discardSddPhasePlan,
-  saveSddPhasePlan,
-  saveSddPhaseVerify,
-} from '$lib/state/sdd.svelte';
 
 export interface CanvasMcpDeps {
   /** Returns the canvas id the session is linked to, or `null` when
@@ -55,11 +47,11 @@ export interface CanvasMcpDeps {
   linkedCanvasIdFor(sessionId: string): string | null;
 }
 
-/** Try to handle a canvas-prefixed or SDD-prefixed MCP tool call.
+/** Try to handle a canvas-prefixed MCP tool call.
  *  Returns `true` when a case matched. The original
  *  `handleAppNavigation` switch keeps its other cases above this
- *  call and only delegates here for the canvas/SDD branches. */
-export function handleCanvasOrSddMcp(
+ *  call and only delegates here for the canvas branches. */
+export function handleCanvasMcp(
   sessionId: string,
   name: string,
   input: Record<string, unknown>,
@@ -354,83 +346,6 @@ export function handleCanvasOrSddMcp(
         if (desiredId) shape.id = desiredId;
         canvasAddShape(canvasId, shape);
       })();
-      return true;
-    }
-    /* Three-call SDD close-out tools. The sidecar tool returns
-       text instantly so the agent can keep streaming; the real
-       mutation (write plan.md / verify.json, advance substep
-       state, flip phase frontmatter) happens here via the same
-       Tauri commands the SddCard buttons call. File-watcher
-       detects the change and the orchestrator schedules the
-       next pass on the next tick. */
-    case 'mcp__app__sdd_save_phase_plan': {
-      const id = str('id');
-      const phase = num('phase');
-      const body = str('body');
-      if (!id || !Number.isFinite(phase) || !body) return true;
-      void saveSddPhasePlan(id, phase, body);
-      return true;
-    }
-    case 'mcp__app__sdd_complete_phase_implement': {
-      const id = str('id');
-      const phase = num('phase');
-      const summary = str('summary');
-      if (!id || !Number.isFinite(phase) || !summary) return true;
-      const fc = Array.isArray(input.files_changed)
-        ? (input.files_changed as unknown[]).filter((v): v is string => typeof v === 'string')
-        : [];
-      void completeSddPhaseImplement(id, phase, summary, fc);
-      return true;
-    }
-    case 'mcp__app__sdd_log_phase_done': {
-      /* Single-call mode close-out. The woom-app sidecar stub
-       * returns a success message but doesn't actually flip phase
-       * status — bug surfaced as "agent says 'Phase 4 done.' in
-       * chat but UI still shows phase 3 done". Route to the
-       * existing verify-save command with an auto-built JSON that
-       * carries the agent's summary + files_changed and an empty
-       * deviations array (single-call agents don't run a verify
-       * pass — their "done" claim IS the assertion that the phase
-       * is clean). Flipping through verify-save means the same
-       * derive_stage / audit path runs and the chips advance. */
-      const id = str('id');
-      const phase = num('phase');
-      const summary = str('summary');
-      if (!id || !Number.isFinite(phase) || !summary) return true;
-      const filesChanged = Array.isArray(input.files_changed)
-        ? (input.files_changed as unknown[]).filter((v): v is string => typeof v === 'string')
-        : [];
-      const rawJson = JSON.stringify({
-        summary,
-        files_changed: filesChanged,
-        task_compliance: [],
-        deviations: [],
-        notes: '',
-      });
-      void saveSddPhaseVerify(id, phase, rawJson);
-      return true;
-    }
-    case 'mcp__app__sdd_save_phase_verify': {
-      const id = str('id');
-      const phase = num('phase');
-      const rawJson = str('raw_json');
-      if (!id || !Number.isFinite(phase) || !rawJson) return true;
-      void saveSddPhaseVerify(id, phase, rawJson);
-      return true;
-    }
-    case 'mcp__app__sdd_approve_phase_plan': {
-      const id = str('id');
-      const phase = num('phase');
-      if (!id || !Number.isFinite(phase)) return true;
-      void approveSddPhasePlan(id, phase);
-      return true;
-    }
-    case 'mcp__app__sdd_discard_phase_plan': {
-      const id = str('id');
-      const phase = num('phase');
-      const reason = str('reason');
-      if (!id || !Number.isFinite(phase)) return true;
-      void discardSddPhasePlan(id, phase, reason || undefined);
       return true;
     }
   }

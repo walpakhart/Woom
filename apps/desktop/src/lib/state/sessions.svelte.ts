@@ -75,7 +75,7 @@ setStreamFlushHandler(() => {
    * `.list = .list.map(...)` reassigned the array reference, which
    * Svelte 5 treats as a coarse-grained dirty on EVERY consumer of
    * `sessionsState.list` (ChatThread, ChatHeader, sidebar lists,
-   * SDD cards, palette derivations, …). When 1 of 8 sessions
+   * workflow cards, palette derivations, …). When 1 of 8 sessions
    * receives a delta we don't want the other 7's reactive subscribers
    * to re-run — fine-grained mutation of `.list[i]` only dirties
    * readers of that index. Cuts streaming-token reactive cost
@@ -1531,8 +1531,23 @@ export function updateLastAssistantUsage(sessionId: string, usage: ClaudeUsage) 
        * at turn-end. The budget popover diffs these across turns to
        * approximate per-session limit consumption (the API gives no
        * absolute cap). Null when no snapshot has been fetched yet. */
+      /* ACCUMULATE across the turn's API steps instead of overwriting.
+       * A multi-step turn (every tool call = one API step) stamps this
+       * message several times; last-write-wins kept only the FINAL
+       * step's counters, so a 40-step turn reported one step's in/out
+       * (session chips showed absurdly low "12k tok" on 50-turn
+       * sessions) and dollar-cost dropped every earlier step's cache
+       * bill. Token buckets sum; contextSize stays the LATEST step's
+       * value (it's a level, not a flow). */
+      const prev = last.usage;
       const stamped: ClaudeUsage = {
         ...usage,
+        inputTokens: (prev?.inputTokens ?? 0) + usage.inputTokens,
+        outputTokens: (prev?.outputTokens ?? 0) + usage.outputTokens,
+        cacheCreationTokens:
+          (prev?.cacheCreationTokens ?? 0) + usage.cacheCreationTokens,
+        cacheReadTokens: (prev?.cacheReadTokens ?? 0) + usage.cacheReadTokens,
+        contextSize: usage.contextSize,
         // Authoritative model (carries the [1m] / tier suffix the CLI
         // drops) so costForUsage picks the right RATE_TABLE row.
         model: effectiveModel,

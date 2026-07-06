@@ -13,8 +13,8 @@
   import SettingsMemory from './settings/SettingsMemory.svelte';
   import SettingsUpdates from './settings/SettingsUpdates.svelte';
   import SettingsWorkflows from './settings/SettingsWorkflows.svelte';
-  import SettingsSdd from './settings/SettingsSdd.svelte';
   import SettingsPrivacy from './settings/SettingsPrivacy.svelte';
+  import SettingsLogs from './settings/SettingsLogs.svelte';
   import SettingsAgents from './settings/SettingsAgents.svelte';
   import SettingsAbout from './settings/SettingsAbout.svelte';
 </script>
@@ -32,8 +32,8 @@
     <SettingsMemory />
     <SettingsUpdates />
     <SettingsWorkflows />
-    <SettingsSdd />
     <SettingsPrivacy />
+    <SettingsLogs />
     <SettingsAgents />
     <SettingsAbout />
   </div>

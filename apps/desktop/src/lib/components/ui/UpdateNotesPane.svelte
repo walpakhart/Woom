@@ -5,14 +5,13 @@
    * the same component the chat thread uses, so GFM tables / fenced
    * code / task lists work end-to-end.
    *
-   * Visual model: same lightbox pattern as `SddCard.svelte`'s
-   * fullscreen mode — fixed inset, translucent backdrop with blur,
+   * Visual model: fullscreen lightbox —
+   * fixed inset, translucent backdrop with blur,
    * Esc + backdrop click + × close. Three CTAs in the footer:
    * - Later (close pane, leave the toast active)
    * - Install on quit (download + stage, no restart)
    * - Install now (download + apply + restart, the louder choice)
-   *
-   * Phase reference: SDD workspace `sdd-2508eeb82e`, phase 4 task 3. */
+ */
 
   import Markdown from '$lib/components/ui/Markdown.svelte';
 
@@ -29,7 +28,7 @@
   let { version, notes, pubDate = null, onInstallNow, onInstallOnQuit, onClose }: Props = $props();
 
   /* Esc dismisses. Mount the listener via $effect so cleanup runs
-   * automatically on unmount — matches the SddCard lightbox pattern. */
+   * automatically on unmount. */
   function onKey(e: KeyboardEvent) {
     if (e.key === 'Escape') {
       e.preventDefault();
@@ -111,8 +110,8 @@
     backdrop-filter: blur(3px);
   }
 
-  /* Pane — viewport-cover panel with generous padding + the same
-     accent-rail visual language as SddCard's lightbox. */
+  /* Pane — viewport-cover panel with generous padding + the
+     accent-rail visual language shared by the inline cards. */
   .unp {
     position: fixed;
     inset: 5vh 6vw;

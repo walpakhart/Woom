@@ -1,7 +1,7 @@
 //! RTK integration — bundled-sidecar discovery, version probing, and the
 //! `rtk_status` Tauri command.
 //!
-//! Phase-1 scope (see SDD workspace `sdd-e1817d13c6`):
+//! Phase-1 scope:
 //!   - locate the bundled `rtk-<triple>` binary placed by Tauri's
 //!     externalBin layout next to the main app binary,
 //!   - fall back to a system-PATH `rtk` so users who installed RTK
@@ -809,12 +809,16 @@ mod tests {
         }
     }
     fn tempdir() -> TempDir {
+        // nanos alone collide under parallel test threads (macOS clock
+        // granularity ~1µs) — the counter guarantees uniqueness.
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let mut p = std::env::temp_dir();
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        p.push(format!("woom-rtk-test-{nanos}-{}", std::process::id()));
+        p.push(format!("woom-rtk-test-{nanos}-{}-{seq}", std::process::id()));
         fs::create_dir_all(&p).unwrap();
         TempDir(p)
     }

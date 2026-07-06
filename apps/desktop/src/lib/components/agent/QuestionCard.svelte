@@ -293,7 +293,7 @@
 
 <style>
   /* Quiet blockquote — no fill, no rounded right corner, hairline
-   *  accent rail. Matches `.cac` / `.sdd-card` so all inline cards
+   *  accent rail. Matches `.cac` so all inline cards
    *  share one visual grammar; lives on the same typographic surface
    *  as the prose instead of a tinted panel on top. Hover lifts a
    *  4% tint so the active question is still findable when scanning. */
@@ -493,7 +493,7 @@
   }
   .qc-foot--minimal { justify-content: flex-end; }
 
-  /* Foot mirrors SddCard / ClaudeActionCard actions row — primary
+  /* Foot mirrors ClaudeActionCard actions row — primary
    *  CTA carries an accent-filled pill; secondary actions sit as
    *  bare text-buttons that only colour-shift on hover. */
   .qc-foot {

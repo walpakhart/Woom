@@ -4,8 +4,6 @@
  * the Settings card, and the future release-notes pane all read from
  * one source of truth. Settings are loaded once on init + re-fetched
  * on demand after any command that mutates them.
- *
- * Phase reference: SDD workspace `sdd-2508eeb82e`, phase 3 task 7.
  */
 
 import { invoke } from '@tauri-apps/api/core';

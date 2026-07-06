@@ -1,6 +1,6 @@
 // Inbox/view/instance MCP-tool dispatcher cases extracted from
 // `handleAppNavigation` in `+page.svelte` (wave-32 split). Covers all
-// 21 non-canvas/SDD cases (open_jira_issue, switch_view, open_repo,
+// 21 non-canvas cases (open_jira_issue, switch_view, open_repo,
 // set_*_instance, set_editor_repo_path, set_agent_cwd, etc).
 //
 // Stateful caller deps come in via the `InboxMcpDeps` interface so

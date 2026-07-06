@@ -7,6 +7,7 @@ mod claude_mcp;
 mod claude_quota;
 mod claudemd;
 mod dw;
+mod ledger;
 mod crash_reporting;
 mod fs;
 mod git;
@@ -17,34 +18,9 @@ mod jira;
 mod jira_commands;
 mod keychain;
 mod library;
+mod logging;
 mod memory_local;
 mod rtk;
-mod sdd;
-mod sdd_action_log;
-mod sdd_action_log_commands;
-mod sdd_audit;
-mod sdd_audit_commands;
-mod sdd_frontmatter;
-mod sdd_git_commands;
-mod sdd_hydrate;
-mod sdd_lifecycle_commands;
-mod sdd_mcp_handlers;
-mod sdd_md_mutators;
-mod sdd_meta;
-mod sdd_phase_commands;
-mod sdd_phase_config;
-mod sdd_phase_io;
-mod sdd_plan;
-mod sdd_plan_helpers;
-mod sdd_skip_commands;
-mod sdd_structure_commands;
-mod sdd_prompts;
-mod sdd_substep;
-mod sdd_time;
-mod sdd_user_commands;
-mod sdd_verify;
-mod sdd_verify_recover_commands;
-mod sdd_watcher;
 mod sentry;
 mod sentry_commands;
 mod skills;
@@ -396,6 +372,11 @@ fn install_panic_hook() {
                 let _ = f.write_all(entry.as_bytes());
                 let _ = f.flush();
             }
+            // Also mirror a one-liner into the app log (`<app_data>/
+            // logs/woom.log`) so the Settings → Logs card shows the
+            // panic next to whatever the app was doing at the time.
+            // The full backtrace stays in panic.log above.
+            logging::log_line("panic", "rust", &format!("{msg} at {location}"));
             // Also delegate to default hook so dev terminal sees it.
             default_hook(info);
         }));
@@ -447,8 +428,8 @@ pub fn run() {
         .manage(terminal::TerminalRegistry::default())
         .manage(bg_tasks::BgRegistry::new())
         .manage(claude_bg::ClaudeBgRegistry::new())
-        .manage(sdd::SddRegistry::new())
         .manage(dw::DwRegistry::new())
+        .manage(ledger::LedgerRegistry::new())
         .manage(std::sync::Arc::new(updater::UpdaterState::new()))
         .manage(action_ipc_state())
         .invoke_handler(tauri::generate_handler![
@@ -549,6 +530,21 @@ pub fn run() {
             dw::dw_get,
             dw::dw_has_running,
             dw::dw_cancel_all,
+            ledger::ledger_create,
+            ledger::ledger_set_task,
+            ledger::ledger_add_item,
+            ledger::ledger_update_item,
+            ledger::ledger_remove_item,
+            ledger::ledger_move_item,
+            ledger::ledger_launch,
+            ledger::ledger_run,
+            ledger::ledger_cancel,
+            ledger::ledger_retry_item,
+            ledger::ledger_skip_item,
+            ledger::ledger_apply,
+            ledger::ledger_discard,
+            ledger::ledger_get,
+            ledger::ledger_list,
             agent_compact_session,
             claude_plan_usage,
             claude_stop,
@@ -620,6 +616,14 @@ pub fn run() {
             biometric_unlock,
             crash_reporting::get_telemetry_opt_out,
             crash_reporting::set_telemetry_opt_out,
+            // App log — `<app_data>/logs/woom.log`. Frontend hooks
+            // funnel console.error/warn + window errors through
+            // `log_write`; Settings → Logs drives the rest.
+            logging::log_write,
+            logging::log_path,
+            logging::log_tail,
+            logging::log_clear,
+            logging::log_reveal,
             list_bundled_docs,
             read_bundled_doc,
             fs_remove_file,
@@ -663,50 +667,6 @@ pub fn run() {
             claude_bg::claude_bg_watch,
             claude_bg::claude_bg_unwatch,
             claude_bg::claude_bg_unwatch_session,
-            // SDD (Spec-Driven Development) — orchestrated spec → plan
-            // → phases workflow in a temp workspace under
-            // `<app_data>/sdd-workspaces/<id>/`. See `sdd.rs`.
-            sdd::sdd_start,
-            sdd::sdd_hydrate,
-            sdd::sdd_get,
-            sdd::sdd_list,
-            sdd::sdd_refresh,
-            sdd_user_commands::sdd_approve,
-            sdd_lifecycle_commands::sdd_pause,
-            sdd_lifecycle_commands::sdd_resume,
-            sdd_lifecycle_commands::sdd_stop,
-            sdd_prompts::sdd_prompt,
-            sdd_user_commands::sdd_save_body,
-            sdd_user_commands::sdd_retry_phase,
-            sdd_user_commands::sdd_approve_phase,
-            sdd_phase_commands::sdd_save_phase_plan,
-            sdd_phase_commands::sdd_complete_phase_implement,
-            sdd_phase_commands::sdd_save_phase_verify,
-            sdd_phase_commands::sdd_approve_phase_plan,
-            sdd_phase_commands::sdd_discard_phase_plan,
-            sdd_phase_commands::sdd_set_phase_execution_config,
-            sdd_skip_commands::sdd_skip_phase,
-            sdd_structure_commands::sdd_insert_phase,
-            sdd_structure_commands::sdd_reorder_phases,
-            sdd_structure_commands::sdd_delete_phase,
-            sdd_structure_commands::sdd_upgrade_workspace,
-            sdd_verify_recover_commands::sdd_run_verification,
-            sdd_verify_recover_commands::sdd_mark_manual_check,
-            sdd_verify_recover_commands::sdd_rollback_phase,
-            sdd_verify_recover_commands::sdd_recover_workspace,
-            sdd_git_commands::sdd_get_git_state,
-            sdd_git_commands::sdd_get_phase_diff,
-            sdd_git_commands::sdd_get_file_diff,
-            sdd_skip_commands::sdd_skip_phase_with_reason,
-            sdd_skip_commands::sdd_accept_phase_failed,
-            sdd_action_log_commands::sdd_append_action_log,
-            sdd_action_log_commands::sdd_append_action_log_batch,
-            sdd_action_log_commands::sdd_read_action_log,
-            sdd_audit_commands::sdd_audit_append,
-            sdd_audit_commands::sdd_audit_read,
-            sdd_audit_commands::sdd_validate_mutation,
-            sdd_user_commands::sdd_discard,
-            sdd_user_commands::sdd_attach_to_session,
             // User-defined hooks — agent-lifecycle scripts. See
             // `hooks.rs` for the contract (stdin JSON / exit code /
             // stdout JSON). `hooks_run` is called from the frontend
@@ -814,6 +774,20 @@ pub fn run() {
             }
         })
         .setup(|app| {
+            // File logging — resolve the real app-data dir before any
+            // other setup work so every subsequent `log_line` lands in
+            // `<app_data>/logs/woom.log` (see `logging.rs`).
+            {
+                use tauri::Manager;
+                if let Ok(dir) = app.path().app_data_dir() {
+                    logging::init(dir);
+                }
+                logging::log_line(
+                    "info",
+                    "app",
+                    &format!("Woom {} started", app.package_info().version),
+                );
+            }
             // Hooks config — load at startup so the frontend's first
             // `hooks_load_config` call doesn't pay a disk read. Failure
             // modes (missing/malformed) fall through to an empty config
@@ -883,6 +857,10 @@ pub fn run() {
             // process died while they were mid-flight), then sweep stale
             // terminal workflows older than the 7-day retain window. The
             // 6h interval task takes over after this initial pass.
+            let ledger_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                ledger::recover_on_startup(ledger_handle).await;
+            });
             let dw_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 dw::recover_on_startup(dw_handle.clone()).await;
@@ -896,7 +874,7 @@ pub fn run() {
                     }
                 }
             });
-            // RTK bootstrap (`sdd-e1817d13c6` Phase 2). Resolves the
+            // RTK bootstrap. Resolves the
             // bundled `rtk` sidecar, copies the woom-managed wrapper
             // script into the user's data dir with the rtk path
             // substituted, and idempotently patches

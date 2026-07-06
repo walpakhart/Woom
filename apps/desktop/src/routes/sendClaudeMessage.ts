@@ -7,7 +7,7 @@
 // recursive retry / queue-drain re-entry resolves correctly.
 //
 // The function preserves a lot of subtle behaviour:
-//   - Queue-while-sending (visible text vs. silent SDD prompt slot).
+//   - Queue-while-sending (visible text vs. silent prompt slot).
 //   - Slash-command short-circuit (delegates to handleSlashCommand).
 //   - UserPromptSubmit hook gating.
 //   - Crash-recovery recap + uuid rotation when `interrupted=true`.
@@ -15,7 +15,7 @@
 //   - Mention bake-in (file refs → image vision blocks).
 //   - Resume-orphan self-heal with a single recursive retry.
 //   - Stop hook + statusline refresh + native completion notify.
-//   - SDD silent-prompt drain + queue drain in the finally block.
+//   - Silent-prompt drain + queue drain in the finally block.
 
 import { invoke } from '@tauri-apps/api/core';
 import {
@@ -46,14 +46,13 @@ import { runHook } from '$lib/state/hooks.svelte';
 import { runStatusLine, type StatusLinePayload } from '$lib/state/statusline.svelte';
 import { notify, notifyError } from '$lib/state/toaster.svelte';
 import { appHasFocus, notifyClaudeRunComplete } from '$lib/notifications';
-import { refreshSdd, workspaceForSession } from '$lib/state/sdd.svelte';
 import { isImagePath } from '$lib/format';
 import type { ClaudeSession, Mention } from '$lib/types';
 
 export interface SendOpts {
   silent?: boolean;
   kind?: 'claude';
-  /** Programmatic prompt — SDD advance, DW verifier, bg-task notify and
+  /** Programmatic prompt — DW verifier, bg-task notify and
    *  the pendingSilent drain pass their text HERE instead of writing it
    *  into `session.input`. The composer input belongs to the user; auto
    *  sends that routed through it used to wipe whatever the user was
@@ -82,6 +81,12 @@ export interface SendClaudeMessageDeps {
   getAttachmentDir(): Promise<string>;
 }
 
+/* Per-session "silent prompt while a turn is in flight" slot. A
+ * programmatic silent send that arrives mid-turn parks its prompt here;
+ * the finally block drains it as the next silent turn. Latest-wins —
+ * these are orchestration prompts, not user text. */
+const pendingSilentBySession = new Map<string, string>();
+
 /** Build a self-aware sendClaudeMessage closure. The recursive
  *  self-call (resume-orphan retry, post-turn queue drain) needs a
  *  reference to the same function — we return the closure so its
@@ -97,8 +102,7 @@ export function createSendClaudeMessage(deps: SendClaudeMessageDeps) {
       if (opts.silent) {
         const promptText = (opts.prompt ?? s.input).trim();
         if (promptText) {
-          const { setPendingSilent } = await import('$lib/state/sdd.svelte');
-          setPendingSilent(s.id, promptText);
+          pendingSilentBySession.set(s.id, promptText);
         }
         /* Only clear the composer when the prompt actually came from it
          * (legacy path) — external prompts must not touch the user's
@@ -121,7 +125,7 @@ export function createSendClaudeMessage(deps: SendClaudeMessageDeps) {
     const text = (opts.prompt ?? s.input).trim();
     if (!opts.silent && (await deps.handleSlashCommand(text, s))) return;
     const id = s.id;
-    /* Quota guard (SDD `sdd-98a42f3bdb` Phase 2). If 5H or 7D
+    /* Quota guard. If 5H or 7D
      * utilization is at/above 95%, block the send + open the pause
      * modal. On «wait» we queue the prompt into `pendingQueue` (same
      * FIFO the composer's queue-while-sending UI uses) and mark
@@ -435,12 +439,6 @@ export function createSendClaudeMessage(deps: SendClaudeMessageDeps) {
         (m, i) => i === finalSess.messages.length - 1 && m.role === 'assistant' && m.content.startsWith('**Claude failed:'),
       );
       updateSession(id, { sending: false });
-      {
-        const sddWs = workspaceForSession(id);
-        if (sddWs) {
-          void refreshSdd(sddWs.id);
-        }
-      }
       void runHook('Stop', {
         session_id: id,
         agent_kind: 'claude',
@@ -469,8 +467,8 @@ export function createSendClaudeMessage(deps: SendClaudeMessageDeps) {
       }
       const sessAfterDrain = sessionsState.list.find((x) => x.id === id);
       {
-        const { popPendingSilent } = await import('$lib/state/sdd.svelte');
-        const deferred = popPendingSilent(id);
+        const deferred = pendingSilentBySession.get(id) ?? null;
+        pendingSilentBySession.delete(id);
         if (deferred && (sessAfterDrain?.pendingQueue?.length ?? 0) === 0) {
           /* Drain via opts.prompt — routing through `input` here used to
            * wipe whatever the user typed during the finished turn. */
@@ -482,18 +480,7 @@ export function createSendClaudeMessage(deps: SendClaudeMessageDeps) {
           return;
         }
       }
-      const rawQueue = sessAfterDrain?.pendingQueue ?? [];
-      const queue = rawQueue.filter((entry) => {
-        const t = entry.text.trimStart();
-        return !(
-          t.startsWith('# SDD Phase 1 — Write the spec') ||
-          t.startsWith('# SDD Phase 2 — Write the plan') ||
-          t.startsWith('# SDD Phase 3+ — Execute phase')
-        );
-      });
-      if (queue.length !== rawQueue.length) {
-        updateSession(id, { pendingQueue: queue });
-      }
+      const queue = sessAfterDrain?.pendingQueue ?? [];
       if (queue.length > 0) {
         const [nextEntry, ...rest] = queue;
         if (!deps.queueSavedDrafts.has(id)) {

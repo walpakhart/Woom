@@ -1,5 +1,5 @@
 <script lang="ts">
-  /* Dynamic Workflow card (SDD `sdd-98a42f3bdb` Phase 4). Chat-inline
+  /* Dynamic Workflow card. Chat-inline
    * card rendered when an assistant message carries `dwWorkflowId`.
    * Surfaces:
    *   - Status badge (planning / awaiting_approval / running / verifying

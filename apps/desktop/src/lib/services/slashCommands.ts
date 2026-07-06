@@ -33,8 +33,8 @@ export type SlashCommand =
   | 'ps'
   | 'loop'
   | 'unloop'
-  | 'sdd'
   | 'dw'
+  | 'ledger'
   | 'remember';
 
 export const KNOWN_SLASH_COMMANDS: SlashCommand[] = [
@@ -47,15 +47,15 @@ export const KNOWN_SLASH_COMMANDS: SlashCommand[] = [
   'ps',
   'loop',
   'unloop',
-  'sdd',
   'dw',
+  'ledger',
   'remember'
 ];
 
 /** Commands that accept inline arguments after the slash (`/preview pnpm dev`).
  *  Arg-less commands stay in the strict-exact-match path so they remain
  *  unambiguous. */
-const ARG_BEARING: Set<SlashCommand> = new Set(['preview', 'kill', 'loop', 'sdd', 'dw']);
+const ARG_BEARING: Set<SlashCommand> = new Set(['preview', 'kill', 'loop', 'dw', 'ledger']);
 
 /** Display-shape for the inline slash-picker. Picker lives in
  *  Composer.svelte and filters this list by prefix as the user types
@@ -71,8 +71,8 @@ export const SLASH_COMMAND_DESCRIPTIONS: Record<SlashCommand, string> = {
   ps:      'List running background tasks inline',
   loop:    'Re-send a prompt on a fixed cadence: /loop 5m check the deploy',
   unloop:  'Stop the active loop on this chat',
-  sdd:     'Spec-Driven Development — agent writes spec/plan/phases into a temp workspace',
   dw:      'Dynamic Workflow — planner → parallel subagent fan-out → verifier synthesis',
+  ledger:  'Ledger — sequential checklist, each item machine-checked + auto-retried',
   remember: 'Distill durable prefs/feedback from this chat into memory-save cards'
 };
 
@@ -194,7 +194,6 @@ export function appendSlashHelp(session: ClaudeSession): void {
     '- `/preview [cmd]` — open the Preview pane; with args, spawn a background task',
     '- `/kill <id|label>` — kill a tracked background task',
     '- `/ps` — list running background tasks',
-    '- `/sdd <ask>` — spec → plan → phases workflow in a temp workspace (no git pollution)',
     '- `/dw <ask>` — Dynamic Workflow: planner fans out parallel subagents → verifier synthesises',
     '- `/loop <duration> <prompt>` / `/unloop` — re-send a prompt on a cadence',
     '- `/remember` — distill durable prefs / feedback from this chat into memory-save cards',
@@ -299,42 +298,6 @@ export async function startLoopFromSlash(
     content: `_/loop started — re-sending every ${m[1]}. \`/unloop\` to stop. Auto-expires in 7 days._`,
     at: new Date().toISOString()
   });
-}
-
-/** Kick off Spec-Driven Development for the user's ask.
- *
- *  1. Creates a temp workspace under `<app_data>/sdd-workspaces/<id>/`
- *     bound to this session.
- *  2. Drops the canonical spec-writer prompt into the composer input —
- *     the agent will use `ask_user_question` for any clarifications it
- *     needs, then write `spec.md` to the workspace.
- *  3. Caller fires `sendClaudeMessage()` right after this returns so
- *     the prompt actually leaves the composer. We DON'T fire the send
- *     ourselves because the chat closures live in +page.svelte and
- *     this helper is in a service module.
- *
- *  Returns the populated prompt the caller should send (already stamped
- *  into `session.input`), or null on failure. */
-export async function startSddFromSlash(
-  session: ClaudeSession,
-  userPrompt: string
-): Promise<string | null> {
-  const { startSdd, buildKickoffPrompt } = await import('$lib/state/sdd.svelte');
-  const ws = await startSdd(session.id, userPrompt);
-  if (!ws) {
-    appendSessionMessage(session.id, {
-      role: 'assistant',
-      content: '_Failed to create SDD workspace — check the app data directory permissions._',
-      at: new Date().toISOString()
-    });
-    return null;
-  }
-  const prompt = await buildKickoffPrompt(ws);
-  /* No "_SDD started…_" preamble — the inline SddCard appearing in
-   *  the chat IS the indicator. Adding a system-style line on top
-   *  would be redundant and clash with the goal of keeping the
-   *  visible thread clean. */
-  return prompt;
 }
 
 export async function stopLoopFromSlash(session: ClaudeSession): Promise<void> {

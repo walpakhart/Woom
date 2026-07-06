@@ -5,7 +5,7 @@
      (project-memory chip; swaps to a live pip + elapsed + stop while a
      turn is in flight).
 
-     DW + SDD history used to live here as popover chips; they moved to
+     DW history used to live here as popover chips; it moved to
      Settings → Workflows (SettingsWorkflows.svelte). The header now
      carries only what's about the *active conversation*: its story
      (ribbon), its spend (sub-line + BudgetPopover), and its project

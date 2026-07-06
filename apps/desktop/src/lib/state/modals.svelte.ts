@@ -256,7 +256,7 @@ export function openQuotaPauseModal(args: {
 }
 
 /** Open the DW preflight modal + await user's approve / cancel
- *  decision (SDD `sdd-98a42f3bdb` Phase 4). On approve returns the
+ *  decision. On approve returns the
  *  user-chosen budget cap (may be raised above the $5 default).
  *  Cancel drops the workflow without firing fan-out. */
 export function openDwPreflightModal(args: {
