@@ -54,6 +54,13 @@ fn default_max_attempts() -> u32 {
     DEFAULT_MAX_ATTEMPTS
 }
 
+/// Apply as ONE clean commit by default — a user reviewing the branch
+/// doesn't want a dozen `ledger: <item>` commits. Opt out per-workflow
+/// (`squash = false`) to keep the granular per-item history.
+fn default_squash() -> bool {
+    true
+}
+
 // ---- Serde types (mirror the TS shapes in `lib/types.ts`) -----------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -132,6 +139,16 @@ pub struct LedgerWorkflow {
     pub full_diff: Option<String>,
     #[serde(default)]
     pub applied: bool,
+    /// Apply as one squashed commit (true) vs preserving per-item
+    /// commits + a merge commit (false). Surfaced as a toggle on the
+    /// review gate.
+    #[serde(default = "default_squash")]
+    pub squash: bool,
+    /// User steering notes queued mid-run. Drained into the next worker
+    /// prompt (next attempt or next item) so the human can nudge a
+    /// running ledger without editing items or restarting.
+    #[serde(default)]
+    pub injections: Vec<String>,
     #[serde(default = "default_model")]
     pub model: String,
     #[serde(default)]
@@ -565,6 +582,22 @@ fn turn_cost(
     (in_tokens, out_t, cost)
 }
 
+/// Clean commit message for a squash-applied ledger: the task as the
+/// subject, then the passed items as a bullet body. Used only when
+/// `squash = true` (the single-commit path).
+fn apply_commit_message(wf: &LedgerWorkflow) -> String {
+    let mut body = String::new();
+    for it in wf.items.iter().filter(|i| i.status == "passed") {
+        body.push_str(&format!("- {}\n", it.title));
+    }
+    let subject = wf.task.trim();
+    if body.is_empty() {
+        subject.to_string()
+    } else {
+        format!("{}\n\nLedger workflow:\n{}", subject, body.trim_end())
+    }
+}
+
 // ---- Prompts ----------------------------------------------------------------
 
 fn items_overview(wf: &LedgerWorkflow) -> String {
@@ -903,8 +936,29 @@ async fn run_ledger(app: &AppHandle, reg: &Arc<LedgerRegistry>, wf_id: &str) -> 
             });
             emit_updated(app, reg, wf_id);
 
+            // Drain any steering the user queued mid-run and fold it into
+            // this turn's feedback, so a running ledger can be nudged
+            // without editing items or restarting. Consumed once.
+            let mut injected: Vec<String> = Vec::new();
+            reg.mutate_persist(app, wf_id, |w| {
+                if !w.injections.is_empty() {
+                    injected = std::mem::take(&mut w.injections);
+                }
+            });
+            let feedback_now: Option<String> = if injected.is_empty() {
+                feedback.clone()
+            } else {
+                let steer = format!("USER STEERING (mid-run):\n{}", injected.join("\n"));
+                Some(match feedback.as_deref() {
+                    Some(f) if !f.trim().is_empty() => {
+                        format!("{}\n\nPrevious check output:\n{}", steer, f)
+                    }
+                    _ => steer,
+                })
+            };
+
             // 1. Fresh-context worker turn (streamed — live feed).
-            let prompt = build_worker_prompt(&wf_now, &item, feedback.as_deref(), false);
+            let prompt = build_worker_prompt(&wf_now, &item, feedback_now.as_deref(), false);
             let (text, usage) = run_worker_streaming(
                 app,
                 reg,
@@ -1277,6 +1331,8 @@ pub async fn ledger_create(
         base_sha: None,
         full_diff: None,
         applied: false,
+        squash: default_squash(),
+        injections: Vec::new(),
         model: model.filter(|m| !m.trim().is_empty()).unwrap_or_else(default_model),
         total_cost_usd: 0.0,
         created_at: unix_ms(),
@@ -1639,7 +1695,18 @@ pub async fn ledger_apply(app: AppHandle, workflow_id: String) -> Result<(), Str
     let parent = wf.parent_cwd.clone().ok_or("ledger has no parent cwd")?;
     let diff = wf.full_diff.clone().unwrap_or_default();
     if !diff.trim().is_empty() {
-        worktree::apply_patch(&parent, &diff)?;
+        match wf.branch.as_deref() {
+            // Real git merge of the workflow's branch — carries binary
+            // files (icons, images) a text patch would drop, and honours
+            // the squash toggle (one clean commit vs per-item history).
+            Some(branch) => {
+                worktree::apply_branch(&parent, branch, wf.squash, &apply_commit_message(&wf))?;
+            }
+            // Legacy workflows persisted before the branch was recorded:
+            // fall back to the text patch (binaries still won't ride, but
+            // nothing else can be done without the branch).
+            None => worktree::apply_patch(&parent, &diff)?,
+        }
     }
     let wf = reg
         .mutate_persist(&app, &workflow_id, |w| {
@@ -1705,6 +1772,50 @@ pub async fn ledger_discard(app: AppHandle, workflow_id: String) -> Result<(), S
         let _ = worktree::cleanup_workflow_worktrees(parent, &workflow_id);
     }
     let _ = app.emit("ledger:workflow_done", &wf);
+    Ok(())
+}
+
+/// Toggle whether applying squashes into one commit (default) or keeps
+/// the per-item commits. Honoured by `ledger_apply`.
+#[tauri::command]
+pub async fn ledger_set_squash(
+    app: AppHandle,
+    workflow_id: String,
+    squash: bool,
+) -> Result<(), String> {
+    let registry: tauri::State<'_, Arc<LedgerRegistry>> = app.state();
+    let reg = registry.inner().clone();
+    let wf = reg
+        .mutate_persist(&app, &workflow_id, |w| w.squash = squash)
+        .ok_or_else(|| format!("ledger not found: {}", workflow_id))?;
+    emit_updated(&app, &reg, &workflow_id);
+    let _ = wf;
+    Ok(())
+}
+
+/// Queue a mid-run steering note. Drained into the next worker turn
+/// (next attempt or next item) — no-op with an error if the workflow
+/// isn't actively running.
+#[tauri::command]
+pub async fn ledger_inject(
+    app: AppHandle,
+    workflow_id: String,
+    note: String,
+) -> Result<(), String> {
+    let note = note.trim().to_string();
+    if note.is_empty() {
+        return Err("empty steering note".into());
+    }
+    let registry: tauri::State<'_, Arc<LedgerRegistry>> = app.state();
+    let reg = registry.inner().clone();
+    let wf = reg
+        .get(&workflow_id)
+        .ok_or_else(|| format!("ledger not found: {}", workflow_id))?;
+    if wf.status != "running" {
+        return Err(format!("ledger is not running (status {})", wf.status));
+    }
+    reg.mutate_persist(&app, &workflow_id, |w| w.injections.push(note));
+    emit_updated(&app, &reg, &workflow_id);
     Ok(())
 }
 
@@ -1778,6 +1889,8 @@ mod tests {
             base_sha: None,
             full_diff: None,
             applied: false,
+            squash: default_squash(),
+            injections: Vec::new(),
             model: default_model(),
             total_cost_usd: 0.0,
             created_at: 0,

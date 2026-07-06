@@ -44,6 +44,11 @@ export interface LedgerWorkflow {
   baseSha?: string | null;
   fullDiff?: string | null;
   applied: boolean;
+  /** Apply as one squashed commit (default) vs preserving per-item
+   *  commits + a merge commit. */
+  squash: boolean;
+  /** Steering notes queued mid-run, drained into the next worker turn. */
+  injections: string[];
   model: string;
   totalCostUsd: number;
   createdAt: number;
@@ -95,6 +100,24 @@ export function activeLedgerForSession(sessionId: string): LedgerWorkflow | null
 export function isLedgerActive(id: string): boolean {
   const w = ledgerState.workflows.find((x) => x.id === id);
   return w ? ACTIVE_LEDGER_STATUSES.has(w.status) : false;
+}
+
+/** Toggle squash-on-apply. Optimistically flips local state; the
+ *  backend echoes a `ledger:updated` that reconciles it. */
+export async function setLedgerSquash(id: string, squash: boolean): Promise<void> {
+  const w = getLedger(id);
+  if (w) w.squash = squash;
+  try {
+    await invoke('ledger_set_squash', { workflowId: id, squash });
+  } catch (e) {
+    console.warn('ledger_set_squash failed', e);
+    if (w) w.squash = !squash; // revert on failure
+  }
+}
+
+/** Queue a mid-run steering note. Backend rejects unless running. */
+export async function injectLedgerNote(id: string, note: string): Promise<void> {
+  await invoke('ledger_inject', { workflowId: id, note });
 }
 
 /** Hydrate from disk on app boot. `ledger_list` returns full workflows

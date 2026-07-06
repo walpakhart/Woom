@@ -543,6 +543,8 @@ pub fn run() {
             ledger::ledger_skip_item,
             ledger::ledger_apply,
             ledger::ledger_discard,
+            ledger::ledger_set_squash,
+            ledger::ledger_inject,
             ledger::ledger_get,
             ledger::ledger_list,
             agent_compact_session,

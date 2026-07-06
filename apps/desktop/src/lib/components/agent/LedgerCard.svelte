@@ -6,7 +6,7 @@
    * action feed; the review gate exposes the branch diff + Apply. */
   import { invoke } from '@tauri-apps/api/core';
   import { slide, fade } from 'svelte/transition';
-  import { ledgerState } from '$lib/state/ledger.svelte';
+  import { ledgerState, setLedgerSquash, injectLedgerNote } from '$lib/state/ledger.svelte';
   import { formatCostUsd } from '$lib/usage';
 
   interface Props {
@@ -98,6 +98,29 @@
   function closeEditor(): void {
     editId = null;
     adding = false;
+  }
+
+  /* Mid-run steering. */
+  let injectText = $state('');
+  let injecting = $state(false);
+  async function sendInject(): Promise<void> {
+    const note = injectText.trim();
+    if (!note || injecting) return;
+    injecting = true;
+    try {
+      await injectLedgerNote(workflowId, note);
+      injectText = '';
+    } catch (e) {
+      console.warn('ledger_inject failed', e);
+    } finally {
+      injecting = false;
+    }
+  }
+  function onInjectKey(e: KeyboardEvent): void {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      void sendInject();
+    }
   }
 
   async function saveEditor(): Promise<void> {
@@ -277,9 +300,32 @@
             <span class="lg-del">−{diffStats.del}</span>
           </span>
         {/if}
+        <label
+          class="lg-squash mono"
+          title="On: apply lands as one clean commit. Off: keep every per-item commit + a merge commit."
+        >
+          <input type="checkbox" checked={wf.squash} disabled={busy} onchange={(e) => setLedgerSquash(workflowId, e.currentTarget.checked)} />
+          one commit
+        </label>
       </div>
       {#if showFullDiff}
         <pre class="lg-pre lg-pre--diff mono" transition:slide={{ duration: 180 }}>{wf.fullDiff}</pre>
+      {/if}
+    {/if}
+
+    {#if wf.status === 'running' || wf.status === 'paused_quota'}
+      <div class="lg-inject" transition:slide={{ duration: 160 }}>
+        <input
+          class="lg-input lg-inject-input mono"
+          bind:value={injectText}
+          onkeydown={onInjectKey}
+          placeholder="steer the running ledger — folded into the next worker turn"
+          disabled={injecting}
+        />
+        <button class="lg-btn" disabled={injecting || !injectText.trim()} onclick={sendInject}>nudge</button>
+      </div>
+      {#if wf.injections.length > 0}
+        <p class="lg-hint mono">{wf.injections.length} note{wf.injections.length === 1 ? '' : 's'} queued for the next turn</p>
       {/if}
     {/if}
     {#if wf.status === 'done' && wf.applied}
@@ -396,6 +442,24 @@
   }
   .lg-add { color: var(--ok, #6cb87a); }
   .lg-del { color: var(--error, #e88264); }
+  .lg-squash {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 10.5px;
+    color: var(--text-2);
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .lg-squash input { cursor: pointer; }
+  .lg-inject {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+  }
+  .lg-inject-input { flex: 1; min-width: 0; margin: 0; }
   .lg-done {
     display: flex;
     align-items: center;

@@ -468,6 +468,62 @@ pub fn apply(repo: &str, session_id: &str) -> Result<String, String> {
     Ok(format!("Merged {} into {}.\n\n{}", branch, current, merge_out.trim()))
 }
 
+/// Merge an EXPLICIT branch (not derived from a session id) into the
+/// main repo's current branch. Used by Ledger, whose branch name is
+/// stored on the workflow rather than following the `woom/<session>`
+/// convention.
+///
+/// Unlike `apply_patch` (a text `git apply`), this is a real git merge,
+/// so binary files — icons, images, anything a unified diff can't carry
+/// — ride along natively.
+///
+/// - `squash = true`  → `git merge --squash` stages the branch's entire
+///   delta as ONE change set with no per-commit history, then records a
+///   single clean commit with `message`. This is what a user who
+///   doesn't want a dozen `ledger: <item>` commits polluting their
+///   branch gets.
+/// - `squash = false` → `git merge --no-ff -m message` preserves every
+///   per-item commit plus a merge commit, for those who want the
+///   granular history.
+///
+/// Does NOT remove the worktree — the caller tears it down after (the
+/// branch must still exist at merge time).
+pub fn apply_branch(
+    repo: &str,
+    branch: &str,
+    squash: bool,
+    message: &str,
+) -> Result<String, String> {
+    // Refuse to merge into the same branch the worktree owns — that
+    // would be a no-op at best and corrupt the worktree's HEAD at worst.
+    let mut cur_cmd = git(repo);
+    cur_cmd.args(["branch", "--show-current"]);
+    let current = run(cur_cmd)?.trim().to_string();
+    if current == branch {
+        return Err(format!(
+            "Main repo is on {} — switch to another branch before applying.",
+            branch
+        ));
+    }
+
+    if squash {
+        let mut merge_cmd = git(repo);
+        merge_cmd.args(["merge", "--squash", branch]);
+        run(merge_cmd)?;
+        // `--squash` stages the delta but never commits — record the one
+        // clean commit ourselves, using the repo's own author identity.
+        let mut commit_cmd = git(repo);
+        commit_cmd.args(["commit", "-m", message]);
+        run(commit_cmd)?;
+        Ok(format!("Squash-merged {} into {} as one commit.", branch, current))
+    } else {
+        let mut merge_cmd = git(repo);
+        merge_cmd.args(["merge", "--no-ff", "-m", message, branch]);
+        let out = run(merge_cmd)?;
+        Ok(format!("Merged {} into {}.\n{}", branch, current, out.trim()))
+    }
+}
+
 /// Total bytes used by everything under `storage_root`. Walks the tree
 /// once so big worktrees with `target/` and `node_modules/` are honestly
 /// counted. Returns 0 if the dir doesn't exist yet.
