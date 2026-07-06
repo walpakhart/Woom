@@ -21,17 +21,6 @@ const RATE_TABLE: Record<
    * dedicated endpoint). 1M-context variant = base × 2 too. The four
    * possible combinations are encoded flat (no derived multipliers at
    * lookup) so debugging a wrong-rate diff in production is one grep. */
-  /* Fable 5 / Mythos 5 (launched 2026-06). Same underlying model;
-   * Mythos = Fable with safeguards lifted (Project Glasswing, gated).
-   * Both $10/$50 per 1M — "less than half" Mythos Preview. Sit above
-   * Opus 4.8 in the hierarchy. Cache write/read follow the standard
-   * 1.25× / 0.1× of base (Anthropic didn't publish cache rates). */
-  'claude-fable-5':             { input: 10, output: 50,  cacheWrite: 12.5, cacheRead: 1.0 },
-  /* 1M-context variant = base × 2, same convention as Opus 4.8[1m]
-   * (no published rate sheet for Fable[1m] yet — revise when one
-   * lands; over-estimating beats silently under-billing). */
-  'claude-fable-5[1m]':         { input: 20, output: 100, cacheWrite: 25.0, cacheRead: 2.0 },
-  'claude-mythos-5':            { input: 10, output: 50,  cacheWrite: 12.5, cacheRead: 1.0 },
   'claude-opus-4-8':            { input: 5,  output: 25,  cacheWrite: 6.25, cacheRead: 0.5 },
   'claude-opus-4-8[1m]':        { input: 10, output: 50,  cacheWrite: 12.5, cacheRead: 1.0 },
   'claude-opus-4-8:fast':       { input: 10, output: 50,  cacheWrite: 12.5, cacheRead: 1.0 },
@@ -46,13 +35,6 @@ const RATE_TABLE: Record<
  *  Sonnet/Haiku stay at 200k. */
 export function contextWindowFor(model: string | null): number {
   if (!model) return 200_000;
-  /* Fable/Mythos 5: the default tier ships a 200K window — Claude Code
-   * auto-compacts these sessions at ~155K, the standard 77.5% threshold
-   * of a 200K window (observed live 2026-06-11; the earlier 1M cap made
-   * the ring show ~15% mid-compaction). The dedicated 1M variant carries
-   * the `[1m]` suffix — check it FIRST, base-id `startsWith` matches both. */
-  if (model.startsWith('claude-fable-5[1m]') || model.startsWith('claude-mythos-5[1m]')) return 1_000_000;
-  if (model.startsWith('claude-fable-5') || model.startsWith('claude-mythos-5')) return 200_000;
   if (model.startsWith('claude-opus-4-7')) return 1_000_000;
   /* Opus 4.8 default tier dropped to 200K; the dedicated 1M variant
    * carries an explicit `[1m]` suffix in the model id. Order matters —

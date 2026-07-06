@@ -236,10 +236,12 @@
   .bp-popover {
     position: absolute;
     top: calc(100% + 6px);
-    /* Anchor is zero-width at the chip's LEFT edge — `right: 0` would
-       grow the 280px panel leftward, out of the chat pane and under
-       the sessions sidebar (only a digit-sliver stays visible). */
-    left: 0;
+    /* The spend chip sits on the RIGHT of the header, and its anchor
+       (`.ch-budget-pop-anchor`) is pinned `right: 0`. Growing the 280px
+       panel rightward (`left: 0`) ran it off the pane's right edge —
+       so anchor the panel's right edge to the chip and let it extend
+       leftward into the (much wider) chat pane. */
+    right: 0;
     z-index: 40;
     width: 280px;
     padding: 10px 12px 8px;

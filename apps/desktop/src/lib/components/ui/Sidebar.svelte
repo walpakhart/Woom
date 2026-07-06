@@ -9,7 +9,14 @@
   import { getVersion } from '@tauri-apps/api/app';
   import RailIdentityAvatar from './rail/RailIdentityAvatar.svelte';
   import { SVG_GITHUB, SVG_JIRA, SVG_SENTRY } from '$lib/data';
-  import { layoutState, setActiveInstance, type AppKind } from '$lib/state/layout.svelte';
+  import {
+    layoutState,
+    setActiveInstance,
+    addInstance,
+    removeInstance,
+    MULTI_INSTANCE_KINDS,
+    type AppKind
+  } from '$lib/state/layout.svelte';
   import { sessionsState } from '$lib/state/sessions.svelte';
   import { updateState, installNow, snooze } from '$lib/state/updates.svelte';
   import { dragState, requestCanvasRailDrop } from '$lib/state/drag.svelte';
@@ -241,19 +248,40 @@
       <span class="sb-pulse sb-pulse--dot" style:background={it.tone ?? 'var(--src-claude)'}></span>
     {/if}
   </button>
-  {#if !collapsed && it.kind && view === it.view && instancesOf(it.kind).length > 1}
+  {#if !collapsed && it.kind && view === it.view && MULTI_INSTANCE_KINDS.has(it.kind)}
     {#each instancesOf(it.kind) as inst (inst.id)}
-      <button
+      <div
         class="sb-sub"
         class:active={layoutState.activeInstance[it.kind] === inst.id}
-        onclick={() => setActiveInstance(it.kind!, inst.id)}
       >
-        <span class="sb-sub-tick">·</span>{inst.name}
-        {#if instanceHint(it.kind, inst.id)}
-          <span class="sb-sub-hint" title={instanceHint(it.kind, inst.id)}>{instanceHint(it.kind, inst.id)}</span>
+        <button
+          class="sb-sub-main"
+          onclick={() => setActiveInstance(it.kind!, inst.id)}
+        >
+          <span class="sb-sub-tick">·</span>{inst.name}
+          {#if instanceHint(it.kind, inst.id)}
+            <span class="sb-sub-hint" title={instanceHint(it.kind, inst.id)}>{instanceHint(it.kind, inst.id)}</span>
+          {/if}
+        </button>
+        {#if !inst.primary}
+          <button
+            class="sb-sub-close"
+            title="Close {inst.name}"
+            aria-label="Close {inst.name}"
+            onclick={() => removeInstance(it.kind!, inst.id)}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>
+          </button>
         {/if}
-      </button>
+      </div>
     {/each}
+    <button
+      class="sb-add"
+      title="New {it.label}"
+      onclick={() => addInstance(it.kind!)}
+    >
+      <span class="sb-add-plus">+</span> new {it.label}
+    </button>
   {/if}
 {/snippet}
 
@@ -433,17 +461,24 @@
     margin-left: 0;
   }
   .sb-sub {
-    display: flex; align-items: center; gap: 7px;
+    display: flex; align-items: center;
     width: calc(100% - 24px);
     margin: 0 0 1px 24px;
+    border-radius: var(--r-item);
+    color: var(--text-mute);
+    min-width: 0;
+  }
+  .sb-sub:hover { background: var(--bg-hover); }
+  .sb-sub:hover .sb-sub-main { color: var(--text-1); }
+  .sb-sub.active .sb-sub-main { color: var(--text-0); }
+  .sb-sub-main {
+    display: flex; align-items: center; gap: 7px;
+    flex: 1; min-width: 0;
     padding: 4px 8px;
-    border: 0; border-radius: var(--r-item);
-    background: transparent;
-    font-size: 11.5px; color: var(--text-mute);
+    border: 0; background: transparent;
+    font-size: 11.5px; color: inherit;
     cursor: pointer; text-align: left;
   }
-  .sb-sub:hover { background: var(--bg-hover); color: var(--text-1); }
-  .sb-sub.active { color: var(--text-0); }
   .sb-sub-tick { color: var(--text-faint); }
   .sb-sub-hint {
     margin-left: auto;
@@ -453,6 +488,32 @@
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     min-width: 0;
   }
+  .sb-sub-close {
+    display: grid; place-items: center;
+    flex: none;
+    width: 20px; height: 20px; margin-right: 4px;
+    border: 0; border-radius: 5px;
+    background: transparent;
+    color: var(--text-faint);
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 120ms, color 120ms, background 120ms;
+  }
+  .sb-sub:hover .sb-sub-close { opacity: 1; }
+  .sb-sub-close:hover { color: var(--err); background: var(--bg-sel); }
+  .sb-sub-close svg { width: 11px; height: 11px; }
+  .sb-add {
+    display: flex; align-items: center; gap: 6px;
+    width: calc(100% - 24px);
+    margin: 2px 0 2px 24px;
+    padding: 4px 8px;
+    border: 0; border-radius: var(--r-item);
+    background: transparent;
+    font-size: 11px; color: var(--text-faint);
+    cursor: pointer; text-align: left;
+  }
+  .sb-add:hover { background: var(--bg-hover); color: var(--text-1); }
+  .sb-add-plus { font-size: 13px; line-height: 1; color: var(--text-mute); }
 
   .sb-foot {
     flex: none;

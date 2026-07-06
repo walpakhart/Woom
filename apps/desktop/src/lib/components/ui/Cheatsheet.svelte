@@ -87,7 +87,7 @@
     {
       title: 'Agent (Claude)',
       rows: [
-        { keys: 'model · effort', label: 'Composer footer picker — Fable 5 / Mythos 5 / Opus 4.8 (+1M) / Opus 4.7 / Sonnet 4.6 / Haiku 4.5, plus the thinking-effort dial' },
+        { keys: 'model · effort', label: 'Composer footer picker — Opus 4.8 (+1M) / Opus 4.7 / Sonnet 4.6 / Haiku 4.5, plus the thinking-effort dial' },
         { keys: 'Enter', label: 'Send message' },
         { keys: `${shift} Enter`, label: 'Newline in composer' },
         { keys: '↑ / ↓', label: 'Cycle through previously-sent prompts in this session' },
