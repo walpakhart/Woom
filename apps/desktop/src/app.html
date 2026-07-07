@@ -5,15 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Woom</title>
     <link rel="icon" type="image/png" href="/woom-mark-ink.png" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <!-- IBM Plex Mono — the single typeface of the paper redesign.
-         Everything (UI, code, headings) sets in it; ui-monospace /
-         Menlo are the fallbacks for hosts that can't reach Google
-         Fonts (offline / corporate firewall). -->
-    <link
-      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap"
-      rel="stylesheet"
-    />
+    <!-- Geist + Geist Mono are self-hosted under static/fonts and
+         declared via @font-face in app.css — no CDN (Tauri runs
+         offline). ui-monospace / Menlo / system-sans are fallbacks. -->
     %sveltekit.head%
   </head>
   <body data-sveltekit-preload-data="hover">

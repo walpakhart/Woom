@@ -446,7 +446,7 @@
             secondaryColor: '#2a221d',
             tertiaryColor: '#3b3027'
           },
-          fontFamily: '"IBM Plex Mono", ui-monospace, monospace'
+          fontFamily: '"Geist Mono", ui-monospace, monospace'
         });
         const id = `mermaid-${shape.id.replace(/[^a-zA-Z0-9]/g, '')}`;
         const { svg } = await m.default.render(id, source);

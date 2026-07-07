@@ -178,20 +178,20 @@
     if (!host) return;
 
     /* Wait for the terminal's monospace font before xterm measures
-       cell metrics. IBM Plex Mono comes from Google Fonts — on the
-       FIRST terminal mount after app launch it may still be in flight,
-       so xterm would measure a fallback font and the WebGL glyph atlas
-       would render blank/garbled ("terminal is empty until I leave and
-       come back"). Bounded by a timeout so an offline host still gets
-       a (fallback-font) terminal instead of hanging forever. */
+       cell metrics. Geist Mono is self-hosted (@font-face in app.css) —
+       on the FIRST terminal mount after app launch it may still be in
+       flight, so xterm would measure a fallback font and the WebGL glyph
+       atlas would render blank/garbled ("terminal is empty until I leave
+       and come back"). Bounded by a timeout so a font-load failure still
+       gets a (fallback-font) terminal instead of hanging forever. */
     try {
       /* `check` is synchronous — after the first app-lifetime load the
          font is cached, so every later terminal mount (view switches
          remount the solo) skips the await entirely instead of eating
          the full race (up to 1.5s of black terminal per open). */
-      if (!document.fonts.check('12.5px "IBM Plex Mono"')) {
+      if (!document.fonts.check('12.5px "Geist Mono"')) {
         await Promise.race([
-          document.fonts.load('12.5px "IBM Plex Mono"'),
+          document.fonts.load('12.5px "Geist Mono"'),
           new Promise((r) => setTimeout(r, 1500))
         ]);
       }
@@ -228,7 +228,7 @@
     const bg1 = v('--dark-0', '#262218');
 
     term = new Terminal({
-      fontFamily: '"IBM Plex Mono", "SF Mono", ui-monospace, monospace',
+      fontFamily: '"Geist Mono", "SF Mono", ui-monospace, monospace',
       fontSize: 12.5,
       lineHeight: 1.25,
       cursorBlink: true,
@@ -312,7 +312,7 @@
        * still works, just slower. Silent fallback. */
     }
 
-    /* Late-font safety net: if IBM Plex Mono finishes loading after
+    /* Late-font safety net: if Geist Mono finishes loading after
        the timeout above let us proceed with a fallback font, rebuild
        the glyph atlas + refit once the FontFaceSet settles so the
        terminal self-heals instead of staying mis-rendered. */
