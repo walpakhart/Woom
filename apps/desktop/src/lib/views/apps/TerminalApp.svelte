@@ -24,7 +24,7 @@
   import InlineClaude from './editor/InlineClaude.svelte';
   import Splitter from '$lib/components/ui/Splitter.svelte';
   import SidePaneRail from '$lib/components/ui/SidePaneRail.svelte';
-  import { layoutState, kindForInstanceId, APP_INSTANCE_IDS } from '$lib/state/layout.svelte';
+  import { layoutState, kindForInstanceId, APP_INSTANCE_IDS, setActiveInstance, addInstance, removeInstance } from '$lib/state/layout.svelte';
   import { sessionsState } from '$lib/state/sessions.svelte';
   import { applyTerminalSelectionToAgent } from '$lib/services/applyToAgent';
   import { clearTerminalScrollback } from '$lib/state/terminals.svelte';
@@ -61,6 +61,16 @@
   const instanceLabel = $derived(
     layoutState.instances.terminal.find((i) => i.id === p.instanceId)?.name ?? 'Terminal'
   );
+
+  /* Redesign v2 §2.7 — instance list column. Switching sets the active
+     terminal instance; +page's `{#key activeInstance.terminal}` remounts
+     this app on the new PTY. */
+  const termInstances = $derived(layoutState.instances.terminal);
+  const activeTermId = $derived(layoutState.activeInstance.terminal);
+  function removeTerminal(id: string, e: MouseEvent) {
+    e.stopPropagation();
+    removeInstance('terminal', id);
+  }
 
   /** Sessions linked TO this terminal — used here ONLY to feed the
    *  floating Apply popover's button list. The InlineClaude pane
@@ -152,6 +162,42 @@
   class:st-shell--rail={!sideOpen}
   style="--app-tone: var(--src-term); --app-glow: rgba(245,240,234,0.30);"
 >
+  <aside class="lp st-list">
+    <header class="lp-head">
+      <span class="lp-title">Terminals</span>
+      <span class="lp-count">{termInstances.length}</span>
+      <span class="lp-head-spring"></span>
+      <button class="lp-add" onclick={() => addInstance('terminal')} title="New terminal" aria-label="New terminal">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+      </button>
+    </header>
+    <div class="lp-list">
+      {#each termInstances as inst (inst.id)}
+        <button
+          class="lp-row st-list-row"
+          class:active={inst.id === activeTermId}
+          onclick={() => setActiveInstance('terminal', inst.id)}
+        >
+          <span class="st-list-dot" aria-hidden="true"></span>
+          <span class="lp-row-title">{inst.name}</span>
+          <span class="lp-row-meta">zsh</span>
+          {#if !inst.primary}
+            <span
+              class="st-list-x"
+              role="button"
+              tabindex="-1"
+              title="Close {inst.name}"
+              aria-label="Close {inst.name}"
+              onclick={(e) => removeTerminal(inst.id, e)}
+              onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); removeTerminal(inst.id, e as unknown as MouseEvent); } }}
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="6" y1="18" x2="18" y2="6"/></svg>
+            </span>
+          {/if}
+        </button>
+      {/each}
+    </div>
+  </aside>
   {#if sideOpen}
     <Splitter
       direction="horizontal"
@@ -291,18 +337,41 @@
      the only solo whose whole subtree (head + surface + side pane,
      all inside the Splitter) intermittently came up invisible. A grid
      cell gives the Splitter a definite stretch context in both axes. */
+  /* Redesign v2 §2.7 — [list 264][PTY(+side)]. Shell padding dropped so
+     the list is flush-left; the charcoal PTY gets its own margin-inset. */
   .st-shell {
     display: grid;
-    grid-template-columns: minmax(0, 1fr);
+    grid-template-columns: 264px minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr);
-    padding: var(--app-pad, 14px);
+    padding: 0;
   }
-  /* Rail-collapsed: 2-col grid (terminal pane + 44px rail). */
+  /* Rail-collapsed: list + terminal pane + 44px rail. */
   .st-shell.st-shell--rail {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 44px;
+    grid-template-columns: 264px minmax(0, 1fr) 44px;
     transition: grid-template-columns var(--dur-base) var(--ease-out);
   }
+  /* Instance list column. */
+  .st-list { min-height: 0; }
+  .st-list-row {
+    display: flex; align-items: center; gap: 8px;
+  }
+  .st-list-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--text-linenum, var(--text-mute));
+    flex: none;
+  }
+  .st-list-row.active .st-list-dot { background: var(--src-term, var(--ok)); }
+  .st-list-row .lp-row-title { flex: 1; min-width: 0; }
+  .st-list-row .lp-row-meta { flex: none; }
+  .st-list-x {
+    flex: none; width: 18px; height: 18px;
+    display: grid; place-items: center;
+    border-radius: 4px; color: var(--text-mute); cursor: pointer;
+    opacity: 0; transition: opacity 120ms, color 120ms, background 120ms;
+  }
+  .st-list-x svg { width: 11px; height: 11px; }
+  .st-list-row:hover .st-list-x { opacity: 0.8; }
+  .st-list-x:hover { opacity: 1; color: var(--err); background: var(--bg-3); }
   .st-shell :global(.s-start),
   .st-shell :global(.s-end) {
     height: 100%;
@@ -337,10 +406,14 @@
   .st-main {
     display: flex; flex-direction: column;
     overflow: hidden;
-    /* Charcoal inset — same in both themes per the mockup. */
+    /* Charcoal inset — margin gap + rounded corners (§2.7). Height comes
+       from the splitter pane's flex, not 100% (margin would overflow). */
     background: var(--dark-0);
     position: relative;
-    height: 100%;
+    flex: 1; min-height: 0;
+    margin: 14px 20px 18px;
+    border-radius: 10px;
+    box-shadow: var(--shadow-1);
   }
   .st-main :global(.terminal-surface) {
     background: var(--dark-0) !important;
