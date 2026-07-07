@@ -134,7 +134,7 @@
 <section class="connections-view">
   <div class="connections-header">
     <h1 class="view-title">Connections</h1>
-    <p class="view-sub">Connect the tools that serve your work. Tokens live in your macOS Keychain.</p>
+    <p class="view-sub">Personal tokens only — no OAuth · stored in the macOS Keychain behind Touch ID.</p>
   </div>
   <div class="connections-body">
     {#each [['sources', sourceConns, 'Work sources'], ['agents', agentConns, 'AI agents']] as [key, list, label] (key)}
@@ -286,22 +286,21 @@
 </section>
 
 <style>
+  /* Redesign v2 §2.7 — centred document, padding 46/64. */
   .connections-view {
     overflow-y: auto; flex: 1;
-    padding: 30px 60px;
+    padding: 46px 64px;
     background: var(--bg-0);
   }
-  .connections-header { padding: 8px 0 28px; max-width: 880px; margin: 0 auto; }
+  .connections-header { padding: 0 0 6px; max-width: 880px; margin: 0 auto; }
   .view-title {
-    font-family: var(--font-mono);
-    font-size: 38px; font-weight: 600;
-    letter-spacing: -0.02em;
+    font-size: 24px; font-weight: 600;
+    letter-spacing: -0.015em;
     color: var(--text-0);
     margin: 0 0 6px;
-    
   }
   .view-sub {
-    font-size: 14px; color: var(--text-2);
+    font-size: 13px; color: var(--text-2);
     line-height: 1.5;
     margin: 0;
   }
@@ -318,9 +317,9 @@
 
   .conn-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
   .conn-card {
-    padding: 18px 20px;
-    background: var(--bg-1); border: 1px solid var(--border);
-    border-radius: 14px;
+    padding: 16px 18px;
+    background: var(--bg-2); border: 1px solid var(--border);
+    border-radius: 12px;
     box-shadow: var(--shadow-1);
     display: flex; flex-direction: column; gap: 10px;
     transition: all 180ms;
@@ -346,7 +345,7 @@
     display: block;
   }
 
-  .conn-name { font-size: 16px; font-weight: 600; color: var(--text-0); flex: 1; }
+  .conn-name { font-size: 14px; font-weight: 600; color: var(--text-0); flex: 1; }
   .conn-status {
     display: inline-flex; align-items: center; gap: 6px;
     padding: 3px 9px;
