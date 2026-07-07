@@ -643,11 +643,14 @@
 
 <style>
   .jdp { height: 100%; display: flex; flex-direction: column; min-height: 0; background: var(--bg-0); }
+  /* Redesign v2 §2.6 — 52px document header, flush on bg-0. */
   .jdp-head {
+    flex: none;
     display: flex; align-items: center; gap: 10px;
-    padding: 12px 20px;
-    border-bottom: 1px solid var(--border-neutral);
-    background: var(--bg-1);
+    height: 52px;
+    padding: 0 24px;
+    border-bottom: 1px solid var(--border-lo);
+    background: var(--bg-0);
   }
   .jdp-back {
     width: 28px; height: 28px; border-radius: 5px;
@@ -691,7 +694,12 @@
   .jdp-state { padding: 40px; text-align: center; color: var(--text-2); }
   .jdp-err { color: var(--error); }
 
-  .jdp-body { flex: 1; overflow-y: auto; padding: 20px 28px 60px; }
+  /* Redesign v2 §2.6 — centred document column (max 800), padding 30/40. */
+  .jdp-body {
+    flex: 1; min-height: 0; overflow-y: auto;
+    width: 100%; max-width: 800px; margin: 0 auto;
+    padding: 30px 40px 60px;
+  }
   .jdp-section { margin-bottom: 24px; }
   .jdp-section-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
 
@@ -705,10 +713,9 @@
   }
   .jdp-summary:hover { background: var(--bg-1); }
   .jdp-summary-text {
-    font-family: var(--font-mono);
-    font-size: 30px; font-weight: 600; color: var(--text-0);
-    letter-spacing: -0.02em;
-    line-height: 1.18; margin: 0;
+    font-size: 22px; font-weight: 600; color: var(--text-0);
+    letter-spacing: -0.015em;
+    line-height: 1.25; margin: 0;
   }
   .jdp-edit-icon { opacity: 0; color: var(--text-2); margin-top: 6px; flex-shrink: 0; transition: opacity 120ms; }
   .jdp-summary:hover .jdp-edit-icon { opacity: 0.8; }

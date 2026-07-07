@@ -40,7 +40,7 @@
     direction="horizontal"
     fixedSide="start"
     persistKey="jira-list:{p.instanceId}"
-    initial={380}
+    initial={300}
     min={280}
     max={640}
   >

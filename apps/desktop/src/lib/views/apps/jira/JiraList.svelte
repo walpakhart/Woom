@@ -398,23 +398,19 @@
   }
 </script>
 
-<aside class="jl app-pane">
-  <header class="jl-head">
-    <h1 class="app-pane-head-h">Jira</h1>
-    {#if p.jiraStatus.kind === 'connected'}
-      <span class="app-pane-head-meta">{p.jiraStatus.user.workspace}</span>
-    {/if}
-    <span class="app-pane-head-spacer"></span>
-    <button class="jl-act" onclick={p.onOpenCreateIssue} title="New issue" disabled={p.jiraStatus.kind !== 'connected'}>
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
-      <span>New</span>
+<aside class="lp jl">
+  <header class="lp-head">
+    <span class="lp-title">Tickets</span>
+    {#if filtered.length > 0}<span class="lp-count">{filtered.length}</span>{/if}
+    <span class="lp-head-spring"></span>
+    <button class="lp-add" onclick={p.onOpenCreateIssue} title="New issue" aria-label="New issue" disabled={p.jiraStatus.kind !== 'connected'}>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
     </button>
-    <button class="jl-icon" onclick={p.onRefresh} title="Refresh" disabled={loading}>
+    <button class="lp-ghostbtn" onclick={p.onRefresh} title="Refresh" aria-label="Refresh" disabled={loading}>
       <svg class:spin={loading} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 4v5h-5"/></svg>
     </button>
   </header>
 
-  <div class="jl-filters">
     <label class="jl-search" bind:this={searchEl}>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
       <input
@@ -440,25 +436,11 @@
       onPick={pickJira}
       onClose={closePicker}
     />
-    <div class="jl-chips">
-      <button class="jl-toggle" class:active={roleFilter === 'reporter'} disabled={!me} onclick={() => toggleRole('reporter')} title="Reported by me">
-        <span class="jl-toggle-dot"></span>
-        Reporter
-      </button>
-      <span class="jl-divider" aria-hidden="true"></span>
-      <button class="jl-toggle" class:active={statusFilter === 'open'} onclick={() => toggleStatus('open')} title="Open / triage">
-        <span class="jl-toggle-dot"></span>
-        Open
-      </button>
-      <button class="jl-toggle" class:active={statusFilter === 'inprogress'} onclick={() => toggleStatus('inprogress')} title="In progress">
-        <span class="jl-toggle-dot"></span>
-        In progress
-      </button>
-      <button class="jl-toggle" class:active={statusFilter === 'done'} onclick={() => toggleStatus('done')} title="Done">
-        <span class="jl-toggle-dot"></span>
-        Done
-      </button>
-      <span class="jl-divider" aria-hidden="true"></span>
+    <div class="lp-chips">
+      <button class="lp-chip" class:active={roleFilter === 'reporter'} disabled={!me} onclick={() => toggleRole('reporter')} title="Reported by me">Reporter</button>
+      <button class="lp-chip" class:active={statusFilter === 'open'} onclick={() => toggleStatus('open')} title="Open / triage">Open</button>
+      <button class="lp-chip" class:active={statusFilter === 'inprogress'} onclick={() => toggleStatus('inprogress')} title="In progress">In progress</button>
+      <button class="lp-chip" class:active={statusFilter === 'done'} onclick={() => toggleStatus('done')} title="Done">Done</button>
 
       <span class="jl-dd">
         <Dropdown
@@ -472,15 +454,12 @@
         />
       </span>
       <button
-        class="jl-toggle"
+        class="lp-chip"
         class:active={assigneeActive}
         disabled={p.jiraStatus.kind !== 'connected'}
         onclick={openUserPicker}
         title="Filter by assignee"
-      >
-        <span class="jl-toggle-dot"></span>
-        {assigneeLabel}
-      </button>
+      >{assigneeLabel}</button>
       <span class="jl-dd">
         <Dropdown
           value={selectedSprintId}
@@ -497,9 +476,8 @@
         <button class="jl-chip-clear" onclick={clearFilters} title="Clear all filters">Clear</button>
       {/if}
     </div>
-  </div>
 
-  <div class="jl-body">
+  <div class="lp-list">
     {#if error}
       <div class="jl-error">
         <p class="jl-error-h serif">Couldn't load Jira</p>
@@ -524,11 +502,11 @@
       </div>
     {:else}
       {#each groups as g (g.label)}
-        <div class="jl-group">{g.label} <span class="mono">·</span> {g.items.length}</div>
+        <div class="lp-group-label">{g.label} · {g.items.length}</div>
         {#each g.items as it (it.key)}
           {@const isActive = inboxState.jiraFocusKey === it.key}
           <button
-            class="jl-card"
+            class="lp-row jl-row"
             class:active={isActive}
             draggable="true"
             onpointerdown={p.onCardMouseDown}
@@ -602,65 +580,26 @@
     min-width: 0;
   }
 
-  .jl-head {
-    flex: 0 0 46px;
-    display: flex; align-items: center; gap: 10px;
-    padding: 0 12px;
-    border-bottom: 1px solid var(--border);
-    background: var(--bg-0);
-  }
-  .jl-act {
-    display: inline-flex; align-items: center; gap: 5px;
-    padding: 4px 9px;
-    border-radius: 7px;
-    font-size: 11.5px; color: var(--text-1);
-    background: var(--bg-2);
-    border: 1px solid var(--border);
-    cursor: pointer;
-    transition: color 140ms, background 140ms, border-color 140ms;
-  }
-  .jl-act:hover:not(:disabled) {
-    color: var(--accent-bright);
-    background: var(--accent-soft);
-    border-color: var(--border-accent-2);
-  }
-  .jl-act:disabled { opacity: 0.5; cursor: not-allowed; }
-  .jl-act svg { width: 11px; height: 11px; }
-  .jl-icon {
-    width: 26px; height: 26px;
-    display: grid; place-items: center;
-    color: var(--text-2);
-    background: transparent; border: none; cursor: pointer;
-    border-radius: 6px;
-  }
-  .jl-icon:hover:not(:disabled) { color: var(--text-0); background: var(--bg-elev, var(--bg-2)); }
-  .jl-icon svg { width: 13px; height: 13px; }
-  .jl-icon .spin { animation: jl-spin 0.9s linear infinite; }
+  .jl .spin { animation: jl-spin 0.9s linear infinite; }
   @keyframes jl-spin { to { transform: rotate(360deg); } }
+  .lp-add:disabled { opacity: 0.5; cursor: not-allowed; }
+  .lp-ghostbtn:disabled { opacity: 0.5; cursor: not-allowed; }
 
-  /* Filter bar — search + role/status chips + project select. */
-  .jl-filters {
-    flex: 0 0 auto;
-    display: flex; flex-direction: column;
-    gap: 6px;
-    padding: 8px 12px 10px;
-    border-bottom: 1px solid var(--border);
-    background: var(--bg-1);
-  }
+  /* Search field — ListPane grammar (§2.4): h30 r8, bg-0 (light bg-2),
+     wrapper keeps the magnifier + clear + picker anchor. */
   .jl-search {
     position: relative;
     display: flex; align-items: center; gap: 6px;
-    padding: 0 8px;
-    height: 28px;
-    border-radius: 6px;
-    background: var(--bg-2);
+    margin: 0 14px 8px;
+    padding: 0 10px;
+    height: 30px;
+    border-radius: 8px;
+    background: var(--bg-0);
     border: 1px solid var(--border);
     transition: border-color 120ms;
   }
-  .jl-search:focus-within {
-    border-color: var(--border-accent);
-    background: var(--bg-1);
-  }
+  :root[data-theme='light'] .jl-search { background: var(--bg-2); }
+  .jl-search:focus-within { border-color: var(--border-hi2, var(--border-hi)); }
   .jl-search > svg { width: 12px; height: 12px; color: var(--text-mute); flex-shrink: 0; }
   .jl-search input {
     flex: 1; min-width: 0;
@@ -677,39 +616,7 @@
   .jl-search-clear:hover { color: var(--text-0); background: var(--bg-3); }
   .jl-search-clear svg { width: 10px; height: 10px; }
 
-  .jl-chips { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
-  .jl-divider {
-    width: 1px; height: 14px;
-    background: var(--border);
-    margin: 0 2px;
-  }
-
-  /* Mockup filter chips: OUTLINE-only, radius 6, active = source
-     colour text + border, transparent fill. */
-  .jl-toggle {
-    display: inline-flex; align-items: center; gap: 6px;
-    padding: 3px 9px;
-    border-radius: var(--r-btn);
-    background: transparent;
-    border: 1px solid var(--border-hi);
-    color: var(--text-mute);
-    font-size: 10.5px; font-weight: 500;
-    cursor: pointer;
-    transition: all 140ms;
-    user-select: none;
-    white-space: nowrap;
-  }
-  .jl-toggle-dot { display: none; }
-  .jl-toggle:hover:not(:disabled):not(.active) {
-    color: var(--text-0); border-color: var(--border-hi2);
-  }
-  .jl-toggle.active {
-    color: var(--src-jira);
-    background: transparent;
-    border-color: var(--src-jira-border);
-  }
-  .jl-toggle:disabled { opacity: 0.45; cursor: not-allowed; }
-
+  .lp-chip:disabled { opacity: 0.45; cursor: not-allowed; }
   .jl-dd { display: inline-flex; }
   .jl-dd :global(.dd-trigger) {
     border-radius: var(--r-btn);
@@ -743,49 +650,12 @@
   }
   .jl-chip-clear:hover { color: var(--text-0); border-color: var(--text-mute); border-style: solid; }
 
-  .jl-body {
-    flex: 1; min-height: 0;
-    overflow-y: auto;
-    padding: 4px 8px 12px;
-  }
-
-  .jl-group {
-    padding: 14px 8px 6px;
-    font-size: 9.5px; font-weight: 700;
-    letter-spacing: 0.10em;
-    text-transform: uppercase;
-    color: var(--text-mute);
-    font-family: var(--font-mono);
-    display: flex; align-items: center; gap: 8px;
-  }
-  .jl-group::after {
-    content: ''; flex: 1; height: 1px;
-    background: linear-gradient(90deg, var(--border), transparent);
-  }
-  .jl-group .mono { opacity: 0.5; }
-
-  /* Mockup list row: flat, hairline bottom border, selection =
-     bg-sel fill + solid 2px source stripe on the left edge. */
-  .jl-card {
+  /* Row = shared .lp-row (rounded, shadow-1 active); .jl-row adds the
+     vertical stack + positioning context for the hover send-chip. */
+  .jl-row {
     position: relative;
     display: flex; flex-direction: column; gap: 5px;
-    padding: 12px 20px;
-    margin: 0;
-    width: 100%;
-    border-radius: 0;
-    border: 0;
-    border-bottom: 1px solid var(--border-lo);
-    border-left: 2px solid transparent;
-    text-align: left;
-    background: transparent;
-    cursor: pointer;
-    transition: background 120ms;
     user-select: none;
-  }
-  .jl-card:hover { background: var(--bg-1); }
-  .jl-card.active {
-    background: var(--bg-sel);
-    border-left-color: var(--src-jira);
   }
 
   .jl-card-top { display: flex; align-items: center; gap: 8px; }
@@ -884,9 +754,9 @@
     opacity: 0;
     transition: opacity 140ms;
   }
-  .jl-card:hover .jl-card-sends,
+  .jl-row:hover .jl-card-sends,
   .jl-card-sends:focus-within,
-  .jl-card.active .jl-card-sends {
+  .jl-row.active .jl-card-sends {
     opacity: 1;
   }
   .jl-card-send {
