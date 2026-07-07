@@ -140,10 +140,10 @@
 
 {#snippet termHead()}
   <header class="st-head">
-    <span class="st-head-title">terminal</span>
-    <span class="st-head-meta">zsh{p.cwd ? ` · ${p.cwd.replace(/^\/Users\/[^/]+/, '~')}` : ''} · drivable by agents via MCP</span>
+    <span class="st-head-title">{instanceLabel}</span>
+    <span class="st-head-meta">zsh{p.cwd ? ` · ${p.cwd.replace(/^\/Users\/[^/]+/, '~')}` : ''}</span>
     <span class="st-head-spring"></span>
-    <span class="st-head-name">{instanceLabel}</span>
+    <span class="st-head-name">drivable by agents via MCP</span>
   </header>
 {/snippet}
 
@@ -323,13 +323,13 @@
   .st-head {
     flex: none;
     display: flex; align-items: center; gap: 10px;
-    height: 36px;
-    padding: 0 16px;
+    height: 44px;
+    padding: 0 20px;
     background: var(--dark-0);
     border-bottom: 1px solid rgba(0, 0, 0, 0.3);
     font-size: 11px;
   }
-  .st-head-title { font-size: 12px; font-weight: 600; color: var(--dark-text); }
+  .st-head-title { font-size: 13.5px; font-weight: 600; color: var(--dark-text); }
   .st-head-meta { color: var(--dark-mute); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .st-head-spring { flex: 1; }
   .st-head-name { color: var(--dark-text-2); font-size: 10.5px; }
