@@ -590,11 +590,13 @@
   /* Unified header bar — close on the left, metadata in the middle,
      "Open on GitHub" on the right. Same shape as `.jdp-head` (Jira) and
      `.sdp-head` (Sentry). */
+  /* Redesign v2 §2.6 — 52px document header, flush on bg-0. */
   .gfo-head {
     display: flex; align-items: center; gap: 10px;
-    padding: 12px 20px;
-    border-bottom: 1px solid var(--border-neutral);
-    background: var(--bg-1);
+    height: 52px;
+    padding: 0 24px;
+    border-bottom: 1px solid var(--border-lo);
+    background: var(--bg-0);
     flex-shrink: 0;
   }
   .gfo-back {
@@ -635,16 +637,16 @@
   @keyframes gfo-spin { to { transform: rotate(360deg); } }
 
   .focus-scroll { flex: 1; overflow-y: auto; }
-  .focus-shell { max-width: 920px; margin: 0 auto; padding: 32px 40px 80px; }
+  /* Redesign v2 §2.6 — centred document, max 800, padding 30/40. */
+  .focus-shell { max-width: 800px; margin: 0 auto; padding: 30px 40px 80px; }
 
   .chip-state { padding: 2px 9px; border-radius: 5px; font-size: 10.5px; font-weight: 500; }
 
   .focus-title {
-    font-family: var(--font-mono);
-    font-size: 30px;
-    line-height: 1.18;
-    letter-spacing: -0.02em;
-    font-weight: 400;
+    font-size: 22px;
+    line-height: 1.25;
+    letter-spacing: -0.015em;
+    font-weight: 600;
     margin-bottom: 16px;
     max-width: 720px;
     color: var(--text-0);

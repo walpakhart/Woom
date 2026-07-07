@@ -49,7 +49,7 @@
     direction="horizontal"
     fixedSide="start"
     persistKey="github-list:{p.instanceId}"
-    initial={380}
+    initial={300}
     min={280}
     max={640}
   >

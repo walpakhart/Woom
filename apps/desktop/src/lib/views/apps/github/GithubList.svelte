@@ -604,28 +604,19 @@
   }
 </script>
 
-<aside class="gl app-pane">
-  <header class="gl-head">
-    <h1 class="app-pane-head-h">GitHub</h1>
-    {#if p.githubStatus.kind === 'connected'}
-      <span class="app-pane-head-meta">@{p.githubStatus.user.login}</span>
-    {/if}
-    <span class="app-pane-head-spacer"></span>
-    <button class="gl-act" onclick={p.onOpenCreatePr} title="New PR" disabled={p.githubStatus.kind !== 'connected'}>
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
-      <span>New PR</span>
+<aside class="lp gl">
+  <header class="lp-head">
+    <span class="lp-title">Pull requests</span>
+    {#if filtered.length > 0}<span class="lp-count">{filtered.length}</span>{/if}
+    <span class="lp-head-spring"></span>
+    <button class="lp-add" onclick={p.onOpenCreatePr} title="New PR" aria-label="New PR" disabled={p.githubStatus.kind !== 'connected'}>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
     </button>
-    <button class="gl-icon" onclick={p.onRefresh} title="Refresh" disabled={loading}>
+    <button class="lp-ghostbtn" onclick={p.onRefresh} title="Refresh" aria-label="Refresh" disabled={loading}>
       <svg class:spin={loading} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 4v5h-5"/></svg>
     </button>
   </header>
 
-  <!-- Filter bar: search input + role/state toggles + repo/author
-       dropdowns. Lives between the header and the grouped list so the
-       user can scope the inbox quickly. Each toggle chip is independent
-       (click again to unset → "all"); the dropdowns share a `__all__`
-       sentinel for the "no filter" option. -->
-  <div class="gl-filters">
     <label class="gl-search" class:gl-search--remote={wantsRemoteSearch} bind:this={searchEl}>
       {#if searching}
         <span class="gl-search-spin" aria-hidden="true"></span>
@@ -656,37 +647,26 @@
       onClose={closePicker}
     />
 
-    <div class="gl-chips">
+    <div class="lp-chips">
       <button
-        class="gl-toggle"
+        class="lp-chip"
         class:active={roleFilter === 'reviewer'}
         disabled={!me}
         onclick={() => toggleRole('reviewer')}
         title="PRs awaiting your review"
-      >
-        <span class="gl-toggle-dot"></span>
-        Reviewer
-      </button>
-      <span class="gl-divider" aria-hidden="true"></span>
+      >Reviewer</button>
       <button
-        class="gl-toggle"
+        class="lp-chip"
         class:active={stateFilter === 'open'}
         onclick={() => toggleState('open')}
         title="Open (non-draft)"
-      >
-        <span class="gl-toggle-dot"></span>
-        Open
-      </button>
+      >Open</button>
       <button
-        class="gl-toggle"
+        class="lp-chip"
         class:active={stateFilter === 'draft'}
         onclick={() => toggleState('draft')}
         title="Drafts only"
-      >
-        <span class="gl-toggle-dot"></span>
-        Draft
-      </button>
-      <span class="gl-divider" aria-hidden="true"></span>
+      >Draft</button>
 
       <span class="gl-dd">
         <Dropdown
@@ -715,9 +695,8 @@
         <button class="gl-chip-clear" onclick={clearFilters} title="Clear all filters">Clear</button>
       {/if}
     </div>
-  </div>
 
-  <div class="gl-body">
+  <div class="lp-list">
     {#if searchError}
       <div class="gl-error">
         <p class="gl-error-h serif">Search failed</p>
@@ -753,11 +732,11 @@
       </div>
     {:else}
       {#each groups as g (g.label)}
-        <div class="gl-group">{g.label} <span class="mono">·</span> {g.items.length}</div>
+        <div class="lp-group-label">{g.label} · {g.items.length}</div>
         {#each g.items as it (it.id)}
           {@const isActive = inboxState.focusItem?.id === it.id}
           <button
-            class="gl-card"
+            class="lp-row gl-row"
             class:active={isActive}
             draggable="true"
             onpointerdown={p.onCardMouseDown}
@@ -840,65 +819,26 @@
     /* Width comes from the parent `app-shell` grid track. */
     min-width: 0;
   }
-  .gl-head {
-    flex: 0 0 46px;
-    display: flex; align-items: center; gap: 10px;
-    padding: 0 12px;
-    border-bottom: 1px solid var(--border);
-    background: var(--bg-0);
-  }
-  .gl-act {
-    display: inline-flex; align-items: center; gap: 5px;
-    padding: 4px 9px;
-    border-radius: 7px;
-    font-size: 11.5px; color: var(--text-1);
-    background: var(--bg-2);
-    border: 1px solid var(--border);
-    cursor: pointer;
-  }
-  .gl-act:hover:not(:disabled) {
-    color: var(--accent-bright);
-    background: var(--accent-soft);
-    border-color: var(--border-accent-2);
-  }
-  .gl-act:disabled { opacity: 0.5; cursor: not-allowed; }
-  .gl-act svg { width: 11px; height: 11px; }
-  .gl-icon {
-    width: 26px; height: 26px;
-    display: grid; place-items: center;
-    color: var(--text-2);
-    background: transparent; border: none; cursor: pointer;
-    border-radius: 6px;
-  }
-  .gl-icon:hover:not(:disabled) { color: var(--text-0); background: var(--bg-elev, var(--bg-2)); }
-  .gl-icon svg { width: 13px; height: 13px; }
-  .gl-icon .spin { animation: gl-spin 0.9s linear infinite; }
+  .gl .spin { animation: gl-spin 0.9s linear infinite; }
   @keyframes gl-spin { to { transform: rotate(360deg); } }
+  .lp-add:disabled { opacity: 0.5; cursor: not-allowed; }
+  .lp-ghostbtn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .lp-chip:disabled { opacity: 0.45; cursor: not-allowed; }
 
-  /* Filter bar — search + chips + repo select. Sits between header
-     and list so it always reads as "scope this view". */
-  .gl-filters {
-    flex: 0 0 auto;
-    display: flex; flex-direction: column;
-    gap: 6px;
-    padding: 8px 12px 10px;
-    border-bottom: 1px solid var(--border);
-    background: var(--bg-1);
-  }
+  /* Search field — ListPane grammar (§2.4): h30 r8, bg-0 (light bg-2). */
   .gl-search {
     position: relative;
     display: flex; align-items: center; gap: 6px;
-    padding: 0 8px;
-    height: 28px;
-    border-radius: 6px;
-    background: var(--bg-2);
+    margin: 0 14px 8px;
+    padding: 0 10px;
+    height: 30px;
+    border-radius: 8px;
+    background: var(--bg-0);
     border: 1px solid var(--border);
     transition: border-color 120ms;
   }
-  .gl-search:focus-within {
-    border-color: var(--border-accent);
-    background: var(--bg-1);
-  }
+  :root[data-theme='light'] .gl-search { background: var(--bg-2); }
+  .gl-search:focus-within { border-color: var(--border-hi2, var(--border-hi)); }
   .gl-search > svg {
     width: 12px; height: 12px;
     color: var(--text-mute);
@@ -939,59 +879,6 @@
   .gl-search-clear:hover { color: var(--text-0); background: var(--bg-3); }
   .gl-search-clear svg { width: 10px; height: 10px; }
 
-  .gl-chips {
-    display: flex; gap: 6px; flex-wrap: wrap; align-items: center;
-  }
-  .gl-divider {
-    width: 1px; height: 14px;
-    background: var(--border);
-    margin: 0 2px;
-  }
-
-  /* Toggle pill — independent on/off chip. Active state shows a
-     filled brand-tinted dot to the left of the label, like Linear's
-     filter chips. Inactive shows a hollow dot. */
-  .gl-toggle {
-    display: inline-flex; align-items: center; gap: 6px;
-    padding: 4px 10px 4px 8px;
-    border-radius: 999px;
-    background: var(--bg-2);
-    border: 1px solid var(--border);
-    color: var(--text-1);
-    font-size: 11px;
-    font-weight: 500;
-    cursor: pointer;
-    transition: all 140ms;
-    user-select: none;
-  }
-  .gl-toggle-dot {
-    width: 8px; height: 8px;
-    border-radius: 50%;
-    background: transparent;
-    box-shadow: inset 0 0 0 1.5px var(--text-mute);
-    transition: all 140ms;
-    flex-shrink: 0;
-  }
-  .gl-toggle:hover:not(:disabled):not(.active) {
-    color: var(--text-0);
-    background: var(--bg-3);
-    border-color: var(--border-hi);
-  }
-  .gl-toggle:hover:not(:disabled):not(.active) .gl-toggle-dot {
-    box-shadow: inset 0 0 0 1.5px var(--text-1);
-  }
-  .gl-toggle.active {
-    color: var(--accent-bright);
-    background: color-mix(in srgb, var(--src-github) 14%, transparent);
-    border-color: color-mix(in srgb, var(--src-github) 40%, transparent);
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--src-github) 8%, transparent);
-  }
-  .gl-toggle.active .gl-toggle-dot {
-    background: var(--src-github);
-    box-shadow: inset 0 0 0 1.5px var(--src-github), var(--shadow-1);
-  }
-  .gl-toggle:disabled { opacity: 0.45; cursor: not-allowed; }
-
   /* Dropdown wrapper — make the existing Dropdown trigger blend with
      our pill scale. The component itself uses `.dd-trigger` internally
      via global selectors here. */
@@ -1030,47 +917,11 @@
   }
   .gl-chip-clear:hover { color: var(--text-0); border-color: var(--text-mute); border-style: solid; }
 
-  .gl-body {
-    flex: 1; min-height: 0;
-    overflow-y: auto;
-    padding: 4px 8px 12px;
-  }
-
-  .gl-group {
-    padding: 14px 8px 6px;
-    font-size: 9.5px; font-weight: 700;
-    letter-spacing: 0.10em;
-    text-transform: uppercase;
-    color: var(--text-mute);
-    font-family: var(--font-mono);
-    display: flex; align-items: center; gap: 8px;
-  }
-  .gl-group::after {
-    content: ''; flex: 1; height: 1px;
-    background: linear-gradient(90deg, var(--border), transparent);
-  }
-  .gl-group .mono { opacity: 0.5; }
-
-  .gl-card {
+  /* Row = shared .lp-row; .gl-row adds vertical stack + positioning. */
+  .gl-row {
     position: relative;
     display: flex; flex-direction: column; gap: 5px;
-    padding: 12px 20px;
-    margin: 0;
-    width: 100%;
-    border-radius: 0;
-    border: 0;
-    border-bottom: 1px solid var(--border-lo);
-    border-left: 2px solid transparent;
-    text-align: left;
-    background: transparent;
-    cursor: pointer;
-    transition: background 120ms;
     user-select: none;
-  }
-  .gl-card:hover { background: var(--bg-1); }
-  .gl-card.active {
-    background: var(--bg-sel);
-    border-left-color: var(--src-github);
   }
 
   .gl-card-top { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
@@ -1152,9 +1003,9 @@
     opacity: 0;
     transition: opacity 140ms;
   }
-  .gl-card:hover .gl-card-sends,
+  .gl-row:hover .gl-card-sends,
   .gl-card-sends:focus-within,
-  .gl-card.active .gl-card-sends {
+  .gl-row.active .gl-card-sends {
     opacity: 1;
   }
   .gl-card-send {
