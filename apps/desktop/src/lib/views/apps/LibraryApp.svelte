@@ -439,17 +439,17 @@
 </section>
 
 <style>
+  /* Redesign v2 §2.7 — centred document, padding 46/64. */
   .lib {
     overflow-y: auto; flex: 1;
     display: flex; flex-direction: column;
-    padding: 30px 60px 60px;
+    padding: 46px 64px 60px;
     background: var(--bg-0);
   }
   .lib-head { max-width: 980px; margin: 0 auto 22px; width: 100%; }
   .view-title {
-    font-family: var(--font-mono);
-    font-size: 38px; font-weight: 600;
-    letter-spacing: -0.02em;
+    font-size: 24px; font-weight: 600;
+    letter-spacing: -0.015em;
     color: var(--text-0);
     margin: 0 0 6px;
   }
@@ -533,14 +533,15 @@
   .lib-grid {
     max-width: 980px; margin: 0 auto; width: 100%;
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 14px;
   }
   .lib-card {
-    background: var(--bg-1); border: 1px solid var(--border);
+    background: var(--bg-2); border: 1px solid var(--border);
     border-radius: 12px;
     padding: 14px 16px;
     display: flex; flex-direction: column; gap: 8px;
+    box-shadow: var(--shadow-1);
     transition: border-color 140ms, transform 140ms;
   }
   .lib-card:hover { border-color: var(--border-hi); }
@@ -556,7 +557,8 @@
   .lib-kind--plugin { background: color-mix(in srgb, var(--src-canvas) 14%, var(--bg-3)); color: var(--src-canvas); }
   .lib-card-name {
     flex: 1; min-width: 0;
-    font-size: 15px; font-weight: 600;
+    font-family: var(--font-mono);
+    font-size: 13px; font-weight: 600;
     color: var(--text-0);
     margin: 0;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;

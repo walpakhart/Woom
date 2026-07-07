@@ -833,15 +833,21 @@
     use:focusTrap
   >
     <div class="palette">
-      <!-- svelte-ignore a11y_autofocus -->
-      <input
-        class="palette-input"
-        bind:value={query}
-        placeholder={recentsOnly
-          ? 'Jump to recent — type to filter, ↵ to open'
-          : 'Search anywhere — solos, repos, boards, issues…'}
-        autofocus
-      />
+      <div class="palette-input-row">
+        <svg class="palette-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+        <!-- svelte-ignore a11y_autofocus -->
+        <input
+          class="palette-input"
+          bind:value={query}
+          placeholder={recentsOnly
+            ? 'Jump to recent — type to filter, ↵ to open'
+            : 'Search anywhere — solos, repos, boards, issues…'}
+          autofocus
+        />
+        {#if results.length > 0}
+          <span class="palette-input-hint mono">{results.length}</span>
+        {/if}
+      </div>
       {#if results.length === 0}
         <div class="palette-empty">No matches.</div>
       {/if}
@@ -934,30 +940,38 @@
     padding-top: 12vh; z-index: 200;
     animation: fadeIn var(--dur-base) var(--ease-out);
   }
+  /* Redesign v2 §2.8 — 640 panel, bg-1, r14, shadow-3. */
   .palette {
-    width: 720px; max-width: 92vw;
+    width: 640px; max-width: 92vw;
     max-height: 70vh;
     display: flex; flex-direction: column;
-    background: var(--bg-0);
+    background: var(--bg-1);
     border: 1px solid var(--border-hi);
-    border-radius: var(--r-modal, 16px);
+    border-radius: 14px;
     overflow: hidden;
-    box-shadow:
-      var(--shadow-3),
-      0 0 0 1px var(--border-accent-2),
-      inset 0 1px 0 rgba(255, 240, 220, 0.04);
+    box-shadow: var(--shadow-3);
     animation: slideDown var(--dur-slow) var(--ease-spring);
   }
-  .palette-input {
-    width: 100%; padding: 18px 22px;
-    font-size: 15px; color: var(--text-0);
+  /* Input row — magnifier + field + faint result-count hint. */
+  .palette-input-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 16px 18px;
     border-bottom: 1px solid var(--border);
-    background: transparent; border-left: none; border-right: none; border-top: none;
     flex-shrink: 0;
+  }
+  .palette-search-icon { width: 15px; height: 15px; color: var(--text-mute); flex-shrink: 0; }
+  .palette-input {
+    flex: 1; min-width: 0; padding: 0;
+    font-size: 15px; color: var(--text-0);
+    background: transparent; border: none;
     letter-spacing: -0.005em;
   }
   .palette-input:focus { outline: none; }
   .palette-input::placeholder { color: var(--text-mute); }
+  .palette-input-hint {
+    flex-shrink: 0;
+    font-size: 10.5px; color: var(--text-mute); opacity: 0.7;
+  }
   .palette-scroll { overflow-y: auto; flex: 1; padding: 4px 0 10px; }
   .palette-section { padding: 4px 10px; }
   .palette-section-title {
@@ -977,19 +991,7 @@
     transition: background 100ms ease;
   }
   .palette-item:hover { background: var(--bg-2); }
-  .palette-item.highlight {
-    background: linear-gradient(90deg,
-      color-mix(in srgb, var(--accent) 10%, transparent),
-      color-mix(in srgb, var(--accent) 2%, transparent) 60%);
-    box-shadow: inset 0 0 0 1px var(--border-accent-2);
-  }
-  .palette-item.highlight::before {
-    content: '';
-    position: absolute; left: 0; top: 6px; bottom: 6px;
-    width: 2.5px; border-radius: 2px;
-    background: var(--accent);
-    box-shadow: var(--shadow-2);
-  }
+  .palette-item.highlight { background: var(--bg-3); }
   .palette-item-main {
     flex: 1; min-width: 0;
     display: flex; align-items: center; gap: 12px;
