@@ -10,6 +10,7 @@ import { sessionsState } from '$lib/state/sessions.svelte';
 import { inboxState, moveSelection, closeFocusItem } from '$lib/state/inbox.svelte';
 import { closeModal, modalsState } from '$lib/state/modals.svelte';
 import { toggleDensity } from '$lib/state/density.svelte';
+import { toggleLayoutMode } from '$lib/state/layoutMode.svelte';
 
 export type View = string;
 
@@ -181,16 +182,10 @@ export function createOnKey(deps: KeyboardShortcutDeps): (e: KeyboardEvent) => v
       !e.shiftKey && !e.altKey &&
       (e.key === '.' || e.code === 'Period')
     ) {
-      const view = deps.getView();
-      const kind: 'claude' | null = view === 'claudeApp' ? 'claude' : null;
-      if (kind) {
-        const activeId = sessionsState.activeIds[kind];
-        const s = activeId ? sessionsState.list.find((x) => x.id === activeId) : null;
-        if (s?.sending) {
-          e.preventDefault();
-          void deps.stopAgentForKind(kind);
-        }
-      }
+      /* ⌘. flips interface direction cabin↔quiet (redesign v2). Stopping
+         a stream is the ChatHeader stop button now, not this chord. */
+      e.preventDefault();
+      toggleLayoutMode();
     } else if ((e.metaKey || e.ctrlKey) && e.key === 'e' && !e.shiftKey && !e.altKey) {
       e.preventDefault();
       deps.setPaletteMode('recents');

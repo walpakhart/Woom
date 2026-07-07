@@ -223,6 +223,7 @@
     SprintScope
   } from '$lib/state/inbox.svelte';
   import { initTheme } from '$lib/state/theme.svelte';
+  import { initLayoutMode } from '$lib/state/layoutMode.svelte';
   import { initScale } from '$lib/state/scale.svelte';
   import { initDensity, toggleDensity } from '$lib/state/density.svelte';
   import { initBgTasks } from '$lib/state/bgTasks.svelte';
@@ -1044,6 +1045,9 @@
        with default `:root` vars, this flips `<html data-theme="…">`
        so the saved palette wins on first paint. */
     initTheme();
+    /* Same for interface direction (cabin/quiet) — flip
+       `<html data-layout="…">` before first paint. */
+    initLayoutMode();
     /* Surface uncaught JS errors as toasts. In a packaged WKWebView
        there is no devtools console — a mount-time crash otherwise
        reads as "the view is just black" with zero signal to report.

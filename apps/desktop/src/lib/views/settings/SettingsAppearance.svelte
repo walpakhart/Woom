@@ -2,6 +2,7 @@
   import { themeState, applyTheme, type ThemeName } from '$lib/state/theme.svelte';
   import { scaleState, applyScale, SCALE_OPTIONS } from '$lib/state/scale.svelte';
   import { densityState, applyDensity, type Density } from '$lib/state/density.svelte';
+  import { layoutModeState, applyLayoutMode, type LayoutMode } from '$lib/state/layoutMode.svelte';
 
   const THEMES: { name: ThemeName; label: string; sub: string; bg: string; fg: string; accent: string }[] = [
     { name: 'iconic', label: 'Iconic', sub: 'Sage + mint on cool noir', bg: '#0E1112', fg: '#EBEFEC', accent: '#B0DCC8' },
@@ -32,6 +33,30 @@
         </span>
         <span class="theme-label">{t.label}</span>
         <span class="theme-sub">{t.sub}</span>
+      </button>
+    {/each}
+  </div>
+</div>
+
+<!-- Interface direction -->
+<div class="card">
+  <header class="card-head">
+    <h2 class="card-title">Direction</h2>
+    <p class="card-sub">
+      Cabin keeps persistent chrome (rail, list panes, context dock). Quiet
+      clears the stage — one centred column and a bottom dock. Both themes
+      work in both directions. Keyboard shortcut: <span class="mono">⌘ .</span> flips instantly.
+    </p>
+  </header>
+  <div class="scale-grid">
+    {#each [{ value: 'cabin' as LayoutMode, label: 'Cabin' }, { value: 'quiet' as LayoutMode, label: 'Quiet' }] as opt (opt.value)}
+      <button
+        class="scale-card"
+        class:active={layoutModeState.mode === opt.value}
+        onclick={() => applyLayoutMode(opt.value)}
+        aria-pressed={layoutModeState.mode === opt.value}
+      >
+        <span class="scale-label">{opt.label}</span>
       </button>
     {/each}
   </div>
