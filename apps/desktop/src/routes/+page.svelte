@@ -12,6 +12,7 @@
   import WorktreeDiffModal from '$lib/components/editor/WorktreeDiffModal.svelte';
   import IconRail from '$lib/components/ui/IconRail.svelte';
   import Titlebar from '$lib/components/ui/Titlebar.svelte';
+  import Dock from '$lib/components/ui/Dock.svelte';
   import RulesView from '$lib/views/RulesView.svelte';
   import LibraryApp from '$lib/views/apps/LibraryApp.svelte';
   import ConnectionsView from '$lib/views/ConnectionsView.svelte';
@@ -223,7 +224,8 @@
     SprintScope
   } from '$lib/state/inbox.svelte';
   import { initTheme } from '$lib/state/theme.svelte';
-  import { initLayoutMode } from '$lib/state/layoutMode.svelte';
+  import { initLayoutMode, layoutModeState } from '$lib/state/layoutMode.svelte';
+  const quietMode = $derived(layoutModeState.mode === 'quiet');
   import { initScale } from '$lib/state/scale.svelte';
   import { initDensity, toggleDensity } from '$lib/state/density.svelte';
   import { initBgTasks } from '$lib/state/bgTasks.svelte';
@@ -3004,27 +3006,38 @@
   </div>
 {/if}
 
-<div id="app" class:is-dragging={dragState.payload !== null}>
-  <Titlebar
-    soloTitle={soloTitleFor(view)}
-    instanceMeta={soloInstanceMeta}
-    onPalette={() => { paletteMode = 'normal'; paletteOpen = true; }}
-    {githubStatus}
-    {jiraStatus}
-    {sentryStatus}
-    {claudeStatus}
-  />
+<div id="app" class:is-dragging={dragState.payload !== null} class:quiet={quietMode}>
+  {#if quietMode}
+    <!-- Quiet caркас (§3.1): no titlebar; a thin drag strip clears the
+         native traffic lights and carries the ⌘K hint. -->
+    <div class="quiet-strip" data-tauri-drag-region>
+      <button class="quiet-k mono" onclick={() => { paletteMode = 'normal'; paletteOpen = true; }} title="Command palette · ⌘K">⌘K всё остальное</button>
+    </div>
+  {/if}
+  {#if !quietMode}
+    <Titlebar
+      soloTitle={soloTitleFor(view)}
+      instanceMeta={soloInstanceMeta}
+      onPalette={() => { paletteMode = 'normal'; paletteOpen = true; }}
+      {githubStatus}
+      {jiraStatus}
+      {sentryStatus}
+      {claudeStatus}
+    />
+  {/if}
 
   <div class="app-body">
-  <IconRail
-    bind:view
-    {githubBadge}
-    {jiraBadge}
-    {sentryBadge}
-    {claudeBusy}
-    dragActive={dragState.payload !== null}
-    onAgentDrop={(e) => onAgentDrop(APP_INSTANCE_IDS.claude, e)}
-  />
+  {#if !quietMode}
+    <IconRail
+      bind:view
+      {githubBadge}
+      {jiraBadge}
+      {sentryBadge}
+      {claudeBusy}
+      dragActive={dragState.payload !== null}
+      onAgentDrop={(e) => onAgentDrop(APP_INSTANCE_IDS.claude, e)}
+    />
+  {/if}
 
   <div class="main">
 
@@ -3323,6 +3336,16 @@
     {/if}
   </div>
   </div>
+  {#if quietMode}
+    <Dock
+      {view}
+      onNav={(v) => (view = v)}
+      {githubBadge}
+      {jiraBadge}
+      {sentryBadge}
+      {claudeBusy}
+    />
+  {/if}
 </div>
 
 <!-- Inbox focus state (PR / ticket / issue) is persisted per app and
@@ -3435,6 +3458,22 @@
     flex: 1;
     min-height: 0;
   }
+
+  /* Quiet direction (§3.1) — no titlebar/rail; thin drag strip clears
+     the native traffic lights + carries the ⌘K hint, charcoal Dock at
+     the bottom. */
+  .quiet-strip {
+    flex: none; height: 30px;
+    display: flex; align-items: center; justify-content: flex-end;
+    padding: 0 18px 0 88px;
+    background: var(--bg-0);
+  }
+  .quiet-k {
+    background: transparent; border: 0; cursor: pointer;
+    font-size: 11.5px; color: var(--text-faint);
+    -webkit-app-region: no-drag;
+  }
+  .quiet-k:hover { color: var(--text-1); }
 
   /* Touch ID / device-owner-auth gate shown at launch. Sits over the app
      (z-index 500) so the solo doesn't flash through before unlock —
