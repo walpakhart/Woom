@@ -239,7 +239,7 @@
     await tick();
     const rowIdx = items.findIndex((it) => it.path === target);
     if (rowIdx < 0 || !treeContainer) return;
-    const row = treeContainer.querySelectorAll('.tree-row')[rowIdx] as HTMLElement | undefined;
+    const row = treeContainer.querySelectorAll('.etree-row')[rowIdx] as HTMLElement | undefined;
     row?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   }
 
@@ -468,20 +468,20 @@
   }
 </script>
 
-<div class="tree" bind:this={treeContainer}>
-  {#if loading}<div class="tree-state">Loading…</div>{/if}
-  {#if error}<div class="tree-state tree-error">{error}</div>{/if}
+<div class="etree" bind:this={treeContainer}>
+  {#if loading}<div class="etree-state">Loading…</div>{/if}
+  {#if error}<div class="etree-state etree-error">{error}</div>{/if}
   {#snippet createRow(depth: number)}
     {@const cIcon = iconFor(creating?.draft || (creating?.isDir ? 'folder' : 'file'), creating?.isDir ?? false, true)}
-    <div class="tree-row tree-creating" style="padding-left: {8 + depth * 12}px">
-      <span class="tree-chevron"><span class="tree-chevron-pad"></span></span>
-      <svg class="tree-icon" viewBox="0 0 24 24" aria-hidden="true">
+    <div class="etree-row etree-creating" style="padding-left: {8 + depth * 12}px">
+      <span class="etree-chevron"><span class="etree-chevron-pad"></span></span>
+      <svg class="etree-icon" viewBox="0 0 24 24" aria-hidden="true">
         <path d={cIcon.d}/>
         {#if cIcon.d2}<path d={cIcon.d2}/>{/if}
       </svg>
       <!-- svelte-ignore a11y_autofocus -->
       <input
-        class="tree-rename mono"
+        class="etree-rename mono"
         value={creating?.draft ?? ''}
         oninput={(e) => { if (creating) creating.draft = e.currentTarget.value; }}
         autofocus
@@ -504,12 +504,11 @@
   {/if}
   {#each items as it, i (it.path)}
     <button
-      class="tree-row"
+      class="etree-row"
       class:selected={selectedPath === it.path && !it.is_dir}
       class:dir={it.is_dir}
       class:ignored={it.ignored}
       class:create-target={creating?.parentDir === it.path}
-      data-git={rowCode(it) ? gitClass(rowCode(it)) : ''}
       style="padding-left: {8 + it.depth * 12}px"
       onclick={() => toggle(i)}
       oncontextmenu={(e) => openContextMenu(e, it)}
@@ -530,16 +529,16 @@
       }}
       ondragend={() => setDragPayload(null)}
     >
-      <span class="tree-chevron">
+      <span class="etree-chevron">
         {#if it.is_dir}
           <svg class="i i-sm" viewBox="0 0 24 24" style="transform: rotate({it.expanded ? 90 : 0}deg)"><path d="M9 6l6 6-6 6" /></svg>
         {:else}
-          <span class="tree-chevron-pad"></span>
+          <span class="etree-chevron-pad"></span>
         {/if}
       </span>
       {#snippet typeIcon()}
         {@const icon = iconFor(it.name, it.is_dir, it.expanded)}
-        <svg class="tree-icon" viewBox="0 0 24 24" aria-hidden="true">
+        <svg class="etree-icon" viewBox="0 0 24 24" aria-hidden="true">
           <path d={icon.d}/>
           {#if icon.d2}<path d={icon.d2}/>{/if}
         </svg>
@@ -550,7 +549,7 @@
              user commits (Enter) or cancels (Esc / blur). -->
         <!-- svelte-ignore a11y_autofocus -->
         <input
-          class="tree-rename mono"
+          class="etree-rename mono"
           bind:value={renaming.draft}
           autofocus
           onclick={(e) => e.stopPropagation()}
@@ -562,12 +561,12 @@
           onblur={commitRename}
         />
       {:else}
-        <span class="tree-name mono">{it.name}</span>
+        <span class="etree-name mono">{it.name}</span>
       {/if}
       {#if rowCode(it)}
         {@const code = rowCode(it)}
         <span
-          class="tree-git mono tree-git--{gitClass(code)}"
+          class="etree-git mono etree-git--{gitClass(code)}"
           title={it.is_dir ? `Contains ${gitTitle(code).toLowerCase()} changes` : gitTitle(code)}
         >{code}</span>
       {/if}
@@ -580,76 +579,73 @@
 
 {#if contextMenu}
   <div
-    class="tree-ctx-backdrop"
+    class="etree-ctx-backdrop"
     onclick={closeContextMenu}
     onkeydown={(e) => { if (e.key === 'Escape') closeContextMenu(); }}
     role="presentation"
   ></div>
-  <div class="tree-ctx" style="left: {contextMenu.x}px; top: {contextMenu.y}px" role="menu">
-    <button class="tree-ctx-item" onclick={() => void ctxRevealInFinder(contextMenu!.item)} role="menuitem">
+  <div class="etree-ctx" style="left: {contextMenu.x}px; top: {contextMenu.y}px" role="menu">
+    <button class="etree-ctx-item" onclick={() => void ctxRevealInFinder(contextMenu!.item)} role="menuitem">
       Reveal in Finder
     </button>
-    <button class="tree-ctx-item" onclick={() => void ctxCopyPath(contextMenu!.item)} role="menuitem">
+    <button class="etree-ctx-item" onclick={() => void ctxCopyPath(contextMenu!.item)} role="menuitem">
       Copy path
     </button>
-    <button class="tree-ctx-item" onclick={() => void startCreate(contextMenu!.item, false)} role="menuitem">
+    <button class="etree-ctx-item" onclick={() => void startCreate(contextMenu!.item, false)} role="menuitem">
       New File…
     </button>
-    <button class="tree-ctx-item" onclick={() => void startCreate(contextMenu!.item, true)} role="menuitem">
+    <button class="etree-ctx-item" onclick={() => void startCreate(contextMenu!.item, true)} role="menuitem">
       New Folder…
     </button>
-    <button class="tree-ctx-item" onclick={() => ctxRename(contextMenu!.item)} role="menuitem">
+    <button class="etree-ctx-item" onclick={() => ctxRename(contextMenu!.item)} role="menuitem">
       Rename…
     </button>
-    <button class="tree-ctx-item tree-ctx-item--danger" onclick={() => void ctxDelete(contextMenu!.item)} role="menuitem">
+    <button class="etree-ctx-item etree-ctx-item--danger" onclick={() => void ctxDelete(contextMenu!.item)} role="menuitem">
       Delete
     </button>
   </div>
 {/if}
 
 <style>
-  .tree { height: 100%; overflow: auto; padding: 4px 0; }
-  .tree-state { padding: 8px 14px; font-size: 11.5px; color: var(--text-2); }
-  .tree-error { color: var(--error); }
-  /* Mockup tree rows: 11.5px, radius 6, active = bg-nav fill. */
-  .tree-row {
+  /* Mockup 4i / README §2.7 editor tree. Rows 12.5px, line-height 2.0,
+     radius 6, active file = bg-nav fill. Fresh `.etree-` markup. */
+  .etree { height: 100%; overflow: auto; padding: 4px 6px; }
+  .etree-state { padding: 8px 14px; font-size: 11.5px; color: var(--text-2); }
+  .etree-error { color: var(--err); }
+  .etree-row {
     display: flex; align-items: center; gap: 7px;
-    width: 100%; padding: 3.5px 8px;
-    font-size: 11.5px; color: var(--text-1);
-    text-align: left; border-radius: var(--r-btn);
+    width: 100%; padding: 0 8px;
+    font-size: 12.5px; line-height: 2.0;
+    color: var(--text-1);
+    text-align: left; border-radius: 6px;
     background: transparent;
     transition: background 80ms ease;
   }
-  .tree-row:hover { background: var(--bg-hover); color: var(--text-0); }
-  .tree-row.selected { background: var(--bg-nav); color: var(--text-0); font-weight: 600; }
-  .tree-row.dir { color: var(--text-0); font-weight: 500; }
+  .etree-row:hover { background: var(--bg-hover); color: var(--text-0); }
+  .etree-row.selected { background: var(--bg-nav); color: var(--text-0); }
+  .etree-row.dir { color: var(--text-0); }
   /* Folder the inline create input is nested under — highlight so it's
      unmistakable WHERE the new file/folder lands (VSCode-style). */
-  .tree-row.create-target { background: color-mix(in srgb, var(--accent) 12%, transparent); }
-  .tree-creating { background: color-mix(in srgb, var(--accent) 8%, transparent); }
-  /* Gitignored files/dirs — dimmed + italic so they read as "outside git"
-     at a glance (mirrors VS Code / IntelliJ). `.selected` still wins, so
-     opening an ignored file still shows the accent highlight. */
-  .tree-row.ignored { color: var(--text-mute);  opacity: 0.65; }
-  .tree-row.ignored:hover { color: var(--text-2); opacity: 0.85; }
-  .tree-row.ignored.dir { color: var(--text-mute); font-weight: 400; }
-  .tree-chevron {
+  .etree-row.create-target { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+  .etree-creating { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+  /* Gitignored files/dirs — dimmed so they read as "outside git" at a
+     glance. `.selected` still wins so opening an ignored file highlights. */
+  .etree-row.ignored { color: var(--text-mute); opacity: 0.65; }
+  .etree-row.ignored:hover { color: var(--text-2); opacity: 0.85; }
+  .etree-row.ignored.dir { color: var(--text-mute); }
+  .etree-chevron {
     display: inline-flex; width: 14px; height: 14px;
     align-items: center; justify-content: center; flex-shrink: 0;
     color: var(--text-2);
   }
-  .tree-chevron :global(svg) {
+  .etree-chevron :global(svg) {
     width: 11px; height: 11px;
-    /* Spring-out easing gives the chevron rotate a tiny snap on expand
-       — much more satisfying than a flat ease for repeated clicks
-       while exploring the tree. */
     transition: transform var(--dur-base) var(--ease-spring);
   }
-  .tree-chevron-pad { width: 11px; height: 11px; }
+  .etree-chevron-pad { width: 11px; height: 11px; }
   /* Type icon — drawn from `fileIcons.ts` SVG paths. Stroke-only,
-     monochrome, takes its colour from the row text so dimmed /
-     ignored rows fade out together with their label. */
-  .tree-icon {
+     inherits row colour so dimmed / ignored rows fade with their label. */
+  .etree-icon {
     width: 14px; height: 14px;
     flex-shrink: 0;
     fill: none;
@@ -660,44 +656,27 @@
     color: var(--text-2);
     opacity: 0.85;
   }
-  .tree-row.dir .tree-icon { color: var(--text-1); opacity: 1; }
-  .tree-row.selected .tree-icon { color: var(--accent-bright); }
-  .tree-row.ignored .tree-icon { color: var(--text-mute); opacity: 0.55; }
-  .tree-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
-  /* Mockup: bare letter on the right, no pill background. */
-  .tree-git {
+  .etree-row.dir .etree-icon { color: var(--text-1); opacity: 1; }
+  .etree-row.selected .etree-icon { color: var(--accent-bright); }
+  .etree-row.ignored .etree-icon { color: var(--text-mute); opacity: 0.55; }
+  .etree-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+  /* Git status — bare mono letter, right-aligned, warn/ok tinted. */
+  .etree-git {
     font-size: 10px; font-weight: 600;
-    padding: 0;
-    border-radius: 0;
     margin-left: 6px;
     flex-shrink: 0;
     min-width: 12px; text-align: right;
-    background: transparent;
   }
-  .tree-git--mod { color: var(--warn); }
-  .tree-git--add { color: var(--ok); }
-  .tree-git--del { color: var(--err); }
-  .tree-git--new { color: var(--ok); }
-  .tree-git--ren { color: var(--text-mute); }
-  .tree-git--conflict { color: var(--err); }
+  .etree-git--mod { color: var(--warn); }
+  .etree-git--add { color: var(--ok); }
+  .etree-git--del { color: var(--err); }
+  .etree-git--new { color: var(--ok); }
+  .etree-git--ren { color: var(--text-mute); }
+  .etree-git--conflict { color: var(--err); }
 
-  /* Git state colours the row's NAME text (VS Code style) — no left rail,
-     no dots, just the filename tinted + a letter badge on the right. The
-     same status set drives files AND folders (folder = rolled-up code).
-     `.selected` / `.ignored` still win since their rules come later /
-     are more specific. Untracked (`new`) = accent, modified = `--warning`. */
-  .tree-row[data-git='mod'] .tree-name { color: var(--warn); }
-  .tree-row[data-git='add'] .tree-name { color: var(--ok); }
-  .tree-row[data-git='del'] .tree-name { color: var(--err); }
-  .tree-row[data-git='ren'] .tree-name { color: var(--text-1); }
-  .tree-row[data-git='new'] .tree-name { color: var(--ok); }
-  .tree-row[data-git='conflict'] .tree-name { color: var(--err); }
-  /* Selection keeps ink text so a selected changed row stays legible. */
-  .tree-row.selected .tree-name { color: var(--text-0); }
-
-  /* Inline rename input — sized to fit the row, takes the same font
-     so the swap doesn't shift the row height. */
-  .tree-rename {
+  /* Inline rename input — sized to fit the row, same font so the swap
+     doesn't shift the row height. */
+  .etree-rename {
     flex: 1; min-width: 0;
     padding: 1px 4px;
     background: var(--bg-0);
@@ -710,11 +689,11 @@
 
   /* Right-click context menu. Positioned absolute at the cursor;
      backdrop captures outside clicks so the menu dismisses. */
-  .tree-ctx-backdrop {
+  .etree-ctx-backdrop {
     position: fixed; inset: 0; z-index: 600;
     background: transparent;
   }
-  .tree-ctx {
+  .etree-ctx {
     position: fixed; z-index: 601;
     min-width: 180px;
     padding: 4px;
@@ -723,13 +702,13 @@
     border-radius: 8px;
     box-shadow: var(--shadow-3);
   }
-  .tree-ctx-item {
+  .etree-ctx-item {
     display: block; width: 100%;
     padding: 6px 10px; border-radius: 5px;
     background: none; border: none; text-align: left;
     color: var(--text-1); font-size: 12px; cursor: pointer;
   }
-  .tree-ctx-item:hover { background: var(--bg-2); color: var(--text-0); }
-  .tree-ctx-item--danger { color: #F0A38A; }
-  .tree-ctx-item--danger:hover { background: rgba(232, 130, 100, 0.12); }
+  .etree-ctx-item:hover { background: var(--bg-2); color: var(--text-0); }
+  .etree-ctx-item--danger { color: var(--err); }
+  .etree-ctx-item--danger:hover { background: color-mix(in srgb, var(--err) 12%, transparent); }
 </style>

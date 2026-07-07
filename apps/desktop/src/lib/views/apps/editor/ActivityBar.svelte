@@ -1,34 +1,23 @@
 <script lang="ts">
-  /* ActivityBar — узкая вертикальная полоса слева в EditorApp.
-     Кнопки: Explorer / Search / Git / Review / Debug / Tests.
-     На MVP debug / tests — переключатели side-panel'a (visual только);
-     review — реальная фича (страница с pending agent edits).
-     Bottom: Settings.
-
-     Inline Claude pane TOGGLED по своей кнопке-«ушку» внутри pane'а
-     (см. InlineClaude.svelte → ic-x / collapsed rail) — не через
-     ActivityBar, чтобы один и тот же интерфейс открытия/закрытия
-     был и в редакторе, и в терминале, и в канвасе. */
+  /* ActivityBar — 44px vertical rail on the left of EditorApp (mockup 4i).
+     Nav items: Explorer / Search / Git / Review / Debug / Tests.
+     Bottom rail: Claude glyph (toggles AgentDock, ⌘L) + Settings (⌘,).
+     git / review counts render as tiny corner digits (--text-1 / --warn). */
   type Tab = 'explorer' | 'search' | 'git' | 'review' | 'debug' | 'tests';
 
   interface Props {
     activeTab: Tab;
     onPick: (t: Tab) => void;
-    /** Bottom-rail Settings shortcut — jumps the user out of the editor
-     *  to the Settings view. Optional so the bar still works in
-     *  preview / standalone embeddings. */
+    /** Bottom-rail Settings shortcut — jumps out to the Settings view.
+     *  Optional so the bar still works in preview / standalone. */
     onOpenSettings?: () => void;
-    /** Number of unresolved problems — displayed as a badge on Tests. */
+    /** Unresolved problems → tiny corner digit on Tests. */
     problemsCount?: number;
-    /** Git change count → git badge. */
+    /** Git change count → tiny corner digit on Git. */
     gitCount?: number;
-    /** Pending agent edits across every linked session → Review badge.
-     *  Goes accent-bright + pulses when > 0 so users can spot "agent
-     *  wrote something I haven't looked at yet" without opening the
-     *  pane. */
+    /** Pending agent edits across linked sessions → corner digit on Review. */
     reviewCount?: number;
-    /** Agent-dock open state — drives the panel-right toggle's active
-     *  tint. Optional so the bar still renders in standalone previews. */
+    /** Agent-dock open state — drives the Claude glyph's active tint. */
     dockOpen?: boolean;
     /** Toggle the editor↔agent dock (mirrors ⌘L). */
     onToggleDock?: () => void;
@@ -36,126 +25,164 @@
   let p: Props = $props();
 </script>
 
-<aside class="ab">
-  <button class="ab-btn" class:active={p.activeTab === 'explorer'} onclick={() => p.onPick('explorer')} title="Explorer · ⇧⌘E">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-      <path d="M3 7v11a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-7L10 5H5a2 2 0 0 0-2 2z"/>
-    </svg>
-  </button>
-  <button class="ab-btn" class:active={p.activeTab === 'search'} onclick={() => p.onPick('search')} title="Search · ⇧⌘F">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3-3"/></svg>
-  </button>
-  <button class="ab-btn" class:active={p.activeTab === 'git'} onclick={() => p.onPick('git')} title="Source Control · ⌃⇧G">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="M6 8.5V14a4 4 0 0 0 4 4h6"/></svg>
-    {#if p.gitCount && p.gitCount > 0}<span class="ab-badge">{p.gitCount}</span>{/if}
-  </button>
-  <button
-    class="ab-btn"
-    class:active={p.activeTab === 'review'}
-    class:ab-btn--pulse={(p.reviewCount ?? 0) > 0}
-    onclick={() => p.onPick('review')}
-    title="Review agent edits · ⇧⌘R"
-  >
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-      <path d="M5 6l5.5 5.5L5 17"/>
-      <path d="M13 17h6"/>
-    </svg>
-    {#if p.reviewCount && p.reviewCount > 0}<span class="ab-badge ab-badge--review">{p.reviewCount}</span>{/if}
-  </button>
-  <button class="ab-btn" class:active={p.activeTab === 'debug'} onclick={() => p.onPick('debug')} title="Debug">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="13" r="6"/><path d="M12 7v-3M9 4h6M5 11l-2 1M19 11l2 1M5 17l-2 1M19 17l2 1"/></svg>
-  </button>
-  <button class="ab-btn" class:active={p.activeTab === 'tests'} onclick={() => p.onPick('tests')} title="Tests">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
-    {#if p.problemsCount && p.problemsCount > 0}<span class="ab-badge ab-badge--err">{p.problemsCount}</span>{/if}
-  </button>
-  <span class="ab-spacer"></span>
-  {#if p.onToggleDock}
+<aside class="eab">
+  <nav class="eab-cluster">
     <button
-      class="ab-btn"
-      class:active={p.dockOpen}
-      onclick={() => p.onToggleDock?.()}
-      title="Agent dock · ⌘L"
-      aria-label="Toggle agent dock"
-      aria-pressed={p.dockOpen}
+      class="eab-item"
+      class:eab-item--on={p.activeTab === 'explorer'}
+      onclick={() => p.onPick('explorer')}
+      title="Explorer · ⇧⌘E"
     >
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-        <rect x="3" y="4" width="18" height="16" rx="2"/>
-        <line x1="15" y1="4" x2="15" y2="20"/>
-        <rect x="15" y="4" width="6" height="16" rx="0" fill="currentColor" stroke="none" opacity="0.32"/>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M6.5 3h6l4 4v13.2a.8.8 0 0 1-.8.8H6.5a.8.8 0 0 1-.8-.8V3.8A.8.8 0 0 1 6.5 3z"/>
+        <path d="M12.5 3v4h4"/>
+        <path d="M8.6 12h5.2M8.6 15h5.2M8.6 18h3.4"/>
       </svg>
     </button>
-  {/if}
-  <button
-    class="ab-btn"
-    title="Settings · ⌘,"
-    onclick={() => p.onOpenSettings?.()}
-    disabled={!p.onOpenSettings}
-  >
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9 1.65 1.65 0 0 0 4.27 7.18l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6 1.65 1.65 0 0 0 10 3.09V3a2 2 0 1 1 4 0v.09c0 .68.4 1.29 1 1.51a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.22.6.83 1 1.51 1H21a2 2 0 1 1 0 4h-.09c-.68 0-1.29.4-1.51 1z"/></svg>
-  </button>
+
+    <button
+      class="eab-item"
+      class:eab-item--on={p.activeTab === 'search'}
+      onclick={() => p.onPick('search')}
+      title="Search · ⇧⌘F"
+    >
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="10.5" cy="10.5" r="6"/>
+        <path d="M15 15l4.5 4.5"/>
+      </svg>
+    </button>
+
+    <button
+      class="eab-item"
+      class:eab-item--on={p.activeTab === 'git'}
+      onclick={() => p.onPick('git')}
+      title="Source Control · ⌃⇧G"
+    >
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3.5 12h5.3M15.2 12h5.3"/>
+        <circle cx="12" cy="12" r="3.3"/>
+      </svg>
+      {#if p.gitCount && p.gitCount > 0}<span class="eab-count eab-count--git">{p.gitCount}</span>{/if}
+    </button>
+
+    <button
+      class="eab-item"
+      class:eab-item--on={p.activeTab === 'review'}
+      onclick={() => p.onPick('review')}
+      title="Review agent edits · ⇧⌘R"
+    >
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M2.5 12s3.4-5.6 9.5-5.6S21.5 12 21.5 12 18.1 17.6 12 17.6 2.5 12 2.5 12z"/>
+        <circle cx="12" cy="12" r="2.4"/>
+      </svg>
+      {#if p.reviewCount && p.reviewCount > 0}<span class="eab-count eab-count--review">{p.reviewCount}</span>{/if}
+    </button>
+
+    <button
+      class="eab-item"
+      class:eab-item--on={p.activeTab === 'debug'}
+      onclick={() => p.onPick('debug')}
+      title="Debug"
+    >
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 8.5a4 4.6 0 0 1 4 4.6v.9a4 4.6 0 0 1-8 0v-.9a4 4.6 0 0 1 4-4.6z"/>
+        <path d="M9.8 6l1.6 2.2M14.2 6l-1.6 2.2"/>
+        <path d="M8 12.5H4.8M16 12.5h3.2M8 16l-2.4 1.4M16 16l2.4 1.4"/>
+      </svg>
+    </button>
+
+    <button
+      class="eab-item"
+      class:eab-item--on={p.activeTab === 'tests'}
+      onclick={() => p.onPick('tests')}
+      title="Tests"
+    >
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M9.5 3h5M10.5 3v6.2l-4.4 7.4a1.4 1.4 0 0 0 1.2 2.1h9.4a1.4 1.4 0 0 0 1.2-2.1L13.5 9.2V3"/>
+        <path d="M8.4 14.5h7.2"/>
+      </svg>
+      {#if p.problemsCount && p.problemsCount > 0}<span class="eab-count eab-count--problems">{p.problemsCount}</span>{/if}
+    </button>
+  </nav>
+
+  <span class="eab-fill"></span>
+
+  <nav class="eab-cluster">
+    {#if p.onToggleDock}
+      <button
+        class="eab-item eab-item--claude"
+        class:eab-item--on={p.dockOpen}
+        onclick={() => p.onToggleDock?.()}
+        title="Agent dock · ⌘L"
+        aria-label="Toggle agent dock"
+        aria-pressed={p.dockOpen}
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 3.5v17M3.5 12h17M6 6l12 12M18 6L6 18"/>
+        </svg>
+      </button>
+    {/if}
+
+    <button
+      class="eab-item"
+      title="Settings · ⌘,"
+      onclick={() => p.onOpenSettings?.()}
+      disabled={!p.onOpenSettings}
+    >
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M4 8h6M14 8h6"/>
+        <circle cx="12" cy="8" r="2.2"/>
+        <path d="M4 16h10M18 16h2"/>
+        <circle cx="16" cy="16" r="2.2"/>
+      </svg>
+    </button>
+  </nav>
 </aside>
 
 <style>
-  /* Quiet paper strip — the mockup has no activity bar, so this
-     narrows and fades into the sheet instead of reading as chrome. */
-  /* Fill the host pane (.se-activity is a flex COLUMN — a
-     `flex: 0 0 36px` here would set the HEIGHT basis, squashing the
-     bar to a 36px box whose buttons spill out via overflow while the
-     pane's border-right peeks through below). */
-  .ab {
+  /* Fill the host pane (.se-activity is a flex COLUMN), so stretch to it
+     rather than setting a HEIGHT basis that would squash the rail. */
+  .eab {
     width: 100%; flex: 1;
     display: flex; flex-direction: column; align-items: center;
     gap: 4px;
     padding: 8px 0 10px;
     background: var(--bg-0);
   }
-  .ab-btn {
+  .eab-cluster {
+    display: flex; flex-direction: column; align-items: center;
+    gap: 4px;
+  }
+  .eab-fill { flex: 1; }
+
+  .eab-item {
     position: relative;
     width: 32px; height: 32px;
     display: grid; place-items: center;
     border-radius: 8px;
     color: var(--text-2);
     background: transparent; border: none; cursor: pointer;
-    transition: color 140ms, background 140ms;
+    transition: color 140ms var(--ease-out), background 140ms var(--ease-out);
   }
-  .ab-btn:hover { color: var(--text-0); background: var(--bg-elev, var(--bg-2)); }
-  .ab-btn.active {
+  .eab-item:hover { color: var(--text-0); background: var(--bg-2); }
+  .eab-item--on {
     color: var(--text-0);
     background: var(--bg-3);
   }
-  .ab-btn svg { width: 17px; height: 17px; stroke-linecap: round; stroke-linejoin: round; }
-  .ab-badge {
-    position: absolute; top: 1px; right: 1px;
-    min-width: 13px; height: 13px; padding: 0 3px;
-    border-radius: 7px;
+  .eab-item:disabled { opacity: 0.4; cursor: default; }
+  .eab-item svg { width: 18px; height: 18px; }
+
+  /* Tiny corner digits — no filled pill, just a colored numeral with a
+     thin ring in the rail bg so it stays legible over the icon. */
+  .eab-count {
+    position: absolute; top: 0; right: 1px;
     font-family: var(--font-mono);
-    font-size: 8px; font-weight: 700;
-    background: var(--accent); color: var(--accent-fg);
-    display: grid; place-items: center;
-    box-shadow: 0 0 0 2px var(--bg-1);
+    font-size: 8px; font-weight: 700; line-height: 1;
+    letter-spacing: -0.02em;
+    text-shadow:
+      0 0 2px var(--bg-0), 0 0 2px var(--bg-0);
   }
-  .ab-badge--err { background: var(--error); color: var(--bg-0); }
-  .ab-badge--review {
-    background: var(--accent-bright);
-    color: var(--accent-fg);
-  }
-  /* Subtle pulse so the user notices "agent wrote something" without
-     a hard ping. Only fires while the count is > 0; the keyframe is
-     short enough to read as breathing, not blinking. */
-  .ab-btn--pulse::after {
-    content: '';
-    position: absolute;
-    inset: -1px;
-    border-radius: 8px;
-    pointer-events: none;
-    box-shadow: 0 0 0 0 var(--accent-glow, var(--accent-glow));
-    animation: ab-pulse 2.4s ease-out infinite;
-  }
-  @keyframes ab-pulse {
-    0%   { box-shadow: 0 0 0 0 var(--accent-glow, var(--accent-glow)); }
-    70%  { box-shadow: 0 0 0 10px transparent; }
-    100% { box-shadow: 0 0 0 0 transparent; }
-  }
-  .ab-spacer { flex: 1; }
+  .eab-count--git { color: var(--text-1); }
+  .eab-count--review { color: var(--warn); }
+  .eab-count--problems { color: var(--warn); }
 </style>

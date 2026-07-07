@@ -25,6 +25,7 @@
   import Splitter from '$lib/components/ui/Splitter.svelte';
   import SidePaneRail from '$lib/components/ui/SidePaneRail.svelte';
   import { layoutState, kindForInstanceId, APP_INSTANCE_IDS, setActiveInstance, addInstance, removeInstance } from '$lib/state/layout.svelte';
+  import { layoutModeState } from '$lib/state/layoutMode.svelte';
   import { sessionsState } from '$lib/state/sessions.svelte';
   import { applyTerminalSelectionToAgent } from '$lib/services/applyToAgent';
   import { clearTerminalScrollback } from '$lib/state/terminals.svelte';
@@ -71,6 +72,26 @@
     e.stopPropagation();
     removeInstance('terminal', id);
   }
+
+  const quiet = $derived(layoutModeState.mode === 'quiet');
+  /* Quiet §3.4 — PTY inset almost full-window; the instance list
+     collapses into a «Name ▾» switcher floating at the traffic-lights. */
+  const cwdShort = $derived(p.cwd ? p.cwd.replace(/^\/Users\/[^/]+/, '~') : '');
+  let termSwitchOpen = $state(false);
+  function pickTerminal(id: string) {
+    setActiveInstance('terminal', id);
+    termSwitchOpen = false;
+  }
+  $effect(() => {
+    if (!termSwitchOpen) return;
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t?.closest?.('.qsolo-float')) return;
+      termSwitchOpen = false;
+    };
+    window.addEventListener('mousedown', onDown, true);
+    return () => window.removeEventListener('mousedown', onDown, true);
+  });
 
   /** Sessions linked TO this terminal — used here ONLY to feed the
    *  floating Apply popover's button list. The InlineClaude pane
@@ -160,8 +181,69 @@
 <section
   class="app-shell st-shell"
   class:st-shell--rail={!sideOpen}
+  class:st-shell--quiet={quiet}
   style="--app-tone: var(--src-term); --app-glow: rgba(245,240,234,0.30);"
 >
+  {#if quiet}
+    <div class="qsolo-term">
+      <div class="qsolo-float">
+        <button
+          class="qsolo-float-title"
+          class:open={termSwitchOpen}
+          onclick={() => (termSwitchOpen = !termSwitchOpen)}
+          aria-expanded={termSwitchOpen}
+          title="Switch terminal"
+        >
+          {instanceLabel} <span class="qsolo-caret" aria-hidden="true">▾</span>
+        </button>
+        <span class="qsolo-term-meta mono">zsh{cwdShort ? ` · ${cwdShort}` : ''} · drivable by agents via MCP</span>
+        {#if termSwitchOpen}
+          <div class="qsolo-float-pop" role="listbox" aria-label="Terminals">
+            {#each termInstances as inst (inst.id)}
+              <button
+                class="qsolo-float-item"
+                class:active={inst.id === activeTermId}
+                onclick={() => pickTerminal(inst.id)}
+                role="option"
+                aria-selected={inst.id === activeTermId}
+              >
+                <span class="qsolo-float-name">{inst.name}</span>
+                <span class="qsolo-float-sub mono">zsh</span>
+              </button>
+            {/each}
+            <button class="qsolo-float-add" onclick={() => { addInstance('terminal'); termSwitchOpen = false; }}>
+              + New terminal
+            </button>
+          </div>
+        {/if}
+      </div>
+      <section class="app-pane st-main st-main--quiet">
+        <TerminalSurface
+          instanceId={p.instanceId}
+          cwd={p.cwd ?? null}
+          onSelectionChange={(s) => (xtermSelection = s)}
+          clearSelectionRef={clearSelRef}
+        />
+        <button class="st-clear" onclick={clearScreen} title="Clear terminal (keeps the shell session running)" aria-label="Clear terminal">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M3 6h18"/>
+            <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+            <path d="M19 6 18 20a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+          </svg>
+        </button>
+        {#if xtermSelection && applyButtons.length > 0}
+          <div class="st-apply-pop" style:left="{xtermSelection.anchor.x}px" style:top="{xtermSelection.anchor.y}px" role="toolbar" aria-label="Apply terminal selection to agent">
+            {#each applyButtons as btn (btn.sessionId)}
+              <button class="st-apply-pop-btn claude" onmousedown={(e) => e.preventDefault()} onclick={() => handleApplyTo(btn)} title={`Pin selection to ${btn.label}'s composer`}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h12M13 6l6 6-6 6"/></svg>
+                <span>Apply to {btn.label}</span>
+              </button>
+            {/each}
+          </div>
+        {/if}
+      </section>
+    </div>
+  {:else}
   <aside class="lp st-list">
     <header class="lp-head">
       <span class="lp-title">Terminals</span>
@@ -329,6 +411,7 @@
       onExpand={() => (sideOpen = true)}
     />
   {/if}
+  {/if}
 </section>
 
 <style>
@@ -350,6 +433,43 @@
     grid-template-columns: 264px minmax(0, 1fr) 44px;
     transition: grid-template-columns var(--dur-base) var(--ease-out);
   }
+  /* Quiet §3.4 — PTY inset almost full-window, no list column. */
+  .st-shell.st-shell--quiet { display: block; grid-template-columns: none; }
+  .qsolo-term { position: relative; display: flex; flex-direction: column; height: 100%; }
+  .st-main--quiet { margin: 52px 40px 18px; }
+  .qsolo-float { position: absolute; top: 13px; left: 96px; z-index: 40; display: flex; align-items: baseline; gap: 10px; }
+  .qsolo-float-title {
+    background: transparent; border: 0; cursor: pointer;
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 15px; font-weight: 600; color: var(--text-0);
+    letter-spacing: -0.01em;
+  }
+  .qsolo-float-title .qsolo-caret { font-size: 10px; color: var(--text-faint); }
+  .qsolo-float-title:hover, .qsolo-float-title.open { color: var(--accent-bright); }
+  .qsolo-term-meta { font-size: 11px; color: var(--text-mute); }
+  .qsolo-float-pop {
+    position: absolute; top: calc(100% + 6px); left: 0; z-index: 50;
+    min-width: 220px; max-height: 340px; overflow-y: auto; padding: 4px;
+    background: var(--bg-1); border: 1px solid var(--border-hi);
+    border-radius: 12px; box-shadow: var(--shadow-3);
+    display: flex; flex-direction: column; gap: 1px;
+  }
+  .qsolo-float-item {
+    display: flex; align-items: center; gap: 8px;
+    padding: 7px 10px; border-radius: 8px;
+    background: transparent; border: 0; cursor: pointer; text-align: left;
+    color: var(--text-1); font-size: 13px;
+  }
+  .qsolo-float-item:hover { background: var(--bg-hover); color: var(--text-0); }
+  .qsolo-float-item.active { background: var(--bg-3); color: var(--text-0); box-shadow: var(--shadow-1); }
+  .qsolo-float-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .qsolo-float-sub { flex: none; font-size: 10.5px; color: var(--text-mute); }
+  .qsolo-float-add {
+    margin-top: 2px; padding: 7px 10px; border-radius: 8px;
+    background: transparent; border: 0; cursor: pointer; text-align: left;
+    color: var(--text-2); font-size: 12px;
+  }
+  .qsolo-float-add:hover { background: var(--bg-hover); color: var(--text-0); }
   /* Instance list column. */
   .st-list { min-height: 0; }
   .st-list-row {

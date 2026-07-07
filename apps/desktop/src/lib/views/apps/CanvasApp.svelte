@@ -5,6 +5,7 @@
   import SidePaneRail from '$lib/components/ui/SidePaneRail.svelte';
   import { canvasState, setActiveCanvasTab, closeCanvasTab, createAndOpenInInstance } from '$lib/state/canvas.svelte';
   import { layoutState, APP_INSTANCE_IDS, kindForInstanceId } from '$lib/state/layout.svelte';
+  import { layoutModeState } from '$lib/state/layoutMode.svelte';
   import { sessionsState, updateSession } from '$lib/state/sessions.svelte';
   import { fly } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
@@ -37,6 +38,30 @@
   );
 
   const activeCanvasId = $derived(canvasState.byInstance[p.instanceId]?.activeId ?? null);
+
+  const quiet = $derived(layoutModeState.mode === 'quiet');
+  /* Quiet §3.4 — full-window surface; the canvases list collapses into a
+     «Name ▾» switcher floating at the traffic-lights corner. */
+  let canvasSwitchOpen = $state(false);
+  const activeCanvasName = $derived(
+    canvasState.byInstance[p.instanceId]?.tabs
+      ? (canvasState.open[activeCanvasId ?? '']?.name ?? instanceLabel)
+      : instanceLabel
+  );
+  function pickCanvas(id: string) {
+    setActiveCanvasTab(p.instanceId, id);
+    canvasSwitchOpen = false;
+  }
+  $effect(() => {
+    if (!canvasSwitchOpen) return;
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t?.closest?.('.qsolo-float')) return;
+      canvasSwitchOpen = false;
+    };
+    window.addEventListener('mousedown', onDown, true);
+    return () => window.removeEventListener('mousedown', onDown, true);
+  });
 
   /* Redesign v2 §2.7 — canvases list column. Lists this instance's open
      canvases (tabs); click switches, "+" creates, hover × closes. */
@@ -85,8 +110,44 @@
 <section
   class="app-shell sc-shell"
   class:sc-shell--rail={!sideOpen}
+  class:sc-shell--quiet={quiet}
   style="--app-tone: var(--src-canvas); --app-glow: rgba(125,201,176,0.40);"
 >
+  {#if quiet}
+    <section class="app-pane sc-canvas qsolo-canvas">
+      <CanvasSurface instanceId={p.instanceId} onCardOpen={p.onCardOpen} />
+      <div class="qsolo-float">
+        <button
+          class="qsolo-float-title"
+          class:open={canvasSwitchOpen}
+          onclick={() => (canvasSwitchOpen = !canvasSwitchOpen)}
+          aria-expanded={canvasSwitchOpen}
+          title="Switch canvas"
+        >
+          {activeCanvasName} <span class="qsolo-caret" aria-hidden="true">▾</span>
+        </button>
+        {#if canvasSwitchOpen}
+          <div class="qsolo-float-pop" role="listbox" aria-label="Canvases">
+            {#each canvasTabs as c (c.id)}
+              <button
+                class="qsolo-float-item"
+                class:active={c.id === activeCanvasId}
+                onclick={() => pickCanvas(c.id)}
+                role="option"
+                aria-selected={c.id === activeCanvasId}
+              >
+                <span class="qsolo-float-name">{c.name}</span>
+                <span class="qsolo-float-sub mono">{c.shapes}</span>
+              </button>
+            {/each}
+            <button class="qsolo-float-add" onclick={() => { createAndOpenInInstance(p.instanceId); canvasSwitchOpen = false; }}>
+              + New canvas
+            </button>
+          </div>
+        {/if}
+      </div>
+    </section>
+  {:else}
   <aside class="lp sc-list">
     <header class="lp-head">
       <span class="lp-title">Canvases</span>
@@ -180,6 +241,7 @@
       onExpand={() => (sideOpen = true)}
     />
   {/if}
+  {/if}
 </section>
 
 <style>
@@ -194,6 +256,41 @@
     grid-template-columns: 264px minmax(0, 1fr) 44px;
     transition: grid-template-columns var(--dur-base) var(--ease-out);
   }
+  /* Quiet §3.4 — one full-window surface, no list column. */
+  .sc-shell.sc-shell--quiet { display: block; grid-template-columns: none; }
+  .qsolo-canvas { position: relative; height: 100%; }
+  .qsolo-float { position: absolute; top: 12px; left: 96px; z-index: 40; }
+  .qsolo-float-title {
+    background: transparent; border: 0; cursor: pointer;
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 15px; font-weight: 600; color: var(--text-0);
+    letter-spacing: -0.01em;
+  }
+  .qsolo-float-title .qsolo-caret { font-size: 10px; color: var(--text-faint); }
+  .qsolo-float-title:hover, .qsolo-float-title.open { color: var(--accent-bright); }
+  .qsolo-float-pop {
+    position: absolute; top: calc(100% + 6px); left: 0; z-index: 50;
+    min-width: 220px; max-height: 340px; overflow-y: auto; padding: 4px;
+    background: var(--bg-1); border: 1px solid var(--border-hi);
+    border-radius: 12px; box-shadow: var(--shadow-3);
+    display: flex; flex-direction: column; gap: 1px;
+  }
+  .qsolo-float-item {
+    display: flex; align-items: center; gap: 8px;
+    padding: 7px 10px; border-radius: 8px;
+    background: transparent; border: 0; cursor: pointer; text-align: left;
+    color: var(--text-1); font-size: 13px;
+  }
+  .qsolo-float-item:hover { background: var(--bg-hover); color: var(--text-0); }
+  .qsolo-float-item.active { background: var(--bg-3); color: var(--text-0); box-shadow: var(--shadow-1); }
+  .qsolo-float-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .qsolo-float-sub { flex: none; font-size: 10.5px; color: var(--text-mute); }
+  .qsolo-float-add {
+    margin-top: 2px; padding: 7px 10px; border-radius: 8px;
+    background: transparent; border: 0; cursor: pointer; text-align: left;
+    color: var(--text-2); font-size: 12px;
+  }
+  .qsolo-float-add:hover { background: var(--bg-hover); color: var(--text-0); }
   /* Canvases list column. */
   .sc-list { min-height: 0; }
   .sc-list-row { display: flex; align-items: center; gap: 8px; }

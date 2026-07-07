@@ -996,6 +996,71 @@
 </script>
 
 {#if sess}
+  <!-- Shared textarea + backdrop. Single-sourced so the Cabin footer
+       and the Quiet single-line pill (§3.3) reuse the exact same input
+       wiring — caret/glyph sync, mention backdrop, all handlers. -->
+  {#snippet composerArea()}
+    <div class="cmp-area-wrap">
+      <div class="cmp-area-backdrop" bind:this={backdropEl} aria-hidden="true">{@html backdropHtml(sess.input ?? '')}</div>
+      <textarea
+        bind:this={ta}
+        class="cmp-area"
+        bind:value={sess.input}
+        oninput={onInput}
+        onkeydown={onKey}
+        onpaste={onPaste}
+        onclick={() => { detectMentionTrigger(); detectSlashTrigger(); }}
+        onkeyup={() => { detectMentionTrigger(); detectSlashTrigger(); }}
+        onscroll={syncBackdropScroll}
+        placeholder={sess.sending
+          ? 'Type to queue — fires after the current turn finishes.'
+          : 'Reply…  ( / commands · @ mention · drag items here )'}
+        rows="1"
+        spellcheck="false"
+        autocomplete="off"
+        {...{ autocorrect: 'off', autocapitalize: 'off' }}
+      ></textarea>
+    </div>
+  {/snippet}
+
+  <!-- Queued-messages popover — shared by the Cabin queue chip and the
+       Quiet meta-row queue readout. -->
+  {#snippet queuePanel()}
+    <div class="cmp-queue-panel">
+      <div class="cmp-queue-panel-head">
+        <span>Queued messages</span>
+        <button class="cmp-queue-clear" onclick={clearQueue}>Clear all</button>
+      </div>
+      {#each sess.pendingQueue ?? [] as msg, i (i)}
+        <div class="cmp-queue-item">
+          <span class="cmp-queue-num">{i + 1}</span>
+          <div class="cmp-queue-text-wrap">
+            {#if msg.mentions.some(m => m.attached)}
+              <span class="cmp-queue-attachments">
+                {#each msg.mentions.filter(m => m.attached) as att}
+                  <span class="cmp-queue-att-chip" title={att.body ?? att.title}>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
+                    {att.title}
+                  </span>
+                {/each}
+              </span>
+            {/if}
+            {#if msg.text}
+              <span class="cmp-queue-text">{msg.text}</span>
+            {/if}
+          </div>
+          <button
+            class="cmp-queue-del"
+            onclick={() => removeFromQueue(i)}
+            aria-label="Remove"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M6 18L18 6"/></svg>
+          </button>
+        </div>
+      {/each}
+    </div>
+  {/snippet}
+
   <div
     class="cmp"
     class:cmp--compact={p.compact}
@@ -1058,33 +1123,115 @@
         </div>
       {/if}
 
-        <div class="cmp-area-wrap">
-          <div class="cmp-area-backdrop" bind:this={backdropEl} aria-hidden="true">{@html backdropHtml(sess.input ?? '')}</div>
-          <textarea
-            bind:this={ta}
-            class="cmp-area"
-            bind:value={sess.input}
-            oninput={onInput}
-            onkeydown={onKey}
-            onpaste={onPaste}
-            onclick={() => { detectMentionTrigger(); detectSlashTrigger(); }}
-            onkeyup={() => { detectMentionTrigger(); detectSlashTrigger(); }}
-            onscroll={syncBackdropScroll}
-            placeholder={sess.sending
-              ? 'Type to queue — fires after the current turn finishes.'
-              : 'Reply…  ( / commands · @ mention · drag items here )'}
-            rows="1"
-            spellcheck="false"
-            autocomplete="off"
-            {...{ autocorrect: 'off', autocapitalize: 'off' }}
-          ></textarea>
-        </div>
+        {#if quietPill}
+          <!-- §3.3 Quiet composer pill — single line: [text][⋯][send-circle].
+               Attach/@ hidden (drag-drop + typed @// only); model/rtk/fast/
+               launchers hide behind the ⋯ run toggle. -->
+          <div class="qpill-row">
+            {@render composerArea()}
+            <button
+              class="qpill-run"
+              class:qpill-run--on={runOpen}
+              onclick={() => (runOpen = !runOpen)}
+              title="Run settings — model · rtk · fast · launchers"
+              aria-label="Run settings"
+              aria-expanded={runOpen}
+            >
+              <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg>
+            </button>
+            {#if sess.sending}
+              <button class="qpill-circle qpill-circle--stop" onclick={p.onStop} title="Stop the running turn" aria-label="Stop the running turn">
+                <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+              </button>
+              <button class="qpill-circle" onclick={doSend} disabled={!sess.input?.trim()} title="Queue this message — fires automatically when the current turn finishes" aria-label="Queue message">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="6 11 12 5 18 11"/></svg>
+              </button>
+            {:else}
+              <button class="qpill-circle" onclick={doSend} disabled={!sess.input?.trim()} title="Send" aria-label="Send message">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="6 11 12 5 18 11"/></svg>
+              </button>
+            {/if}
+          </div>
 
-        <div class="cmp-foot">
-          <div class="cmp-prefix">
+          {#if runOpen}
+            <!-- Run controls revealed by ⋯ (§3.3) — model chip, /dw /ledger
+                 launchers, RTK/FAST toggles. Fresh qpill- markup; same wiring
+                 as the Cabin footer. -->
+            <div class="qpill-run-panel">
+              <ModelEngine
+                model={sess.claudeModel ?? 'claude-sonnet-4-6'}
+                modelOptions={claudeModels}
+                effort={sess.thinkingEffort ?? 'auto'}
+                effortOptions={claudeEffort}
+                onModelChange={setModel}
+                onEffortChange={setEffort}
+              />
+              <span class="qpill-run-launchers">
+                <button
+                  class="qpill-launch"
+                  onclick={() => {
+                    if (!sess) return;
+                    updateSession(sess.id, { input: '/dw ' });
+                    queueMicrotask(() => { if (ta) { ta.selectionStart = ta.value.length; ta.selectionEnd = ta.value.length; ta.focus(); } });
+                  }}
+                  aria-label="Start a Dynamic Workflow"
+                  title="DW — planner fans out parallel subagents, then a verifier synthesises one answer."
+                >
+                  <span class="qpill-launch-glyph">/dw</span>
+                </button>
+                <button
+                  class="qpill-launch"
+                  onclick={() => {
+                    if (!sess) return;
+                    updateSession(sess.id, { input: '/ledger ' });
+                    queueMicrotask(() => { if (ta) { ta.selectionStart = ta.value.length; ta.selectionEnd = ta.value.length; ta.focus(); } });
+                  }}
+                  aria-label="Start a Ledger workflow"
+                  title="Ledger — decomposes the task into a machine-checked checklist; fresh-context workers land items one by one."
+                >
+                  <span class="qpill-launch-glyph">/ledger</span>
+                </button>
+              </span>
+              <span class="qpill-run-toggles">
+                {#if rtkUiState !== 'unavailable'}
+                  <button
+                    class="qpill-tog"
+                    class:qpill-tog--on={rtkUiState === 'on'}
+                    class:qpill-tog--error={rtkUiState === 'error'}
+                    disabled={rtkUiState === 'error'}
+                    onclick={() => updateSession(sess.id, { rtkEnabled: !(rtkEnabled) })}
+                    aria-pressed={rtkUiState === 'on'}
+                    aria-label={rtkUiState === 'on' ? 'RTK output compression active — click to disable for this session' : rtkUiState === 'off' ? 'RTK output compression disabled — click to re-enable for this session' : 'RTK binary missing — reinstall Woom'}
+                    title={rtkUiState === 'error' ? 'RTK binary missing — reinstall Woom' : rtkUiState === 'on' ? 'RTK rewrites bash commands to compact output. Click to disable for this session.' : 'RTK disabled for this session. Click to re-enable. (Applies to next spawn.)'}
+                  >
+                    <span class="qpill-tog-dot" aria-hidden="true"></span>
+                    <span class="qpill-tog-glyph" aria-hidden="true">RTK</span>
+                  </button>
+                {/if}
+                {#if (sess.claudeModel ?? '').startsWith('claude-opus-4-8')}
+                  <button
+                    class="qpill-tog"
+                    class:qpill-tog--on={sess.fastMode === true}
+                    onclick={() => updateSession(sess.id, { fastMode: !(sess.fastMode === true) })}
+                    aria-pressed={sess.fastMode === true}
+                    aria-label={sess.fastMode === true ? 'Fast mode active — click to disable for this session' : 'Fast mode disabled — click to enable for this session'}
+                    title={sess.fastMode === true ? 'Fast mode ON — Opus 4.8 streams 2.5× faster at 2× cost. Click to disable.' : 'Fast mode OFF — click to enable. Opus 4.8 streams 2.5× faster at 2× cost.'}
+                  >
+                    <span class="qpill-tog-dot" aria-hidden="true"></span>
+                    <span class="qpill-tog-glyph" aria-hidden="true">FAST</span>
+                  </button>
+                {/if}
+              </span>
+            </div>
+          {/if}
+        {:else}
+        {@render composerArea()}
+
+        <div class="cbar">
+          <div class="cbar-lead">
             <div class="cmp-attach-wrap">
               <button
-                class="cmp-iconbtn"
+                class="cbar-ghost"
                 class:active={attachMenu}
                 title="Attach files or folders"
                 aria-haspopup="menu"
@@ -1111,15 +1258,16 @@
                 </div>
               {/if}
             </div>
-            <button class="cmp-iconbtn" title="@ mention" onclick={clickMention}>
+            <button class="cbar-ghost" title="@ mention" onclick={clickMention}>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="4"/><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.92 7.94"/></svg>
             </button>
           </div>
 
+          <!-- 1×16 hairline separating the prefix icons from the model chip. -->
+          <span class="cbar-divider" aria-hidden="true"></span>
 
-
-          <!-- Group 3 · model config — model picker + effort slider. -->
-          <span class="cmp-model">
+          <!-- model config — model picker + effort slider (opens ModelEngine panel). -->
+          <span class="cbar-model">
             <ModelEngine
               model={sess.claudeModel ?? 'claude-sonnet-4-6'}
               modelOptions={claudeModels}
@@ -1130,19 +1278,18 @@
             />
           </span>
 
-          <!-- Group 2 · launchers + toggles. Two semantic sub-clusters:
-               launchers (/dw) are one-shot slash-command shortcuts —
-               styled as mono command chips with a leading slash so it's
-               obvious they just type a command. Toggles (RTK/FAST) are
-               persistent session modes — styled as on/off pills with a
-               status dot. -->
-          <span class="cmp-grp">
-          <span class="cmp-launchers">
+          <!-- launchers + toggles. Two semantic sub-clusters: launchers
+               (/dw /ledger) are one-shot slash-command shortcuts, styled
+               as mono ghost chips with a leading slash. Toggles (RTK/FAST)
+               are persistent session modes, styled as on/off pills with a
+               5px status dot (filled = on, hollow = off). -->
+          <span class="cbar-run">
+          <span class="cbar-launchers">
           <!-- DW button — prefills `/dw ` into the composer. Same code
                path as typing the slash command (`runDwFromSlash` in
                routes/handleSlashCommand.ts). -->
           <button
-            class="cmp-dw-btn"
+            class="cbar-launch"
             onclick={() => {
               if (!sess) return;
               updateSession(sess.id, { input: '/dw ' });
@@ -1157,13 +1304,13 @@
             aria-label="Start a Dynamic Workflow"
             title="DW — planner fans out parallel subagents (each in its own git worktree), then a verifier synthesises one answer. Shows a cost estimate before it runs."
           >
-            <span class="cmp-dw-glyph">/dw</span>
+            <span class="cbar-launch-glyph">/dw</span>
           </button>
 
           <!-- Ledger button — prefills `/ledger `. Same code path as the
                slash command (`runLedgerFromSlash`). -->
           <button
-            class="cmp-dw-btn"
+            class="cbar-launch"
             onclick={() => {
               if (!sess) return;
               updateSession(sess.id, { input: '/ledger ' });
@@ -1178,11 +1325,11 @@
             aria-label="Start a Ledger workflow"
             title="Ledger — the agent decomposes the task into a machine-checked checklist you can edit, then fresh-context workers land items one by one (waves run in parallel), each verified by its check command with auto-retry. Review the diff, apply."
           >
-            <span class="cmp-dw-glyph">/ledger</span>
+            <span class="cbar-launch-glyph">/ledger</span>
           </button>
 
-          </span><!-- /cmp-launchers -->
-          <span class="cmp-toggles">
+          </span><!-- /cbar-launchers -->
+          <span class="cbar-toggles">
 
           <!-- RTK output-compression pill. On by default for every new
                Claude session (`newClaudeSession` sets `rtkEnabled: true`).
@@ -1192,9 +1339,9 @@
                (native Windows — see Phase 1's `platformSupported`). -->
           {#if rtkUiState !== 'unavailable'}
             <button
-              class="cmp-rtk-pill"
-              class:cmp-rtk-pill--off={rtkUiState === 'off'}
-              class:cmp-rtk-pill--error={rtkUiState === 'error'}
+              class="cbar-pill"
+              class:cbar-pill--on={rtkUiState === 'on'}
+              class:cbar-pill--error={rtkUiState === 'error'}
               disabled={rtkUiState === 'error'}
               onclick={() => updateSession(sess.id, { rtkEnabled: !(rtkEnabled) })}
               aria-pressed={rtkUiState === 'on'}
@@ -1209,8 +1356,8 @@
                   ? 'RTK rewrites bash commands to compact output. ~80% token savings on git/test/ls. Click to disable for this session.'
                   : 'RTK disabled for this session — bash output passes through raw. Click to re-enable. (Applies to next spawn.)'}
             >
-              <span class="cmp-tg-dot" aria-hidden="true"></span>
-              <span class="cmp-rtk-pill-glyph" aria-hidden="true">RTK</span>
+              <span class="cbar-dot" aria-hidden="true"></span>
+              <span class="cbar-pill-glyph" aria-hidden="true">RTK</span>
             </button>
           {/if}
 
@@ -1223,8 +1370,8 @@
                started on. -->
           {#if (sess.claudeModel ?? '').startsWith('claude-opus-4-8')}
             <button
-              class="cmp-fast-chip"
-              class:cmp-fast-chip--on={sess.fastMode === true}
+              class="cbar-pill"
+              class:cbar-pill--on={sess.fastMode === true}
               onclick={() => updateSession(sess.id, { fastMode: !(sess.fastMode === true) })}
               aria-pressed={sess.fastMode === true}
               aria-label={sess.fastMode === true
@@ -1234,28 +1381,21 @@
                 ? 'Fast mode ON — Opus 4.8 streams 2.5× faster at 2× cost. Click to disable. (Applies to next spawn.)'
                 : 'Fast mode OFF — click to enable. Opus 4.8 will stream 2.5× faster at 2× cost. Same model, dedicated endpoint.'}
             >
-              <span class="cmp-tg-dot" aria-hidden="true"></span>
-              <span class="cmp-fast-chip-glyph" aria-hidden="true">FAST</span>
+              <span class="cbar-dot" aria-hidden="true"></span>
+              <span class="cbar-pill-glyph" aria-hidden="true">FAST</span>
             </button>
           {/if}
-          </span><!-- /cmp-toggles -->
+          </span><!-- /cbar-toggles -->
           </span>
 
 
-          <span class="cmp-spring" aria-hidden="true"></span>
-
-          <span
-            class="cmp-ctx-txt"
-            class:cmp-ctx-txt--warn={ctxPct >= 70 && ctxPct < 90}
-            class:cmp-ctx-txt--err={ctxPct >= 90}
-            title="Context window: {contextTokens.toLocaleString()} / {tokenLimit.toLocaleString()} tokens ({ctxLabel})"
-          >ctx {ctxPct}%</span>
+          <span class="cbar-spring" aria-hidden="true"></span>
 
           {#if (sess.pendingQueue?.length ?? 0) > 0}
-            <div class="cmp-queue-wrap" bind:this={queueWrapEl}>
+            <div class="cbar-queue-wrap" bind:this={queueWrapEl}>
               <button
-                class="cmp-queue-indicator"
-                class:cmp-queue-indicator--open={queueOpen}
+                class="cbar-queue"
+                class:cbar-queue--open={queueOpen}
                 onclick={toggleQueue}
                 title="Show queued messages"
               >
@@ -1263,81 +1403,75 @@
                 {sess.pendingQueue?.length}
               </button>
               {#if queueOpen}
-                <div class="cmp-queue-panel">
-                  <div class="cmp-queue-panel-head">
-                    <span>Queued messages</span>
-                    <button class="cmp-queue-clear" onclick={clearQueue}>Clear all</button>
-                  </div>
-                  {#each sess.pendingQueue ?? [] as msg, i (i)}
-                    <div class="cmp-queue-item">
-                      <span class="cmp-queue-num">{i + 1}</span>
-                      <div class="cmp-queue-text-wrap">
-                        {#if msg.mentions.some(m => m.attached)}
-                          <span class="cmp-queue-attachments">
-                            {#each msg.mentions.filter(m => m.attached) as att}
-                              <span class="cmp-queue-att-chip" title={att.body ?? att.title}>
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
-                                {att.title}
-                              </span>
-                            {/each}
-                          </span>
-                        {/if}
-                        {#if msg.text}
-                          <span class="cmp-queue-text">{msg.text}</span>
-                        {/if}
-                      </div>
-                      <button
-                        class="cmp-queue-del"
-                        onclick={() => removeFromQueue(i)}
-                        aria-label="Remove"
-                      >
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M6 18L18 6"/></svg>
-                      </button>
-                    </div>
-                  {/each}
-                </div>
+                {@render queuePanel()}
               {/if}
             </div>
           {/if}
 
-          {#if quietPill}
-            <!-- Run-settings toggle (§3.3) — reveals the model / rtk /
-                 fast / launcher controls that are hidden in the Quiet
-                 single-line pill. -->
-            <button
-              class="cmp-run-toggle"
-              class:active={runOpen}
-              onclick={() => (runOpen = !runOpen)}
-              title="Run settings — model · rtk · fast · launchers"
-              aria-label="Run settings"
-              aria-expanded={runOpen}
-            >
-              <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
-            </button>
-          {/if}
+          <span
+            class="cbar-ctx"
+            class:cbar-ctx--warn={ctxPct >= 70 && ctxPct < 90}
+            class:cbar-ctx--err={ctxPct >= 90}
+            title="Context window: {contextTokens.toLocaleString()} / {tokenLimit.toLocaleString()} tokens ({ctxLabel})"
+          >ctx {ctxPct}%</span>
 
           {#if sess.sending}
-            <button class="cmp-stop" onclick={p.onStop} title="Stop the running turn">
+            <button class="cbar-stop" onclick={p.onStop} title="Stop the running turn">
               <svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
-              <span class="cmp-send-label">Stop</span>
+              <span class="cbar-send-label">Stop</span>
             </button>
             <button
-              class="cmp-send cmp-send--queue"
+              class="cbar-send cbar-send--queue"
               onclick={doSend}
               disabled={!sess.input?.trim()}
               title="Queue this message — fires automatically when the current turn finishes"
             >
-              <span class="cmp-send-label">Queue</span>
-              <span class="cmp-send-kbd">⏎</span>
+              <span class="cbar-send-label">Queue</span>
+              <span class="cbar-send-kbd">⏎</span>
             </button>
           {:else}
-            <button class="cmp-send" onclick={doSend} disabled={!sess.input?.trim()}>
-              <span class="cmp-send-label">Send</span>
-              <span class="cmp-send-kbd">⏎</span>
+            <button class="cbar-send" onclick={doSend} disabled={!sess.input?.trim()}>
+              <span class="cbar-send-label">Send</span>
+              <span class="cbar-send-kbd">⏎</span>
             </button>
           {/if}
       </div>
+        {/if}
     </div>
+
+    {#if quietPill}
+      <!-- §3.3 — one ghost mono row under the pill: queued · ctx · statusline. -->
+      <div class="qpill-meta">
+        {#if (sess.pendingQueue?.length ?? 0) > 0}
+          <div class="qpill-meta-queue" bind:this={queueWrapEl}>
+            <button
+              class="qpill-meta-btn"
+              class:qpill-meta-btn--open={queueOpen}
+              onclick={toggleQueue}
+              title="Show queued messages"
+            >⧗ {sess.pendingQueue?.length} queued</button>
+            {#if queueOpen}
+              {@render queuePanel()}
+            {/if}
+          </div>
+          <span class="qpill-meta-sep" aria-hidden="true">·</span>
+        {/if}
+        <span
+          class="qpill-meta-ctx"
+          class:qpill-meta-ctx--warn={ctxPct >= 70 && ctxPct < 90}
+          class:qpill-meta-ctx--err={ctxPct >= 90}
+          title="Context window: {contextTokens.toLocaleString()} / {tokenLimit.toLocaleString()} tokens ({ctxLabel})"
+        >ctx {ctxPct}%</span>
+        {#if statuslineState.lastResult && statuslineState.lastResult.stdout.trim().length > 0}
+          <span class="qpill-meta-sep" aria-hidden="true">·</span>
+          <span
+            class="qpill-meta-status"
+            class:qpill-meta-status--err={!statuslineState.lastResult.ok}
+            title={statuslineState.lastResult.ok ? `last ran ${Math.round((Date.now() - statuslineState.lastRanAt) / 1000)}s ago` : (statuslineState.lastResult.stderr || 'statusline error')}
+          >▸ {statuslineState.lastResult.stdout.trim()}</span>
+        {/if}
+      </div>
+    {/if}
 
     {#if slashOpen}
       <!-- Slash-command picker. Anchored to `.cmp` (position: relative)
@@ -1393,7 +1527,7 @@
        output. Hidden when no script configured or output empty.
        Multi-line stdout becomes multi-line (max 4 visible rows; the
        rest scrolls within the strip's max-height). -->
-  {#if statuslineState.lastResult && statuslineState.lastResult.stdout.trim().length > 0}
+  {#if !quietPill && statuslineState.lastResult && statuslineState.lastResult.stdout.trim().length > 0}
     <div
       class="cmp-statusline"
       class:cmp-statusline--err={!statuslineState.lastResult.ok}
@@ -1554,46 +1688,182 @@
     box-shadow: 0 0 0 4px var(--accent-soft), var(--shadow-3);
   }
 
-  /* ── Quiet composer pill (§3.3) — single line; run controls hide
-     behind the ⋯ toggle; send is a 32px inverse circle. ── */
-  .cmp-shell--quiet { border-radius: 14px; }
-  .cmp-shell--quiet .cmp-foot { flex-wrap: wrap; }
-  /* attach/@ move to drag-n-drop + typed @// in Quiet (§3.3). */
-  .cmp-shell--quiet .cmp-prefix { display: none; }
-  /* Run controls (model + launchers/toggles) collapse unless ⋯ open. */
-  .cmp-shell--quiet .cmp-model,
-  .cmp-shell--quiet .cmp-grp { display: none; }
-  .cmp-shell--quiet.cmp-shell--run-open .cmp-model { display: inline-flex; }
-  .cmp-shell--quiet.cmp-shell--run-open .cmp-grp { display: inline-flex; }
-  /* ⋯ toggle — 28×28 ghost-border square. */
-  .cmp-run-toggle {
-    width: 28px; height: 28px; flex: none;
+  /* ── Quiet composer pill (§3.3) — single-line pill [text][⋯][send-circle]
+     with a ghost mono meta row beneath. Fresh qpill- markup; base pill bg /
+     border / shadow come from .cmp-shell above. ── */
+  .cmp-shell--quiet {
+    border-radius: 14px;
+    padding: 12px 12px 12px 16px;
+  }
+  /* One line: textarea flexes, ⋯ + send-circle pin to the end, all centered. */
+  .qpill-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .qpill-row .cmp-area-wrap { flex: 1; min-width: 0; }
+  /* Spec text metrics 14.5 / 1.6. Backdrop MUST track the textarea byte-for-byte
+     or the @-mention caret drifts, so both sides get identical metrics. */
+  .cmp-shell--quiet .cmp-area,
+  .cmp-shell--quiet .cmp-area-backdrop {
+    font-size: 14.5px;
+    line-height: 1.6;
+  }
+  /* ⋯ run toggle — 28×28 ghost-border square. */
+  .qpill-run {
+    flex: none;
+    width: 28px; height: 28px;
     display: grid; place-items: center;
-    border: 1px solid var(--border); border-radius: 8px;
-    background: transparent; color: var(--text-2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text-2);
     cursor: pointer;
     transition: color 120ms, border-color 120ms, background 120ms;
   }
-  .cmp-run-toggle:hover { color: var(--text-0); border-color: var(--border-hi); }
-  .cmp-run-toggle.active { color: var(--text-0); background: var(--bg-3); border-color: var(--border-hi); }
-  .cmp-run-toggle svg { width: 15px; height: 15px; }
-  /* Send → inverse circle; the ⏎ kbd is the glyph, the word hides. */
-  .cmp-shell--quiet .cmp-send {
-    width: 32px; height: 32px; padding: 0; gap: 0;
-    border-radius: 50%;
-    justify-content: center;
+  .qpill-run:hover { color: var(--text-0); border-color: var(--border-hi); }
+  .qpill-run--on { color: var(--text-0); background: var(--bg-3); border-color: var(--border-hi); }
+  .qpill-run svg { width: 15px; height: 15px; }
+  /* Send-circle — 32px inverse disc, shadow-pill. Stop reuses the shape but
+     tinted with the error token. */
+  .qpill-circle {
+    flex: none;
+    width: 32px; height: 32px;
+    display: grid; place-items: center;
+    border: none; border-radius: 50%;
+    background: var(--accent);
+    color: var(--accent-fg);
+    cursor: pointer;
+    box-shadow: var(--shadow-pill);
+    transition: transform 120ms, box-shadow 200ms;
   }
-  .cmp-shell--quiet .cmp-send-label { display: none; }
-  .cmp-shell--quiet .cmp-send-kbd {
-    opacity: 1; padding: 0; background: transparent; border: 0;
-    font-size: 12px;
+  .qpill-circle:hover:not(:disabled) {
+    transform: translate(-1px, -1px);
+    box-shadow: var(--shadow-2);
   }
-  /* Stop collapses to an icon-only circle too. */
-  .cmp-shell--quiet .cmp-stop {
-    width: 32px; height: 32px; padding: 0; gap: 0;
-    border-radius: 50%;
-    justify-content: center;
+  .qpill-circle:disabled { opacity: 0.45; cursor: not-allowed; box-shadow: none; }
+  .qpill-circle svg { width: 16px; height: 16px; }
+  .qpill-circle--stop {
+    background: color-mix(in srgb, var(--error) 10%, transparent);
+    border: 1px solid color-mix(in srgb, var(--error) 30%, transparent);
+    color: var(--error);
+    box-shadow: none;
   }
+  .qpill-circle--stop:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--error) 18%, transparent);
+    transform: none;
+    box-shadow: none;
+  }
+  .qpill-circle--stop svg { width: 12px; height: 12px; }
+  @media (prefers-reduced-motion: reduce) {
+    .qpill-run, .qpill-circle { transition: none; }
+    .qpill-circle:hover:not(:disabled) { transform: none; }
+  }
+
+  /* Run controls revealed by ⋯ — model chip + launchers + toggles below the
+     input line, separated by a hairline. */
+  .qpill-run-panel {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border-lo);
+  }
+  .qpill-run-launchers,
+  .qpill-run-toggles {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .qpill-run-toggles:empty { display: none; }
+  /* /dw /ledger launchers — mono ghost chips. */
+  .qpill-launch {
+    display: inline-flex; align-items: center;
+    padding: 2px 7px;
+    border-radius: 5px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--text-mute);
+    cursor: pointer;
+    transition: background 120ms, color 120ms;
+  }
+  .qpill-launch:hover { background: var(--bg-3); color: var(--text-1); }
+  .qpill-launch-glyph {
+    font-family: var(--font-mono);
+    font-size: 11px; font-weight: 600;
+  }
+  /* RTK / FAST toggles — on/off pills with a 5px status dot. */
+  .qpill-tog {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 3px 8px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-mute);
+    cursor: pointer;
+    transition: background 120ms, border-color 120ms, color 120ms;
+  }
+  .qpill-tog:hover:not(:disabled) { border-color: var(--border-hi); color: var(--text-1); }
+  .qpill-tog--on {
+    background: var(--bg-3);
+    border-color: var(--border-hi);
+    color: var(--text-0);
+  }
+  .qpill-tog--error { opacity: 0.5; cursor: not-allowed; }
+  .qpill-tog-glyph {
+    font-family: var(--font-mono);
+    font-size: 10px; font-weight: 700;
+    letter-spacing: 0.04em;
+  }
+  .qpill-tog-dot {
+    width: 5px; height: 5px; border-radius: 50%;
+    border: 1px solid currentColor;
+    background: transparent;
+  }
+  .qpill-tog--on .qpill-tog-dot { background: currentColor; }
+  @media (prefers-reduced-motion: reduce) {
+    .qpill-launch, .qpill-tog { transition: none; }
+  }
+
+  /* ── Ghost mono meta row under the pill (§3.3): ⧗ N queued · ctx X% ·
+     ▸ statusline. One line, mono 10.5, linenum tone. ── */
+  .qpill-meta {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    width: 100%;
+    max-width: 680px;
+    margin: 6px auto 0;
+    padding: 0 2px;
+    font: 10.5px / 1.5 var(--font-mono), ui-monospace, monospace;
+    color: var(--text-linenum, var(--text-mute));
+    font-variant-numeric: tabular-nums;
+  }
+  .qpill-meta-sep { opacity: 0.55; flex: none; }
+  .qpill-meta-queue { position: relative; flex: none; }
+  .qpill-meta-btn {
+    font: inherit;
+    color: inherit;
+    background: transparent;
+    border: 0;
+    padding: 0;
+    cursor: pointer;
+    transition: color 120ms;
+  }
+  .qpill-meta-btn:hover,
+  .qpill-meta-btn--open { color: var(--text-1); }
+  .qpill-meta-ctx { flex: none; }
+  .qpill-meta-ctx--warn { color: var(--warn); }
+  .qpill-meta-ctx--err { color: var(--err); }
+  .qpill-meta-status {
+    flex: 1; min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .qpill-meta-status--err { color: var(--warn); }
 
   /* Attachments strip — externals only (OS drag, paste). Each chip is
      removable via an × overlay. Image attachments preview as small
@@ -1690,37 +1960,42 @@
     transform: none;
   }
 
-  /* Row layout. `align-items: center` keeps the icons, textarea text,
-     dropdowns and Send button on a single visual line for the common
-     1-line case. When the textarea grows (multi-line draft) the
-     prefix/suffix remain vertically centered against the taller
-     content — feels natural and avoids the "icons glued to the
-     floor" look that `align-items: end` produced. */
-  /* Two-tier card per the paper mockup: textarea on top, control
-     row underneath separated by a hairline. */
-  .cmp-foot {
-    display: flex; align-items: center; gap: 10px;
+  /* ── Footer control bar (§2.5, mockup 3a). Single centered row:
+     [+] [@] · divider · model chip · /dw /ledger · RTK/FAST · spring ·
+     queue · ctx · Send. `align-items: center` keeps every control on
+     the textarea's baseline; when the draft grows multi-line the row
+     stays vertically centered against the taller textarea above it. ── */
+  .cbar {
+    display: flex; align-items: center; gap: 8px;
     border-top: 1px solid var(--border-lo);
     padding-top: 8px;
     margin-top: 8px;
     min-height: 28px;
   }
-  .cmp-prefix {
-    display: flex; align-items: center; gap: 4px;
+  .cbar-lead {
+    display: flex; align-items: center; gap: 2px;
   }
-  .cmp-iconbtn {
-    width: 24px; height: 24px;
+  /* [+] Files/Folder + [@] mention — 26×26 ghost squares, faint until
+     hovered. */
+  .cbar-ghost {
+    width: 26px; height: 26px;
     display: grid; place-items: center;
-    border-radius: 6px;
-    color: var(--text-2);
+    border-radius: 7px;
+    color: var(--text-mute);
     background: transparent;
     border: 0;
     cursor: pointer;
-    transition: all 120ms;
+    transition: background 120ms, color 120ms;
   }
-  .cmp-iconbtn:hover { background: var(--bg-3); color: var(--text-0); }
-  .cmp-iconbtn.active { background: var(--bg-3); color: var(--text-0); }
-  .cmp-iconbtn svg { width: 14px; height: 14px; }
+  .cbar-ghost:hover { background: var(--bg-3); color: var(--text-1); }
+  .cbar-ghost.active { background: var(--bg-3); color: var(--text-0); }
+  .cbar-ghost svg { width: 15px; height: 15px; }
+  /* 1×16 hairline between prefix icons and the model chip. */
+  .cbar-divider {
+    width: 1px; height: 16px;
+    background: var(--border);
+    flex-shrink: 0;
+  }
 
   /* Attach menu — small popover anchored above the paperclip. */
   .cmp-attach-wrap { position: relative; display: inline-flex; }
@@ -1940,17 +2215,13 @@
   }
   .cmp-area:disabled { opacity: 0.5; cursor: not-allowed; }
 
-  .cmp-suffix { display: contents; }
   /* Compact (agent dock, ~340px): the single row can't hold textarea +
      full control run. Go two-tier — textarea gets its own full-width
-     line, controls drop to a second line below. Shed only the truly
-     redundant noise: quota pills, numeric ctx label, group dividers.
-     Keep ring + /dw + RTK/FAST + model + send — the second tier
-     has room for them. Solo never gets `.cmp--compact`. */
-
-  .cmp--compact .cmp-ctx-label,
-  .cmp--compact .cmp-divider { display: none; }
-  .cmp--compact .cmp-foot {
+     line, controls drop to a second line below. Shed the group divider.
+     Keep /dw + RTK/FAST + model + send — the second tier has room for
+     them. Solo never gets `.cmp--compact`. */
+  .cmp--compact .cbar-divider { display: none; }
+  .cmp--compact .cbar {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
@@ -1960,73 +2231,52 @@
     order: 1;
     flex: 1 1 100%;   /* tier 1 — textarea full width */
   }
-  .cmp--compact .cmp-prefix { order: 2; }
-  /* suffix flows inside .cmp-foot via display:contents */
+  .cmp--compact .cbar-lead { order: 2; }
   /* Send pinned to the right edge of tier 2; everything else flows left. */
-  .cmp--compact .cmp-send,
-  .cmp--compact .cmp-stop { margin-left: auto; }
-  .cmp--compact .cmp-send ~ .cmp-send,
-  .cmp--compact .cmp-stop ~ .cmp-send { margin-left: 0; }
-  /* Three semantic clusters — usage · launchers · model — so the row
-     reads as grouped intent instead of one flat run of chips. Tight
-     intra-group gap; the hairline divider carries inter-group
-     separation. */
-  .cmp-grp {
-    display: inline-flex; align-items: center; gap: 5px;
+  .cmp--compact .cbar-send,
+  .cmp--compact .cbar-stop { margin-left: auto; }
+  .cmp--compact .cbar-send ~ .cbar-send,
+  .cmp--compact .cbar-stop ~ .cbar-send { margin-left: 0; }
+  /* launchers + toggles cluster (one semantic group between the model
+     chip and the spring). Tight intra-group gap. */
+  .cbar-run {
+    display: inline-flex; align-items: center; gap: 6px;
     min-width: 0;
   }
-  /* Mockup order: attach/@ + launchers + model LEFT, ctx + Send RIGHT.
-     The usage group (ctx ring) jumps to the right edge; Stop/Send trail it. */
-  .cmp-foot .cmp-grp:has(.cmp-ctx) { order: 8; margin-left: auto; }
-  .cmp-foot .cmp-stop { order: 9; }
-  .cmp-divider {
-    width: 1px; height: 16px;
-    background: var(--border);
-    flex-shrink: 0;
-  }
-  /* Two sub-clusters inside the launchers+toggles group. Launchers
-     (/dw) and toggles (RTK/FAST) sit a hair apart so the
-     "command shortcut" cluster reads distinctly from the "session
+  /* Launchers (/dw /ledger) and toggles (RTK/FAST) sit a hair apart so
+     the "command shortcut" cluster reads distinctly from the "session
      mode" pair without a hard divider between them. */
-  .cmp-launchers, .cmp-toggles {
+  .cbar-launchers, .cbar-toggles {
     display: inline-flex; align-items: center; gap: 4px;
   }
-  .cmp-toggles:empty { display: none; }
-  /* Status dot on the mode toggles — filled = ON, hollow ring = OFF.
-     Inherits the pill's current text color, so each mode keeps its own
-     hue (RTK sage, FAST amber). */
-  .cmp-tg-dot {
-    width: 5px; height: 5px; border-radius: 50%;
-    background: currentColor;
+  .cbar-toggles:empty { display: none; }
+
+  /* Model-chip wrapper — hosts ModelEngine's `Opus 4.8 · 1M · ultracode ▾`
+     chip. */
+  .cbar-model {
     flex-shrink: 0;
-  }
-  .cmp-rtk-pill--off .cmp-tg-dot,
-  .cmp-fast-chip:not(.cmp-fast-chip--on) .cmp-tg-dot {
-    background: transparent;
-    box-shadow: inset 0 0 0 1.4px currentColor;
+    display: inline-flex; align-items: center; gap: 4px;
   }
 
-  /* Context readout — quiet text per the mockup ("ctx 38%"),
-     colour shifts as the window fills. */
-  .cmp-spring { flex: 1; }
-  .cmp-ctx-txt {
-    font-size: 10.5px;
+  /* Spring pushes the queue / ctx / Send cluster to the right edge. */
+  .cbar-spring { flex: 1; }
+
+  /* Context readout — mono, quiet; colour shifts as the window fills
+     (≥70% warn, ≥90% err). */
+  .cbar-ctx {
+    font-family: var(--font-mono);
+    font-size: 11px;
     color: var(--text-mute);
     flex-shrink: 0;
     white-space: nowrap;
     font-variant-numeric: tabular-nums;
   }
-  .cmp-ctx-txt--warn { color: var(--warn); }
-  .cmp-ctx-txt--err  { color: var(--err); }
+  .cbar-ctx--warn { color: var(--warn); }
+  .cbar-ctx--err  { color: var(--err); }
 
-  .cmp-model {
-    flex-shrink: 0;
-    display: inline-flex; align-items: center; gap: 4px;
-  }
-
-  /* DW button — quiet one-shot-launcher chassis, tinted teal.
-   *  `#5bb3a8` matches the canvas brand-accent family. */
-  .cmp-dw-btn {
+  /* Launchers (/dw /ledger) — mono ghost chips; click prefills the
+     slash command into the input. */
+  .cbar-launch {
     display: inline-flex; align-items: center;
     padding: 2px 7px;
     border-radius: 5px;
@@ -2035,81 +2285,23 @@
     color: var(--text-mute);
     cursor: pointer;
     flex-shrink: 0;
-    transition: background 120ms, border-color 120ms, color 120ms;
+    transition: background 120ms, color 120ms;
   }
-  .cmp-dw-btn:hover {
-    background: color-mix(in srgb, #5bb3a8 16%, transparent);
-    border-color: color-mix(in srgb, #5bb3a8 38%, transparent);
-    color: #5bb3a8;
-  }
-  .cmp-dw-glyph {
+  .cbar-launch:hover { background: var(--bg-3); color: var(--text-1); }
+  .cbar-launch-glyph {
     font-family: var(--font-mono);
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 600;
     letter-spacing: 0.01em;
   }
 
-  /* RTK output-compression toggle. Three visual states — on
-     (default), off (muted), error (disabled). Sits in the composer
-     footer where the Plan-mode dot used to live; tooltip explains
-     the toggle applies to the NEXT claude spawn (matches the
-     spawn-level env-var semantics in `claude.rs::spawn_claude_armed`). */
-  .cmp-rtk-pill {
-    display: inline-flex; align-items: center;
-    gap: 5px;
-    padding: 3px 7px;
-    border-radius: 5px;
-    border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
-    background: color-mix(in srgb, var(--accent) 12%, transparent);
-    color: var(--accent-bright, var(--accent));
-    font-family: var(--font-mono);
-    font-size: 9.5px;
-    font-weight: 700;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    cursor: pointer;
-    flex-shrink: 0;
-    transition: background 120ms, border-color 120ms, color 120ms;
-  }
-  .cmp-rtk-pill:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--accent) 20%, transparent);
-    border-color: color-mix(in srgb, var(--accent) 55%, var(--border-hi));
-  }
-  /* Off state — muted hollow outline. The user wants raw output and
-     the pill recedes to a quiet "this is off" reminder. */
-  .cmp-rtk-pill--off {
-    background: transparent;
-    border-color: var(--border);
-    color: var(--text-mute);
-  }
-  .cmp-rtk-pill--off:hover:not(:disabled) {
-    background: var(--bg-3);
-    border-color: var(--border-hi);
-    color: var(--text-1);
-  }
-  /* Error state — bundled rtk binary missing / corrupt. Disabled
-     button so the user can't toggle into a broken state; tooltip
-     surfaces the recovery hint. */
-  .cmp-rtk-pill--error {
-    background: color-mix(in srgb, var(--error, #e88264) 10%, transparent);
-    border-color: color-mix(in srgb, var(--error, #e88264) 35%, var(--border));
-    color: var(--error, #e88264);
-    cursor: not-allowed;
-  }
-  .cmp-rtk-pill-glyph {
-    font-family: var(--font-mono);
-    font-size: 9.5px;
-    font-weight: 700;
-    letter-spacing: 0.14em;
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .cmp-rtk-pill { transition: none; }
-  }
-
-  /* Fast-mode chip. Same chassis as the RTK pill but in an amber
-     palette so the user reads it as «speed/cost dial», not «output
-     compression». Visible only when an Opus 4.8 model is active. */
-  .cmp-fast-chip {
+  /* Session-mode toggles (RTK / FAST) — mono uppercase pills with a
+     5px status dot (filled = on, hollow = off). OFF is the quiet base
+     (hairline border + faint text); ON lifts to accent-soft fill +
+     rgba(fg,.30) border + full-strength text. Toggles apply to the
+     NEXT claude spawn (spawn-level env-var semantics in
+     `claude.rs::spawn_claude_armed`). */
+  .cbar-pill {
     display: inline-flex; align-items: center;
     gap: 5px;
     padding: 3px 7px;
@@ -2118,43 +2310,63 @@
     background: transparent;
     color: var(--text-mute);
     font-family: var(--font-mono);
-    font-size: 9.5px;
-    font-weight: 700;
-    letter-spacing: 0.14em;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
     text-transform: uppercase;
     cursor: pointer;
     flex-shrink: 0;
     transition: background 120ms, border-color 120ms, color 120ms;
   }
-  .cmp-fast-chip:hover {
+  .cbar-pill:hover:not(:disabled) {
     background: var(--bg-3);
     border-color: var(--border-hi);
     color: var(--text-1);
   }
-  /* ON state — amber accent so the user can't miss they're paying 2×
-     per token. Same hue family the deleted Plan-mode pill used. */
-  .cmp-fast-chip--on {
-    background: color-mix(in srgb, #e0b16c 14%, transparent);
-    border-color: color-mix(in srgb, #e0b16c 40%, var(--border));
-    color: #e0b16c;
+  /* ON — active session mode: accent-soft fill, fg-tinted border. */
+  .cbar-pill--on {
+    background: var(--accent-soft);
+    border-color: color-mix(in srgb, var(--text-0) 30%, transparent);
+    color: var(--text-0);
   }
-  .cmp-fast-chip--on:hover {
-    background: color-mix(in srgb, #e0b16c 22%, transparent);
-    border-color: color-mix(in srgb, #e0b16c 55%, var(--border-hi));
-    color: #f0c084;
+  .cbar-pill--on:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--accent) 22%, var(--accent-soft));
+    border-color: color-mix(in srgb, var(--text-0) 42%, transparent);
+    color: var(--text-0);
   }
-  .cmp-fast-chip-glyph {
+  /* Error — bundled rtk binary missing / corrupt. Disabled so the user
+     can't toggle into a broken state; tooltip surfaces the recovery. */
+  .cbar-pill--error {
+    background: color-mix(in srgb, var(--error) 10%, transparent);
+    border-color: color-mix(in srgb, var(--error) 35%, var(--border));
+    color: var(--error);
+    cursor: not-allowed;
+  }
+  .cbar-pill-glyph {
     font-family: var(--font-mono);
-    font-size: 9.5px;
-    font-weight: 700;
-    letter-spacing: 0.14em;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+  }
+  /* 5px status dot — hollow ring by default (off), filled when on.
+     Inherits the pill's current text color. */
+  .cbar-dot {
+    width: 5px; height: 5px; border-radius: 50%;
+    background: transparent;
+    box-shadow: inset 0 0 0 1.4px currentColor;
+    flex-shrink: 0;
+  }
+  .cbar-pill--on .cbar-dot {
+    background: currentColor;
+    box-shadow: none;
   }
   @media (prefers-reduced-motion: reduce) {
-    .cmp-fast-chip { transition: none; }
+    .cbar-launch, .cbar-pill { transition: none; }
   }
 
-  /* Redesign v2 §2.5 — accent primary pill, engraved shadow-pill. */
-  .cmp-send {
+  /* §2.5 — accent primary Send, engraved shadow-pill; ⏎ kbd at op.55.
+     Sits last in DOM order so the spring right-aligns it. */
+  .cbar-send {
     display: inline-flex; align-items: center; gap: 6px;
     padding: 6px 14px;
     border-radius: 8px;
@@ -2164,38 +2376,37 @@
     border: none; cursor: pointer;
     box-shadow: var(--shadow-pill);
     transition: transform 120ms, box-shadow 200ms;
-    order: 10;
   }
-  .cmp-send:hover:not(:disabled) {
+  .cbar-send:hover:not(:disabled) {
     transform: translate(-1px, -1px);
     box-shadow: var(--shadow-2);
   }
-  .cmp-send:disabled { opacity: 0.45; cursor: not-allowed; box-shadow: none; }
-  .cmp-send-kbd {
+  .cbar-send:disabled { opacity: 0.45; cursor: not-allowed; box-shadow: none; }
+  .cbar-send-kbd {
     font-family: var(--font-mono);
     font-size: 10px;
     color: var(--accent-fg);
     opacity: 0.55;
   }
 
-  .cmp-stop {
+  .cbar-stop {
     display: inline-flex; align-items: center; gap: 5px;
     padding: 6px 11px;
     border-radius: 7px;
     font-size: 12px; font-weight: 500;
-    background: rgba(232, 130, 100, 0.10);
-    border: 1px solid rgba(232, 130, 100, 0.30);
+    background: color-mix(in srgb, var(--error) 10%, transparent);
+    border: 1px solid color-mix(in srgb, var(--error) 30%, transparent);
     color: var(--error);
     cursor: pointer;
     transition: background 140ms;
   }
-  .cmp-stop:hover { background: rgba(232, 130, 100, 0.18); }
-  .cmp-stop svg { width: 11px; height: 11px; }
+  .cbar-stop:hover { background: color-mix(in srgb, var(--error) 18%, transparent); }
+  .cbar-stop svg { width: 11px; height: 11px; }
 
-  /* "Queue" variant of the send button — appears alongside Stop while
-     a turn is in flight. Same shape as Send but tinted neutral so the
-     user reads it as "park this for later" instead of "fire now". */
-  .cmp-send--queue {
+  /* "Queue" variant of Send — appears alongside Stop while a turn is in
+     flight. Same shape as Send but tinted neutral so it reads as "park
+     for later" instead of "fire now". */
+  .cbar-send--queue {
     background: linear-gradient(180deg,
       color-mix(in srgb, var(--accent) 28%, var(--bg-3)),
       color-mix(in srgb, var(--accent) 14%, var(--bg-3)));
@@ -2204,34 +2415,36 @@
       0 1px 0 rgba(0, 0, 0, 0.10),
       inset 0 1px 0 rgba(255, 255, 255, 0.08);
   }
-  .cmp-send--queue:hover:not(:disabled) {
+  .cbar-send--queue:hover:not(:disabled) {
     background: linear-gradient(180deg,
       color-mix(in srgb, var(--accent) 38%, var(--bg-3)),
       color-mix(in srgb, var(--accent) 22%, var(--bg-3)));
   }
 
-  /* Queue indicator button + floating panel */
-  .cmp-queue-wrap {
-    position: relative;
-  }
-  .cmp-queue-indicator {
+  /* Queue chip (icon + count) — quiet mono ghost; opens the floating
+     queued-messages panel below. */
+  .cbar-queue-wrap { position: relative; }
+  .cbar-queue {
     display: inline-flex; align-items: center; gap: 4px;
-    padding: 4px 8px;
-    border-radius: 999px;
-    background: color-mix(in srgb, var(--accent) 14%, transparent);
-    border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent);
-    color: var(--accent-bright);
+    padding: 3px 8px;
+    border-radius: 6px;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-mute);
+    font-family: var(--font-mono);
     font-size: 11px; font-weight: 600;
     cursor: pointer;
-    transition: background 120ms, border-color 120ms;
+    transition: background 120ms, border-color 120ms, color 120ms;
     user-select: none;
+    font-variant-numeric: tabular-nums;
   }
-  .cmp-queue-indicator:hover,
-  .cmp-queue-indicator--open {
-    background: color-mix(in srgb, var(--accent) 22%, transparent);
-    border-color: color-mix(in srgb, var(--accent) 50%, transparent);
+  .cbar-queue:hover,
+  .cbar-queue--open {
+    background: var(--bg-3);
+    border-color: var(--border-hi);
+    color: var(--text-1);
   }
-  .cmp-queue-indicator svg { width: 11px; height: 11px; }
+  .cbar-queue svg { width: 11px; height: 11px; }
 
   .cmp-queue-panel {
     position: absolute;

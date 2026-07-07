@@ -248,7 +248,7 @@
   $effect(() => {
     activePath;
     if (!tabbarEl) return;
-    const active = tabbarEl.querySelector<HTMLElement>('.ev-tab-wrap.active');
+    const active = tabbarEl.querySelector<HTMLElement>('.etab-tab.active');
     active?.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'instant' });
   });
 
@@ -1339,6 +1339,8 @@
             {dirtyByPath}
             {diffTarget}
             {tabDisplayName}
+            {cursorInfo}
+            readoutLang={extOf(diffTarget?.path ?? activePath)}
             onSwitch={(p) => void switchTab(p)}
             onClose={(p, e) => void closeTab(p, e)}
             onMiddleClick={(p, e) => void onTabMiddleClick(p, e)}
