@@ -3,7 +3,7 @@
   import InlineClaude from './editor/InlineClaude.svelte';
   import Splitter from '$lib/components/ui/Splitter.svelte';
   import SidePaneRail from '$lib/components/ui/SidePaneRail.svelte';
-  import { canvasState } from '$lib/state/canvas.svelte';
+  import { canvasState, setActiveCanvasTab, closeCanvasTab, createAndOpenInInstance } from '$lib/state/canvas.svelte';
   import { layoutState, APP_INSTANCE_IDS, kindForInstanceId } from '$lib/state/layout.svelte';
   import { sessionsState, updateSession } from '$lib/state/sessions.svelte';
   import { fly } from 'svelte/transition';
@@ -37,6 +37,20 @@
   );
 
   const activeCanvasId = $derived(canvasState.byInstance[p.instanceId]?.activeId ?? null);
+
+  /* Redesign v2 §2.7 — canvases list column. Lists this instance's open
+     canvases (tabs); click switches, "+" creates, hover × closes. */
+  const canvasTabs = $derived.by(() => {
+    const ids = canvasState.byInstance[p.instanceId]?.tabs ?? [];
+    return ids.map((id) => {
+      const c = canvasState.open[id];
+      return { id, name: c?.name ?? 'Untitled', shapes: c?.shapes.length ?? 0 };
+    });
+  });
+  function removeCanvas(id: string, e: MouseEvent) {
+    e.stopPropagation();
+    closeCanvasTab(p.instanceId, id);
+  }
 
   function handleLinkSession(sessionId: string) {
     if (!activeCanvasId) return;
@@ -73,6 +87,41 @@
   class:sc-shell--rail={!sideOpen}
   style="--app-tone: var(--src-canvas); --app-glow: rgba(125,201,176,0.40);"
 >
+  <aside class="lp sc-list">
+    <header class="lp-head">
+      <span class="lp-title">Canvases</span>
+      <span class="lp-count">{canvasTabs.length}</span>
+      <span class="lp-head-spring"></span>
+      <button class="lp-add" onclick={() => createAndOpenInInstance(p.instanceId)} title="New canvas" aria-label="New canvas">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+      </button>
+    </header>
+    <div class="lp-list">
+      {#each canvasTabs as c (c.id)}
+        <button
+          class="lp-row sc-list-row"
+          class:active={c.id === activeCanvasId}
+          onclick={() => setActiveCanvasTab(p.instanceId, c.id)}
+        >
+          <span class="lp-row-title">{c.name}</span>
+          <span class="lp-row-meta">{c.shapes} card{c.shapes === 1 ? '' : 's'}</span>
+          {#if canvasTabs.length > 1}
+            <span
+              class="sc-list-x"
+              role="button"
+              tabindex="-1"
+              title="Close {c.name}"
+              aria-label="Close {c.name}"
+              onclick={(e) => removeCanvas(c.id, e)}
+              onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); removeCanvas(c.id, e as unknown as MouseEvent); } }}
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="6" y1="18" x2="18" y2="6"/></svg>
+            </span>
+          {/if}
+        </button>
+      {/each}
+    </div>
+  </aside>
   {#if sideOpen}
     <Splitter
       direction="horizontal"
@@ -134,15 +183,31 @@
 </section>
 
 <style>
-  .sc-shell { display: block; padding: var(--app-pad, 14px); }
-  /* When the side pane is collapsed, switch to a 2-col grid:
-     canvas pane (1fr) + 44px rail. Splitter mode keeps `display:
-     block` so it can manage its own layout. */
-  .sc-shell.sc-shell--rail {
+  /* Redesign v2 §2.7 — [list 264][surface(+side)]; flush, no shell pad. */
+  .sc-shell {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 44px;
+    grid-template-columns: 264px minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+    padding: 0;
+  }
+  .sc-shell.sc-shell--rail {
+    grid-template-columns: 264px minmax(0, 1fr) 44px;
     transition: grid-template-columns var(--dur-base) var(--ease-out);
   }
+  /* Canvases list column. */
+  .sc-list { min-height: 0; }
+  .sc-list-row { display: flex; align-items: center; gap: 8px; }
+  .sc-list-row .lp-row-title { flex: 1; min-width: 0; }
+  .sc-list-row .lp-row-meta { flex: none; }
+  .sc-list-x {
+    flex: none; width: 18px; height: 18px;
+    display: grid; place-items: center;
+    border-radius: 4px; color: var(--text-mute); cursor: pointer;
+    opacity: 0; transition: opacity 120ms, color 120ms, background 120ms;
+  }
+  .sc-list-x svg { width: 11px; height: 11px; }
+  .sc-list-row:hover .sc-list-x { opacity: 0.8; }
+  .sc-list-x:hover { opacity: 1; color: var(--err); background: var(--bg-3); }
   .sc-shell :global(.s-start),
   .sc-shell :global(.s-end) {
     height: 100%;
