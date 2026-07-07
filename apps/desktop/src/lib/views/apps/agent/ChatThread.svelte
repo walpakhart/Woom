@@ -929,12 +929,12 @@
     flex: 1; min-height: 0;
     overflow-y: auto;
     padding: 20px 22px 8px;
-    display: flex; flex-direction: column; gap: 24px;
+    display: flex; flex-direction: column; gap: 26px;
   }
-  /* Mockup: thread column capped at 760px, centred. */
+  /* Redesign v2 §2.5: thread column capped at 680px, centred. */
   .ct > :global(*) {
     width: 100%;
-    max-width: 960px;
+    max-width: 680px;
     margin-left: auto;
     margin-right: auto;
   }
