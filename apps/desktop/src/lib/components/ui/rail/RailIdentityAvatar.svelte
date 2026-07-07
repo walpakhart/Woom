@@ -15,8 +15,11 @@
     jiraStatus?: JiraStatus;
     sentryStatus?: SentryStatus;
     claudeStatus?: ClaudeStatus | null;
+    /** 'rail' — 30px, popover opens to the right (rail foot).
+     *  'titlebar' — 22px, popover drops below, right-aligned. */
+    placement?: 'rail' | 'titlebar';
   }
-  let p: Props = $props();
+  let { placement = 'rail', ...p }: Props = $props();
 
   interface IdentityRow {
     label: string;
@@ -79,7 +82,7 @@
   });
 </script>
 
-<button class="rail-avatar" type="button" aria-label="Workspace identity" tabindex="0">
+<button class="rail-avatar" class:tb={placement === 'titlebar'} type="button" aria-label="Workspace identity" tabindex="0">
   {#if p.githubStatus.kind === 'connected'}
     <img src={p.githubStatus.user.avatar_url} alt={p.githubStatus.user.login} />
   {:else}—{/if}
@@ -115,6 +118,8 @@
   .rail-avatar > img {
     width: 100%; height: 100%; object-fit: cover; border-radius: 50%;
   }
+  /* Titlebar placement — smaller, popover drops below right-aligned. */
+  .rail-avatar.tb { width: 22px; height: 22px; margin-top: 0; font-size: 9px; }
 
   .rail-identity {
     position: absolute;
@@ -141,6 +146,11 @@
     opacity: 1;
     transform: translateY(0) scale(1);
     pointer-events: auto;
+  }
+  /* Titlebar: drop below the avatar, aligned to the window's right edge. */
+  .rail-avatar.tb .rail-identity {
+    left: auto; right: 0; bottom: auto;
+    top: calc(100% + 8px);
   }
   @media (prefers-reduced-motion: reduce) {
     .rail-identity { transition: opacity 80ms var(--ease-out); transform: none; }

@@ -10,9 +10,8 @@
   import Welcome from '$lib/components/ui/Welcome.svelte';
   import { welcomeState } from '$lib/state/welcome.svelte';
   import WorktreeDiffModal from '$lib/components/editor/WorktreeDiffModal.svelte';
-  import Sidebar from '$lib/components/ui/Sidebar.svelte';
+  import IconRail from '$lib/components/ui/IconRail.svelte';
   import Titlebar from '$lib/components/ui/Titlebar.svelte';
-  import StatusStrip from '$lib/components/ui/StatusStrip.svelte';
   import RulesView from '$lib/views/RulesView.svelte';
   import LibraryApp from '$lib/views/apps/LibraryApp.svelte';
   import ConnectionsView from '$lib/views/ConnectionsView.svelte';
@@ -138,7 +137,8 @@
     MULTI_INSTANCE_KINDS,
     addInstance as addLayoutInstance,
     kindForInstanceId,
-    setActiveInstance
+    setActiveInstance,
+    type AppKind
   } from '$lib/state/layout.svelte';
   import {
     sessionsState,
@@ -341,6 +341,27 @@
   function soloTitleFor(v: string): string {
     return SOLO_TITLES[v] ?? 'Home';
   }
+
+  /* Titlebar breadcrumb tail — for multi-instance solos, the active
+     instance's mark (+ the editor's open repo). Empty otherwise. */
+  const soloInstanceMeta = $derived.by(() => {
+    const kind: AppKind | null =
+      view === 'editorApp' ? 'editor'
+      : view === 'canvasApp' ? 'canvas'
+      : view === 'terminalApp' ? 'terminal'
+      : null;
+    if (!kind) return '';
+    const activeId = layoutState.activeInstance[kind];
+    const inst = layoutState.instances[kind]?.find((i) => i.id === activeId);
+    if (!inst) return '';
+    if (kind === 'editor') {
+      const slot = sessionsState.editorInstanceState[activeId];
+      const roots = slot?.repoPaths?.length ? slot.repoPaths : slot?.repoPath ? [slot.repoPath] : [];
+      const repo = roots.map((r) => r.split('/').filter(Boolean).pop() ?? '').filter(Boolean).join(' + ');
+      return repo ? `${inst.name} · ${repo}` : inst.name;
+    }
+    return inst.name;
+  });
 
   /* Browser-style back/forward stack for solo navigation. ⌘[ steps
    * back through the user's view history, ⌘] redoes it. We capture
@@ -674,18 +695,6 @@
   const jiraStatus = $derived(connectionsState.jira);
   const sentryStatus = $derived(connectionsState.sentry);
   const claudeStatus = $derived(connectionsState.claude);
-  const statusLoading = $derived(connectionsState.statusLoading);
-  /* `anyRetrying` is true while the boot retry/backoff loop has at
-   *  least one source mid-attempt after a transient failure. Rail
-   *  uses it to render a pulsing "retrying" dot in place of the plain
-   *  disconnected dot — distinguishes "nothing connected" from
-   *  "trying to connect, network was flaky on launch". */
-  const anyRetrying = $derived(
-    connectionsState.retrying.github ||
-      connectionsState.retrying.jira ||
-      connectionsState.retrying.sentry ||
-      connectionsState.retrying.claude
-  );
 
   /* Top-level palette actions — extracted to ./paletteActions.ts
    * (phase-9 split). The derived re-runs whenever `connectionsState`
@@ -719,7 +728,6 @@
     if (connectedClaude) set.add('claude');
     return set;
   });
-  const anythingConnected = $derived(connectedIds.size > 0);
 
   let githubPollInterval: ReturnType<typeof setInterval> | null = null;
   let jiraPollInterval: ReturnType<typeof setInterval> | null = null;
@@ -2999,19 +3007,17 @@
 <div id="app" class:is-dragging={dragState.payload !== null}>
   <Titlebar
     soloTitle={soloTitleFor(view)}
+    instanceMeta={soloInstanceMeta}
     onPalette={() => { paletteMode = 'normal'; paletteOpen = true; }}
-  />
-
-  <div class="app-body">
-  <Sidebar
-    bind:view
-    {anythingConnected}
-    {statusLoading}
-    {anyRetrying}
     {githubStatus}
     {jiraStatus}
     {sentryStatus}
     {claudeStatus}
+  />
+
+  <div class="app-body">
+  <IconRail
+    bind:view
     {githubBadge}
     {jiraBadge}
     {sentryBadge}
@@ -3317,12 +3323,6 @@
     {/if}
   </div>
   </div>
-
-  <StatusStrip
-    {githubBadge}
-    {sentryBadge}
-    onGoClaude={() => (view = 'claudeApp')}
-  />
 </div>
 
 <!-- Inbox focus state (PR / ticket / issue) is persisted per app and
