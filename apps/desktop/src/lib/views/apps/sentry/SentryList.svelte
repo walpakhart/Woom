@@ -296,19 +296,16 @@
   }
 </script>
 
-<aside class="sl app-pane">
-  <header class="sl-head">
-    <h1 class="app-pane-head-h">Sentry</h1>
-    {#if p.sentryStatus.kind === 'connected'}
-      <span class="app-pane-head-meta">{p.sentryStatus.user.organization_slug}</span>
-    {/if}
-    <span class="app-pane-head-spacer"></span>
-    <button class="sl-icon" disabled={loading} title="Refresh disabled — Sentry items pull on poll">
+<aside class="lp sl">
+  <header class="lp-head">
+    <span class="lp-title">Issues</span>
+    {#if filtered.length > 0}<span class="lp-count">{filtered.length}</span>{/if}
+    <span class="lp-head-spring"></span>
+    <button class="lp-ghostbtn" disabled={loading} title="Refresh disabled — Sentry items pull on poll" aria-label="Refresh">
       <svg class:spin={loading} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 4v5h-5"/></svg>
     </button>
   </header>
 
-  <div class="sl-filters">
     <label class="sl-search" bind:this={searchEl}>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
       <input
@@ -334,37 +331,14 @@
       onPick={pickIssue}
       onClose={closePicker}
     />
-    <div class="sl-chips">
-      <button class="sl-toggle" class:active={levelFilter === 'fatal'} onclick={() => toggleLevel('fatal')}>
-        <span class="sl-toggle-dot"></span>
-        Fatal
-      </button>
-      <button class="sl-toggle" class:active={levelFilter === 'error'} onclick={() => toggleLevel('error')}>
-        <span class="sl-toggle-dot"></span>
-        Error
-      </button>
-      <button class="sl-toggle" class:active={levelFilter === 'warning'} onclick={() => toggleLevel('warning')}>
-        <span class="sl-toggle-dot"></span>
-        Warn
-      </button>
-      <button class="sl-toggle" class:active={levelFilter === 'info'} onclick={() => toggleLevel('info')}>
-        <span class="sl-toggle-dot"></span>
-        Info
-      </button>
-      <span class="sl-divider" aria-hidden="true"></span>
-      <button class="sl-toggle" class:active={statusFilter === 'unresolved'} onclick={() => toggleStatus('unresolved')}>
-        <span class="sl-toggle-dot"></span>
-        Unresolved
-      </button>
-      <button class="sl-toggle" class:active={statusFilter === 'resolved'} onclick={() => toggleStatus('resolved')}>
-        <span class="sl-toggle-dot"></span>
-        Resolved
-      </button>
-      <button class="sl-toggle" class:active={statusFilter === 'ignored'} onclick={() => toggleStatus('ignored')}>
-        <span class="sl-toggle-dot"></span>
-        Ignored
-      </button>
-      <span class="sl-divider" aria-hidden="true"></span>
+    <div class="lp-chips">
+      <button class="lp-chip" class:active={levelFilter === 'fatal'} onclick={() => toggleLevel('fatal')}>Fatal</button>
+      <button class="lp-chip" class:active={levelFilter === 'error'} onclick={() => toggleLevel('error')}>Error</button>
+      <button class="lp-chip" class:active={levelFilter === 'warning'} onclick={() => toggleLevel('warning')}>Warn</button>
+      <button class="lp-chip" class:active={levelFilter === 'info'} onclick={() => toggleLevel('info')}>Info</button>
+      <button class="lp-chip" class:active={statusFilter === 'unresolved'} onclick={() => toggleStatus('unresolved')}>Unresolved</button>
+      <button class="lp-chip" class:active={statusFilter === 'resolved'} onclick={() => toggleStatus('resolved')}>Resolved</button>
+      <button class="lp-chip" class:active={statusFilter === 'ignored'} onclick={() => toggleStatus('ignored')}>Ignored</button>
       <span class="sl-dd">
         <Dropdown
           value={projectFilter ?? '__all__'}
@@ -380,9 +354,8 @@
         <button class="sl-chip-clear" onclick={clearFilters} title="Clear all filters">Clear</button>
       {/if}
     </div>
-  </div>
 
-  <div class="sl-body">
+  <div class="lp-list">
     {#if error}
       <div class="sl-error">
         <p class="sl-error-h serif">Couldn't load Sentry</p>
@@ -406,11 +379,11 @@
       </div>
     {:else}
       {#each groups as g (g.label)}
-        <div class="sl-group">{g.label} <span class="mono">·</span> {g.items.length}</div>
+        <div class="lp-group-label">{g.label} · {g.items.length}</div>
         {#each g.items as it (it.id)}
           {@const isActive = inboxState.sentryFocusId === it.id}
           <button
-            class="sl-card"
+            class="lp-row sl-row"
             class:active={isActive}
             draggable="true"
             onpointerdown={p.onCardMouseDown}
@@ -475,49 +448,25 @@
     /* Width comes from the parent `app-shell` grid track. */
     min-width: 0;
   }
-  .sl-head {
-    flex: 0 0 46px;
-    display: flex; align-items: center; gap: 10px;
-    padding: 0 12px;
-    border-bottom: 1px solid var(--border);
-    background: var(--bg-0);
-  }
-  .sl-icon {
-    margin-left: auto;
-    width: 26px; height: 26px;
-    display: grid; place-items: center;
-    color: var(--text-2);
-    background: transparent; border: none; cursor: pointer;
-    border-radius: 6px;
-  }
-  .sl-icon:hover:not(:disabled) { color: var(--text-0); background: var(--bg-elev, var(--bg-2)); }
-  .sl-icon svg { width: 13px; height: 13px; }
-  .sl-icon .spin { animation: sl-spin 0.9s linear infinite; }
+  .sl .spin { animation: sl-spin 0.9s linear infinite; }
   @keyframes sl-spin { to { transform: rotate(360deg); } }
+  .lp-ghostbtn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .lp-chip:disabled { opacity: 0.45; cursor: not-allowed; }
 
-  /* Filter bar — search + level/status chips + project select. */
-  .sl-filters {
-    flex: 0 0 auto;
-    display: flex; flex-direction: column;
-    gap: 6px;
-    padding: 8px 12px 10px;
-    border-bottom: 1px solid var(--border);
-    background: var(--bg-1);
-  }
+  /* Search field — ListPane grammar (§2.4): h30 r8, bg-0 (light bg-2). */
   .sl-search {
     position: relative;
     display: flex; align-items: center; gap: 6px;
-    padding: 0 8px;
-    height: 28px;
-    border-radius: 6px;
-    background: var(--bg-2);
+    margin: 0 14px 8px;
+    padding: 0 10px;
+    height: 30px;
+    border-radius: 8px;
+    background: var(--bg-0);
     border: 1px solid var(--border);
     transition: border-color 120ms;
   }
-  .sl-search:focus-within {
-    border-color: var(--border-accent);
-    background: var(--bg-1);
-  }
+  :root[data-theme='light'] .sl-search { background: var(--bg-2); }
+  .sl-search:focus-within { border-color: var(--border-hi2, var(--border-hi)); }
   .sl-search > svg { width: 12px; height: 12px; color: var(--text-mute); flex-shrink: 0; }
   .sl-search input {
     flex: 1; min-width: 0;
@@ -533,51 +482,6 @@
   }
   .sl-search-clear:hover { color: var(--text-0); background: var(--bg-3); }
   .sl-search-clear svg { width: 10px; height: 10px; }
-
-  .sl-chips { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
-  .sl-divider {
-    width: 1px; height: 14px;
-    background: var(--border);
-    margin: 0 2px;
-  }
-
-  .sl-toggle {
-    display: inline-flex; align-items: center; gap: 6px;
-    padding: 4px 10px 4px 8px;
-    border-radius: 999px;
-    background: var(--bg-2);
-    border: 1px solid var(--border);
-    color: var(--text-1);
-    font-size: 11px; font-weight: 500;
-    cursor: pointer;
-    transition: all 140ms;
-    user-select: none;
-    white-space: nowrap;
-  }
-  .sl-toggle-dot {
-    width: 8px; height: 8px;
-    border-radius: 50%;
-    background: transparent;
-    box-shadow: inset 0 0 0 1.5px var(--text-mute);
-    transition: all 140ms;
-    flex-shrink: 0;
-  }
-  .sl-toggle:hover:not(:disabled):not(.active) {
-    color: var(--text-0); background: var(--bg-3); border-color: var(--border-hi);
-  }
-  .sl-toggle:hover:not(:disabled):not(.active) .sl-toggle-dot {
-    box-shadow: inset 0 0 0 1.5px var(--text-1);
-  }
-  .sl-toggle.active {
-    color: var(--accent-bright);
-    background: color-mix(in srgb, var(--src-sentry) 14%, transparent);
-    border-color: color-mix(in srgb, var(--src-sentry) 40%, transparent);
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--src-sentry) 8%, transparent);
-  }
-  .sl-toggle.active .sl-toggle-dot {
-    background: var(--src-sentry);
-    box-shadow: inset 0 0 0 1.5px var(--src-sentry), var(--shadow-1);
-  }
 
   .sl-dd { display: inline-flex; }
   .sl-dd :global(.dd-trigger) {
@@ -624,46 +528,11 @@
   }
   .sl-error-retry:hover { color: var(--text-0); }
 
-  .sl-body {
-    flex: 1; min-height: 0;
-    overflow-y: auto;
-    padding: 4px 8px 12px;
-  }
-  .sl-group {
-    padding: 14px 8px 6px;
-    font-size: 9.5px; font-weight: 700;
-    letter-spacing: 0.10em;
-    text-transform: uppercase;
-    color: var(--text-mute);
-    font-family: var(--font-mono);
-    display: flex; align-items: center; gap: 8px;
-  }
-  .sl-group::after {
-    content: ''; flex: 1; height: 1px;
-    background: linear-gradient(90deg, var(--border), transparent);
-  }
-  .sl-group .mono { opacity: 0.5; }
-
-  .sl-card {
+  /* Row = shared .lp-row; .sl-row adds vertical stack + positioning. */
+  .sl-row {
     position: relative;
     display: flex; flex-direction: column; gap: 5px;
-    padding: 12px 20px;
-    margin: 0;
-    width: 100%;
-    border-radius: 0;
-    border: 0;
-    border-bottom: 1px solid var(--border-lo);
-    border-left: 2px solid transparent;
-    text-align: left;
-    background: transparent;
-    cursor: pointer;
-    transition: background 120ms;
     user-select: none;
-  }
-  .sl-card:hover { background: var(--bg-1); }
-  .sl-card.active {
-    background: var(--bg-sel);
-    border-left-color: var(--src-sentry);
   }
 
   .sl-card-top { display: flex; align-items: center; gap: 7px; }
@@ -731,9 +600,9 @@
     opacity: 0;
     transition: opacity 140ms;
   }
-  .sl-card:hover .sl-card-sends,
+  .sl-row:hover .sl-card-sends,
   .sl-card-sends:focus-within,
-  .sl-card.active .sl-card-sends {
+  .sl-row.active .sl-card-sends {
     opacity: 1;
   }
   .sl-card-send {

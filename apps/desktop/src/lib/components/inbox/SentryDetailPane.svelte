@@ -442,11 +442,13 @@
      header bar with close on the left + action buttons on the right, body
      scrolls with consistent padding. Keeps both panes feeling the same. */
   .sdp { height: 100%; display: flex; flex-direction: column; min-height: 0; background: var(--bg-0); }
+  /* Redesign v2 §2.6 — 52px document header, flush on bg-0. */
   .sdp-head {
     display: flex; align-items: center; gap: 10px;
-    padding: 12px 20px;
-    border-bottom: 1px solid var(--border-neutral);
-    background: var(--bg-1);
+    height: 52px;
+    padding: 0 24px;
+    border-bottom: 1px solid var(--border-lo);
+    background: var(--bg-0);
     flex-shrink: 0;
   }
   .sdp-back {
@@ -514,15 +516,18 @@
   .sdp-chevron { transition: transform var(--dur-base) var(--ease-spring); }
   .sdp-chevron--open { transform: rotate(90deg); }
 
+  /* Redesign v2 §2.6 — centred document (max 800), padding 30/40. */
   .sdp-body {
-    flex: 1; overflow-y: auto;
-    padding: 24px 28px 60px;
+    flex: 1; min-height: 0; overflow-y: auto;
+    width: 100%; max-width: 800px; margin: 0 auto;
+    padding: 30px 40px 60px;
     display: flex; flex-direction: column; gap: 18px;
   }
+  /* Sentry h1 = exception text → mono 20/600 (spec §2.6). */
   .sdp-title {
     font-family: var(--font-mono);
-    font-size: 30px; line-height: 1.18; font-weight: 400;
-    color: var(--text-0); letter-spacing: -0.02em;
+    font-size: 20px; line-height: 1.3; font-weight: 600;
+    color: var(--text-0); letter-spacing: -0.015em;
     margin: 0;
     overflow-wrap: anywhere;
   }
