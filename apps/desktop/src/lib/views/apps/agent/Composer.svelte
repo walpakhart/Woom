@@ -1483,35 +1483,39 @@
   /* Statusline strip — user's `statusline.json` script output. Lives
      directly below the composer pill. Monospace, single-color tone,
      hidden when no output. Vertical scroll if multi-line. */
+  /* Redesign v2 §2.5 — boxless statusline under the pill: no bg/border,
+     mono 10.5 linenum tone, `▸` prefix. */
   .cmp-statusline {
-    margin-top: 8px;
-    padding: 4px 12px;
-    font: 10.5px / 1.5 'JetBrains Mono', ui-monospace, monospace;
-    color: var(--text-mute);
-    background: var(--bg-2);
-    border: 1px solid var(--border);
-    border-radius: 6px;
+    margin-top: 6px;
+    padding: 0 2px;
+    font: 10.5px / 1.5 var(--font-mono), ui-monospace, monospace;
+    color: var(--text-linenum, var(--text-mute));
+    background: transparent;
+    border: 0;
+    border-radius: 0;
     white-space: pre-wrap;
     word-break: break-word;
     max-height: 72px;
     overflow-y: auto;
     flex-shrink: 0;
   }
-  .cmp-statusline--err {
-    color: #e0b16c;
-    border-color: color-mix(in srgb, #e0b16c 35%, var(--border));
-  }
+  .cmp-statusline::before { content: '▸ '; opacity: 0.7; }
+  .cmp-statusline--err { color: #e0b16c; }
 
+  /* Redesign v2 §2.5 — 680px pill matching the thread column: bg-1
+     (light bg-2), hairline border, r12, engraved shadow-1. */
   .cmp-shell {
     width: 100%;
-    max-width: 960px;
+    max-width: 680px;
     margin: 0 auto;
-    background: var(--bg-2);
-    border: 1px solid var(--border-hi);
-    border-radius: var(--r-input);
-    padding: 10px 12px;
+    background: var(--bg-1);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 12px 14px;
+    box-shadow: var(--shadow-1);
     transition: border-color 200ms, box-shadow 200ms;
   }
+  :global(:root[data-theme='light']) .cmp-shell { background: var(--bg-2); }
   .cmp-shell:focus-within {
     border-color: var(--border-hi2);
     box-shadow: var(--shadow-1);
@@ -1948,73 +1952,6 @@
   .cmp-ctx-txt--warn { color: var(--warn); }
   .cmp-ctx-txt--err  { color: var(--err); }
 
-  .cmp-quotas {
-    display: inline-flex; align-items: center; gap: 4px;
-    flex-shrink: 0;
-  }
-  .cmp-q {
-    display: inline-flex; align-items: center; gap: 4px;
-    padding: 2px 7px;
-    border-radius: 5px;
-    background: var(--bg-3);
-    border: 1px solid var(--border);
-    font-size: 10px;
-    color: var(--text-1);
-    /* Button-element reset — the click-to-refresh wiring
-       changes the tag from <span> to <button>; explicit overrides keep
-       the visual identical while making the affordance clickable. */
-    font-family: inherit;
-    cursor: pointer;
-    transition: background 120ms, border-color 120ms;
-  }
-  .cmp-q:hover {
-    background: var(--bg-2);
-    border-color: var(--border-hi);
-  }
-  /* Spin indicator — small ring rotated 360° while the force-refresh
-     request is in flight. Min-visible 800ms enforced by the JS-side
-     timer so even a fast network shows the affordance. */
-  @keyframes cmp-q-spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
-  }
-  .cmp-q--refreshing::after {
-    content: '';
-    width: 8px; height: 8px;
-    border-radius: 50%;
-    border: 1.2px solid currentColor;
-    border-right-color: transparent;
-    animation: cmp-q-spin 800ms linear infinite;
-    margin-left: 4px;
-    flex-shrink: 0;
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .cmp-q--refreshing::after { animation: none; opacity: 0.5; }
-  }
-  .cmp-q-tag {
-    color: var(--text-mute);
-    font-size: 9px;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-  }
-  .cmp-q-val { color: var(--text-0); }
-  /* Endpoint-down fallback pill — dashed border + muted text reads as
-     "no data" rather than "0% used". */
-  .cmp-q.cmp-q--na { border-style: dashed; color: var(--text-mute); }
-  .cmp-q.cmp-q--na .cmp-q-val { color: var(--text-mute); }
-  .cmp-q.cmp-q--warn {
-    background: rgba(217, 184, 110, 0.10);
-    border-color: rgba(217, 184, 110, 0.32);
-    color: var(--warning);
-  }
-  .cmp-q.cmp-q--warn .cmp-q-val { color: var(--warning); }
-  .cmp-q.cmp-q--err {
-    background: rgba(232, 130, 100, 0.10);
-    border-color: rgba(232, 130, 100, 0.34);
-    color: var(--error);
-  }
-  .cmp-q.cmp-q--err .cmp-q-val { color: var(--error); }
-
   .cmp-model {
     flex-shrink: 0;
     display: inline-flex; align-items: center; gap: 4px;
@@ -2149,13 +2086,13 @@
     .cmp-fast-chip { transition: none; }
   }
 
-  /* Ink-inversion pill per the mockup, two-step engraved shadow. */
+  /* Redesign v2 §2.5 — accent primary pill, engraved shadow-pill. */
   .cmp-send {
     display: inline-flex; align-items: center; gap: 6px;
-    padding: 5px 14px;
-    border-radius: var(--r-item);
-    font-size: 11px; font-weight: 600;
-    background: var(--text-0);
+    padding: 6px 14px;
+    border-radius: 8px;
+    font-size: 12.5px; font-weight: 600;
+    background: var(--accent);
     color: var(--accent-fg);
     border: none; cursor: pointer;
     box-shadow: var(--shadow-pill);
@@ -2170,11 +2107,8 @@
   .cmp-send-kbd {
     font-family: var(--font-mono);
     font-size: 10px;
-    padding: 1px 5px;
-    border-radius: 4px;
-    background: rgba(14, 17, 18, 0.30);
-    border: 1px solid rgba(14, 17, 18, 0.40);
     color: var(--accent-fg);
+    opacity: 0.55;
   }
 
   .cmp-stop {
