@@ -1558,6 +1558,8 @@
      behind the ⋯ toggle; send is a 32px inverse circle. ── */
   .cmp-shell--quiet { border-radius: 14px; }
   .cmp-shell--quiet .cmp-foot { flex-wrap: wrap; }
+  /* attach/@ move to drag-n-drop + typed @// in Quiet (§3.3). */
+  .cmp-shell--quiet .cmp-prefix { display: none; }
   /* Run controls (model + launchers/toggles) collapse unless ⋯ open. */
   .cmp-shell--quiet .cmp-model,
   .cmp-shell--quiet .cmp-grp { display: none; }

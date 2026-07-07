@@ -8,12 +8,14 @@
      dock's Tasks section or the /preview command), not a permanent pane. */
   import SessionsSidebar from './agent/SessionsSidebar.svelte';
   import ChatHeader from './agent/ChatHeader.svelte';
+  import QuietChatHeader from './agent/QuietChatHeader.svelte';
   import ChatThread from './agent/ChatThread.svelte';
   import Composer from './agent/Composer.svelte';
   import ContextDock from './agent/ContextDock.svelte';
   import PreviewPane from './agent/PreviewPane.svelte';
   import { onMount } from 'svelte';
   import { sessionsState } from '$lib/state/sessions.svelte';
+  import { layoutModeState } from '$lib/state/layoutMode.svelte';
   import type { ClaudeAction } from '$lib/types';
 
   type Kind = 'claude';
@@ -63,11 +65,15 @@
 
   const tone = $derived('var(--accent)');
   const glow = $derived('var(--accent-glow)');
+  const quiet = $derived(layoutModeState.mode === 'quiet');
 
-  /* Context dock open state — persisted per agent kind. */
+  /* Context dock open state — persisted per agent kind (Cabin only).
+     In Quiet the context is a popover from the header chip, defaulting
+     closed (`ctxPopOpen`), so the empty stage stays empty. */
   // svelte-ignore state_referenced_locally
   const dockKey = `woom:agent-context-dock:v1:${p.kind}`;
   let dockOpen = $state(true);
+  let ctxPopOpen = $state(false);
 
   /* Preview overlay — ephemeral. Opened from the dock's Tasks section
      ("preview") or the /preview slash command's window event. */
@@ -93,15 +99,27 @@
   </div>
 
   <section class="sa-chat">
-    <ChatHeader
-      kind={p.kind}
-      instanceId={p.instanceId}
-      thinkingStartedAt={p.thinkingStartedAt}
-      thinkingTick={p.thinkingTick}
-      onStop={p.onStop}
-      contextOpen={dockOpen}
-      onToggleContext={() => (dockOpen = !dockOpen)}
-    />
+    {#if quiet}
+      <QuietChatHeader
+        kind={p.kind}
+        instanceId={p.instanceId}
+        thinkingStartedAt={p.thinkingStartedAt}
+        thinkingTick={p.thinkingTick}
+        onStop={p.onStop}
+        contextOpen={ctxPopOpen}
+        onToggleContext={() => (ctxPopOpen = !ctxPopOpen)}
+      />
+    {:else}
+      <ChatHeader
+        kind={p.kind}
+        instanceId={p.instanceId}
+        thinkingStartedAt={p.thinkingStartedAt}
+        thinkingTick={p.thinkingTick}
+        onStop={p.onStop}
+        contextOpen={dockOpen}
+        onToggleContext={() => (dockOpen = !dockOpen)}
+      />
+    {/if}
     <!-- {#key}: thread MUST remount per session — the windowed lazy-mount
          (IntersectionObserver) leaves reused nodes stuck as stubs. -->
     {#key sessionsState.activeIds[p.kind]}
@@ -131,7 +149,7 @@
     />
   </section>
 
-  {#if dockOpen}
+  {#snippet contextDock(onCollapse: () => void)}
     <ContextDock
       kind={p.kind}
       instanceId={p.instanceId}
@@ -152,8 +170,17 @@
       onOpenWorktreeInEditor={p.onOpenWorktreeInEditor}
       onCopyWorktreeBranch={p.onCopyWorktreeBranch}
       onRemoveWorktree={p.onRemoveWorktree}
-      onCollapse={() => (dockOpen = false)}
+      {onCollapse}
     />
+  {/snippet}
+
+  {#if quiet}
+    {#if ctxPopOpen}
+      <div class="sa-ctx-pop">{@render contextDock(() => (ctxPopOpen = false))}</div>
+      <button class="sa-ctx-scrim" aria-label="Close context" onclick={() => (ctxPopOpen = false)}></button>
+    {/if}
+  {:else if dockOpen}
+    {@render contextDock(() => (dockOpen = false))}
   {:else}
     <aside class="sa-dock-rail">
       <button class="sa-dock-expand" aria-label="Open context" title="Open context" onclick={() => (dockOpen = true)}>
@@ -185,6 +212,27 @@
     background: var(--bg-0);
     position: relative;
   }
+  /* Quiet context popover (§3.2) — floats the ContextDock under the
+     header "контекст ▾" chip instead of a persistent column. */
+  .sa-ctx-pop {
+    position: fixed;
+    top: 92px;
+    /* Anchor under the header "контекст ▾" chip — the chat column is
+       centred at max-720, the chip sits just left of its centre. */
+    left: 50%; transform: translateX(-210px);
+    width: 384px; max-height: 72vh;
+    z-index: 130;
+    border-radius: 12px; border: 1px solid var(--border-hi);
+    box-shadow: var(--shadow-3);
+    overflow: hidden auto;
+    display: flex;
+  }
+  .sa-ctx-pop > :global(.cd) { width: 100%; border: 0; }
+  .sa-ctx-scrim {
+    position: fixed; inset: 0; z-index: 120;
+    background: transparent; border: 0; cursor: default;
+  }
+
   /* Collapsed-dock rail — thin strip with an expand chevron. */
   .sa-dock-rail {
     flex: none; width: 44px;

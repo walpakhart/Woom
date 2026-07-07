@@ -12,18 +12,6 @@
 :root[data-layout='quiet'] .sa-dock-rail {
   display: none;
 }
-/* Context still reachable in Quiet — the ChatHeader "Context" toggle
- * now floats the dock as a right-side popover (§3.2) instead of a
- * persistent column. Only mounted when open (AgentApp's {#if dockOpen}). */
-:root[data-layout='quiet'] .cd {
-  position: fixed;
-  top: 58px; right: 24px; bottom: 58px;
-  width: 384px;
-  z-index: 120;
-  border-radius: 12px;
-  border: 1px solid var(--border-hi);
-  box-shadow: var(--shadow-3);
-}
 
 /* ── List columns everywhere: inbox lists (jira/github/sentry) +
  *    terminal/canvas instance lists all use the shared `.lp`. In Quiet
@@ -31,6 +19,10 @@
 :root[data-layout='quiet'] .lp {
   display: none;
 }
+
+/* Chat column widens to 720 in Quiet (§3.1). */
+:root[data-layout='quiet'] .ct > * { max-width: 720px; }
+:root[data-layout='quiet'] .cmp-shell { max-width: 720px; }
 
 /* Quiet thread (§3.3) — user turns drop the right-aligned bubble for a
  * quiet left-border quote, so the transcript reads as one column. */
