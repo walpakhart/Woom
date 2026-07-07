@@ -1563,7 +1563,7 @@
       else addWorkflow(wf);
     });
 
-    // Ledger workflows — every backend transition ships the FULL
+    // Ledger workflows — most backend transitions ship the FULL
     // workflow snapshot, so one upsert handler covers created/updated/
     // review/done alike. `ledger:item_done` is a slim ping (no
     // snapshot); the paired `ledger:updated` carries the state.
@@ -1577,10 +1577,34 @@
       ledgerUnlistenRefs.push(
         await listen<LedgerWorkflow>(ev, (e) => {
           const wf = e.payload as LedgerWorkflow;
-          if (wf?.id && wf.items !== undefined) upsertLedger(wf);
+          if (wf?.id && wf.items !== undefined) {
+            upsertLedger(wf);
+          } else if (ev === 'ledger:workflow_done') {
+            // The FAILED path emits a slim `{workflowId, error}` done
+            // ping with no `items`, so the upsert above is skipped and
+            // the card would stay frozen mid-run. Reconcile from disk so
+            // the terminal state always lands, whatever the payload shape.
+            void loadPersistedLedgers();
+          }
         })
       );
     }
+
+    // Self-heal missed events. A ledger can build/run/apply across a CLI
+    // Stop-restart or while the window is backgrounded; if any live
+    // `ledger:*` event doesn't reach this webview the card is left a
+    // zombie (frozen at an early snapshot) even though disk holds the
+    // real terminal state. Re-hydrate from disk whenever the window
+    // regains focus so a dropped stream reconciles instead of lingering.
+    const rehydrateLedgers = () => {
+      if (document.visibilityState === 'visible') void loadPersistedLedgers();
+    };
+    window.addEventListener('focus', rehydrateLedgers);
+    document.addEventListener('visibilitychange', rehydrateLedgers);
+    ledgerUnlistenRefs.push(() => {
+      window.removeEventListener('focus', rehydrateLedgers);
+      document.removeEventListener('visibilitychange', rehydrateLedgers);
+    });
   });
 
   /* formatBytesShort moved to ./page_helpers.ts */
@@ -2463,11 +2487,23 @@
         checkCmd: str('check_cmd') || null,
         maxAttempts: null,
         parallel: input?.parallel === true,
+        deps: Array.isArray(input?.deps)
+          ? input.deps.filter((d): d is string => typeof d === 'string')
+          : null,
+        parentId: typeof input?.parent_id === 'string' ? input.parent_id : null,
       });
       return;
     }
     if (name === 'mcp__app__ledger_launch') {
       void invoke('ledger_launch', { workflowId: str('workflow_id') });
+      return;
+    }
+    /* Autonomous start — the agent skips the approval gate (user opted
+     * in). Mirrors the card's 'run' button; `ledger_run` accepts either
+     * `building` or `awaiting_launch`, so it works whether or not the
+     * agent called ledger_launch first. */
+    if (name === 'mcp__app__ledger_run') {
+      void invoke('ledger_run', { workflowId: str('workflow_id') });
       return;
     }
     // parseEdgeSpec moved to ./mcpInputParse.ts (wave-30 split).

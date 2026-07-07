@@ -21,6 +21,13 @@ export interface LedgerItem {
   costUsd: number;
   notes?: string | null;
   parallel: boolean;
+  /** Ids of earlier items that must pass before this one is eligible.
+   *  Empty = gated only by list order (classic linear ledger). */
+  deps: string[];
+  /** Parent item id for sub-items. An item that is some other item's
+   *  parent is a CONTAINER (grouping header) — not executed; its status
+   *  rolls up from its children. Null/absent = top-level item. */
+  parentId?: string | null;
   feed: string[];
 }
 

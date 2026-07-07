@@ -6,7 +6,7 @@
    * action feed; the review gate exposes the branch diff + Apply. */
   import { invoke } from '@tauri-apps/api/core';
   import { slide, fade } from 'svelte/transition';
-  import { ledgerState, setLedgerSquash, injectLedgerNote } from '$lib/state/ledger.svelte';
+  import { ledgerState, setLedgerSquash, injectLedgerNote, type LedgerItem } from '$lib/state/ledger.svelte';
   import { formatCostUsd } from '$lib/usage';
 
   interface Props {
@@ -15,6 +15,38 @@
   const { workflowId }: Props = $props();
 
   const wf = $derived(ledgerState.workflows.find((w) => w.id === workflowId) ?? null);
+
+  /* Nested display order. Items store hierarchy via `parentId` (adjacency
+     list); flatten to a render list of {item, depth, num} — roots in list
+     order, each followed by its children (recursively). `num` stays the
+     item's 1-based position in the original list so ids the user reads
+     (item-3) still line up. Orphans (dangling parentId) fall back to top
+     level so nothing is ever hidden. */
+  interface LedgerRow {
+    item: LedgerItem;
+    depth: number;
+    num: number;
+  }
+  const rows = $derived.by<LedgerRow[]>(() => {
+    if (!wf) return [];
+    const items = wf.items;
+    const numOf = (id: string) => items.findIndex((i) => i.id === id) + 1;
+    const childrenOf = (pid: string | null) =>
+      items.filter((i) => (i.parentId ?? null) === pid);
+    const out: LedgerRow[] = [];
+    const seen = new Set<string>();
+    const walk = (it: LedgerItem, depth: number) => {
+      if (seen.has(it.id)) return;
+      seen.add(it.id);
+      out.push({ item: it, depth, num: numOf(it.id) });
+      for (const c of childrenOf(it.id)) walk(c, depth + 1);
+    };
+    for (const it of childrenOf(null)) walk(it, 0);
+    for (const it of items) if (!seen.has(it.id)) out.push({ item: it, depth: 0, num: numOf(it.id) });
+    return out;
+  });
+  const isContainer = (id: string): boolean =>
+    !!wf && wf.items.some((i) => i.parentId === id);
 
   let expandedId = $state<string | null>(null);
   let showFullDiff = $state(false);
@@ -31,6 +63,8 @@
   let eDetail = $state('');
   let eCheck = $state('');
   let eParallel = $state(false);
+  let eDeps = $state('');
+  let eParent = $state('');
   let adding = $state(false);
 
   const passed = $derived(wf ? wf.items.filter((i) => i.status === 'passed').length : 0);
@@ -149,13 +183,15 @@
     }
   }
 
-  function openEdit(item: { id: string; title: string; detail?: string | null; checkCmd?: string | null; parallel: boolean }): void {
+  function openEdit(item: LedgerItem): void {
     editId = item.id;
     adding = false;
     eTitle = item.title;
     eDetail = item.detail ?? '';
     eCheck = item.checkCmd ?? '';
     eParallel = item.parallel;
+    eDeps = (item.deps ?? []).join(', ');
+    eParent = item.parentId ?? '';
   }
 
   function openAdd(): void {
@@ -165,6 +201,16 @@
     eDetail = '';
     eCheck = '';
     eParallel = false;
+    eDeps = '';
+    eParent = '';
+  }
+
+  /** Parse the comma/space-separated dep field into a clean id list. */
+  function parseDeps(raw: string): string[] {
+    return raw
+      .split(/[\s,]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
   }
 
   function closeEditor(): void {
@@ -204,6 +250,8 @@
         checkCmd: eCheck || null,
         maxAttempts: null,
         parallel: eParallel,
+        deps: parseDeps(eDeps),
+        parentId: eParent.trim() || null,
       });
     } else if (editId) {
       await call('ledger_update_item', {
@@ -213,6 +261,8 @@
         checkCmd: eCheck,
         maxAttempts: null,
         parallel: eParallel,
+        deps: parseDeps(eDeps),
+        parentId: eParent.trim(),
       });
     }
     closeEditor();
@@ -237,6 +287,14 @@
     <label class="lg-flag mono">
       <input type="checkbox" bind:checked={eParallel} />
       parallel-safe (may run in a wave)
+    </label>
+    <label class="lg-field">
+      <span class="lg-field-label mono">deps <span class="lg-field-opt">item ids, comma-separated — run after these pass</span></span>
+      <input class="lg-input mono" bind:value={eDeps} placeholder="item-1, item-3" />
+    </label>
+    <label class="lg-field">
+      <span class="lg-field-label mono">parent <span class="lg-field-opt">item id — nest as a sub-item (empty = top level)</span></span>
+      <input class="lg-input mono" bind:value={eParent} placeholder="item-2" />
     </label>
     <div class="lg-editor-actions">
       <button class="lg-btn lg-btn--ink" disabled={busy || !eTitle.trim()} onclick={saveEditor}>{adding ? 'add step' : 'save'}</button>
@@ -337,12 +395,16 @@
     {/if}
 
     <ul class="lg-items">
-      {#each wf.items as item, idx (item.id)}
+      {#each rows as { item, depth, num } (item.id)}
+        {@const container = isContainer(item.id)}
         <li
           class="lg-item"
           data-status={item.status}
           class:lg-item--current={wf.currentItem === item.id}
-          class:lg-item--wave={item.parallel && (wf.items[idx - 1]?.parallel || wf.items[idx + 1]?.parallel)}
+          class:lg-item--wave={item.parallel && (wf.items[num - 2]?.parallel || wf.items[num]?.parallel)}
+          class:lg-item--child={depth > 0}
+          class:lg-item--group={container}
+          style="--lg-depth: {depth}"
           in:slide={{ duration: 180 }}
         >
           {#if editId === item.id}
@@ -354,11 +416,14 @@
                 onclick={() => (expandedId = expandedId === item.id ? null : item.id)}
                 aria-expanded={expandedId === item.id}
               >
-                <span class="lg-num mono">{String(idx + 1).padStart(2, '0')}</span>
+                <span class="lg-num mono">{String(num).padStart(2, '0')}</span>
                 <span class="lg-glyph mono" class:lg-glyph--live={item.status === 'working' || item.status === 'checking'}>{glyph(item.status)}</span>
                 <span class="lg-title">{item.title}</span>
                 {#if item.parallel}<span class="lg-par mono" title="parallel-safe — may run in a wave">∥</span>{/if}
-                {#if item.checkCmd}
+                {#if item.deps?.length}<span class="lg-deps mono" title="waits for {item.deps.join(', ')}">⤺ {item.deps.length}</span>{/if}
+                {#if container}
+                  <span class="lg-check lg-check--group mono" title="grouping header — status rolls up from its sub-items">group</span>
+                {:else if item.checkCmd}
                   <span class="lg-check mono" title={item.checkCmd}>{item.checkCmd}</span>
                 {:else}
                   <span class="lg-check lg-check--grader mono">llm grade</span>
@@ -730,6 +795,32 @@
     flex: none;
     font-size: 11px;
     color: var(--text-2);
+  }
+  .lg-deps {
+    flex: none;
+    font-size: 10px;
+    color: var(--text-2);
+    padding: 0 5px;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+  }
+  /* Sub-items — indent by depth, with a hairline rail marking the nest. */
+  .lg-item--child > .lg-rowline,
+  .lg-item--child > .lg-feed,
+  .lg-item--child > .lg-detail,
+  .lg-item--child > .lg-item-actions {
+    padding-left: calc(var(--lg-depth, 0) * 16px);
+  }
+  .lg-item--child > .lg-rowline {
+    border-left: 1px solid var(--border);
+    margin-left: 6px;
+  }
+  /* Grouping header (container) — bolder title, dashed "group" chip. */
+  .lg-item--group .lg-title { font-weight: 600; }
+  .lg-check--group {
+    border-style: dashed;
+    color: var(--text-2);
+    opacity: 0.85;
   }
   .lg-check {
     flex: 0 1 auto;

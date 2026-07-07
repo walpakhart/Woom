@@ -125,6 +125,22 @@ pub struct LedgerItem {
     /// merged back in item order. Failures degrade to sequential retry.
     #[serde(default)]
     pub parallel: bool,
+    /// Explicit dependency edges — ids of items that must be `passed` or
+    /// `skipped` before this one becomes eligible. Empty (the default) =
+    /// the item is gated only by its position in the list, so an all-
+    /// empty checklist runs exactly like the classic linear ledger. Deps
+    /// let the builder express a DAG: fan-out items sharing a prerequisite,
+    /// a join item that waits on several branches, etc.
+    #[serde(default)]
+    pub deps: Vec<String>,
+    /// Parent item id for sub-items. An item that is the `parent_id` of
+    /// ≥1 other item is a CONTAINER (a grouping header): it is never
+    /// executed by a worker — its "work" is its children — and its status
+    /// is rolled up from them (passed once all children settle). Leaf
+    /// items (the common case) have `None`. Enables arbitrary-depth
+    /// nesting via the parent chain without a tree data structure.
+    #[serde(default)]
+    pub parent_id: Option<String>,
     /// Live action feed for the current attempt (tool calls streamed
     /// from the worker CLI). Capped; reset per attempt.
     #[serde(default)]
@@ -851,6 +867,65 @@ fn emit_updated(app: &AppHandle, reg: &Arc<LedgerRegistry>, wf_id: &str) {
     }
 }
 
+/// A queued item is eligible only once every dependency it names has
+/// settled (`passed` or `skipped`). No deps → always ready, so an
+/// all-empty-deps checklist schedules exactly like the classic linear
+/// ledger. An unknown dep id is treated as satisfied (deps are filtered
+/// to real, earlier ids at add time, so this is only belt-and-braces —
+/// a stale id must never wedge the run).
+fn deps_ready(wf: &LedgerWorkflow, item: &LedgerItem) -> bool {
+    item.deps.iter().all(|dep| {
+        wf.items
+            .iter()
+            .find(|i| &i.id == dep)
+            .map(|i| matches!(i.status.as_str(), "passed" | "skipped"))
+            .unwrap_or(true)
+    })
+}
+
+/// A CONTAINER is any item that is the declared parent of ≥1 other item —
+/// a grouping header for sub-items. Containers are never handed to a
+/// worker; their status is rolled up from their children.
+fn is_container(wf: &LedgerWorkflow, id: &str) -> bool {
+    wf.items.iter().any(|i| i.parent_id.as_deref() == Some(id))
+}
+
+/// Derive every container's status from its children. `passed` once all
+/// children settle (passed/skipped), `failed` if any child failed,
+/// `working` while children are in flight, else `queued`. Reverse order
+/// so a container that is itself a child is rolled up before its parent
+/// reads it (children are always added after their parent). Idempotent.
+fn rollup_containers(w: &mut LedgerWorkflow) {
+    let ids: Vec<String> = w.items.iter().map(|i| i.id.clone()).collect();
+    for id in ids.iter().rev() {
+        let children: Vec<&str> = w
+            .items
+            .iter()
+            .filter(|i| i.parent_id.as_deref() == Some(id.as_str()))
+            .map(|i| i.status.as_str())
+            .collect();
+        if children.is_empty() {
+            continue;
+        }
+        let next = if children.iter().any(|s| *s == "failed") {
+            "failed"
+        } else if children.iter().all(|s| matches!(*s, "passed" | "skipped")) {
+            "passed"
+        } else if children
+            .iter()
+            .any(|s| matches!(*s, "working" | "checking" | "passed" | "skipped"))
+        {
+            "working"
+        } else {
+            "queued"
+        }
+        .to_string();
+        if let Some(it) = w.items.iter_mut().find(|i| &i.id == id) {
+            it.status = next;
+        }
+    }
+}
+
 pub(crate) fn spawn_ledger_run(app: AppHandle, reg: Arc<LedgerRegistry>, wf_id: String) {
     tauri::async_runtime::spawn(async move {
         if let Err(e) = run_ledger(&app, &reg, &wf_id).await {
@@ -912,9 +987,30 @@ async fn run_ledger(app: &AppHandle, reg: &Arc<LedgerRegistry>, wf_id: &str) -> 
         if matches!(wf.status.as_str(), "paused" | "paused_budget") {
             return Ok(());
         }
-        let item = match wf.items.iter().find(|i| i.status == "queued") {
+        // First queued LEAF item whose dependencies have all settled.
+        // Containers (grouping headers) are never executed — their status
+        // rolls up from children. With no deps/parents this is just "first
+        // queued" (classic order). If queued leaves remain but none is
+        // ready, the only cause is a bad dep graph (dangling/cyclic) —
+        // filtered at add time, so treat it as a hard error, not a spin.
+        let item = match wf
+            .items
+            .iter()
+            .find(|i| i.status == "queued" && !is_container(&wf, &i.id) && deps_ready(&wf, i))
+        {
             Some(i) => i.clone(),
-            None => break,
+            None => {
+                if wf
+                    .items
+                    .iter()
+                    .any(|i| i.status == "queued" && !is_container(&wf, &i.id))
+                {
+                    return Err(
+                        "ledger deadlocked: remaining items have unsatisfiable dependencies".into(),
+                    );
+                }
+                break;
+            }
         };
 
         if !wait_quota(app, reg, wf_id).await {
@@ -936,7 +1032,19 @@ async fn run_ledger(app: &AppHandle, reg: &Arc<LedgerRegistry>, wf_id: &str) -> 
                     continue;
                 }
                 match it.status.as_str() {
-                    "queued" if it.parallel && wave.len() < 4 => wave.push(it.clone()),
+                    // A wave member must also have its deps satisfied. Any
+                    // member depending on another still-queued member is
+                    // NOT ready (deps require passed/skipped), so it drops
+                    // out of the wave and runs later — waves never contain
+                    // an intra-wave dependency edge.
+                    "queued"
+                        if it.parallel
+                            && !is_container(&wf, &it.id)
+                            && deps_ready(&wf, it)
+                            && wave.len() < 4 =>
+                    {
+                        wave.push(it.clone())
+                    }
                     "queued" => break,
                     "passed" | "skipped" => continue,
                     _ => break,
@@ -1093,6 +1201,7 @@ async fn run_ledger(app: &AppHandle, reg: &Arc<LedgerRegistry>, wf_id: &str) -> 
                             it.error = None;
                         }
                     }
+                    rollup_containers(w);
                     w.current_item = None;
                 });
                 if let Some(w) = reg.get(wf_id) {
@@ -1154,6 +1263,9 @@ async fn run_ledger(app: &AppHandle, reg: &Arc<LedgerRegistry>, wf_id: &str) -> 
     // park for the behavioral review gate.
     let full = range_diff(&wt_path, &base);
     let wf_done = reg.mutate_persist(app, wf_id, |w| {
+        // Final rollup so grouping headers read `passed` at the review
+        // gate once every child settled.
+        rollup_containers(w);
         w.full_diff = full.clone();
         w.status = "awaiting_review".to_string();
         w.current_item = None;
@@ -1343,6 +1455,7 @@ async fn run_wave(
                                 it.error = None;
                             }
                         }
+                        rollup_containers(w);
                     });
                     let _ = app.emit(
                         "ledger:item_done",
@@ -1436,6 +1549,8 @@ pub async fn ledger_add_item(
     check_cmd: Option<String>,
     max_attempts: Option<u32>,
     parallel: Option<bool>,
+    deps: Option<Vec<String>>,
+    parent_id: Option<String>,
 ) -> Result<String, String> {
     if title.trim().is_empty() {
         return Err("item title is empty".into());
@@ -1450,6 +1565,23 @@ pub async fn ledger_add_item(
             }
             let id = format!("item-{}", w.items.len() + 1);
             new_id = id.clone();
+            // Keep only deps that name a real, earlier item — a dangling
+            // or forward ref would deadlock the run loop. Builders add
+            // items in order, so a valid dep always already exists.
+            let existing: std::collections::HashSet<&str> =
+                w.items.iter().map(|i| i.id.as_str()).collect();
+            let deps = deps
+                .clone()
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|d| existing.contains(d.as_str()))
+                .collect::<Vec<_>>();
+            // parent_id must name a real, earlier item (same order rule as
+            // deps); an unknown ref is dropped so it degrades to a normal
+            // top-level item rather than an orphan the card can't place.
+            let parent_id = parent_id
+                .clone()
+                .filter(|p| existing.contains(p.as_str()));
             w.items.push(LedgerItem {
                 id,
                 title: title.clone(),
@@ -1469,6 +1601,8 @@ pub async fn ledger_add_item(
                 cost_usd: 0.0,
                 notes: None,
                 parallel: parallel.unwrap_or(false),
+                deps,
+                parent_id,
                 feed: Vec::new(),
             });
         })
@@ -1487,8 +1621,8 @@ fn editable(wf_status: &str, item_status: &str) -> bool {
 }
 
 /// Edit a not-yet-run item (title / detail / check_cmd / max_attempts /
-/// parallel). The user's pre-run review gate is only as strong as its
-/// ability to FIX the checklist, not just approve it.
+/// parallel / deps / parent_id). The user's pre-run review gate is only
+/// as strong as its ability to FIX the checklist, not just approve it.
 #[tauri::command]
 pub async fn ledger_update_item(
     app: AppHandle,
@@ -1499,6 +1633,8 @@ pub async fn ledger_update_item(
     check_cmd: Option<String>,
     max_attempts: Option<u32>,
     parallel: Option<bool>,
+    deps: Option<Vec<String>>,
+    parent_id: Option<String>,
 ) -> Result<(), String> {
     let registry: tauri::State<'_, Arc<LedgerRegistry>> = app.state();
     let mut touched = false;
@@ -1506,6 +1642,16 @@ pub async fn ledger_update_item(
         .inner()
         .mutate_persist(&app, &workflow_id, |w| {
             let wf_status = w.status.clone();
+            // Valid targets for deps / parent_id: any OTHER item. Filter
+            // here (not against "earlier only") since edit can point at
+            // any existing item; a self-ref or unknown id is dropped so
+            // the graph can't be wedged from the card.
+            let valid: std::collections::HashSet<String> = w
+                .items
+                .iter()
+                .map(|i| i.id.clone())
+                .filter(|id| id != &item_id)
+                .collect();
             for it in w.items.iter_mut() {
                 if it.id != item_id || !editable(&wf_status, &it.status) {
                     continue;
@@ -1529,6 +1675,19 @@ pub async fn ledger_update_item(
                 }
                 if let Some(p) = parallel {
                     it.parallel = p;
+                }
+                if let Some(d) = &deps {
+                    it.deps = d.iter().filter(|x| valid.contains(*x)).cloned().collect();
+                }
+                if let Some(p) = &parent_id {
+                    // Empty string clears the parent (item → top level).
+                    it.parent_id = if p.trim().is_empty() {
+                        None
+                    } else if valid.contains(p) {
+                        Some(p.clone())
+                    } else {
+                        it.parent_id.clone()
+                    };
                 }
                 // Edited items get a clean slate — stale failure feedback
                 // must not leak into the next attempt's prompt.
@@ -2004,6 +2163,8 @@ mod tests {
             cost_usd: 0.0,
             notes: None,
             parallel: false,
+            deps: Vec::new(),
+            parent_id: None,
             feed: Vec::new(),
         }
     }
@@ -2088,5 +2249,56 @@ mod tests {
         let t = truncate_tail(&s, 10);
         assert!(t.ends_with("TAIL"));
         assert!(t.starts_with("…(truncated)…"));
+    }
+
+    #[test]
+    fn deps_gate_readiness() {
+        let mut b = item("item-2", "queued");
+        b.deps = vec!["item-1".into()];
+        // No-dep item is always ready.
+        let a = item("item-1", "queued");
+        let w = wf(vec![a, b.clone()]);
+        assert!(deps_ready(&w, &w.items[0]));
+        // item-2 waits until item-1 settles.
+        assert!(!deps_ready(&w, &b));
+        let w2 = wf(vec![item("item-1", "passed"), b.clone()]);
+        assert!(deps_ready(&w2, &b));
+        // Unknown dep id never wedges the run.
+        let mut c = item("item-3", "queued");
+        c.deps = vec!["item-nope".into()];
+        assert!(deps_ready(&w2, &c));
+    }
+
+    #[test]
+    fn container_detection_and_rollup() {
+        let parent = item("item-1", "queued");
+        let mut child = item("item-2", "queued");
+        child.parent_id = Some("item-1".into());
+        let mut w = wf(vec![parent, child]);
+        assert!(is_container(&w, "item-1"));
+        assert!(!is_container(&w, "item-2"));
+        // Children still queued → container not yet passed.
+        rollup_containers(&mut w);
+        assert_eq!(w.items[0].status, "queued");
+        // Child passes → container rolls up to passed.
+        w.items[1].status = "passed".into();
+        rollup_containers(&mut w);
+        assert_eq!(w.items[0].status, "passed");
+    }
+
+    #[test]
+    fn rollup_marks_working_and_failed() {
+        let parent = item("item-1", "queued");
+        let mut c1 = item("item-2", "working");
+        c1.parent_id = Some("item-1".into());
+        let mut c2 = item("item-3", "queued");
+        c2.parent_id = Some("item-1".into());
+        let mut w = wf(vec![parent, c1, c2]);
+        rollup_containers(&mut w);
+        assert_eq!(w.items[0].status, "working");
+        // A failed child fails the group.
+        w.items[1].status = "failed".into();
+        rollup_containers(&mut w);
+        assert_eq!(w.items[0].status, "failed");
     }
 }

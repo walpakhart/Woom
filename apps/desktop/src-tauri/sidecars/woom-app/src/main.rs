@@ -2451,7 +2451,7 @@ impl App {
     }
 
     #[tool(
-        description = "Add ONE checklist item to a Ledger workflow you're building. Call repeatedly, in EXECUTION ORDER — items run sequentially in one shared worktree, each by a fresh agent context; consecutive `parallel: true` items run concurrently as a wave. `title` = one-line requirement (what must become true). `detail` = optional expanded instructions (include relevant file paths). `check_cmd` = shell command run from the repo root whose exit code verifies the item (exit 0 = pass) — ALWAYS provide one when possible (test run, grep, build); items without it fall back to a slower LLM grader. `parallel` = true ONLY when the item touches files no other item touches. Survey the repo FIRST so checks are real commands that exist."
+        description = "Add ONE checklist item to a Ledger workflow you're building. Call repeatedly, in EXECUTION ORDER — items run sequentially in one shared worktree, each by a fresh agent context; consecutive `parallel: true` items run concurrently as a wave. `title` = one-line requirement (what must become true). `detail` = optional expanded instructions (include relevant file paths). `check_cmd` = shell command run from the repo root whose exit code verifies the item (exit 0 = pass) — ALWAYS provide one when possible (test run, grep, build); items without it fall back to a slower LLM grader. `parallel` = true ONLY when the item touches files no other item touches. `deps` = optional ids of earlier items that must pass first (e.g. [\"item-1\"]); leave empty for plain linear order, use it to model a DAG (fan-out sharing a prerequisite, or a join waiting on several branches). `parent_id` = optional id of an earlier item to nest THIS one under it as a sub-item (that parent becomes a non-executed grouping header whose status rolls up from its children). Survey the repo FIRST so checks are real commands that exist."
     )]
     async fn ledger_add_item(
         &self,
@@ -2461,6 +2461,8 @@ impl App {
             detail: _,
             check_cmd: _,
             parallel: _,
+            deps: _,
+            parent_id: _,
         }): Parameters<LedgerAddItemParams>,
     ) -> Result<CallToolResult, ErrorData> {
         if workflow_id.trim().is_empty() || title.trim().is_empty() {
@@ -2486,6 +2488,21 @@ impl App {
         }
         Ok(CallToolResult::success(vec![Content::text(
             "Ledger built. Parked for the user to review the checklist and press 'run' on the card. You're done building; stop here.",
+        )]))
+    }
+
+    #[tool(
+        description = "Start a Ledger run IMMEDIATELY, skipping the user's approval gate — the autonomous equivalent of the user pressing 'run' on the card. Requires ≥1 item added. Only call this when the user has EXPLICITLY authorized autonomous execution of this ledger (e.g. \"build it and run it yourself\", \"don't wait for me\"); otherwise call ledger_launch and let the user press 'run'. Items then execute in order (parallel-safe items as concurrent waves) and the card parks at the review gate when done."
+    )]
+    async fn ledger_run(
+        &self,
+        Parameters(LedgerLaunchParams { workflow_id }): Parameters<LedgerLaunchParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        if workflow_id.trim().is_empty() {
+            return Err(ErrorData::invalid_params("workflowId required", None));
+        }
+        Ok(CallToolResult::success(vec![Content::text(
+            "Ledger run started. Items execute in order (parallel-safe items as waves); the card streams live progress and parks at the review gate for apply when every item passes. Stop here.",
         )]))
     }
 
@@ -2795,6 +2812,20 @@ struct LedgerAddItemParams {
     /// consecutive parallel items run concurrently as a wave.
     #[allow(dead_code)]
     parallel: Option<bool>,
+    /// Optional explicit dependency ids (e.g. ["item-1","item-3"]) — this
+    /// item won't start until each named earlier item has passed. Leave
+    /// empty for the default linear order; use it to model a DAG: several
+    /// items sharing one prerequisite, or a join item that waits on
+    /// multiple branches. Ids must reference items you already added.
+    #[allow(dead_code)]
+    deps: Option<Vec<String>>,
+    /// Optional parent item id — makes THIS item a sub-item of that
+    /// parent, which becomes a grouping header ("epic") shown nested on
+    /// the card. A parent is never executed itself; its status rolls up
+    /// from its children. Use it to break a big requirement into ordered
+    /// sub-steps. Must reference an item you already added.
+    #[allow(dead_code)]
+    parent_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
