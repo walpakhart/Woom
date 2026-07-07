@@ -13,6 +13,7 @@
   import IconRail from '$lib/components/ui/IconRail.svelte';
   import Titlebar from '$lib/components/ui/Titlebar.svelte';
   import Dock from '$lib/components/ui/Dock.svelte';
+  import '$lib/styles/quiet.css';
   import RulesView from '$lib/views/RulesView.svelte';
   import LibraryApp from '$lib/views/apps/LibraryApp.svelte';
   import ConnectionsView from '$lib/views/ConnectionsView.svelte';

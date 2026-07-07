@@ -1,0 +1,54 @@
+/* Quiet direction (redesign v2 §3) — collapse Cabin's multi-pane
+ * shells to a single centred column. Loaded globally from +page.svelte;
+ * rules only bite under `:root[data-layout='quiet']`. Components stay
+ * mounted (state intact) — the side panes just hide and the main
+ * column carries its own max-width/centre from the Cabin pass.
+ *
+ * Editor is intentionally left on its Cabin layout for now — its Quiet
+ * form (code-as-list + pinnable ⌘E panel, §3.4) is a separate rework. */
+
+/* ── Agent / Claude (flex shell — hiding panes auto-collapses) ── */
+:root[data-layout='quiet'] .sa-sessions,
+:root[data-layout='quiet'] .cd,
+:root[data-layout='quiet'] .sa-dock-rail {
+  display: none;
+}
+
+/* ── List columns everywhere: inbox lists (jira/github/sentry) +
+ *    terminal/canvas instance lists all use the shared `.lp`. In Quiet
+ *    the switcher moves to the Dock / ⌘K, so the column disappears. ── */
+:root[data-layout='quiet'] .lp {
+  display: none;
+}
+
+/* Quiet thread (§3.3) — user turns drop the right-aligned bubble for a
+ * quiet left-border quote, so the transcript reads as one column. */
+:root[data-layout='quiet'] .msg--user .msg-body {
+  margin-left: 0;
+  max-width: 100%;
+  background: transparent;
+  border: 0;
+  border-left: 2px solid var(--border-hi);
+  border-radius: 0;
+  padding: 2px 0 2px 16px;
+}
+
+/* Terminal / Canvas grids reserved a 264 track for the (now hidden)
+ * list — drop it so the surface fills. Rail-collapsed keeps its 44. */
+:root[data-layout='quiet'] .st-shell,
+:root[data-layout='quiet'] .sc-shell {
+  grid-template-columns: minmax(0, 1fr);
+}
+:root[data-layout='quiet'] .st-shell.st-shell--rail,
+:root[data-layout='quiet'] .sc-shell.sc-shell--rail {
+  grid-template-columns: minmax(0, 1fr) 44px;
+}
+
+/* Inbox splitters ([list][doc]) — the list lives in the splitter's
+ * start pane. Zero it out and let the document pane take the width;
+ * the detail panes already centre their own document (max 760–800). */
+:root[data-layout='quiet'] .sj-shell .s-start,
+:root[data-layout='quiet'] .sg-shell .s-start,
+:root[data-layout='quiet'] .ssn-shell .s-start {
+  display: none;
+}
