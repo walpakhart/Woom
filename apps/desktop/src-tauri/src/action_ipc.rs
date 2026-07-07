@@ -14,7 +14,7 @@
 //! synthesised next-turn user message. That broke on every edge: the
 //! CLI's idle timeout fired during legitimate waits, the session-id
 //! got locked when a forced-kill cascaded, and the user constantly
-//! had to type "продолжи" to nudge the agent forward.
+//! had to type "continue" to nudge the agent forward.
 //!
 //! Protocol: line-delimited JSON. Sidecar opens connection, writes
 //! one CardRequest line, reads one CardResolution line, closes. Each

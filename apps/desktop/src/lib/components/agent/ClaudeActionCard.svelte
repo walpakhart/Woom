@@ -207,7 +207,7 @@
           oninput={(e) => { histIdx = -1; onUpdate({ message: e.currentTarget.value }); }}
           onkeydown={onSubjectKey}
           disabled={!isEditable}
-          placeholder="commit subject (↑/↓ история, imperative, ≤72 chars)"
+          placeholder="commit subject (↑/↓ history, imperative, ≤72 chars)"
         />
       </label>
       <label class="cac-label">

@@ -1,11 +1,11 @@
 <script lang="ts">
-  /* EmptyState — themed empty card для solo modes когда:
-     - источник не подключён → подсказывает Connect
-     - подключён, но пусто → подсказывает что появится
-     - идёт реализация → "coming next iteration"
+  /* EmptyState — themed empty card for solo modes when:
+     - source not connected → prompts Connect
+     - connected but empty → hints what will appear
+     - implementation in progress → "coming next iteration"
 
-     Использует .app-empty primitives из solo.css. Brand-tone halo
-     задаётся через --app-tone и --app-glow на корне. */
+     Uses .app-empty primitives from solo.css. Brand-tone halo
+     is set via --app-tone and --app-glow on the root. */
 
   interface Action {
     label: string;

@@ -543,7 +543,7 @@
     font-size: 12px; border: 1px solid var(--border-neutral-hi); cursor: pointer;
   }
   .ghd-ghostbtn:hover { background: var(--bg-2); color: var(--text-0); }
-  /* Send-to-Claude — primary inverse pill (spec: инверсный + shadow-pill). */
+  /* Send-to-Claude — primary inverse pill (spec: inverse + shadow-pill). */
   .ghd-claudebtn {
     display: inline-flex; align-items: center;
     padding: 6px 14px; border-radius: 999px;

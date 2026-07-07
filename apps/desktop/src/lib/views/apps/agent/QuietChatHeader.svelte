@@ -4,11 +4,13 @@
      head with the session title (inline-rename), a «N ▾» switcher
      popover that lists sessions (the Chats list moves here in Quiet),
      the turns/spend chip → BudgetPopover, a dotted meta line, and a
-     "контекст ▾" chip that toggles the context popover. */
-  import { sessionsState, updateSession, setActiveSessionInInstance } from '$lib/state/sessions.svelte';
+     "context ▾" chip that toggles the context popover. */
+  import { sessionsState, updateSession, setActiveSessionInInstance, newClaudeSession } from '$lib/state/sessions.svelte';
   import { sessionUsageTotals, formatTokens, formatCostUsd } from '$lib/usage';
   import { sessionDwTotals } from '$lib/state/dw.svelte';
   import BudgetPopover from '$lib/components/agent/BudgetPopover.svelte';
+  import ModelEngine from './ModelEngine.svelte';
+  import { claudeModels, claudeEffort } from './composerHelpers';
   import { tick } from 'svelte';
 
   type Kind = 'claude';
@@ -18,10 +20,24 @@
     thinkingStartedAt: Record<string, number | null>;
     thinkingTick: Record<string, number>;
     onStop: () => void;
+    /** Open the folder picker to change the session's working dir. */
+    onPickCwd?: () => void;
     contextOpen?: boolean;
     onToggleContext?: () => void;
   }
   let p: Props = $props();
+
+  function newChat() {
+    const id = newClaudeSession({ agentInstanceId: p.instanceId });
+    setActiveSessionInInstance(p.instanceId, id);
+    switcherOpen = false;
+  }
+  function setModel(m: string) {
+    if (sess) updateSession(sess.id, { claudeModel: m });
+  }
+  function setEffort(e: string) {
+    if (sess) updateSession(sess.id, { thinkingEffort: e as 'auto' | 'low' | 'medium' | 'high' | 'max' | 'ultracode' });
+  }
 
   const sess = $derived(
     sessionsState.list.find((s) => s.id === sessionsState.activeIds[p.kind]) ?? null
@@ -40,15 +56,6 @@
     return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`;
   });
 
-  function shortModel(m: string | null | undefined): string {
-    if (!m) return '';
-    let s = m.replace(/^claude-/, '');
-    s = s.replace(/-(\d+)-(\d+)/, '-$1.$2');
-    s = s.replace('[1m]', ' · 1M');
-    s = s.replace(/-\d{8}$/, '');
-    return s;
-  }
-  const modelLabel = $derived(shortModel(sess?.claudeModel));
   const repoLabel = $derived.by(() => {
     const cwd = sess?.worktreePath ?? sess?.cwd ?? null;
     if (!cwd) return '';
@@ -142,6 +149,10 @@
       </button>
       {#if switcherOpen}
         <div class="qh-switch-pop" role="listbox" aria-label="Chats">
+          <button class="qh-switch-item qh-switch-new" onclick={newChat}>
+            <span class="qh-switch-plus" aria-hidden="true">+</span>
+            <span class="qh-switch-name">New chat</span>
+          </button>
           {#each sessions as s (s.id)}
             <button
               class="qh-switch-item"
@@ -157,6 +168,11 @@
         </div>
       {/if}
     </div>
+
+    <button class="qh-new" onclick={newChat} title="New chat" aria-label="New chat">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+      new
+    </button>
 
     <span class="qh-spring"></span>
 
@@ -182,10 +198,25 @@
   </div>
 
   <div class="qh-meta">
-    {#if repoLabel}<span class="qh-hot">{repoLabel}{#if sess?.worktreeBranch}<span class="qh-mono"> · wt {sess.worktreeBranch}</span>{/if}</span>{/if}
-    {#if modelLabel}<span class="qh-hot qh-mono">{modelLabel}</span>{/if}
+    {#if repoLabel}
+      {#if p.onPickCwd}
+        <button class="qh-hot qh-hotbtn" onclick={() => p.onPickCwd?.()} title="Change working folder">{repoLabel}{#if sess?.worktreeBranch}<span class="qh-mono"> · wt {sess.worktreeBranch}</span>{/if}</button>
+      {:else}
+        <span class="qh-hot">{repoLabel}{#if sess?.worktreeBranch}<span class="qh-mono"> · wt {sess.worktreeBranch}</span>{/if}</span>
+      {/if}
+    {/if}
+    {#if sess}
+      <ModelEngine
+        model={sess.claudeModel ?? 'claude-opus-4-8'}
+        modelOptions={claudeModels}
+        effort={sess.thinkingEffort ?? 'auto'}
+        effortOptions={claudeEffort}
+        onModelChange={setModel}
+        onEffortChange={setEffort}
+      />
+    {/if}
     {#if p.onToggleContext}
-      <button class="qh-ctx-chip" class:open={p.contextOpen} onclick={p.onToggleContext} aria-expanded={p.contextOpen}>контекст <span class="qh-caret" aria-hidden="true">▾</span></button>
+      <button class="qh-ctx-chip" class:open={p.contextOpen} onclick={p.onToggleContext} aria-expanded={p.contextOpen}>context <span class="qh-caret" aria-hidden="true">▾</span></button>
     {/if}
   </div>
 </header>
@@ -194,7 +225,7 @@
   .qh {
     flex: none;
     display: flex; flex-direction: column; gap: 6px;
-    width: 100%; max-width: 720px; margin: 0 auto;
+    width: 100%; max-width: min(1280px, 94%); margin: 0 auto;
     padding: 6px 0 14px;
   }
   .qh-titlerow { display: flex; align-items: baseline; gap: 10px; }
@@ -272,6 +303,31 @@
     padding-bottom: 1px;
   }
   .qh-mono { font-family: var(--font-mono); font-size: 11.5px; }
+  .qh-hotbtn {
+    font: inherit; background: transparent; border: 0; padding: 0 0 1px;
+    cursor: pointer;
+  }
+  .qh-hotbtn:hover { color: var(--text-0); }
+
+  /* New-chat — visible button beside the «N ▾» switcher (the Chats
+     list + its "+" live only in the popover in Quiet, so surface a
+     first-class new-chat affordance here). */
+  .qh-new {
+    display: inline-flex; align-items: center; gap: 4px;
+    background: transparent; border: 1px solid var(--border);
+    border-radius: 6px; padding: 2px 8px 2px 6px;
+    color: var(--text-1); font-size: 11.5px; cursor: pointer;
+    transition: color 120ms, border-color 120ms, background 120ms;
+  }
+  .qh-new svg { width: 12px; height: 12px; }
+  .qh-new:hover { color: var(--text-0); border-color: var(--border-hi); background: var(--bg-2); }
+  .qh-switch-new { color: var(--accent-bright, var(--accent)); }
+  .qh-switch-new:hover { background: var(--bg-hover); }
+  .qh-switch-plus {
+    width: 6px; flex: none; text-align: center;
+    font-size: 14px; line-height: 1; font-weight: 700;
+    color: var(--accent-bright, var(--accent));
+  }
   .qh-ctx-chip {
     display: inline-flex; align-items: center; gap: 4px;
     padding: 2px 8px; border-radius: 6px;

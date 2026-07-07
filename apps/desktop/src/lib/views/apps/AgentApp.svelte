@@ -106,6 +106,7 @@
         thinkingStartedAt={p.thinkingStartedAt}
         thinkingTick={p.thinkingTick}
         onStop={p.onStop}
+        onPickCwd={p.onPickCwd}
         contextOpen={ctxPopOpen}
         onToggleContext={() => (ctxPopOpen = !ctxPopOpen)}
       />
@@ -213,13 +214,16 @@
     position: relative;
   }
   /* Quiet context popover (§3.2) — floats the ContextDock under the
-     header "контекст ▾" chip instead of a persistent column. */
+     header "context ▾" chip instead of a persistent column. */
   .sa-ctx-pop {
     position: fixed;
     top: 92px;
-    /* Anchor under the header "контекст ▾" chip — the chat column is
-       centred at max-720, the chip sits just left of its centre. */
-    left: 50%; transform: translateX(-210px);
+    /* Anchor under the header "context ▾" chip. NO `transform` here —
+       a transformed ancestor becomes the containing block for
+       `position:fixed` descendants, which threw the ModelEngine model
+       picker + BudgetPopover (both fixed, positioned in viewport coords)
+       off-screen. Use a plain `left` calc for the same offset. */
+    left: calc(50% - 210px);
     width: 384px; max-height: 72vh;
     z-index: 130;
     border-radius: 12px; border: 1px solid var(--border-hi);

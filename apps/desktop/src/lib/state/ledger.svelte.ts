@@ -33,6 +33,8 @@ export interface LedgerWorkflow {
     | 'awaiting_launch'
     | 'running'
     | 'paused_quota'
+    | 'paused'
+    | 'paused_budget'
     | 'awaiting_review'
     | 'done'
     | 'failed'
@@ -51,6 +53,8 @@ export interface LedgerWorkflow {
   injections: string[];
   model: string;
   totalCostUsd: number;
+  /** Spend ceiling; run pauses (`paused_budget`) when crossed, raised on resume. */
+  budgetCapUsd: number;
   createdAt: number;
   startedAt?: number | null;
   completedAt?: number | null;
@@ -85,6 +89,8 @@ const ACTIVE_LEDGER_STATUSES = new Set([
   'awaiting_launch',
   'running',
   'paused_quota',
+  'paused',
+  'paused_budget',
   'awaiting_review'
 ]);
 

@@ -3009,10 +3009,10 @@
 
 <div id="app" class:is-dragging={dragState.payload !== null} class:quiet={quietMode}>
   {#if quietMode}
-    <!-- Quiet caркас (§3.1): no titlebar; a thin drag strip clears the
+    <!-- Quiet shell (§3.1): no titlebar; a thin drag strip clears the
          native traffic lights and carries the ⌘K hint. -->
     <div class="quiet-strip" data-tauri-drag-region>
-      <button class="quiet-k mono" onclick={() => { paletteMode = 'normal'; paletteOpen = true; }} title="Command palette · ⌘K">⌘K всё остальное</button>
+      <button class="quiet-k mono" onclick={() => { paletteMode = 'normal'; paletteOpen = true; }} title="Command palette · ⌘K">⌘K everything else</button>
     </div>
   {/if}
   {#if !quietMode}

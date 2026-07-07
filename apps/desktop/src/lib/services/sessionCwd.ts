@@ -264,7 +264,7 @@ export function buildContinuationRecap(
     intro +
       "\n\nNON-NEGOTIABLE rules for this turn:" +
       "\n1. Treat this as a direct continuation. The user did not start a fresh chat. Their NEXT message refers to context that's in this recap — do NOT ask them to re-explain." +
-      "\n2. The 'ORIGINAL TASK' block below is the north star. If the user's next message is a short directive (\"продолжи\", \"go ahead\", \"да\"), it refers back to that task. Re-read it before answering." +
+      "\n2. The 'ORIGINAL TASK' block below is the north star. If the user's next message is a short directive (\"continue\", \"go ahead\", \"yes\"), it refers back to that task. Re-read it before answering." +
       "\n3. Do NOT say \"first message in the chat\" / \"I don't see prior context\" / \"can you remind me what we were doing\". The recap below IS your prior context. Read it." +
       "\n4. DO NOT RE-ASK FOR DATA YOU ALREADY DISCOVERED. If a prior turn ran a tool and the result is in the recap — project refs, API responses, file paths, command outputs, config values — you HAVE that data. Use it; never say \"can you give me X\" when X is already shown above." +
       "\n5. Tools are wired identically (memory MCP, GitHub/Jira/Sentry sidecars, app-nav, action cards). Only the CLI's working memory was (potentially) the casualty.",

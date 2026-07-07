@@ -1662,11 +1662,11 @@
   .cmp-statusline::before { content: '▸ '; opacity: 0.7; }
   .cmp-statusline--err { color: #e0b16c; }
 
-  /* Redesign v2 §2.5 — 680px pill matching the thread column: bg-1
-     (light bg-2), hairline border, r12, engraved shadow-1. */
+  /* Pill matches the thread column width (kept in sync with ChatThread
+     `.ct > *`): bg-1 (light bg-2), hairline border, r12, shadow-1. */
   .cmp-shell {
     width: 100%;
-    max-width: 680px;
+    max-width: min(1280px, 94%);
     margin: 0 auto;
     background: var(--bg-1);
     border: 1px solid var(--border);
@@ -1834,7 +1834,7 @@
     align-items: baseline;
     gap: 6px;
     width: 100%;
-    max-width: 680px;
+    max-width: min(1280px, 94%);
     margin: 6px auto 0;
     padding: 0 2px;
     font: 10.5px / 1.5 var(--font-mono), ui-monospace, monospace;

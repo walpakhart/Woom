@@ -1,6 +1,6 @@
 <script lang="ts">
-  /* SentryList — левая панель SentryApp. Standalone: читает inbox
-     state, рендерит фильтр-row + groups (Surging / Unresolved /
+  /* SentryList — left panel of SentryApp. Standalone: reads inbox
+     state, renders filter row + groups (Surging / Unresolved /
      Resolved) + item cards. Click → inboxState.sentryFocusId. */
   import {
     inboxState,

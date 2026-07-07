@@ -516,7 +516,7 @@ async fn spawn_claude_armed(args: &AskArgs<'_>) -> Result<ArmedCli, ClaudeRunErr
     // turn after every approval card resolves (commit / PR / bash /
     // switch_cwd) — the result is fed back as a synthesised user
     // message and you immediately get a fresh turn to react. So the
-    // anti-pattern is ending a turn with "ждy результата" / "waiting
+    // anti-pattern is ending a turn with "awaiting the result" / "waiting
     // for X to finish" — that text never reaches the user as a useful
     // signal because by the time they read it the next turn is already
     // streaming in. Just stop the turn after the propose_* call (or
@@ -528,7 +528,7 @@ async fn spawn_claude_armed(args: &AskArgs<'_>) -> Result<ArmedCli, ClaudeRunErr
          end the turn — Woom runs the card and AUTO-RESUMES you \
          with the outcome as the next turn (success or failure recap). \
          You do NOT need the user to type \"continue\" or \"go ahead\" \
-         between cards. Don't write \"waiting for X\" / \"ждy коммит\" \
+         between cards. Don't write \"waiting for X\" / \"awaiting the commit\" \
          filler — it's noise; just stop and the next turn arrives.\n\
          When a card fails, the failure summary lands as your next \
          turn's input — react and propose a fix (e.g. set upstream \
@@ -1430,6 +1430,31 @@ pub(crate) struct OneshotResponse {
 /// `Err` surfaces ClaudeRunError up to the caller; on success returns
 /// the JSON envelope's `result` text alongside whatever `usage` block
 /// the CLI emitted (may be `None`).
+/// Tauri-launched processes inherit a skinny PATH, and `claude` (plus
+/// the pnpm/node/git binaries a headless worker may shell out to) can
+/// live in Homebrew or per-user install dirs. Augment PATH the same way
+/// `ask()` / `generate_commit_message` do. Shared by every headless
+/// spawn (oneshot + ledger worker) so they don't each re-roll this.
+pub(crate) fn augment_cli_path(cmd: &mut tokio::process::Command) {
+    if let Ok(p) = std::env::var("PATH") {
+        let mut parts: Vec<String> = p.split(':').map(String::from).collect();
+        for e in ["/opt/homebrew/bin", "/usr/local/bin"] {
+            if !parts.iter().any(|d| d == e) {
+                parts.push(e.into());
+            }
+        }
+        if let Some(h) = home_dir() {
+            for sub in [".local/bin", ".claude/local/bin", ".claude/local", ".bun/bin", ".volta/bin"] {
+                let full = h.join(sub).to_string_lossy().into_owned();
+                if !parts.iter().any(|d| d == &full) {
+                    parts.push(full);
+                }
+            }
+        }
+        cmd.env("PATH", parts.join(":"));
+    }
+}
+
 pub(crate) async fn run_claude_oneshot(
     bin: &str,
     prompt: &str,
@@ -1448,29 +1473,16 @@ pub(crate) async fn run_claude_oneshot(
     if let Some(m) = model.map(str::trim).filter(|s| !s.is_empty()) {
         cmd.arg("--model").arg(m);
     }
+    // Headless oneshot has no TTY to answer permission prompts — without
+    // this flag every built-in tool call (Write/Edit/Bash) is silently
+    // denied, so a grader/subagent turn that needs to touch disk just
+    // flails and returns nothing. Woom is the trust boundary (see
+    // `spawn_claude_armed`), so skip the per-call prompt here too.
+    cmd.arg("--dangerously-skip-permissions");
     if let Some(d) = cwd {
         cmd.current_dir(d);
     }
-    // Same PATH augmentation as `ask()` / `generate_commit_message` —
-    // Tauri-launched processes inherit a skinny PATH, and `claude` may
-    // live in `~/.claude/local/bin` etc. depending on install method.
-    if let Ok(p) = std::env::var("PATH") {
-        let mut parts: Vec<String> = p.split(':').map(String::from).collect();
-        for e in ["/opt/homebrew/bin", "/usr/local/bin"] {
-            if !parts.iter().any(|d| d == e) {
-                parts.push(e.into());
-            }
-        }
-        if let Some(h) = home_dir() {
-            for sub in [".local/bin", ".claude/local/bin", ".claude/local", ".bun/bin", ".volta/bin"] {
-                let full = h.join(sub).to_string_lossy().into_owned();
-                if !parts.iter().any(|d| d == &full) {
-                    parts.push(full);
-                }
-            }
-        }
-        cmd.env("PATH", parts.join(":"));
-    }
+    augment_cli_path(&mut cmd);
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
 

@@ -90,7 +90,7 @@
     </span>
   {/if}
   {#if p.view === 'claudeApp' && weekPct !== null}
-    <span class="dock-week mono">неделя {weekPct}%</span>
+    <span class="dock-week mono">week {weekPct}%</span>
   {/if}
 </footer>
 

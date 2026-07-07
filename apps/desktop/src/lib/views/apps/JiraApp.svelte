@@ -62,7 +62,7 @@
     <div class="qsolo-doc">
       <QuietSoloHeader
         count={items.length}
-        noun="тикетов"
+        noun="tickets"
         items={switchItems}
         onPick={pickTicket}
         ariaLabel="Tickets"
@@ -76,7 +76,7 @@
         {/snippet}
         {#snippet actions()}
           {#if focusItem}
-            <button class="qsolo-act" onclick={() => focusItem && p.onOpenBrowser(focusItem.url)}>в Jira ↗</button>
+            <button class="qsolo-act" onclick={() => focusItem && p.onOpenBrowser(focusItem.url)}>in Jira ↗</button>
             <button class="qsolo-act qsolo-act--claude" onclick={sendFocusedToClaude}>→ claude</button>
             <button class="qsolo-act" onclick={dwFocused}>/dw</button>
           {/if}

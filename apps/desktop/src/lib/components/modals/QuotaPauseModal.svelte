@@ -42,30 +42,30 @@
     <div class="modal qp-modal">
       <header class="modal-head">
         <div>
-          <div class="modal-title">{m.bucketLabel} лимит {Math.round(m.pct)}% — пауза</div>
-          <div class="modal-sub">Сброс через <span class="qp-countdown mono">{formatResumeIn(remaining)}</span></div>
+          <div class="modal-title">{m.bucketLabel} limit {Math.round(m.pct)}% — paused</div>
+          <div class="modal-sub">Resets in <span class="qp-countdown mono">{formatResumeIn(remaining)}</span></div>
         </div>
-        <button class="modal-close" onclick={() => finish('cancel')} aria-label="Закрыть">
+        <button class="modal-close" onclick={() => finish('cancel')} aria-label="Close">
           <svg class="i" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12" /></svg>
         </button>
       </header>
       <div class="modal-body">
         <p class="modal-copy">
-          Claude Code 5H/7D квота почти исчерпана. Отправка сейчас прервёт твой turn
-          mid-stream когда лимит пересечёт 100%. Можешь дождаться сброса — твоё
-          сообщение уйдёт в очередь и автоматически отправится как только квота
-          восстановится. Или отменить и решить вручную.
+          Claude Code 5H/7D quota is nearly exhausted. Sending now will cut off your
+          turn mid-stream once the limit crosses 100%. You can wait for the reset —
+          your message goes into a queue and sends automatically as soon as the quota
+          recovers. Or cancel and decide manually.
         </p>
       </div>
       <footer class="modal-actions">
         <button class="btn-secondary" onclick={() => finish('cancel')}>
-          Отмена
+          Cancel
         </button>
         <button class="btn-ghost" onclick={() => finish('force')}>
-          Отправить всё равно
+          Send anyway
         </button>
         <button class="btn-primary" onclick={() => finish('wait')}>
-          Подождать сброса
+          Wait for reset
         </button>
       </footer>
     </div>
@@ -99,7 +99,7 @@
     transition: background 120ms, border-color 120ms, color 120ms;
   }
   /* Send-anyway: deliberately understated — allowed but not encouraged.
-     Transparent until hover so «Подождать сброса» stays the default eye-pull. */
+     Transparent until hover so "Wait for reset" stays the default eye-pull. */
   .btn-ghost {
     background: transparent;
     color: var(--text-2);
@@ -110,7 +110,7 @@
     background: var(--bg-2);
     border-color: var(--border);
   }
-  /* Push «Отмена» to the far left; force + wait sit on the right. */
+  /* Push "Cancel" to the far left; force + wait sit on the right. */
   .modal-actions .btn-secondary { margin-right: auto; }
   .btn-primary {
     background: var(--accent);

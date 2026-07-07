@@ -925,10 +925,11 @@
     padding: 20px 22px 8px;
     display: flex; flex-direction: column; gap: 26px;
   }
-  /* Redesign v2 §2.5: thread column capped at 680px, centred. */
+  /* Thread column: wide reading measure that grows with the window
+     (was a fixed 680px that left huge side gutters on wide screens). */
   .ct > :global(*) {
     width: 100%;
-    max-width: 680px;
+    max-width: min(1280px, 94%);
     margin-left: auto;
     margin-right: auto;
   }

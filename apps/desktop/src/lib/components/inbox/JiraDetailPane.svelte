@@ -690,7 +690,7 @@
   }
   .jrd-ghostbtn:hover:not(:disabled) { background: var(--bg-2); color: var(--text-0); }
   .jrd-ghostbtn:disabled { opacity: 0.5; cursor: default; }
-  /* → claude — primary inverse pill (spec §2.6: инверсный + shadow-pill). */
+  /* → claude — primary inverse pill (spec §2.6: inverse + shadow-pill). */
   .jrd-claudebtn {
     display: inline-flex; align-items: center;
     padding: 6px 14px; border-radius: 999px;

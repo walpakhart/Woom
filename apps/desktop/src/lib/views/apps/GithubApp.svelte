@@ -1,7 +1,7 @@
 <script lang="ts">
-  /* GithubApp — full-screen workspace для GitHub.
+  /* GithubApp — full-screen workspace for GitHub.
      Layout: [GithubList 380] [GithubFocusOverlay (flex)].
-     Когда focusItem === null — editorial empty state. */
+     When focusItem === null — editorial empty state. */
   import GithubList from './github/GithubList.svelte';
   import GithubFocusOverlay from '$lib/components/inbox/GithubFocusOverlay.svelte';
   import Splitter from '$lib/components/ui/Splitter.svelte';
@@ -88,7 +88,7 @@
         {/snippet}
         {#snippet actions()}
           {#if focusItem}
-            <button class="qsolo-act" onclick={() => focusItem && p.onOpenBrowser(focusItem.url)}>на GitHub ↗</button>
+            <button class="qsolo-act" onclick={() => focusItem && p.onOpenBrowser(focusItem.url)}>on GitHub ↗</button>
             <button class="qsolo-act qsolo-act--claude" onclick={sendFocusedToClaude}>→ claude</button>
           {/if}
         {/snippet}

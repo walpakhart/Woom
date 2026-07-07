@@ -1,8 +1,8 @@
 <script lang="ts">
-  /* SentryApp — full-screen workspace для Sentry.
+  /* SentryApp — full-screen workspace for Sentry.
      Layout: [SentryList 380] [SentryDetailPane (flex)]
-     Detail = существующий SentryDetailPane (events, stack frames,
-     breadcrumbs, status). Рендерится inline. */
+     Detail = the existing SentryDetailPane (events, stack frames,
+     breadcrumbs, status). Rendered inline. */
   import SentryList from './sentry/SentryList.svelte';
   import SentryDetailPane from '$lib/components/inbox/SentryDetailPane.svelte';
   import Splitter from '$lib/components/ui/Splitter.svelte';
@@ -56,7 +56,7 @@
     <div class="qsolo-doc">
       <QuietSoloHeader
         count={items.length}
-        noun="ошибок"
+        noun="errors"
         items={switchItems}
         onPick={pickIssue}
         ariaLabel="Issues"

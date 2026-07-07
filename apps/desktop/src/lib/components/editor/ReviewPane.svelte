@@ -635,7 +635,7 @@
   .rp-row-streaming { font-size: 10px; color: var(--accent-bright); flex: 0 0 auto; }
   .rp-row-spacer { flex: 1; }
   /* Stats stay readable at a glance — the prior 10.5px regular-weight
-     rendering washed out against the dark row ("цифры бледные"). */
+     rendering washed out against the dark row (numbers looked faint). */
   .rp-row-stats { display: flex; gap: 6px; font-size: 11px; font-weight: 600; flex: 0 0 auto; }
   .rp-add { color: var(--diff-add); }
   .rp-rem { color: var(--diff-rem); }

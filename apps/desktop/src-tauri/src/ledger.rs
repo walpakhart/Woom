@@ -45,6 +45,23 @@ pub const DEFAULT_MAX_ATTEMPTS: u32 = 3;
 const CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 /// Tail of check output kept on the item (feedback prompt + card UI).
 const CHECK_OUTPUT_TAIL: usize = 4_000;
+/// Per-item budget headroom. The whole-run cap scales with checklist
+/// length (`budget_for`) so a healthy multi-item run NEVER nags — the
+/// cap only trips on genuine pathology (a single item looping, or a
+/// wild overrun). Opus items routinely run $20-35 each, so this sits
+/// well above that. When the cap IS crossed the run PAUSES
+/// (`paused_budget`), not dies: raise the cap and resume, committed
+/// items kept.
+pub const PER_ITEM_BUDGET_USD: f64 = 60.0;
+
+/// Whole-run cap for a checklist of `n` items (min one item's worth).
+fn budget_for(n: usize) -> f64 {
+    (n.max(1) as f64) * PER_ITEM_BUDGET_USD
+}
+
+fn default_budget_cap() -> f64 {
+    PER_ITEM_BUDGET_USD
+}
 
 fn default_model() -> String {
     "claude-opus-4-8".to_string()
@@ -122,7 +139,8 @@ pub struct LedgerWorkflow {
     /// The overall task this checklist decomposes.
     pub task: String,
     /// 'building' | 'awaiting_launch' | 'running' | 'paused_quota' |
-    /// 'awaiting_review' | 'done' | 'failed' | 'cancelled'
+    /// 'paused' (user) | 'paused_budget' (cap hit) | 'awaiting_review' |
+    /// 'done' | 'failed' | 'cancelled'
     pub status: String,
     pub items: Vec<LedgerItem>,
     #[serde(default)]
@@ -153,6 +171,10 @@ pub struct LedgerWorkflow {
     pub model: String,
     #[serde(default)]
     pub total_cost_usd: f64,
+    /// Spend ceiling; run pauses (`paused_budget`) when crossed. Raised
+    /// on resume. Per-workflow so a big redesign can opt into more.
+    #[serde(default = "default_budget_cap")]
+    pub budget_cap_usd: f64,
     pub created_at: i64,
     #[serde(default)]
     pub started_at: Option<i64>,
@@ -475,12 +497,21 @@ async fn run_worker_streaming(
         .arg("--output-format")
         .arg("stream-json")
         .arg("--verbose")
+        // Headless worker: no TTY to approve tool calls. Without this the
+        // CLI silently DENIES every Write/Edit/Bash, so the worker can
+        // never touch the worktree — it just loops probing for write
+        // access, burning millions of tokens without ever producing a
+        // diff (observed: one item ran to 3M tokens / $12 before manual
+        // cancel). Matches the interactive session's `spawn_claude_armed`;
+        // Woom is the trust boundary, not the CLI.
+        .arg("--dangerously-skip-permissions")
         .arg("--model")
         .arg(model)
         .current_dir(cwd)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null());
+    crate::claude::augment_cli_path(&mut cmd);
 
     let mut child = cmd.spawn().map_err(|e| format!("worker spawn: {}", e))?;
     if let Some(mut stdin) = child.stdin.take() {
@@ -870,10 +901,15 @@ async fn run_ledger(app: &AppHandle, reg: &Arc<LedgerRegistry>, wf_id: &str) -> 
     emit_updated(app, reg, wf_id);
 
     loop {
-        // Re-read fresh state every iteration — retry/skip/cancel
+        // Re-read fresh state every iteration — retry/skip/cancel/pause
         // commands mutate the registry under us.
         let wf = reg.get(wf_id).ok_or("workflow disappeared")?;
         if wf.status == "cancelled" {
+            return Ok(());
+        }
+        // User pause takes effect at the item boundary — the in-flight
+        // item finishes, then the loop winds down and resume re-enters.
+        if matches!(wf.status.as_str(), "paused" | "paused_budget") {
             return Ok(());
         }
         let item = match wf.items.iter().find(|i| i.status == "queued") {
@@ -970,18 +1006,47 @@ async fn run_ledger(app: &AppHandle, reg: &Arc<LedgerRegistry>, wf_id: &str) -> 
             )
             .await?;
             let (tin, tout, cost) = turn_cost(&usage, prompt.len(), text.len(), &model);
-            reg.mutate_persist(app, wf_id, |w| {
-                for it in w.items.iter_mut() {
-                    if it.id == item.id {
-                        it.tokens_in += tin;
-                        it.tokens_out += tout;
-                        it.cost_usd += cost;
-                        it.status = "checking".to_string();
+            let spent = reg
+                .mutate_persist(app, wf_id, |w| {
+                    for it in w.items.iter_mut() {
+                        if it.id == item.id {
+                            it.tokens_in += tin;
+                            it.tokens_out += tout;
+                            it.cost_usd += cost;
+                            it.status = "checking".to_string();
+                        }
                     }
-                }
-                w.total_cost_usd = w.items.iter().map(|i| i.cost_usd).sum();
-            });
+                    w.total_cost_usd = w.items.iter().map(|i| i.cost_usd).sum();
+                })
+                .map(|w| w.total_cost_usd)
+                .unwrap_or(0.0);
             emit_updated(app, reg, wf_id);
+
+            // Budget brake: a single turn can blow the whole budget (a
+            // permission-starved worker once hit $12 on one attempt).
+            // PAUSE rather than fail — reset this item to queued so a
+            // resume (with a raised cap) re-runs it cleanly, and keep
+            // every already-committed item. The user raises the cap and
+            // presses resume; no progress lost.
+            if spent > wf_now.budget_cap_usd {
+                let cap = wf_now.budget_cap_usd;
+                reg.mutate_persist(app, wf_id, |w| {
+                    for it in w.items.iter_mut() {
+                        if it.id == item.id {
+                            it.status = "queued".to_string();
+                            it.attempts = attempt.saturating_sub(1);
+                            it.error = Some(format!(
+                                "paused: spend ${:.2} hit the ${:.0} budget cap — raise it and resume",
+                                spent, cap
+                            ));
+                        }
+                    }
+                    w.status = "paused_budget".to_string();
+                    w.current_item = None;
+                });
+                emit_updated(app, reg, wf_id);
+                return Ok(());
+            }
 
             // 2. Verification — objective shell check, or independent grader.
             let (passed, check_out) = match &item.check_cmd {
@@ -1335,6 +1400,7 @@ pub async fn ledger_create(
         injections: Vec::new(),
         model: model.filter(|m| !m.trim().is_empty()).unwrap_or_else(default_model),
         total_cost_usd: 0.0,
+        budget_cap_usd: default_budget_cap(),
         created_at: unix_ms(),
         started_at: None,
         completed_at: None,
@@ -1584,6 +1650,10 @@ pub async fn ledger_run(app: AppHandle, workflow_id: String) -> Result<(), Strin
     }
     let wf = reg
         .mutate_persist(&app, &workflow_id, |w| {
+            // Scale the cap to the checklist size so a healthy run never
+            // nags — only a genuine overrun trips it. Respect a higher
+            // user-set cap.
+            w.budget_cap_usd = w.budget_cap_usd.max(budget_for(w.items.len()));
             w.status = "running".to_string();
             w.started_at = Some(unix_ms());
         })
@@ -1605,6 +1675,68 @@ pub async fn ledger_cancel(app: AppHandle, workflow_id: String) -> Result<(), St
         })
         .ok_or_else(|| format!("ledger not found: {}", workflow_id))?;
     let _ = app.emit("ledger:workflow_done", &wf);
+    Ok(())
+}
+
+/// User pause. Takes effect at the next item boundary — the in-flight
+/// item completes, the run loop then winds down. Resume re-enters.
+#[tauri::command]
+pub async fn ledger_pause(app: AppHandle, workflow_id: String) -> Result<(), String> {
+    let registry: tauri::State<'_, Arc<LedgerRegistry>> = app.state();
+    let wf = registry
+        .inner()
+        .get(&workflow_id)
+        .ok_or_else(|| format!("ledger not found: {}", workflow_id))?;
+    if !matches!(wf.status.as_str(), "running" | "paused_quota") {
+        return Err(format!("ledger not pausable from status {}", wf.status));
+    }
+    let wf = registry
+        .inner()
+        .mutate_persist(&app, &workflow_id, |w| {
+            w.status = "paused".to_string();
+        })
+        .unwrap();
+    let _ = app.emit("ledger:updated", &wf);
+    Ok(())
+}
+
+/// Resume a paused run (user pause or budget cap). Optionally raise the
+/// budget cap; a bare resume from a budget pause auto-bumps the cap by
+/// the default increment so the run can actually make progress.
+#[tauri::command]
+pub async fn ledger_resume(
+    app: AppHandle,
+    workflow_id: String,
+    budget_cap_usd: Option<f64>,
+) -> Result<(), String> {
+    let registry: tauri::State<'_, Arc<LedgerRegistry>> = app.state();
+    let reg = registry.inner().clone();
+    let wf = reg
+        .get(&workflow_id)
+        .ok_or_else(|| format!("ledger not found: {}", workflow_id))?;
+    if !matches!(wf.status.as_str(), "paused" | "paused_budget") {
+        return Err(format!("ledger not resumable from status {}", wf.status));
+    }
+    let wf = reg
+        .mutate_persist(&app, &workflow_id, |w| {
+            if let Some(c) = budget_cap_usd {
+                if c > 0.0 {
+                    w.budget_cap_usd = c;
+                }
+            }
+            // Guarantee real headroom above what's already spent, else
+            // the next turn would instantly re-pause at the same cap.
+            // A checklist-sized bump so one resume finishes the run
+            // instead of nagging item-by-item.
+            if w.budget_cap_usd <= w.total_cost_usd {
+                w.budget_cap_usd = w.total_cost_usd + budget_for(w.items.len());
+            }
+            w.status = "running".to_string();
+            w.completed_at = None;
+        })
+        .unwrap();
+    let _ = app.emit("ledger:updated", &wf);
+    spawn_ledger_run(app, reg, workflow_id);
     Ok(())
 }
 
@@ -1893,6 +2025,7 @@ mod tests {
             injections: Vec::new(),
             model: default_model(),
             total_cost_usd: 0.0,
+            budget_cap_usd: default_budget_cap(),
             created_at: 0,
             started_at: None,
             completed_at: None,

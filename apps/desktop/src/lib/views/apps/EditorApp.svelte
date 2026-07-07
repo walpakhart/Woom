@@ -166,7 +166,7 @@
     return out;
   });
 
-  /** Sessions linked TO this editor (для Link chips в EditorView header). */
+  /** Sessions linked TO this editor (for Link chips in the EditorView header). */
   const linkedAgents = $derived.by(() => {
     const out: { sessionId: string; agentInstanceId: string; kind: 'claude'; name: string }[] = [];
     for (const s of sessionsState.list) {
@@ -187,11 +187,11 @@
     updateSession(sessionId, { linkedToEditor: false, linkedToEditorInstanceId: null });
   }
 
-  /** Git change count → badge на activity-bar Git button. Будет реальным
-   *  когда подключим git_status в EditorApp. На MVP — 0. */
+  /** Git change count → badge on the activity-bar Git button. Will be
+   *  real once git_status is wired into EditorApp. MVP — 0. */
   const gitCount = 0;
-  /** Problems count → badge на activity-bar Tests + bottom Problems
-   *  tab. На MVP — 0 (typecheck integration в следующем milestone). */
+  /** Problems count → badge on the activity-bar Tests + bottom Problems
+   *  tab. MVP — 0 (typecheck integration in the next milestone). */
   const problemsCount = 0;
 
   /** Pending agent edits across every linked session — drives the

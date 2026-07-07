@@ -1,8 +1,8 @@
 <script lang="ts">
-  /* GithubList — левая панель GithubApp. Standalone: читает inbox
-     state, рендерит PRs / Issues + filter row + groups + item cards.
+  /* GithubList — left panel of GithubApp. Standalone: reads inbox
+     state, renders PRs / Issues + filter row + groups + item cards.
      Click on item → selectInboxItem (sets inboxState.focusItem).
-     Drag handlers для drop-в-Claude. */
+     Drag handlers for drop-into-Claude. */
   import {
     inboxState,
     githubItemsFor,
@@ -406,10 +406,10 @@
     });
   });
 
-  /** Group по типу + ревью-статусу:
-   *  - "Awaiting review" — PR где у нас есть pending review request
-   *  - "Pull requests" — остальные PR
-   *  - "Issues" — обычные issues */
+  /** Group by type + review status:
+   *  - "Awaiting review" — PRs with a pending review request for us
+   *  - "Pull requests" — the rest of the PRs
+   *  - "Issues" — plain issues */
   const groups = $derived.by(() => {
     const awaiting: InboxItem[] = [];
     const prs: InboxItem[] = [];
@@ -419,7 +419,7 @@
         issues.push(it);
         continue;
       }
-      // Heuristic: "awaiting" если author не я И item ещё open
+      // Heuristic: "awaiting" if author isn't me AND item is still open
       if (me && it.author?.login !== me && it.state === 'open' && !it.merged) {
         awaiting.push(it);
       } else {

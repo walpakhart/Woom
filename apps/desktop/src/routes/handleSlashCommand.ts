@@ -61,7 +61,7 @@ export async function handleSlashCommand(
    *  to the strict-start parser below. */
   /* Allow `/skill` followed by punctuation (`.`, `,`, `!`, `?`, `;`,
    * `:`) — not just whitespace or end-of-string. Without this a
-   * sentence-final invocation like "сделай страницу /frontend-design."
+   * sentence-final invocation like "build a page /frontend-design."
    * silently fell through to plain text because the trailing period
    * broke the lookahead and the user thought the skill was broken. */
   const inlineSkillRe = /(^|\s)\/([A-Za-z][\w-]*)(?=[\s.,!?;:]|$)/g;

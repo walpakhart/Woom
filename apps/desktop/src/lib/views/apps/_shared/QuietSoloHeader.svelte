@@ -1,7 +1,7 @@
 <script lang="ts">
   /* Quiet-direction document eyebrow shared by the non-chat solos
      (Jira / GitHub / Sentry, redesign v2 §3.4). Mirrors the chat solo's
-     QuietChatHeader grammar: a compact identifier row + a «N штук ▾»
+     QuietChatHeader grammar: a compact identifier row + a «N items ▾»
      switcher popover (the list panel moves in here in Quiet) + solo
      actions rendered as dotted links. The big title + meta stay in the
      document body below — this only owns the switcher + action chrome
@@ -18,7 +18,7 @@
 
   interface Props {
     count: number;
-    /** Noun after the count, e.g. "тикета" / "PR" / "ошибки". */
+    /** Noun after the count, e.g. "tickets" / "PR" / "errors". */
     noun: string;
     items: QsoloSwitchItem[];
     onPick: (id: string) => void;

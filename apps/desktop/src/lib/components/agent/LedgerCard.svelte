@@ -19,6 +19,12 @@
   let expandedId = $state<string | null>(null);
   let showFullDiff = $state(false);
   let busy = $state(false);
+  /* Last command failure, surfaced on the card — apply/resume/etc used
+     to fail silently (console.warn only), so a broken apply looked like
+     a dead button. */
+  let actionErr = $state<string | null>(null);
+  /* Raise-cap input shown on a budget pause (empty → auto-bump). */
+  let capInput = $state('');
   /* Inline editor state — one item at a time. */
   let editId = $state<string | null>(null);
   let eTitle = $state('');
@@ -65,12 +71,78 @@
     }
   }
 
+  /** Per-line class for the colorized diff view. Meta lines (+++/---,
+   *  headers) are checked before +/- so they don't read as add/del. */
+  function diffCls(ln: string): string {
+    if (
+      ln.startsWith('diff --git') ||
+      ln.startsWith('index ') ||
+      ln.startsWith('--- ') ||
+      ln.startsWith('+++ ') ||
+      ln.startsWith('new file') ||
+      ln.startsWith('deleted file') ||
+      ln.startsWith('rename ') ||
+      ln.startsWith('similarity ')
+    )
+      return 'lg-dl--meta';
+    if (ln.startsWith('@@')) return 'lg-dl--hunk';
+    if (ln.startsWith('+')) return 'lg-dl--add';
+    if (ln.startsWith('-')) return 'lg-dl--del';
+    return '';
+  }
+
+  interface DiffFile {
+    path: string;
+    add: number;
+    del: number;
+    lines: string[];
+  }
+  /** Split a unified diff into per-file sections so the card can show a
+   *  collapsible list instead of one flat sheet. Path is taken from the
+   *  `diff --git a/… b/…` header (b-side). */
+  function splitDiffFiles(text: string): DiffFile[] {
+    const files: DiffFile[] = [];
+    let cur: DiffFile | null = null;
+    for (const ln of text.split('\n')) {
+      if (ln.startsWith('diff --git')) {
+        const m = ln.match(/ b\/(.+)$/);
+        cur = { path: m ? m[1] : ln.replace('diff --git ', ''), add: 0, del: 0, lines: [] };
+        files.push(cur);
+        continue;
+      }
+      if (!cur) {
+        cur = { path: '(diff)', add: 0, del: 0, lines: [] };
+        files.push(cur);
+      }
+      cur.lines.push(ln);
+      if (ln.startsWith('+') && !ln.startsWith('+++')) cur.add++;
+      else if (ln.startsWith('-') && !ln.startsWith('---')) cur.del++;
+    }
+    return files;
+  }
+
+  /** Resume a paused run. `raiseCap` folds the (optional) cap input, or
+   *  auto-bumps past current spend when left empty. */
+  async function resumeLedger(raiseCap: boolean): Promise<void> {
+    const args: Record<string, unknown> = {};
+    if (raiseCap && wf) {
+      const typed = parseFloat(capInput);
+      const cap = Number.isFinite(typed) && typed > 0 ? typed : Math.ceil(wf.totalCostUsd + 20);
+      args.budgetCapUsd = cap;
+    }
+    capInput = '';
+    await call('ledger_resume', args);
+  }
+
   async function call(cmd: string, args: Record<string, unknown> = {}): Promise<void> {
     if (busy) return;
     busy = true;
+    actionErr = null;
     try {
       await invoke(cmd, { workflowId, ...args });
     } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      actionErr = `${cmd.replace('ledger_', '')} failed: ${msg}`;
       console.warn(`${cmd} failed`, e);
     } finally {
       busy = false;
@@ -148,18 +220,49 @@
 </script>
 
 {#snippet editorFields()}
-  <div class="lg-editor" transition:slide={{ duration: 160 }}>
-    <input class="lg-input mono" bind:value={eTitle} placeholder="requirement — what must become true" />
-    <textarea class="lg-input lg-input--area mono" bind:value={eDetail} placeholder="detail (optional worker instructions)" rows="2"></textarea>
-    <input class="lg-input mono" bind:value={eCheck} placeholder="check command (exit 0 = pass; empty → llm grade)" />
+  <div class="lg-form" transition:fade={{ duration: 120 }}>
+    <div class="lg-form-head mono">{adding ? 'new step' : 'edit step'}</div>
+    <label class="lg-field">
+      <span class="lg-field-label mono">requirement</span>
+      <input class="lg-input mono" bind:value={eTitle} placeholder="what must become true" />
+    </label>
+    <label class="lg-field">
+      <span class="lg-field-label mono">detail <span class="lg-field-opt">optional</span></span>
+      <textarea class="lg-input lg-input--area mono" bind:value={eDetail} placeholder="worker instructions + relevant file paths" rows="3"></textarea>
+    </label>
+    <label class="lg-field">
+      <span class="lg-field-label mono">check <span class="lg-field-opt">exit 0 = pass · empty → llm grade</span></span>
+      <input class="lg-input mono" bind:value={eCheck} placeholder="cd apps/desktop && pnpm svelte-check" />
+    </label>
     <label class="lg-flag mono">
       <input type="checkbox" bind:checked={eParallel} />
       parallel-safe (may run in a wave)
     </label>
     <div class="lg-editor-actions">
-      <button class="lg-btn lg-btn--ink" disabled={busy || !eTitle.trim()} onclick={saveEditor}>save</button>
+      <button class="lg-btn lg-btn--ink" disabled={busy || !eTitle.trim()} onclick={saveEditor}>{adding ? 'add step' : 'save'}</button>
       <button class="lg-btn" onclick={closeEditor}>cancel</button>
     </div>
+  </div>
+{/snippet}
+
+{#snippet diffBlock(text: string, openByDefault: boolean)}
+  <div class="lg-diffwrap" transition:slide={{ duration: 160 }}>
+    {#each splitDiffFiles(text) as f, fi (f.path + fi)}
+      <details class="lg-file" open={openByDefault}>
+        <summary class="lg-file-head mono">
+          <span class="lg-file-path">{f.path}</span>
+          <span class="lg-file-stat">
+            <span class="lg-add">+{f.add}</span>
+            <span class="lg-del">−{f.del}</span>
+          </span>
+        </summary>
+        <div class="lg-diff mono">
+          {#each f.lines as ln, i (i)}
+            <div class="lg-dl {diffCls(ln)}">{ln || ' '}</div>
+          {/each}
+        </div>
+      </details>
+    {/each}
   </div>
 {/snippet}
 
@@ -178,13 +281,33 @@
       {#if wf.status === 'awaiting_launch'}
         <button class="lg-btn lg-btn--ink" disabled={busy} onclick={() => call('ledger_run')}>run</button>
         <button class="lg-btn" disabled={busy} onclick={() => call('ledger_cancel')}>cancel</button>
-      {:else if wf.status === 'running' || wf.status === 'paused_quota' || wf.status === 'building'}
+      {:else if wf.status === 'running' || wf.status === 'paused_quota'}
+        <button class="lg-btn" disabled={busy} onclick={() => call('ledger_pause')}>pause</button>
+        <button class="lg-btn" disabled={busy} onclick={() => call('ledger_cancel')}>cancel</button>
+      {:else if wf.status === 'building'}
+        <button class="lg-btn" disabled={busy} onclick={() => call('ledger_cancel')}>cancel</button>
+      {:else if wf.status === 'paused'}
+        <button class="lg-btn lg-btn--ink" disabled={busy} onclick={() => resumeLedger(false)}>resume</button>
+        <button class="lg-btn" disabled={busy} onclick={() => call('ledger_cancel')}>cancel</button>
+      {:else if wf.status === 'paused_budget'}
+        <input
+          class="lg-input lg-cap mono"
+          bind:value={capInput}
+          placeholder={`cap $${Math.ceil(wf.totalCostUsd + 20)}`}
+          inputmode="decimal"
+          title="new budget cap in USD (empty → auto-bump past current spend)"
+        />
+        <button class="lg-btn lg-btn--ink" disabled={busy} onclick={() => resumeLedger(true)}>resume</button>
         <button class="lg-btn" disabled={busy} onclick={() => call('ledger_cancel')}>cancel</button>
       {:else if wf.status === 'awaiting_review'}
         <button class="lg-btn lg-btn--ink" disabled={busy} onclick={() => call('ledger_apply')}>apply</button>
         <button class="lg-btn" disabled={busy} onclick={() => call('ledger_discard')}>discard</button>
       {/if}
     </header>
+
+    {#if actionErr}
+      <p class="lg-err" transition:slide={{ duration: 140 }}>{actionErr}</p>
+    {/if}
 
     {#if wf.items.length > 0}
       <div class="lg-progress" role="progressbar" aria-valuemin="0" aria-valuemax={wf.items.length} aria-valuenow={settled}>
@@ -194,6 +317,12 @@
 
     {#if wf.status === 'building'}
       <p class="lg-hint" transition:fade={{ duration: 150 }}>agent is building the checklist…</p>
+    {:else if wf.status === 'paused_budget'}
+      <p class="lg-hint lg-hint--warn" transition:fade={{ duration: 150 }}>
+        budget cap ${wf.budgetCapUsd.toFixed(0)} reached at {formatCostUsd(wf.totalCostUsd)} — raise the cap and resume; committed items are kept.
+      </p>
+    {:else if wf.status === 'paused'}
+      <p class="lg-hint" transition:fade={{ duration: 150 }}>paused — resume to continue where it left off.</p>
     {/if}
 
     {#if wf.status === 'building' && wf.items.length === 0}
@@ -256,6 +385,7 @@
             </div>
           {/if}
           {#if wf.status === 'failed' && item.status === 'failed'}
+            {#if item.error}<p class="lg-err mono">{item.error}</p>{/if}
             <div class="lg-item-actions">
               <button class="lg-btn" disabled={busy} onclick={() => call('ledger_retry_item', { itemId: item.id })}>retry</button>
               <button class="lg-btn" disabled={busy} onclick={() => call('ledger_skip_item', { itemId: item.id })}>skip</button>
@@ -267,11 +397,14 @@
               {#if item.notes}
                 <p class="lg-notes mono">notes → {item.notes}</p>
               {/if}
+              {#if item.error}
+                <p class="lg-err mono">{item.error}</p>
+              {/if}
               {#if item.checkOutput}
                 <pre class="lg-pre mono">{item.checkOutput}</pre>
               {/if}
               {#if item.diff}
-                <pre class="lg-pre lg-pre--diff mono">{item.diff}</pre>
+                {@render diffBlock(item.diff, true)}
               {/if}
             </div>
           {/if}
@@ -309,7 +442,7 @@
         </label>
       </div>
       {#if showFullDiff}
-        <pre class="lg-pre lg-pre--diff mono" transition:slide={{ duration: 180 }}>{wf.fullDiff}</pre>
+        {@render diffBlock(wf.fullDiff ?? '', false)}
       {/if}
     {/if}
 
@@ -331,8 +464,17 @@
     {#if wf.status === 'done' && wf.applied}
       <div class="lg-done" in:fade={{ duration: 250 }}>
         <span class="lg-stamp mono" aria-hidden="true">applied</span>
-        <p class="lg-hint">diff applied to {wf.parentCwd}</p>
+        <span class="lg-donesum mono">
+          {passed}/{wf.items.length} items · {formatCostUsd(wf.totalCostUsd)}{#if diffStats} · <span class="lg-add">+{diffStats.add}</span> <span class="lg-del">−{diffStats.del}</span> in {diffStats.files} {diffStats.files === 1 ? 'file' : 'files'}{/if}
+        </span>
+        {#if wf.fullDiff}
+          <button class="lg-difftoggle mono" onclick={() => (showFullDiff = !showFullDiff)}>{showFullDiff ? 'hide' : 'review'} diff</button>
+        {/if}
       </div>
+      <p class="lg-hint">applied to {wf.parentCwd}</p>
+      {#if showFullDiff && wf.fullDiff}
+        {@render diffBlock(wf.fullDiff, false)}
+      {/if}
     {/if}
   </div>
 {/if}
@@ -641,11 +783,38 @@
     cursor: pointer;
   }
   .lg-add:hover { color: var(--text-0); border-color: var(--text-2); }
-  .lg-editor {
+  /* Add/edit-step form — a settled bordered panel (no slide-out), the
+     fields labelled so it reads as a form, not a raw input stack. */
+  .lg-form {
     display: flex;
     flex-direction: column;
-    gap: 4px;
-    padding: 6px 8px 8px 0;
+    gap: 8px;
+    margin: 4px 0 6px;
+    padding: 10px 12px;
+    background: var(--bg-1);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: var(--shadow-1, none);
+  }
+  .lg-form-head {
+    font-size: 9.5px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-2);
+  }
+  .lg-field {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .lg-field-label {
+    font-size: 10px;
+    color: var(--text-1);
+  }
+  .lg-field-opt {
+    color: var(--text-linenum, var(--text-mute));
+    font-weight: 400;
   }
   .lg-input {
     font: inherit;
@@ -720,6 +889,97 @@
     text-decoration: underline;
     cursor: pointer;
     padding: 0;
+  }
+  /* Per-file collapsible diff — file sections you expand one at a time
+     instead of one flat sheet; colorized line-per-row inside. */
+  .lg-diffwrap {
+    margin: 4px 0 0;
+    max-height: 420px;
+    overflow: auto;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--bg-1);
+  }
+  .lg-file + .lg-file { border-top: 1px solid var(--border); }
+  .lg-file-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 5px 10px;
+    font-size: 11px;
+    color: var(--text-1);
+    cursor: pointer;
+    list-style: none;
+    user-select: none;
+  }
+  .lg-file-head::-webkit-details-marker { display: none; }
+  .lg-file-head::before {
+    content: '▸';
+    margin-right: 6px;
+    color: var(--text-2);
+    font-size: 9px;
+  }
+  .lg-file[open] > .lg-file-head::before { content: '▾'; }
+  .lg-file-head:hover { background: var(--bg-2); }
+  .lg-file-path {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+    min-width: 0;
+  }
+  .lg-file-stat { flex-shrink: 0; font-size: 10px; }
+  .lg-diff {
+    font-size: 10.5px;
+    line-height: 1.55;
+    background: var(--bg-2);
+    border-top: 1px solid var(--border);
+    padding: 6px 0;
+  }
+  .lg-dl {
+    padding: 0 10px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: var(--text-1);
+  }
+  .lg-dl--add {
+    color: var(--ok, #6cb87a);
+    background: color-mix(in srgb, var(--ok, #6cb87a) 12%, transparent);
+  }
+  .lg-dl--del {
+    color: var(--error, #e88264);
+    background: color-mix(in srgb, var(--error, #e88264) 12%, transparent);
+  }
+  .lg-dl--hunk {
+    color: var(--accent, #7a9cc6);
+    background: color-mix(in srgb, var(--accent, #7a9cc6) 8%, transparent);
+  }
+  .lg-dl--meta {
+    color: var(--text-2);
+    font-weight: 600;
+  }
+  .lg-err {
+    margin: 2px 0 6px;
+    padding: 4px 8px 4px 22px;
+    font-size: 10.5px;
+    color: var(--error, #e88264);
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .lg-hint--warn {
+    color: var(--warn, #d99a4e);
+    font-style: normal;
+  }
+  .lg-cap {
+    width: 92px;
+    margin: 0;
+    padding: 2px 8px;
+    font-size: 10.5px;
+  }
+  .lg-donesum {
+    font-size: 10.5px;
+    color: var(--text-2);
   }
   .mono {
     font-family: var(--font-mono, ui-monospace, monospace);

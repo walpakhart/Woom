@@ -427,8 +427,8 @@ export async function initSessionsFromDisk(appDataDir: string): Promise<void> {
        * `--resume <uuid>` rehydrates the prior conversation cleanly,
        * sometimes the CLI's session store has been auto-compacted /
        * pruned / reinstalled — in those cases the agent answers the
-       * next turn as if it were a fresh chat ("В этом чате обсуждали
-       * один вопрос…" pointing only at the most recent exchange).
+       * next turn as if it were a fresh chat ("This chat discussed
+       * one question…" pointing only at the most recent exchange).
        *
        * Cheap insurance: stamp a one-shot continuation recap on every
        * restored session that has prior turns. The next send picks it
@@ -1076,8 +1076,8 @@ export function attachTerminalSelectionMention(
  *       are empty (the placeholder is wired to `mentions.length`).
  *    2. The next `sendAgent` snapshots the still-present mentions
  *       and bakes them into the prompt as `Referenced file: @…`,
- *       so e.g. the agent receives "Привет, what about resolve-
- *       components.js?" even though the user just typed "ку".
+ *       so e.g. the agent receives "Hi, what about resolve-
+ *       components.js?" even though the user just typed "yo".
  *
  *  Image mentions are kept regardless: they live as thumbnail chips
  *  in the attach-row above the composer (no `@token` is ever written

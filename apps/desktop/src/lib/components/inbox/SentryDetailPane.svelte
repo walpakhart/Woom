@@ -247,7 +247,7 @@
   {:else if issue}
     <div class="snd-scroll">
       <div class="snd-doc">
-        <!-- Exception title — mono 20/600 (spec §2.6: это exception-текст). -->
+        <!-- Exception title — mono 20/600 (spec §2.6: the exception text). -->
         <h1 class="snd-title mono">{issue.title}</h1>
         {#if issue.culprit}<div class="snd-culprit mono">{issue.culprit}</div>{/if}
 

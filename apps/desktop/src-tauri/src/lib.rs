@@ -539,6 +539,8 @@ pub fn run() {
             ledger::ledger_launch,
             ledger::ledger_run,
             ledger::ledger_cancel,
+            ledger::ledger_pause,
+            ledger::ledger_resume,
             ledger::ledger_retry_item,
             ledger::ledger_skip_item,
             ledger::ledger_apply,

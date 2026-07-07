@@ -830,7 +830,7 @@
     editHunkIds = byEdit;
     /* When the reviewer has picked an edit that lives in THIS file, show only
        that edit's hunks — stacked edits on one file otherwise pile overlapping
-       overlays ("наслоения"). A stale selection for another file (`!byEdit.has`)
+       overlays. A stale selection for another file (`!byEdit.has`)
        falls through to showing all, so opening a file normally still works. */
     const displayed = selKey && byEdit.has(selKey)
       ? merged.filter((h) => h.id.startsWith(selKey + '#'))

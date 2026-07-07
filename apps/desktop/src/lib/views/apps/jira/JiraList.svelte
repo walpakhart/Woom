@@ -1,9 +1,9 @@
 <script lang="ts">
-  /* JiraList — левая панель JiraApp. Standalone: читает inbox state
-     напрямую, рендерит filter row + groups + item cards. Click on item
-     → sets inboxState.jiraFocusKey (детейл откроется в правой
-     панели JiraApp inline).
-     Drag handlers пробрасываются сверху (для drop-в-Claude). */
+  /* JiraList — left panel of JiraApp. Standalone: reads inbox state
+     directly, renders filter row + groups + item cards. Click on item
+     → sets inboxState.jiraFocusKey (detail opens inline in the right
+     panel of JiraApp).
+     Drag handlers are passed down from above (for drop-into-Claude). */
   import {
     inboxState,
     jiraItemsFor,
