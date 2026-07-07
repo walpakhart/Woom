@@ -5,7 +5,8 @@
      popover that lists sessions (the Chats list moves here in Quiet),
      the turns/spend chip → BudgetPopover, a dotted meta line, and a
      "context ▾" chip that toggles the context popover. */
-  import { sessionsState, updateSession, setActiveSessionInInstance, newClaudeSession } from '$lib/state/sessions.svelte';
+  import { sessionsState, updateSession, setActiveSessionInInstance, newClaudeSession, deleteClaudeSession, restoreClaudeSession } from '$lib/state/sessions.svelte';
+  import { notify } from '$lib/state/toaster.svelte';
   import { sessionUsageTotals, formatTokens, formatCostUsd } from '$lib/usage';
   import { sessionDwTotals } from '$lib/state/dw.svelte';
   import BudgetPopover from '$lib/components/agent/BudgetPopover.svelte';
@@ -76,6 +77,25 @@
     setActiveSessionInInstance(p.instanceId, id);
     switcherOpen = false;
   }
+
+  /* Soft-delete → Archive (recoverable from the Archived section below).
+     No confirm — it's reversible. Mirrors SessionsSidebar. */
+  function archiveChat(id: string) {
+    deleteClaudeSession(id);
+    notify({ kind: 'success', title: 'Chat archived', ttlMs: 2000 });
+  }
+  function restoreChat(id: string) {
+    restoreClaudeSession(id);
+  }
+
+  /* Archived chats — newest-archived first. Rendered in a collapsible
+     section at the popover bottom; restore brings one back. */
+  const archivedItems = $derived.by(() =>
+    sessionsState.list
+      .filter((s) => s.archived)
+      .sort((a, b) => (b.archivedAt ?? 0) - (a.archivedAt ?? 0))
+  );
+  let showArchived = $state(false);
 
   /* ---- rename ---- */
   let editing = $state(false);
@@ -154,17 +174,61 @@
             <span class="qh-switch-name">New chat</span>
           </button>
           {#each sessions as s (s.id)}
-            <button
+            <div
               class="qh-switch-item"
               class:active={s.id === sessionsState.activeIds[p.kind]}
-              onclick={() => pickSession(s.id)}
               role="option"
               aria-selected={s.id === sessionsState.activeIds[p.kind]}
             >
-              <span class="qh-switch-dot" class:running={s.sending} aria-hidden="true"></span>
-              <span class="qh-switch-name">{s.title || 'Untitled chat'}</span>
-            </button>
+              <button class="qh-switch-pick" onclick={() => pickSession(s.id)} title={s.title || 'Untitled chat'}>
+                <span class="qh-switch-dot" class:running={s.sending} aria-hidden="true"></span>
+                <span class="qh-switch-name">{s.title || 'Untitled chat'}</span>
+              </button>
+              <button
+                class="qh-switch-arch"
+                title="Archive chat"
+                aria-label="Archive chat"
+                onclick={() => archiveChat(s.id)}
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8v13H3V8M1 3h22v5H1zM10 12h4"/></svg>
+              </button>
+            </div>
           {/each}
+
+          {#if archivedItems.length > 0}
+            <button
+              class="qh-arch-toggle"
+              onclick={() => (showArchived = !showArchived)}
+              aria-expanded={showArchived}
+            >
+              <svg
+                class="qh-arch-caret"
+                class:open={showArchived}
+                viewBox="0 0 24 24" width="11" height="11"
+                fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+              ><path d="M9 6l6 6-6 6"/></svg>
+              <span>Archived</span>
+              <span class="qh-arch-count mono">{archivedItems.length}</span>
+            </button>
+            {#if showArchived}
+              {#each archivedItems as s (s.id)}
+                <div class="qh-switch-item qh-arch-row">
+                  <span class="qh-arch-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8v13H3V8M1 3h22v5H1zM10 12h4"/></svg>
+                  </span>
+                  <span class="qh-switch-name">{s.title || 'Untitled chat'}</span>
+                  <button
+                    class="qh-switch-arch qh-arch-restore"
+                    title="Restore chat"
+                    aria-label="Restore chat"
+                    onclick={() => restoreChat(s.id)}
+                  >
+                    <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v6h6M3 13a9 9 0 1 0 3-7.7L3 8"/></svg>
+                  </button>
+                </div>
+              {/each}
+            {/if}
+          {/if}
         </div>
       {/if}
     </div>
@@ -273,6 +337,53 @@
   }
   .qh-switch-dot.running { background: var(--ok); }
   .qh-switch-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* Row is now a flex container (div); the pick area is an inner button
+     so the per-row archive/restore action can sit beside it (button-in-
+     button is invalid). Pick inherits the row's text colour. */
+  .qh-switch-pick {
+    flex: 1; min-width: 0;
+    display: flex; align-items: center; gap: 8px;
+    background: transparent; border: 0; padding: 0; cursor: pointer;
+    text-align: left; color: inherit; font: inherit;
+  }
+  .qh-switch-arch {
+    display: none;
+    width: 20px; height: 20px; flex: none;
+    place-items: center;
+    border: 0; border-radius: 5px;
+    background: transparent; color: var(--text-faint); cursor: pointer;
+  }
+  .qh-switch-arch svg { width: 12px; height: 12px; }
+  .qh-switch-item:hover .qh-switch-arch { display: grid; }
+  .qh-switch-arch:hover { color: var(--err); background: var(--bg-3); }
+
+  /* Archived collapsible section — mirrors SessionsSidebar. */
+  .qh-arch-toggle {
+    display: flex; align-items: center; gap: 6px;
+    width: 100%;
+    margin-top: 6px;
+    padding: 6px 10px;
+    border: 0; border-radius: 8px;
+    background: transparent;
+    font-size: 10px; font-weight: 600;
+    letter-spacing: 0.10em; text-transform: uppercase;
+    color: var(--text-faint); cursor: pointer;
+  }
+  .qh-arch-toggle:hover { color: var(--text-1); background: var(--bg-hover); }
+  .qh-arch-caret { transition: transform 140ms; }
+  .qh-arch-caret.open { transform: rotate(90deg); }
+  .qh-arch-count { margin-left: auto; }
+  .qh-arch-row { opacity: 0.75; }
+  .qh-arch-row:hover { opacity: 1; }
+  .qh-arch-icon {
+    flex: none; display: grid; place-items: center;
+    width: 16px; height: 16px; color: var(--text-faint);
+  }
+  .qh-arch-icon svg { width: 14px; height: 14px; }
+  .qh-arch-restore { display: grid; }
+  .qh-arch-restore svg { width: 13px; height: 13px; }
+  .qh-arch-restore:hover { color: var(--text-0); background: var(--bg-3); }
 
   .qh-spring { flex: 1; }
   .qh-state {

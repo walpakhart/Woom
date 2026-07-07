@@ -14,6 +14,7 @@
   import SidePaneRail from '$lib/components/ui/SidePaneRail.svelte';
   import { sessionsState, getPendingEditEvents, editorRoots, updateSession } from '$lib/state/sessions.svelte';
   import { kindForInstanceId, APP_INSTANCE_IDS, layoutState } from '$lib/state/layout.svelte';
+  import { layoutModeState } from '$lib/state/layoutMode.svelte';
   import { onMount, untrack } from 'svelte';
   import { fly } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
@@ -48,6 +49,12 @@
     dock: DockHandlers;
   }
   let p: Props = $props();
+
+  /* Interface direction. Quiet §3 mockup 4j strips the editor to a
+     single centred document: the center EditorView only, a mono
+     filename/repo header, and none of the Cabin chrome (ActivityBar,
+     file-tree sidebar, AgentDock / Splitter). Cabin is untouched. */
+  const quiet = $derived(layoutModeState.mode === 'quiet');
 
   let activityTab = $state<ActivityTab>('explorer');
 
@@ -137,6 +144,11 @@
     return editorRoots(p.instanceId);
   });
 
+  /* Repo basename for the Quiet mono header — the "document location"
+     eyebrow above the stripped EditorView (mockup 4j). EditorView owns
+     the per-file tab strip, so this is the workspace-level mark. */
+  const repoLabel = $derived(repoPath ? (repoPath.split('/').filter(Boolean).pop() ?? repoPath) : '');
+
   /** Link-picker entries — one row per Claude session that is
    *  not already linked to this editor. The label is the session
    *  title so the user knows exactly which chat they're linking; if
@@ -212,7 +224,8 @@
 
 <section
   class="app-shell se-shell"
-  class:se-shell--with-side={dockOpen}
+  class:se-shell--quiet={quiet}
+  class:se-shell--with-side={dockOpen && !quiet}
   style="--app-tone: var(--src-editor); --app-glow: rgba(204,120,92,0.42);"
   ontransitionend={(e) => {
     /* Nudge CodeMirror to re-measure once the dock open/close column
@@ -223,6 +236,37 @@
     }
   }}
 >
+  {#if quiet}
+    <!-- Quiet §3 mockup 4j — single centred document. Just the center
+         EditorView (tabs + code); the file-tree sidebar + internal
+         divider are hidden via `:global` below, and the ActivityBar /
+         AgentDock / outer Splitter are simply not rendered. -->
+    <div class="qeditor">
+      <div class="qeditor-head">
+        {#if repoLabel}
+          <span class="qeditor-name mono">{repoLabel}</span>
+        {/if}
+        {#if instanceLabel}
+          <span class="qeditor-instance">{instanceLabel}</span>
+        {/if}
+      </div>
+      <div class="qeditor-body">
+        <EditorView
+          bind:repoPath
+          {repoPaths}
+          {agentInstances}
+          {linkedAgents}
+          {sidebarTab}
+          {instanceLabel}
+          instanceId={p.instanceId}
+          onLinkToAgent={p.onLinkToAgent}
+          onUnlinkAgent={unlinkSession}
+          onRequestReviewTab={focusReviewTab}
+          onQuickSend={p.onQuickSend}
+        />
+      </div>
+    </div>
+  {:else}
   <div class="app-pane se-activity">
     <ActivityBar
       activeTab={activityTab}
@@ -331,6 +375,7 @@
       }}
     />
   {/if}
+  {/if}
 </section>
 
 <style>
@@ -344,6 +389,62 @@
   }
   .se-shell--with-side {
     grid-template-columns: 44px minmax(0, 1fr);
+  }
+
+  /* Quiet §3 mockup 4j — drop the grid, centre a single document that
+     fills the height (the code surface owns its own scroll, unlike the
+     scrolling inbox docs). Only the center EditorView renders; the
+     ActivityBar / AgentDock / rail are not in the DOM at all, and the
+     EditorView's own file-tree pane + splitter divider are hidden. */
+  .se-shell--quiet {
+    display: block;
+    padding: 0;
+    overflow: hidden;
+  }
+  .qeditor {
+    width: 100%;
+    max-width: 900px;
+    margin: 0 auto;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    padding: 0 20px;
+  }
+  .qeditor-head {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    padding: 14px 2px 10px;
+    flex: 0 0 auto;
+  }
+  .qeditor-name {
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--text-1);
+  }
+  .qeditor-instance {
+    font-size: 11px;
+    font-style: italic;
+    color: var(--text-mute);
+  }
+  .qeditor-body {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+  }
+  .qeditor-body :global(.ev) {
+    flex: 1;
+    min-height: 0;
+    width: 100%;
+  }
+  /* Strip EditorView's left column (file tree) + the internal divider —
+     the Quiet document is a single buffer, so `.ev-main` (tabs + code)
+     fills the whole width. `.s-end` already flexes, no width override
+     needed (fixedSide='start' only writes an inline width on s-start). */
+  .qeditor-body :global(.ev > .splitter > .s-start),
+  .qeditor-body :global(.ev > .splitter > .s-divider) {
+    display: none;
   }
   /* Splitter snippets render bare into the panes — let them stretch
      to fill the available pixels in each side of the splitter. */

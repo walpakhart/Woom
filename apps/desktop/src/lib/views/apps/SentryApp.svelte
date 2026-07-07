@@ -10,7 +10,7 @@
   import QuietSoloHeader from './_shared/QuietSoloHeader.svelte';
   import { inboxState, sentryItemsFor } from '$lib/state/inbox.svelte';
   import { layoutModeState } from '$lib/state/layoutMode.svelte';
-  import type { SentryIssue, SentryStatus } from '$lib/data';
+  import { sentryLevelClass, type SentryIssue, type SentryStatus } from '$lib/data';
   import type { DragPayload } from '$lib/state/drag.svelte';
 
   interface Props {
@@ -34,6 +34,7 @@
      detail pane owns that mutation), so the qsolo eyebrow above it is
      purely the cross-issue switcher. */
   const items = $derived(sentryItemsFor(p.instanceId));
+  const focusItem = $derived(items.find((it) => it.id === inboxState.sentryFocusId) ?? null);
   const switchItems = $derived(
     items.map((it) => ({
       id: it.id,
@@ -44,6 +45,12 @@
   );
   function pickIssue(id: string) {
     inboxState.sentryFocusId = id;
+  }
+  function sendFocusedToClaude() {
+    if (focusItem) p.onSendToClaude(focusItem);
+  }
+  function dwFocused() {
+    if (focusItem) p.onFixWithDw(focusItem);
   }
 </script>
 
@@ -60,7 +67,22 @@
         items={switchItems}
         onPick={pickIssue}
         ariaLabel="Issues"
-      />
+      >
+        {#snippet lead()}
+          {#if focusItem}
+            <span class="qsolo-key mono">{focusItem.short_id}</span>
+            <span class="qsolo-tag {sentryLevelClass(focusItem.level)}">{focusItem.level.toLowerCase()}</span>
+            <span class="qsolo-tag">{focusItem.status.toLowerCase()}</span>
+          {/if}
+        {/snippet}
+        {#snippet actions()}
+          {#if focusItem}
+            <button class="qsolo-act" onclick={() => focusItem && p.onOpenBrowser(focusItem.permalink)}>in Sentry ↗</button>
+            <button class="qsolo-act qsolo-act--claude" onclick={sendFocusedToClaude}>→ claude</button>
+            <button class="qsolo-act" onclick={dwFocused}>/dw</button>
+          {/if}
+        {/snippet}
+      </QuietSoloHeader>
       {#if inboxState.sentryFocusId}
         {@const focusId = inboxState.sentryFocusId}
         <div class="qsolo-pane">
@@ -155,6 +177,29 @@
   .qsolo-empty { padding: 64px 20px; text-align: center; }
   .qsolo-empty-h { font-size: 20px; font-weight: 600; color: var(--text-0); margin: 0 0 8px; letter-spacing: -0.015em; }
   .qsolo-empty-p { font-size: 12.5px; color: var(--text-2); margin: 0; }
+
+  .qsolo-key { font-size: 12px; font-weight: 600; color: var(--src-sentry); }
+  .qsolo-tag {
+    font-size: 10.5px; color: var(--text-mute);
+    padding: 1px 7px; border-radius: var(--r-chip);
+    border: 1px solid var(--border-hi);
+  }
+  /* sentryLevelClass → tag--fatal / tag--error / tag--warning / tag--info. */
+  .qsolo-tag.tag--fatal { color: #f87171; border-color: color-mix(in srgb, #f87171 45%, transparent); }
+  .qsolo-tag.tag--error { color: var(--error); border-color: color-mix(in srgb, var(--error) 45%, transparent); }
+  .qsolo-tag.tag--warning { color: #D9B86E; border-color: color-mix(in srgb, #D9B86E 45%, transparent); }
+  .qsolo-tag.tag--info { color: #60a5fa; border-color: color-mix(in srgb, #60a5fa 45%, transparent); }
+
+  /* Solo actions — dotted-underline links (§3.4). */
+  .qsolo-act {
+    background: transparent; border: 0; cursor: pointer;
+    font-size: 12.5px; color: var(--text-1);
+    padding: 0 0 1px;
+    border-bottom: 1px dotted color-mix(in srgb, var(--text-1) 40%, transparent);
+  }
+  .qsolo-act:hover { color: var(--text-0); border-bottom-color: var(--text-0); }
+  .qsolo-act--claude { color: var(--src-claude); border-bottom-color: color-mix(in srgb, var(--src-claude) 45%, transparent); }
+  .qsolo-act--claude:hover { color: var(--accent-bright); border-bottom-color: var(--accent-bright); }
 
   .ssn-shell :global(.s-start),
   .ssn-shell :global(.s-end) {
