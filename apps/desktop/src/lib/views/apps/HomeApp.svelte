@@ -193,23 +193,27 @@
 </section>
 
 <style>
+  /* Redesign v2 §2.7 — no list column; one centred column, max 1160,
+     padding 46/64, everything scrolls together. */
   .ho {
     flex: 1; min-height: 0;
-    display: flex; flex-direction: column;
+    overflow-y: auto;
     background: var(--bg-0);
+    padding: 46px 64px 60px;
   }
 
   .ho-head {
-    padding: 26px 30px 18px;
-    border-bottom: 1px solid var(--border);
-    flex: none;
+    max-width: 1160px;
+    margin: 0 auto 30px;
+    padding: 0;
+    border: 0;
   }
   .ho-date {
-    font-size: 11px; color: var(--text-mute);
-    margin-bottom: 6px;
+    font-size: 12.5px; color: var(--text-faint);
+    margin-bottom: 8px;
     display: flex; align-items: center; gap: 6px;
   }
-  .ho-date-path { color: var(--text-1); }
+  .ho-date-path { color: var(--text-1); font-family: var(--font-mono); font-size: 11.5px; }
   .ho-tour {
     margin-left: 8px;
     font-size: 10px; color: var(--text-faint);
@@ -219,29 +223,31 @@
   }
   .ho-tour:hover { color: var(--text-0); border-color: var(--border-hi2); }
   .ho-hero {
-    font-size: 20px; font-weight: 600;
+    font-size: 27px; font-weight: 600;
     color: var(--text-0);
-    letter-spacing: -0.01em;
+    letter-spacing: -0.015em;
     margin: 0;
   }
 
   .ho-body {
-    flex: 1; min-height: 0;
-    display: flex;
+    max-width: 1160px;
+    margin: 0 auto;
+    display: grid;
+    grid-template-columns: 1fr 340px;
+    gap: 56px;
+    align-items: start;
   }
 
-  .ho-inbox {
-    flex: 1.4; min-width: 0;
-    overflow-y: auto;
-    border-right: 1px solid var(--border);
-  }
-  .ho-inbox-label { padding: 16px 30px 4px; display: block; }
+  .ho-inbox { min-width: 0; }
+  .ho-inbox-label { padding: 0 0 8px; display: block; }
   .ho-row {
-    display: flex; align-items: baseline; gap: 12px;
+    display: grid;
+    grid-template-columns: 64px 92px 1fr auto;
+    align-items: baseline; gap: 12px;
     width: 100%;
-    padding: 11px 30px;
+    padding: 10px 10px;
     border: 0;
-    border-bottom: 1px solid var(--border-lo);
+    border-radius: 8px;
     background: transparent;
     cursor: pointer;
     text-align: left;
@@ -249,31 +255,26 @@
   }
   .ho-row:hover { background: var(--bg-1); }
   .ho-row-src {
-    flex: none; width: 52px;
     font-size: 10px; font-weight: 600;
-    letter-spacing: 0.06em;
+    letter-spacing: 0.06em; text-transform: uppercase;
   }
   .ho-row-src[data-src='jira'] { color: var(--src-jira); }
   .ho-row-src[data-src='github'] { color: var(--src-github); }
   .ho-row-src[data-src='sentry'] { color: var(--src-sentry); }
-  .ho-row-ref { flex: none; width: 74px; font-size: 11px; color: var(--text-mute); }
+  .ho-row-ref { font-size: 11.5px; color: var(--text-1); font-family: var(--font-mono); }
   .ho-row-title {
-    font-size: 12.5px; color: var(--text-0);
+    font-size: 13px; color: var(--text-0);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     min-width: 0;
   }
-  .ho-row-when { margin-left: auto; flex: none; font-size: 10.5px; color: var(--text-faint); }
-  .ho-hint { padding: 10px 30px; font-size: 11px; color: var(--text-faint); }
-  .ho-quiet { padding: 12px 30px; font-size: 11.5px; color: var(--text-mute); }
+  .ho-row-when { font-size: 11px; color: var(--text-faint); font-family: var(--font-mono); text-align: right; }
+  .ho-hint { padding: 10px 10px; font-size: 11px; color: var(--text-faint); }
+  .ho-quiet { padding: 12px 10px; font-size: 11.5px; color: var(--text-mute); }
   .ho-quiet--side { padding: 4px 0; }
 
-  .ho-side {
-    flex: 1; min-width: 300px; max-width: 380px;
-    overflow-y: auto;
-    padding: 16px 22px;
-  }
+  .ho-side { min-width: 0; }
   .ho-side-label { display: block; padding: 0 0 8px; }
-  .ho-side-label--tasks { padding-top: 16px; }
+  .ho-side-label--tasks { padding-top: 20px; }
 
   .ho-card {
     display: block; width: 100%;
