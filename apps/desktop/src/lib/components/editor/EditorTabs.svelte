@@ -84,10 +84,12 @@
      editor's existing visual rhythm stays untouched (Svelte scopes
      each per-component selector with its own hash, so these are
      isolated to this file even though the names look shared). */
+  /* Redesign v2 §2.7 — 38px strip, chip tabs (active bg-3), modified
+     dot in the trailing slot (warn tone). */
   .ev-tabbar {
-    display: flex; align-items: center; gap: 2px;
+    display: flex; align-items: center; gap: 3px;
     padding: 0 12px;
-    min-height: 36px;
+    min-height: 38px;
     background: var(--bg-1);
     overflow-x: auto;
     flex-shrink: 0;
@@ -99,39 +101,21 @@
     font-size: 12px; color: var(--text-mute);
     white-space: nowrap;
   }
-  /* Mockup tabs: flat text tabs, active = 600 weight + 2px editor
-     underline; modification dot in claude tone. No pill chrome. */
   .ev-tab-wrap {
     display: inline-flex; align-items: center; gap: 0;
-    height: 34px;
-    padding: 0 6px 0 13px;
+    height: 30px;
+    padding: 0 6px 0 12px;
     background: transparent;
     border: 0;
-    border-bottom: 2px solid transparent;
-    border-radius: 0;
+    border-radius: 7px;
     flex-shrink: 0;
     max-width: 260px;
-    transition: color 120ms, border-color 120ms;
+    transition: color 120ms, background 120ms;
     cursor: pointer;
   }
   .ev-tab-wrap:hover { background: var(--bg-hover); }
-  .ev-tab-wrap.active {
-    background: transparent;
-    border-bottom-color: var(--src-editor);
-  }
+  .ev-tab-wrap.active { background: var(--bg-3); }
   .ev-tab-wrap.active .ev-tab-name { font-weight: 600; }
-  /* Modification dot — claude tone when dirty, hidden otherwise. */
-  .ev-tab-wrap::before {
-    content: '';
-    flex-shrink: 0;
-    width: 6px; height: 6px;
-    border-radius: 50%;
-    margin-right: 7px;
-    background: transparent;
-    transition: background 140ms;
-  }
-  .ev-tab-wrap.active::before { background: var(--src-editor); }
-  .ev-tab-wrap.dirty::before { background: var(--src-claude); }
   .ev-tab-btn {
     display: inline-flex; align-items: center; gap: 6px;
     padding: 0;

@@ -1155,9 +1155,12 @@
                their own subtle row below to keep the head uncluttered. -->
           <div class="ev-left-head">
             <div class="ev-root-stack">
-              <span class="ev-root-name" title={rootTitle}>{rootLabel}</span>
+              <div class="ev-root-line">
+                <span class="ev-root-name" title={rootTitle}>{rootLabel}</span>
+                {#if instanceLabel}<span class="ev-root-instance">{instanceLabel}</span>{/if}
+              </div>
               {#if gitBranch}
-                <span class="ev-root-branch">on <b>{gitBranch}</b></span>
+                <span class="ev-root-branch mono">wt <b>{gitBranch}</b></span>
               {/if}
             </div>
             <!-- Chat linking lives in the right-side AgentDock — the old
@@ -1790,28 +1793,28 @@
   /* Two-line head stack: small italic-serif instance mark above the
      repo name. Lets users see which Vermeer / Rothko / Hokusai
      instance they're inside without having to open the rail menu. */
+  /* Redesign v2 §2.7 — head stack: `woom  Vermeer` line + `wt <branch>`
+     mono underneath. */
   .ev-root-stack {
     flex: 1 1 0; min-width: 0;
-    display: flex; align-items: baseline;
-    gap: 8px;
+    display: flex; flex-direction: column;
+    gap: 2px;
     overflow: hidden;
   }
-  .ev-instance-label {
-    font-family: var(--font-mono);
-    font-size: 11px;
-    
-    line-height: 1;
-    letter-spacing: 0.02em;
-    color: var(--src-editor);
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  .ev-root-line {
+    display: flex; align-items: baseline; gap: 8px;
+    min-width: 0;
   }
-  /* v7 — repo name reads as a small editorial heading. */
-  /* Mockup tree head: `woom on fix/branch` — small, quiet. */
+  .ev-root-instance {
+    font-style: italic;
+    font-size: 11px; color: var(--text-faint);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    flex-shrink: 0;
+  }
   .ev-root-name {
     min-width: 0;
-    font-family: var(--font-mono);
-    font-size: 11px; font-weight: 600;
-    letter-spacing: 0;
+    font-size: 13px; font-weight: 600;
+    letter-spacing: -0.01em;
     color: var(--text-0);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
