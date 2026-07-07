@@ -122,6 +122,28 @@
   });
   const tool = $derived<CanvasTool>(instState?.tool ?? 'select');
 
+  /* ---- Redesign v2 §2.7 surface toolbar ---- */
+  const toolbarTools: { id: CanvasTool; title: string }[] = [
+    { id: 'select', title: 'Select · V' },
+    { id: 'rect', title: 'Box · R' },
+    { id: 'ellipse', title: 'Ellipse · O' },
+    { id: 'text', title: 'Text · T' },
+    { id: 'arrow', title: 'Arrow · A' },
+    { id: 'mermaid', title: 'Mermaid diagram · ⇧M' }
+  ];
+  const layoutChips: { algo: LayoutAlgorithm; label: string }[] = [
+    { algo: 'grid', label: 'grid' },
+    { algo: 'row', label: 'row' },
+    { algo: 'column', label: 'column' },
+    { algo: 'dagre', label: 'dag' }
+  ];
+  const tbCanUndo = $derived(activeCanvasId ? canUndoFor(activeCanvasId) : false);
+  const tbCanRedo = $derived(activeCanvasId ? canRedoFor(activeCanvasId) : false);
+  function resetZoom() {
+    camZoom = 1;
+    pushViewport();
+  }
+
   // ---- Camera (local mirror of viewport) -------------------------------
 
   let camX = $state(0);
@@ -1565,6 +1587,51 @@
       <button class="btn btn--primary" onclick={onCreateNew}>+ New canvas</button>
     </div>
   {:else}
+    <!-- Redesign v2 §2.7 — surface toolbar: tool segment-group,
+         undo/redo, arrange chips, zoom readout. -->
+    {#snippet toolGlyph(id: CanvasTool)}
+      {#if id === 'select'}
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M5 3l6 16 2.2-6.8L20 10z"/></svg>
+      {:else if id === 'rect'}
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="4" y="6" width="16" height="12" rx="1.5"/></svg>
+      {:else if id === 'ellipse'}
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="7.5"/></svg>
+      {:else if id === 'arrow'}
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h14M13 6l6 6-6 6"/></svg>
+      {:else if id === 'text'}
+        <span class="cv-tool-glyph">T</span>
+      {:else if id === 'mermaid'}
+        <span class="cv-tool-glyph cv-tool-glyph--mmd">mmd</span>
+      {/if}
+    {/snippet}
+    <header class="cv-toolbar">
+      <div class="cv-tool-seg">
+        {#each toolbarTools as t (t.id)}
+          <button
+            class="cv-tool"
+            class:active={tool === t.id}
+            onclick={() => setTool(instanceId, t.id)}
+            title={t.title}
+            aria-label={t.title}
+            aria-pressed={tool === t.id}
+          >{@render toolGlyph(t.id)}</button>
+        {/each}
+      </div>
+      <span class="cv-tb-sep" aria-hidden="true"></span>
+      <button class="cv-tb-btn" disabled={!tbCanUndo} onclick={() => activeCanvasId && undo(activeCanvasId)} title="Undo · ⌘Z" aria-label="Undo">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-3"/></svg>
+      </button>
+      <button class="cv-tb-btn" disabled={!tbCanRedo} onclick={() => activeCanvasId && redo(activeCanvasId)} title="Redo · ⇧⌘Z" aria-label="Redo">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M15 14l5-5-5-5"/><path d="M20 9H9a5 5 0 0 0 0 10h3"/></svg>
+      </button>
+      <span class="cv-tb-sep" aria-hidden="true"></span>
+      <span class="cv-tb-label">layout</span>
+      {#each layoutChips as l (l.algo)}
+        <button class="cv-chip" onclick={() => runLayout(l.algo)} title="Arrange selection — {l.label}">{l.label}</button>
+      {/each}
+      <span class="cv-tb-spring"></span>
+      <button class="cv-zoom mono" onclick={resetZoom} title="Reset zoom to 100%">{zoomPct}%</button>
+    </header>
     <div
       class="canvas-surface"
       bind:this={surfaceEl}
@@ -1964,6 +2031,61 @@
   }
 
   /* ---- Status bar -------------------------------------------------- */
+
+  /* Redesign v2 §2.7 — surface toolbar (46px). */
+  .cv-toolbar {
+    flex: none;
+    display: flex; align-items: center; gap: 8px;
+    height: 46px; padding: 0 14px;
+    background: var(--bg-0);
+    border-bottom: 1px solid var(--border-lo);
+  }
+  .cv-tool-seg {
+    display: inline-flex; align-items: center; gap: 2px;
+    padding: 2px; border-radius: 8px;
+    background: var(--bg-2); border: 1px solid var(--border);
+  }
+  .cv-tool {
+    width: 28px; height: 24px;
+    display: grid; place-items: center;
+    border: 0; border-radius: 6px; background: transparent;
+    color: var(--text-2); cursor: pointer;
+    transition: background 120ms, color 120ms;
+  }
+  .cv-tool:hover { color: var(--text-0); background: var(--bg-3); }
+  .cv-tool.active { background: var(--accent); color: var(--accent-fg); box-shadow: var(--shadow-pill); }
+  .cv-tool svg { width: 15px; height: 15px; }
+  .cv-tool-glyph { font-family: var(--font-mono); font-size: 12px; font-weight: 600; line-height: 1; }
+  .cv-tool-glyph--mmd { font-size: 9.5px; letter-spacing: 0.02em; }
+  .cv-tb-sep { width: 1px; height: 18px; background: var(--border); flex: none; }
+  .cv-tb-btn {
+    width: 26px; height: 26px; display: grid; place-items: center;
+    border: 1px solid var(--border); border-radius: 6px;
+    background: transparent; color: var(--text-2); cursor: pointer;
+    transition: color 120ms, border-color 120ms;
+  }
+  .cv-tb-btn:hover:not(:disabled) { color: var(--text-0); border-color: var(--border-hi); }
+  .cv-tb-btn:disabled { opacity: 0.4; cursor: default; }
+  .cv-tb-btn svg { width: 14px; height: 14px; }
+  .cv-tb-label {
+    font-size: 10px; font-weight: 600; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--text-mute);
+  }
+  .cv-chip {
+    padding: 3px 9px; border-radius: 6px;
+    border: 1px solid var(--border); background: transparent;
+    color: var(--text-mute); font-size: 11px; cursor: pointer;
+    transition: color 120ms, border-color 120ms, background 120ms;
+  }
+  .cv-chip:hover { color: var(--text-1); border-color: var(--border-hi); background: var(--bg-2); }
+  .cv-tb-spring { flex: 1; }
+  .cv-zoom {
+    padding: 3px 8px; border-radius: 6px;
+    border: 1px solid transparent; background: transparent;
+    color: var(--text-mute); font-size: 11px; cursor: pointer;
+    font-variant-numeric: tabular-nums;
+  }
+  .cv-zoom:hover { color: var(--text-0); background: var(--bg-2); border-color: var(--border); }
 
   .canvas-status {
     flex-shrink: 0;

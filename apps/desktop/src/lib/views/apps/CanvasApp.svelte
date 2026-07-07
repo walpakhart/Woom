@@ -84,10 +84,6 @@
     >
       {#snippet start()}
         <section class="app-pane sc-canvas">
-          <header class="app-pane-head sc-canvas-head">
-            <span class="app-pane-head-h">canvas</span>
-            <span class="sc-canvas-name">· {instanceLabel}</span>
-          </header>
           <CanvasSurface instanceId={p.instanceId} onCardOpen={p.onCardOpen} />
         </section>
       {/snippet}
@@ -138,9 +134,6 @@
 </section>
 
 <style>
-  .sc-canvas-head { flex: 0 0 36px; min-height: 36px; }
-  .sc-canvas-name { font-size: 11px; color: var(--text-mute); }
-
   .sc-shell { display: block; padding: var(--app-pad, 14px); }
   /* When the side pane is collapsed, switch to a 2-col grid:
      canvas pane (1fr) + 44px rail. Splitter mode keeps `display:
