@@ -9,9 +9,20 @@
 
 /* ── Agent / Claude (flex shell — hiding panes auto-collapses) ── */
 :root[data-layout='quiet'] .sa-sessions,
-:root[data-layout='quiet'] .cd,
 :root[data-layout='quiet'] .sa-dock-rail {
   display: none;
+}
+/* Context still reachable in Quiet — the ChatHeader "Context" toggle
+ * now floats the dock as a right-side popover (§3.2) instead of a
+ * persistent column. Only mounted when open (AgentApp's {#if dockOpen}). */
+:root[data-layout='quiet'] .cd {
+  position: fixed;
+  top: 58px; right: 24px; bottom: 58px;
+  width: 384px;
+  z-index: 120;
+  border-radius: 12px;
+  border: 1px solid var(--border-hi);
+  box-shadow: var(--shadow-3);
 }
 
 /* ── List columns everywhere: inbox lists (jira/github/sentry) +
