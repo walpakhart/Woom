@@ -99,6 +99,8 @@
       thinkingStartedAt={p.thinkingStartedAt}
       thinkingTick={p.thinkingTick}
       onStop={p.onStop}
+      contextOpen={dockOpen}
+      onToggleContext={() => (dockOpen = !dockOpen)}
     />
     <!-- {#key}: thread MUST remount per session — the windowed lazy-mount
          (IntersectionObserver) leaves reused nodes stuck as stubs. -->
