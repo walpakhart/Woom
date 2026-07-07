@@ -339,11 +339,11 @@
      - rail-collapsed: 44px ActivityBar + editor pane (1fr) + 44px
        rail (mirror of the ActivityBar on the right edge). */
   .se-shell {
-    grid-template-columns: 36px minmax(0, 1fr) 44px;
+    grid-template-columns: 44px minmax(0, 1fr) 44px;
     transition: grid-template-columns var(--dur-base) var(--ease-out);
   }
   .se-shell--with-side {
-    grid-template-columns: 36px minmax(0, 1fr);
+    grid-template-columns: 44px minmax(0, 1fr);
   }
   /* Splitter snippets render bare into the panes — let them stretch
      to fill the available pixels in each side of the splitter. */

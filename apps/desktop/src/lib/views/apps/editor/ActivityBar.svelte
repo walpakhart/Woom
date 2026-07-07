@@ -114,23 +114,23 @@
     position: relative;
     width: 32px; height: 32px;
     display: grid; place-items: center;
-    border-radius: 7px;
+    border-radius: 8px;
     color: var(--text-2);
     background: transparent; border: none; cursor: pointer;
     transition: color 140ms, background 140ms;
   }
   .ab-btn:hover { color: var(--text-0); background: var(--bg-elev, var(--bg-2)); }
   .ab-btn.active {
-    color: var(--src-editor);
-    background: var(--bg-nav);
+    color: var(--text-0);
+    background: var(--bg-3);
   }
   .ab-btn svg { width: 17px; height: 17px; stroke-linecap: round; stroke-linejoin: round; }
   .ab-badge {
     position: absolute; top: 1px; right: 1px;
-    min-width: 14px; height: 14px; padding: 0 3px;
+    min-width: 13px; height: 13px; padding: 0 3px;
     border-radius: 7px;
     font-family: var(--font-mono);
-    font-size: 9px; font-weight: 700;
+    font-size: 8px; font-weight: 700;
     background: var(--accent); color: var(--accent-fg);
     display: grid; place-items: center;
     box-shadow: 0 0 0 2px var(--bg-1);
