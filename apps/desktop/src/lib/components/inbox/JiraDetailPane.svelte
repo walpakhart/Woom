@@ -1,7 +1,7 @@
 <script lang="ts">
   import { invoke } from '@tauri-apps/api/core';
   import { openUrl } from '@tauri-apps/plugin-opener';
-  import { jiraStatusClass, relativeTime, type JiraComment, type JiraDetail, type JiraUserSummary, type JiraWorklog } from '$lib/data';
+  import { relativeTime, type JiraComment, type JiraDetail, type JiraUserSummary, type JiraWorklog } from '$lib/data';
   import { formatDuration, jiraStartedString, parseDuration } from '$lib/format';
   import Markdown from '$lib/components/ui/Markdown.svelte';
 
@@ -293,640 +293,614 @@
   }
 </script>
 
-<div class="jdp">
-  <header class="jdp-head">
-    <button class="jdp-back" onclick={onClose} aria-label="Close" title="Close">
+<div class="jrd">
+  <header class="jrd-head">
+    <button class="jrd-back" onclick={onClose} aria-label="Close" title="Close">
       <svg class="i i-sm" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12" /></svg>
     </button>
-    <span class="jdp-key mono">{issueKey}</span>
+    <span class="jrd-ref mono">{issueKey}</span>
     {#if detail}
-      <span class="mini-tag {jiraStatusClass(detail.status_category)}">{detail.status.toLowerCase()}</span>
-      <span class="jdp-kind">{detail.issue_type.toLowerCase()}</span>
-      {#if detail.priority}<span class="jdp-prio">· {detail.priority.toLowerCase()}</span>{/if}
+      <span class="jrd-chip mono">{detail.status.toLowerCase()}</span>
+      <span class="jrd-chip mono">{detail.issue_type.toLowerCase()}</span>
+      {#if detail.priority}<span class="jrd-prio">· {detail.priority.toLowerCase()}</span>{/if}
     {/if}
-    <div style="flex:1"></div>
+    <div class="jrd-spring"></div>
     <button
-      class="jdp-btn jdp-btn--icon"
+      class="jrd-iconbtn"
       onclick={() => void load()}
       disabled={loading}
       title="Refresh issue"
       aria-label="Refresh"
     >
-      <svg class="i i-sm" class:jdp-spin={loading} viewBox="0 0 24 24">
+      <svg class="i i-sm" class:jrd-spin={loading} viewBox="0 0 24 24">
         <path d="M21 12a9 9 0 0 1-9 9 9 9 0 0 1-8.5-6"/>
         <path d="M3 12a9 9 0 0 1 9-9 9 9 0 0 1 8.5 6"/>
         <polyline points="21 3 21 9 15 9"/>
         <polyline points="3 21 3 15 9 15"/>
       </svg>
     </button>
-    {#if onSendToClaude}
-      <button class="jdp-btn jdp-btn--claude" onclick={onSendToClaude} disabled={!detail} title="Send this ticket to Claude">
-        <svg class="i i-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="m22 2-7 20-4-9-9-4 20-7z"/></svg>
-        Send to Claude
-      </button>
-    {/if}
-    <button class="jdp-btn" onclick={() => detail && openUrl(detail.url)} disabled={!detail} title="Open on Jira">
+    <button class="jrd-ghostbtn" onclick={() => detail && openUrl(detail.url)} disabled={!detail} title="Open on Jira">
+      Open in Jira
       <svg class="i i-sm" viewBox="0 0 24 24"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /><path d="M15 3h6v6M10 14 21 3" /></svg>
-      Open on Jira
     </button>
+    {#if onSendToClaude}
+      <button class="jrd-claudebtn" onclick={onSendToClaude} disabled={!detail} title="Send this ticket to Claude">→ claude</button>
+    {/if}
   </header>
 
   {#if loading && !detail}
-    <div class="jdp-state">Loading issue…</div>
+    <div class="jrd-state">Loading issue…</div>
   {:else if error}
-    <div class="jdp-state jdp-err">{error} <button class="jdp-link" onclick={load}>Retry</button></div>
+    <div class="jrd-state jrd-err">{error} <button class="jrd-link" onclick={load}>Retry</button></div>
   {:else if detail}
-    <div class="jdp-body">
-      <!-- Summary (editable) -->
-      <section class="jdp-section">
-        {#if editingSummary}
-          <input
-            class="jdp-summary-input"
-            bind:value={summaryDraft}
-            onkeydown={(e) => { if (e.key === 'Enter') void saveSummary(); if (e.key === 'Escape') editingSummary = false; }}
-            disabled={saving}
-          />
-          <div class="jdp-save-row">
-            <button class="jdp-btn jdp-btn--primary" onclick={saveSummary} disabled={saving || !summaryDraft.trim()}>Save</button>
-            <button class="jdp-link" onclick={() => (editingSummary = false)}>Cancel</button>
-          </div>
-        {:else}
-          <button class="jdp-summary" onclick={startEditSummary} title="Click to edit">
-            <h1 class="jdp-summary-text">{detail.summary}</h1>
-            <svg class="i i-sm jdp-edit-icon" viewBox="0 0 24 24"><path d="M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" /></svg>
-          </button>
-        {/if}
-      </section>
+    <div class="jrd-scroll">
+      <div class="jrd-doc">
+        <!-- Summary (editable) -->
+        <section class="jrd-summary-sec">
+          {#if editingSummary}
+            <input
+              class="jrd-summary-input"
+              bind:value={summaryDraft}
+              onkeydown={(e) => { if (e.key === 'Enter') void saveSummary(); if (e.key === 'Escape') editingSummary = false; }}
+              disabled={saving}
+            />
+            <div class="jrd-save-row">
+              <button class="jrd-btn jrd-btn--primary" onclick={saveSummary} disabled={saving || !summaryDraft.trim()}>Save</button>
+              <button class="jrd-link" onclick={() => (editingSummary = false)}>Cancel</button>
+            </div>
+          {:else}
+            <button class="jrd-summary" onclick={startEditSummary} title="Click to edit">
+              <h1 class="jrd-title">{detail.summary}</h1>
+              <svg class="i i-sm jrd-edit-icon" viewBox="0 0 24 24"><path d="M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" /></svg>
+            </button>
+          {/if}
+        </section>
 
-      <!-- Meta row -->
-      <section class="jdp-meta-grid">
-        <div class="jdp-meta jdp-meta--editable">
-          <div class="jdp-meta-label">Assignee</div>
-          <button class="jdp-meta-val jdp-edit-target" onclick={() => { showAssigneePicker = !showAssigneePicker; showPriorityPicker = false; if (showAssigneePicker && !assigneeResults.length) scheduleAssigneeSearch(); }} disabled={saving}>
-            {#if detail.assignee}
-              {#if detail.assignee.avatar_url}
-                <img class="jdp-avatar" src={detail.assignee.avatar_url} alt={detail.assignee.display_name} />
-              {/if}
-              <span>{detail.assignee.display_name}</span>
-            {:else}
-              <span class="jdp-none">unassigned</span>
-            {/if}
-            <svg class="i i-sm jdp-edit-caret" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" /></svg>
-          </button>
-          {#if showAssigneePicker}
-            <div class="jdp-popover">
-              <input
-                class="jdp-popover-input mono"
-                placeholder="Search users…"
-                bind:value={assigneeQuery}
-                oninput={scheduleAssigneeSearch}
-                {@attach (node: HTMLInputElement) => node.focus()}
-              />
-              <button class="jdp-popover-item" onclick={() => setAssignee(null)}>
-                <span class="jdp-none">Unassigned</span>
-              </button>
-              {#if assigneeSearching}
-                <div class="jdp-popover-state">Searching…</div>
+        <!-- Meta grid — caps-label + value, 16px avatars. -->
+        <section class="jrd-meta-grid">
+          <div class="jrd-meta jrd-meta--editable">
+            <div class="jrd-meta-label">Assignee</div>
+            <button class="jrd-meta-val jrd-edit-target" onclick={() => { showAssigneePicker = !showAssigneePicker; showPriorityPicker = false; if (showAssigneePicker && !assigneeResults.length) scheduleAssigneeSearch(); }} disabled={saving}>
+              {#if detail.assignee}
+                {#if detail.assignee.avatar_url}
+                  <img class="jrd-avatar" src={detail.assignee.avatar_url} alt={detail.assignee.display_name} />
+                {/if}
+                <span>{detail.assignee.display_name}</span>
               {:else}
-                {#each assigneeResults as u (u.account_id)}
-                  <button class="jdp-popover-item" onclick={() => setAssignee(u.account_id)}>
-                    <img class="jdp-avatar" src={u.avatar_url} alt={u.display_name} />
-                    <span>{u.display_name}</span>
-                    {#if u.email_address}<span class="jdp-popover-sub mono">{u.email_address}</span>{/if}
+                <span class="jrd-none">unassigned</span>
+              {/if}
+              <svg class="i i-sm jrd-edit-caret" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" /></svg>
+            </button>
+            {#if showAssigneePicker}
+              <div class="jrd-popover">
+                <input
+                  class="jrd-popover-input mono"
+                  placeholder="Search users…"
+                  bind:value={assigneeQuery}
+                  oninput={scheduleAssigneeSearch}
+                  {@attach (node: HTMLInputElement) => node.focus()}
+                />
+                <button class="jrd-popover-item" onclick={() => setAssignee(null)}>
+                  <span class="jrd-none">Unassigned</span>
+                </button>
+                {#if assigneeSearching}
+                  <div class="jrd-popover-state">Searching…</div>
+                {:else}
+                  {#each assigneeResults as u (u.account_id)}
+                    <button class="jrd-popover-item" onclick={() => setAssignee(u.account_id)}>
+                      <img class="jrd-avatar" src={u.avatar_url} alt={u.display_name} />
+                      <span>{u.display_name}</span>
+                      {#if u.email_address}<span class="jrd-popover-sub mono">{u.email_address}</span>{/if}
+                    </button>
+                  {/each}
+                {/if}
+              </div>
+            {/if}
+          </div>
+          <div class="jrd-meta jrd-meta--editable">
+            <div class="jrd-meta-label">Priority</div>
+            <button class="jrd-meta-val jrd-edit-target" onclick={() => { showPriorityPicker = !showPriorityPicker; showAssigneePicker = false; }} disabled={saving}>
+              <span>{detail.priority ?? 'None'}</span>
+              <svg class="i i-sm jrd-edit-caret" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" /></svg>
+            </button>
+            {#if showPriorityPicker}
+              <div class="jrd-popover jrd-popover--narrow">
+                {#each PRIORITIES as p (p)}
+                  <button class="jrd-popover-item" onclick={() => setPriority(p)} class:active={detail.priority === p}>
+                    <span>{p}</span>
                   </button>
                 {/each}
+              </div>
+            {/if}
+          </div>
+          <div class="jrd-meta">
+            <div class="jrd-meta-label">Reporter</div>
+            <div class="jrd-meta-val">
+              {#if detail.reporter}
+                {#if detail.reporter.avatar_url}
+                  <img class="jrd-avatar" src={detail.reporter.avatar_url} alt={detail.reporter.display_name} />
+                {/if}
+                <span>{detail.reporter.display_name}</span>
+              {:else}
+                <span class="jrd-none">—</span>
               {/if}
             </div>
-          {/if}
-        </div>
-        <div class="jdp-meta jdp-meta--editable">
-          <div class="jdp-meta-label">Priority</div>
-          <button class="jdp-meta-val jdp-edit-target" onclick={() => { showPriorityPicker = !showPriorityPicker; showAssigneePicker = false; }} disabled={saving}>
-            <span>{detail.priority ?? 'None'}</span>
-            <svg class="i i-sm jdp-edit-caret" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" /></svg>
-          </button>
-          {#if showPriorityPicker}
-            <div class="jdp-popover jdp-popover--narrow">
-              {#each PRIORITIES as p (p)}
-                <button class="jdp-popover-item" onclick={() => setPriority(p)} class:active={detail.priority === p}>
-                  <span>{p}</span>
+          </div>
+          <div class="jrd-meta">
+            <div class="jrd-meta-label">Updated</div>
+            <div class="jrd-meta-val">{relativeTime(detail.updated, now)} ago</div>
+          </div>
+          <div class="jrd-meta jrd-meta--full">
+            <div class="jrd-sec-head">
+              <span class="jrd-meta-label">Labels</span>
+              <div class="jrd-spring"></div>
+              {#if !editingLabels}
+                <button class="jrd-link" onclick={startEditLabels}>Edit</button>
+              {/if}
+            </div>
+            {#if editingLabels}
+              <input
+                class="jrd-input"
+                placeholder="comma-separated labels"
+                bind:value={labelsDraft}
+                disabled={saving}
+                onkeydown={(e) => { if (e.key === 'Enter') void saveLabels(); if (e.key === 'Escape') editingLabels = false; }}
+              />
+              <div class="jrd-save-row">
+                <button class="jrd-btn jrd-btn--primary" onclick={saveLabels} disabled={saving}>Save</button>
+                <button class="jrd-link" onclick={() => (editingLabels = false)}>Cancel</button>
+              </div>
+            {:else if detail.labels.length}
+              <div class="jrd-meta-val jrd-labels">
+                {#each detail.labels as l, _i (l + '|' + _i)}<span class="jrd-label mono">{l}</span>{/each}
+              </div>
+            {:else}
+              <span class="jrd-none">no labels</span>
+            {/if}
+          </div>
+        </section>
+
+        <!-- Status transitions — current = inverse chip + 2px shadow,
+             available transitions follow as ghost chips (arrow between). -->
+        <section class="jrd-section">
+          <div class="jrd-transition-row">
+            <span class="jrd-status-current">{detail.status}</span>
+            {#if detail.transitions.length}
+              <span class="jrd-trans-arrow" aria-hidden="true">→</span>
+              {#each detail.transitions as t (t.id)}
+                <button
+                  class="jrd-transition"
+                  onclick={() => transitionTo(t.id, t.to_status)}
+                  disabled={statusBusy}
+                  title={t.to_status ? `→ ${t.to_status}` : t.name}
+                >
+                  {t.name}
                 </button>
+              {/each}
+            {:else}
+              <span class="jrd-meta-muted">no transitions available</span>
+            {/if}
+          </div>
+        </section>
+
+        <!-- Description -->
+        <section class="jrd-section">
+          <div class="jrd-sec-head">
+            <span class="jrd-sec-label">Description</span>
+            <span class="hatch" aria-hidden="true"></span>
+            <div class="jrd-spring"></div>
+            {#if !editingDesc}
+              <button class="jrd-link" onclick={startEditDesc}>Edit</button>
+            {/if}
+          </div>
+          {#if editingDesc}
+            <textarea class="jrd-input" bind:value={descDraft} rows="12" disabled={saving}></textarea>
+            <div class="jrd-save-row">
+              <button class="jrd-btn jrd-btn--primary" onclick={saveDesc} disabled={saving}>Save</button>
+              <button class="jrd-link" onclick={() => (editingDesc = false)}>Cancel</button>
+            </div>
+          {:else if detail.description}
+            <div class="jrd-desc"><Markdown source={detail.description} /></div>
+          {:else}
+            <div class="jrd-none">No description. <button class="jrd-link" onclick={startEditDesc}>Add one</button></div>
+          {/if}
+        </section>
+
+        <!-- Time — native Jira worklog. Tempo syncs these in/out by default,
+             so logging here is the same thing you'd see in the Tempo timesheet
+             at /plugins/servlet/ac/io.tempo.jira/tempo-app. -->
+        <section class="jrd-section">
+          <div class="jrd-sec-head">
+            <span class="jrd-sec-label">
+              Time {#if worklogs.length}· {formatDuration(totalWorklogSeconds)} logged{/if}
+            </span>
+            <span class="hatch" aria-hidden="true"></span>
+            <div class="jrd-spring"></div>
+            {#if worklogsLoaded}
+              <button class="jrd-link" onclick={loadWorklogs} disabled={worklogsLoading} title="Refresh worklogs">
+                Refresh
+              </button>
+            {/if}
+          </div>
+
+          {#if worklogsLoading && !worklogsLoaded}
+            <div class="jrd-none">Loading worklogs…</div>
+          {:else if worklogs.length === 0 && worklogsLoaded}
+            <div class="jrd-none">No time logged yet.</div>
+          {:else}
+            <div class="jrd-worklogs">
+              {#each worklogs as w (w.id)}
+                <div class="jrd-worklog">
+                  <div class="jrd-worklog-head">
+                    {#if w.author?.avatar_url}
+                      <img class="jrd-avatar" src={w.author.avatar_url} alt={w.author.display_name} />
+                    {/if}
+                    <span class="jrd-worklog-author">{w.author?.display_name ?? 'Unknown'}</span>
+                    <span class="jrd-worklog-dur mono">{w.time_spent}</span>
+                    <span class="jrd-worklog-time mono">{relativeTime(w.started, now)} ago</span>
+                    <button
+                      class="jrd-worklog-del"
+                      onclick={() => deleteWorklog(w.id)}
+                      disabled={deletingWorklogId === w.id}
+                      title="Delete worklog (only your own)"
+                      aria-label="Delete worklog"
+                    >
+                      <svg class="i i-sm" viewBox="0 0 24 24"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
+                    </button>
+                  </div>
+                  {#if w.comment.trim()}
+                    <div class="jrd-worklog-body"><Markdown source={w.comment} /></div>
+                  {/if}
+                </div>
               {/each}
             </div>
           {/if}
-        </div>
-        <div class="jdp-meta">
-          <div class="jdp-meta-label">Reporter</div>
-          <div class="jdp-meta-val">
-            {#if detail.reporter}
-              {#if detail.reporter.avatar_url}
-                <img class="jdp-avatar" src={detail.reporter.avatar_url} alt={detail.reporter.display_name} />
-              {/if}
-              <span>{detail.reporter.display_name}</span>
-            {:else}
-              <span class="jdp-none">—</span>
-            {/if}
-          </div>
-        </div>
-        <div class="jdp-meta">
-          <div class="jdp-meta-label">Updated</div>
-          <div class="jdp-meta-val">{relativeTime(detail.updated, now)} ago</div>
-        </div>
-        <div class="jdp-meta jdp-meta--full">
-          <div class="jdp-section-head">
-            <span class="jdp-meta-label">Labels</span>
-            {#if !editingLabels}
-              <button class="jdp-link" onclick={startEditLabels}>Edit</button>
-            {/if}
-          </div>
-          {#if editingLabels}
-            <input
-              class="jdp-desc-input"
-              placeholder="comma-separated labels"
-              bind:value={labelsDraft}
-              disabled={saving}
-              onkeydown={(e) => { if (e.key === 'Enter') void saveLabels(); if (e.key === 'Escape') editingLabels = false; }}
-            />
-            <div class="jdp-save-row">
-              <button class="jdp-btn jdp-btn--primary" onclick={saveLabels} disabled={saving}>Save</button>
-              <button class="jdp-link" onclick={() => (editingLabels = false)}>Cancel</button>
-            </div>
-          {:else if detail.labels.length}
-            <div class="jdp-meta-val jdp-labels">
-              {#each detail.labels as l, _i (l + '|' + _i)}<span class="jdp-label mono">{l}</span>{/each}
-            </div>
-          {:else}
-            <span class="jdp-none">no labels</span>
-          {/if}
-        </div>
-      </section>
 
-      <!-- Status transitions -->
-      <section class="jdp-section">
-        <div class="jdp-meta-label">Status</div>
-        <!-- Mockup transitions row: current status = quiet filled tag,
-             first (likely) transition = primary ink pill, the rest are
-             outline chips — all inline, no dropdown. -->
-        <div class="jdp-transition-row">
-          <span class="jdp-status-current">{detail.status}</span>
-          {#if detail.transitions.length}
-            {#each detail.transitions as t, i (t.id)}
+          <div class="jrd-log-time">
+            <div class="jrd-log-row">
+              <input
+                class="jrd-log-dur mono"
+                type="text"
+                placeholder="1h 30m"
+                bind:value={newWorklogDuration}
+                disabled={addingWorklog}
+                onkeydown={(e) => { if (e.key === 'Enter') void addWorklog(); }}
+                aria-label="Duration"
+              />
+              <input
+                class="jrd-log-note"
+                type="text"
+                placeholder="What did you work on? (optional)"
+                bind:value={newWorklogComment}
+                disabled={addingWorklog}
+                onkeydown={(e) => { if (e.key === 'Enter') void addWorklog(); }}
+                aria-label="Worklog comment"
+              />
               <button
-                class="jdp-transition"
-                class:jdp-transition--primary={i === 0}
-                onclick={() => transitionTo(t.id, t.to_status)}
-                disabled={statusBusy}
-                title={t.to_status ? `→ ${t.to_status}` : t.name}
+                class="jrd-btn jrd-btn--primary"
+                onclick={addWorklog}
+                disabled={addingWorklog || !parsedWorklogSeconds || parsedWorklogSeconds < 60}
               >
-                {t.name}
+                {#if addingWorklog}
+                  Logging…
+                {:else if parsedWorklogSeconds && parsedWorklogSeconds >= 60}
+                  Log {formatDuration(parsedWorklogSeconds)}
+                {:else}
+                  Log time
+                {/if}
               </button>
-            {/each}
-          {:else}
-            <span class="jdp-meta-muted">no transitions available</span>
-          {/if}
-        </div>
-      </section>
-
-      <!-- Description -->
-      <section class="jdp-section">
-        <div class="jdp-section-head">
-          <span class="jdp-meta-label">Description</span>
-          {#if !editingDesc}
-            <button class="jdp-link" onclick={startEditDesc}>Edit</button>
-          {/if}
-        </div>
-        {#if editingDesc}
-          <textarea class="jdp-desc-input" bind:value={descDraft} rows="12" disabled={saving}></textarea>
-          <div class="jdp-save-row">
-            <button class="jdp-btn jdp-btn--primary" onclick={saveDesc} disabled={saving}>Save</button>
-            <button class="jdp-link" onclick={() => (editingDesc = false)}>Cancel</button>
-          </div>
-        {:else if detail.description}
-          <div class="jdp-desc"><Markdown source={detail.description} /></div>
-        {:else}
-          <div class="jdp-none">No description. <button class="jdp-link" onclick={startEditDesc}>Add one</button></div>
-        {/if}
-      </section>
-
-      <!-- Time — native Jira worklog. Tempo syncs these in/out by default,
-           so logging here is the same thing you'd see in the Tempo timesheet
-           at /plugins/servlet/ac/io.tempo.jira/tempo-app. -->
-      <section class="jdp-section">
-        <div class="jdp-section-head">
-          <span class="jdp-meta-label">
-            Time {#if worklogs.length}({formatDuration(totalWorklogSeconds)} logged){/if}
-          </span>
-          {#if worklogsLoaded}
-            <button class="jdp-link" onclick={loadWorklogs} disabled={worklogsLoading} title="Refresh worklogs">
-              Refresh
-            </button>
-          {/if}
-        </div>
-
-        {#if worklogsLoading && !worklogsLoaded}
-          <div class="jdp-none">Loading worklogs…</div>
-        {:else if worklogs.length === 0 && worklogsLoaded}
-          <div class="jdp-none">No time logged yet.</div>
-        {:else}
-          <div class="jdp-worklogs">
-            {#each worklogs as w (w.id)}
-              <div class="jdp-worklog">
-                <div class="jdp-worklog-head">
-                  {#if w.author?.avatar_url}
-                    <img class="jdp-avatar" src={w.author.avatar_url} alt={w.author.display_name} />
-                  {/if}
-                  <span class="jdp-worklog-author">{w.author?.display_name ?? 'Unknown'}</span>
-                  <span class="jdp-worklog-dur mono">{w.time_spent}</span>
-                  <span class="jdp-worklog-time mono">{relativeTime(w.started, now)} ago</span>
-                  <button
-                    class="jdp-worklog-del"
-                    onclick={() => deleteWorklog(w.id)}
-                    disabled={deletingWorklogId === w.id}
-                    title="Delete worklog (only your own)"
-                    aria-label="Delete worklog"
-                  >
-                    <svg class="i i-sm" viewBox="0 0 24 24"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
-                  </button>
-                </div>
-                {#if w.comment.trim()}
-                  <div class="jdp-worklog-body"><Markdown source={w.comment} /></div>
-                {/if}
-              </div>
-            {/each}
-          </div>
-        {/if}
-
-        <div class="jdp-log-time">
-          <div class="jdp-log-row">
-            <input
-              class="jdp-log-dur mono"
-              type="text"
-              placeholder="1h 30m"
-              bind:value={newWorklogDuration}
-              disabled={addingWorklog}
-              onkeydown={(e) => { if (e.key === 'Enter') void addWorklog(); }}
-              aria-label="Duration"
-            />
-            <input
-              class="jdp-log-note"
-              type="text"
-              placeholder="What did you work on? (optional)"
-              bind:value={newWorklogComment}
-              disabled={addingWorklog}
-              onkeydown={(e) => { if (e.key === 'Enter') void addWorklog(); }}
-              aria-label="Worklog comment"
-            />
-            <button
-              class="jdp-btn jdp-btn--primary"
-              onclick={addWorklog}
-              disabled={addingWorklog || !parsedWorklogSeconds || parsedWorklogSeconds < 60}
-            >
-              {#if addingWorklog}
-                Logging…
-              {:else if parsedWorklogSeconds && parsedWorklogSeconds >= 60}
-                Log {formatDuration(parsedWorklogSeconds)}
-              {:else}
-                Log time
-              {/if}
-            </button>
-          </div>
-          {#if worklogsError}
-            <div class="jdp-log-err">{worklogsError}</div>
-          {/if}
-          <div class="jdp-log-hint">
-            Format: <span class="mono">1h 30m</span>, <span class="mono">45m</span>, <span class="mono">2h</span>, <span class="mono">1.5h</span>, <span class="mono">1d 2h</span>. Jira: 1d = 8h, 1w = 5d.
-          </div>
-        </div>
-      </section>
-
-      <!-- Comments -->
-      <section class="jdp-section">
-        <div class="jdp-section-head">
-          <span class="jdp-meta-label">Comments ({detail.comments.length})</span>
-        </div>
-        <div class="jdp-comments">
-          {#each detail.comments as c (c.id)}
-            <div class="jdp-comment">
-              <div class="jdp-comment-head">
-                {#if c.author?.avatar_url}
-                  <img class="jdp-avatar" src={c.author.avatar_url} alt={c.author.display_name} />
-                {/if}
-                <span class="jdp-comment-author">{c.author?.display_name ?? 'Unknown'}</span>
-                <span class="jdp-comment-time mono">{relativeTime(c.created, now)} ago</span>
-              </div>
-              <div class="jdp-comment-body"><Markdown source={c.body} /></div>
             </div>
-          {/each}
-          {#if detail.comments.length === 0}
-            <div class="jdp-none">No comments yet.</div>
-          {/if}
-        </div>
-        <div class="jdp-add-comment">
-          <textarea
-            class="jdp-desc-input"
-            placeholder="Add a comment (⌘↵ to send)"
-            bind:value={newComment}
-            rows="3"
-            disabled={addingComment}
-            onkeydown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') void postComment(); }}
-          ></textarea>
-          <div class="jdp-save-row">
-            <button class="jdp-btn jdp-btn--primary" onclick={postComment} disabled={addingComment || !newComment.trim()}>
-              {addingComment ? 'Posting…' : 'Comment'}
-            </button>
+            {#if worklogsError}
+              <div class="jrd-log-err">{worklogsError}</div>
+            {/if}
+            <div class="jrd-log-hint">
+              Format: <span class="mono">1h 30m</span>, <span class="mono">45m</span>, <span class="mono">2h</span>, <span class="mono">1.5h</span>, <span class="mono">1d 2h</span>. Jira: 1d = 8h, 1w = 5d.
+            </div>
           </div>
-        </div>
-      </section>
+        </section>
+
+        <!-- Comments — border-left quotes (GitHub-detail grammar). -->
+        <section class="jrd-section">
+          <div class="jrd-sec-head">
+            <span class="jrd-sec-label">Comments · {detail.comments.length}</span>
+            <span class="hatch" aria-hidden="true"></span>
+          </div>
+          <div class="jrd-comments">
+            {#each detail.comments as c (c.id)}
+              <div class="jrd-quote">
+                <div class="jrd-quote-head">
+                  {#if c.author?.avatar_url}
+                    <img class="jrd-avatar" src={c.author.avatar_url} alt={c.author.display_name} />
+                  {/if}
+                  <span class="jrd-quote-author">{c.author?.display_name ?? 'Unknown'}</span>
+                  <span class="jrd-quote-time mono">{relativeTime(c.created, now)} ago</span>
+                </div>
+                <div class="jrd-quote-body"><Markdown source={c.body} /></div>
+              </div>
+            {/each}
+            {#if detail.comments.length === 0}
+              <div class="jrd-none">No comments yet.</div>
+            {/if}
+          </div>
+          <div class="jrd-add-comment">
+            <textarea
+              class="jrd-input"
+              placeholder="Add a comment (⌘↵ to send)"
+              bind:value={newComment}
+              rows="3"
+              disabled={addingComment}
+              onkeydown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') void postComment(); }}
+            ></textarea>
+            <div class="jrd-save-row">
+              <button class="jrd-btn jrd-btn--primary" onclick={postComment} disabled={addingComment || !newComment.trim()}>
+                {addingComment ? 'Posting…' : 'Comment'}
+              </button>
+            </div>
+          </div>
+        </section>
+      </div>
     </div>
   {/if}
 </div>
 
 <style>
-  .jdp { height: 100%; display: flex; flex-direction: column; min-height: 0; background: var(--bg-0); }
-  /* Redesign v2 §2.6 — 52px document header, flush on bg-0. */
-  .jdp-head {
+  /* §2.6 Jira detail (mockup 4c) — single scrolling document, no side
+     panels. Fresh `.jrd-` grammar: 52px header, centred document (max 800),
+     summary + meta-grid + transitions + Description/Time/Comments sections. */
+
+  .jrd { height: 100%; display: flex; flex-direction: column; min-height: 0; background: var(--bg-0); }
+
+  /* Header ------------------------------------------------------------- */
+  .jrd-head {
     flex: none;
     display: flex; align-items: center; gap: 10px;
-    height: 52px;
-    padding: 0 24px;
+    height: 52px; padding: 0 24px;
     border-bottom: 1px solid var(--border-lo);
     background: var(--bg-0);
   }
-  .jdp-back {
+  .jrd-back {
     width: 28px; height: 28px; border-radius: 5px;
     display: inline-flex; align-items: center; justify-content: center;
     color: var(--text-1);
   }
-  .jdp-back:hover { background: var(--bg-2); color: var(--text-0); }
-  .jdp-key { font-size: 13px; color: var(--accent-bright); font-weight: 600; }
-  .jdp-kind { font-size: 11px; color: var(--text-2); }
-  .jdp-prio { font-size: 11px; color: var(--text-2); }
-  .jdp-btn {
+  .jrd-back:hover { background: var(--bg-2); color: var(--text-0); }
+  .jrd-ref { font-size: 12px; color: var(--text-1); font-weight: 600; }
+  .jrd-chip {
+    font-size: 11px; padding: 2px 8px; border-radius: 5px;
+    background: var(--accent-soft); color: var(--text-1);
+  }
+  .jrd-prio { font-size: 12px; color: var(--text-faint); }
+  .jrd-spring { flex: 1; }
+  .jrd-iconbtn {
+    width: 30px; height: 28px; border-radius: 6px;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: transparent; color: var(--text-2);
+    border: 1px solid var(--border-neutral);
+  }
+  .jrd-iconbtn:hover:not(:disabled) { background: var(--bg-2); color: var(--text-0); }
+  .jrd-iconbtn:disabled { opacity: 0.45; cursor: not-allowed; }
+  .jrd-iconbtn .i-sm { width: 14px; height: 14px; }
+  .jrd-spin { animation: jrd-spin 0.8s linear infinite; }
+  @keyframes jrd-spin { to { transform: rotate(360deg); } }
+  .jrd-ghostbtn {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 6px 12px; border-radius: 6px;
+    background: transparent; color: var(--text-1);
+    font-size: 12px; border: 1px solid var(--border-neutral-hi);
+  }
+  .jrd-ghostbtn:hover:not(:disabled) { background: var(--bg-2); color: var(--text-0); }
+  .jrd-ghostbtn:disabled { opacity: 0.5; cursor: default; }
+  /* → claude — primary inverse pill (spec §2.6: инверсный + shadow-pill). */
+  .jrd-claudebtn {
+    display: inline-flex; align-items: center;
+    padding: 6px 14px; border-radius: 999px;
+    background: var(--accent); color: var(--accent-fg);
+    font-size: 12px; font-weight: 600; border: none;
+    box-shadow: var(--shadow-pill);
+  }
+  .jrd-claudebtn:hover:not(:disabled) { background: var(--accent-bright); color: var(--accent-fg); }
+  .jrd-claudebtn:disabled { opacity: 0.5; cursor: default; }
+
+  .jrd-state { padding: 40px; text-align: center; color: var(--text-2); }
+  .jrd-err { color: var(--error); }
+  .jrd-link { color: var(--accent-bright); font-size: 12px; text-decoration: none; }
+  .jrd-link:hover { text-decoration: underline; }
+
+  /* Document ----------------------------------------------------------- */
+  .jrd-scroll { flex: 1; min-height: 0; overflow-y: auto; }
+  .jrd-doc { max-width: 800px; margin: 0 auto; padding: 30px 40px 60px; }
+
+  /* Summary ------------------------------------------------------------ */
+  .jrd-summary-sec { margin-bottom: 4px; }
+  .jrd-summary {
+    display: flex; align-items: flex-start; gap: 10px;
+    padding: 4px; border-radius: 6px;
+    text-align: left; width: 100%; color: inherit;
+    transition: background 100ms;
+  }
+  .jrd-summary:hover { background: var(--bg-1); }
+  .jrd-title {
+    font-size: 22px; font-weight: 600; color: var(--text-0);
+    letter-spacing: -0.015em; line-height: 1.25; margin: 0;
+  }
+  .jrd-edit-icon { opacity: 0; color: var(--text-2); margin-top: 6px; flex-shrink: 0; transition: opacity 120ms; }
+  .jrd-summary:hover .jrd-edit-icon { opacity: 0.8; }
+  .jrd-summary-input {
+    width: 100%; font-size: 22px; font-weight: 600; color: var(--text-0);
+    padding: 6px 10px; background: var(--bg-1); border: 1px solid var(--border-hi);
+    border-radius: 6px; font-family: inherit;
+  }
+  .jrd-summary-input:focus { outline: none; border-color: var(--accent); }
+  .jrd-save-row { display: flex; gap: 8px; margin-top: 10px; align-items: center; }
+
+  /* Meta grid — caps-label + value, 16px avatars. --------------------- */
+  .jrd-meta-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 14px 24px;
+    padding: 16px 0 18px; margin-top: 12px;
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+  }
+  .jrd-meta { display: flex; flex-direction: column; gap: 5px; }
+  .jrd-meta--full { grid-column: 1 / -1; }
+  .jrd-meta--editable { position: relative; }
+  .jrd-meta-label {
+    font-size: 10.5px; font-weight: 600;
+    color: var(--text-faint);
+    text-transform: uppercase; letter-spacing: 0.09em;
+  }
+  .jrd-meta-val { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-0); }
+  .jrd-avatar { width: 16px; height: 16px; border-radius: 50%; flex-shrink: 0; }
+  .jrd-none { color: var(--text-mute); font-size: 12.5px; }
+  .jrd-labels { flex-wrap: wrap; }
+  .jrd-label {
+    font-size: 11px; padding: 2px 7px; border-radius: 4px;
+    background: var(--accent-soft); color: var(--text-1);
+  }
+  .jrd-edit-target {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 13px; color: var(--text-0);
+    padding: 2px 4px; border-radius: 4px; text-align: left;
+    transition: background 100ms;
+  }
+  .jrd-edit-target:hover:not(:disabled) { background: var(--bg-1); }
+  .jrd-edit-target:disabled { opacity: 0.5; cursor: default; }
+  .jrd-edit-caret { color: var(--text-2); opacity: 0.6; margin-left: 4px; }
+
+  /* Popovers ----------------------------------------------------------- */
+  .jrd-popover {
+    position: absolute; top: calc(100% + 4px); left: 0;
+    min-width: 300px; max-width: 360px; max-height: 300px; overflow-y: auto;
+    background: var(--bg-2); border: 1px solid var(--border-hi);
+    border-radius: 8px; z-index: 10; box-shadow: var(--shadow-2);
+    padding: 4px; display: flex; flex-direction: column; gap: 2px;
+  }
+  .jrd-popover--narrow { min-width: 180px; }
+  .jrd-popover-input {
+    width: 100%; padding: 6px 10px;
+    background: var(--bg-0); border: 1px solid var(--border-neutral-hi);
+    border-radius: 5px; color: var(--text-0); font-size: 12px; margin-bottom: 2px;
+  }
+  .jrd-popover-input:focus { outline: none; border-color: var(--border-hi2); }
+  .jrd-popover-item {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 10px; border-radius: 5px;
+    font-size: 12.5px; color: var(--text-1); text-align: left;
+  }
+  .jrd-popover-item:hover { background: var(--bg-3); color: var(--text-0); }
+  .jrd-popover-item.active { background: var(--accent-soft); color: var(--accent-bright); }
+  .jrd-popover-sub { margin-left: auto; font-size: 10.5px; color: var(--text-mute); }
+  .jrd-popover-state { padding: 8px 10px; font-size: 11.5px; color: var(--text-2); }
+
+  /* Sections — caps label + hatch ornament. --------------------------- */
+  .jrd-section { margin-top: 28px; }
+  .jrd-sec-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+  .jrd-sec-label {
+    font-size: 10.5px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.09em;
+    color: var(--text-faint);
+  }
+
+  /* Transitions — current = inverse chip + 2px shadow, rest ghost. ----- */
+  .jrd-transition-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .jrd-status-current {
+    padding: 5px 12px; font-size: 11px; border-radius: var(--r-item);
+    background: var(--accent); color: var(--accent-fg);
+    font-weight: 600; box-shadow: var(--shadow-1);
+  }
+  .jrd-trans-arrow { color: var(--text-mute); font-size: 12px; }
+  .jrd-meta-muted { color: var(--text-mute); font-size: 12px; }
+  .jrd-transition {
+    display: inline-flex; align-items: center; padding: 5px 12px;
+    border-radius: var(--r-item); border: 1px solid var(--border-hi);
+    font-size: 11px; color: var(--text-1); background: transparent;
+    transition: background 120ms, color 120ms;
+  }
+  .jrd-transition:hover:not(:disabled) { background: var(--bg-hover); color: var(--text-0); }
+  .jrd-transition:disabled { opacity: 0.5; cursor: default; }
+
+  /* Inputs (description / labels / comment) — r9. --------------------- */
+  .jrd-input {
+    width: 100%; padding: 10px 14px;
+    font-family: inherit; font-size: 13px;
+    background: var(--bg-1); color: var(--text-0);
+    border: 1px solid var(--border-neutral-hi); border-radius: 9px;
+    line-height: 1.55; resize: vertical;
+  }
+  .jrd-input:focus { outline: none; border-color: var(--border-hi2); }
+  .jrd-desc { color: var(--text-1); font-size: 13.5px; line-height: 1.6; }
+
+  /* Comments — border-left quotes (GitHub-detail grammar). ------------ */
+  .jrd-comments { display: flex; flex-direction: column; margin-bottom: 18px; }
+  .jrd-quote {
+    border-left: 2px solid var(--border-hi); padding-left: 14px; margin-bottom: 18px;
+  }
+  .jrd-quote-head {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 11.5px; color: var(--text-faint); margin-bottom: 6px;
+  }
+  .jrd-quote-author { color: var(--text-1); font-weight: 500; }
+  .jrd-quote-time { margin-left: auto; color: var(--text-mute); font-size: 11px; }
+  .jrd-quote-body { font-size: 13.5px; line-height: 1.6; color: var(--text-1); }
+  .jrd-add-comment { display: flex; flex-direction: column; }
+
+  /* Worklog — list of native Jira time entries + inline "Log time" form. */
+  .jrd-worklogs { display: flex; flex-direction: column; margin-bottom: 14px; }
+  .jrd-worklog { padding: 8px 0; border-bottom: 1px solid var(--border-lo); }
+  .jrd-worklog:last-child { border-bottom: none; }
+  .jrd-worklog-head { display: flex; align-items: center; gap: 8px; }
+  .jrd-worklog-author { font-size: 12.5px; color: var(--text-0); font-weight: 500; }
+  .jrd-worklog-dur {
+    font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 4px;
+    color: var(--accent-bright); background: var(--accent-soft);
+  }
+  .jrd-worklog-time { margin-left: auto; font-size: 11px; color: var(--text-mute); }
+  .jrd-worklog-del {
+    width: 22px; height: 22px; border-radius: 4px;
+    display: inline-flex; align-items: center; justify-content: center;
+    color: var(--text-mute); background: transparent; opacity: 0; transition: all 120ms;
+  }
+  .jrd-worklog:hover .jrd-worklog-del { opacity: 1; }
+  .jrd-worklog-del:hover:not(:disabled) { color: var(--error); background: var(--bg-3); }
+  .jrd-worklog-del:disabled { opacity: 0.3; cursor: default; }
+  .jrd-worklog-body {
+    margin-top: 6px; font-size: 12.5px; color: var(--text-1); line-height: 1.5; padding-left: 2px;
+  }
+
+  .jrd-log-time {
+    border-top: 1px solid var(--border-neutral); padding-top: 12px;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .jrd-log-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .jrd-log-dur {
+    width: 90px; padding: 7px 10px;
+    background: var(--bg-0); border: 1px solid var(--border-neutral-hi);
+    border-radius: 6px; color: var(--text-0); font-size: 12.5px;
+    font-feature-settings: 'zero'; text-align: center;
+  }
+  .jrd-log-dur:focus { outline: none; border-color: var(--accent); }
+  .jrd-log-note {
+    flex: 1; min-width: 180px; padding: 7px 10px;
+    background: var(--bg-0); border: 1px solid var(--border-neutral-hi);
+    border-radius: 6px; color: var(--text-0); font-size: 12.5px; font-family: inherit;
+  }
+  .jrd-log-note:focus { outline: none; border-color: var(--accent); }
+  .jrd-log-err { font-size: 11.5px; color: var(--error); }
+  .jrd-log-hint { font-size: 10.5px; color: var(--text-mute); }
+
+  /* Buttons ------------------------------------------------------------ */
+  .jrd-btn {
     display: inline-flex; align-items: center; gap: 6px;
     padding: 6px 12px; border-radius: 6px;
     background: var(--bg-2); color: var(--text-1);
     font-size: 12px; border: 1px solid var(--border-neutral-hi);
   }
-  .jdp-btn:hover:not(:disabled) { background: var(--bg-3); color: var(--text-0); }
-  .jdp-btn:disabled { opacity: 0.5; cursor: default; }
-  .jdp-btn--icon { padding: 6px; }
-  .jdp-btn--icon .i-sm { width: 14px; height: 14px; }
-  .jdp-spin { animation: jdp-spin 0.8s linear infinite; }
-  @keyframes jdp-spin { to { transform: rotate(360deg); } }
-  .jdp-btn--primary {
+  .jrd-btn:hover:not(:disabled) { background: var(--bg-3); color: var(--text-0); }
+  .jrd-btn:disabled { opacity: 0.5; cursor: default; }
+  .jrd-btn--primary {
     background: var(--accent); color: var(--accent-fg);
     border-color: transparent; font-weight: 600;
   }
-  .jdp-btn--primary:hover:not(:disabled) { background: var(--accent-bright); color: var(--accent-fg); }
-  /* Send-to-Claude — brand-tinted ghost so the handoff stands apart
-     from the Jira-native actions (Refresh / Open on Jira). */
-  .jdp-btn--claude {
-    color: var(--src-claude);
-    background: color-mix(in srgb, var(--src-claude) 8%, transparent);
-    border-color: color-mix(in srgb, var(--src-claude) 30%, transparent);
-  }
-  .jdp-btn--claude:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--src-claude) 18%, transparent);
-    color: var(--accent-bright);
-    border-color: color-mix(in srgb, var(--src-claude) 50%, transparent);
-  }
-
-  .jdp-state { padding: 40px; text-align: center; color: var(--text-2); }
-  .jdp-err { color: var(--error); }
-
-  /* Redesign v2 §2.6 — centred document column (max 800), padding 30/40. */
-  .jdp-body {
-    flex: 1; min-height: 0; overflow-y: auto;
-    width: 100%; max-width: 800px; margin: 0 auto;
-    padding: 30px 40px 60px;
-  }
-  .jdp-section { margin-bottom: 24px; }
-  .jdp-section-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
-
-  .jdp-summary {
-    display: flex; align-items: flex-start; gap: 10px;
-    padding: 4px; border-radius: 6px;
-    text-align: left; width: 100%;
-    cursor: pointer;
-    transition: background 100ms;
-    color: inherit;
-  }
-  .jdp-summary:hover { background: var(--bg-1); }
-  .jdp-summary-text {
-    font-size: 22px; font-weight: 600; color: var(--text-0);
-    letter-spacing: -0.015em;
-    line-height: 1.25; margin: 0;
-  }
-  .jdp-edit-icon { opacity: 0; color: var(--text-2); margin-top: 6px; flex-shrink: 0; transition: opacity 120ms; }
-  .jdp-summary:hover .jdp-edit-icon { opacity: 0.8; }
-  .jdp-summary-input {
-    width: 100%;
-    font-size: 22px; font-weight: 600; color: var(--text-0);
-    padding: 6px 10px;
-    background: var(--bg-1); border: 1px solid var(--border-hi);
-    border-radius: 6px; font-family: inherit;
-  }
-  .jdp-summary-input:focus { outline: none; border-color: var(--accent); }
-  .jdp-save-row { display: flex; gap: 8px; margin-top: 10px; align-items: center; }
-
-  .jdp-meta-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-    gap: 14px 24px;
-    padding: 16px 0 18px;
-    border-top: 1px solid var(--border);
-    border-bottom: 1px solid var(--border);
-  }
-  .jdp-meta { display: flex; flex-direction: column; gap: 4px; }
-  .jdp-meta--full { grid-column: 1 / -1; }
-  .jdp-meta-label {
-    font-size: 9.5px; font-weight: 700;
-    color: var(--text-mute);
-    text-transform: uppercase; letter-spacing: 0.10em;
-  }
-  .jdp-meta-val { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-0); }
-  .jdp-avatar { width: 20px; height: 20px; border-radius: 50%; }
-  .jdp-none { color: var(--text-mute);  font-size: 12.5px; }
-  .jdp-labels { flex-wrap: wrap; }
-  .jdp-label {
-    font-size: 11px; padding: 2px 7px;
-    border-radius: 4px;
-    background: var(--bg-2); color: var(--text-1);
-    border: 1px solid var(--border-neutral);
-  }
-
-  .jdp-meta--editable { position: relative; }
-  .jdp-edit-target {
-    display: inline-flex; align-items: center; gap: 6px;
-    font-size: 13px; color: var(--text-0);
-    padding: 2px 4px;
-    border-radius: 4px;
-    text-align: left;
-    transition: background 100ms;
-  }
-  .jdp-edit-target:hover:not(:disabled) { background: var(--bg-1); }
-  .jdp-edit-target:disabled { opacity: 0.5; cursor: default; }
-  .jdp-edit-caret { color: var(--text-2); opacity: 0.6; margin-left: 4px; }
-  .jdp-popover {
-    position: absolute; top: calc(100% + 4px); left: 0;
-    min-width: 300px; max-width: 360px;
-    max-height: 300px; overflow-y: auto;
-    background: var(--bg-2);
-    border: 1px solid var(--border-hi);
-    border-radius: 8px;
-    z-index: 10;
-    box-shadow: var(--shadow-2);
-    padding: 4px;
-    display: flex; flex-direction: column; gap: 2px;
-  }
-  .jdp-popover--narrow { min-width: 180px; }
-  .jdp-popover-input {
-    width: 100%; padding: 6px 10px;
-    background: var(--bg-0); border: 1px solid var(--border-neutral-hi);
-    border-radius: 5px; color: var(--text-0); font-size: 12px;
-    margin-bottom: 2px;
-  }
-  .jdp-popover-input:focus { outline: none; border-color: var(--border-hi2); }
-  .jdp-popover-item {
-    display: flex; align-items: center; gap: 8px;
-    padding: 6px 10px; border-radius: 5px;
-    font-size: 12.5px; color: var(--text-1);
-    text-align: left;
-  }
-  .jdp-popover-item:hover { background: var(--bg-3); color: var(--text-0); }
-  .jdp-popover-item.active { background: var(--accent-soft); color: var(--accent-bright); }
-  .jdp-popover-sub { margin-left: auto; font-size: 10.5px; color: var(--text-mute); }
-  .jdp-popover-state { padding: 8px 10px; font-size: 11.5px; color: var(--text-2);  }
-
-  .jdp-transition-row {
-    position: relative;
-    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-  }
-  /* Mockup grammar: current = quiet fill (bg-3, mute), primary next
-     step = ink inversion pill, remaining = outline chips. */
-  .jdp-status-current {
-    padding: 5px 12px;
-    font-size: 11px;
-    border-radius: var(--r-item);
-    background: var(--bg-3);
-    color: var(--text-mute);
-  }
-  .jdp-meta-muted { color: var(--text-mute); font-size: 12px; }
-  .jdp-transition {
-    display: inline-flex; align-items: center;
-    padding: 5px 12px;
-    border-radius: var(--r-item);
-    border: 1px solid var(--border-hi);
-    font-size: 11px; color: var(--text-1);
-    background: transparent;
-    cursor: pointer;
-    transition: background 120ms, color 120ms;
-  }
-  .jdp-transition:hover:not(:disabled) { background: var(--bg-hover); color: var(--text-0); }
-  .jdp-transition--primary {
-    background: var(--text-0);
-    color: var(--accent-fg);
-    border-color: transparent;
-    font-weight: 600;
-    box-shadow: var(--shadow-pill);
-  }
-  .jdp-transition--primary:hover:not(:disabled) {
-    background: var(--accent-bright);
-    color: var(--accent-fg);
-  }
-
-  .jdp-desc-input {
-    width: 100%; padding: 10px 14px;
-    font-family: inherit; font-size: 13px;
-    background: var(--bg-1); color: var(--text-0);
-    border: 1px solid var(--border-neutral-hi); border-radius: 8px;
-    line-height: 1.55; resize: vertical;
-  }
-  .jdp-desc-input:focus { outline: none; border-color: var(--border-hi2); }
-  .jdp-desc { padding: 2px; color: var(--text-0); font-size: 13.5px; line-height: 1.6; }
-
-  .jdp-link { color: var(--accent-bright); font-size: 12px; text-decoration: none; }
-  .jdp-link:hover { text-decoration: underline; }
-
-  .jdp-comments { display: flex; flex-direction: column; gap: 14px; margin-bottom: 20px; }
-  .jdp-comment {
-    background: var(--bg-2);
-    border: 1px solid var(--border);
-    border-radius: 11px;
-    padding: 12px 14px;
-  }
-  .jdp-comment-head .jdp-avatar {
-    width: 22px; height: 22px;
-    border-radius: 50%;
-    background: var(--bg-3);
-    display: grid; place-items: center;
-    font-size: 10.5px; font-weight: 600;
-    color: var(--text-1);
-  }
-  .jdp-comment-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
-  .jdp-comment-author { font-size: 12.5px; color: var(--text-0); font-weight: 500; }
-  .jdp-comment-time { font-size: 11px; color: var(--text-mute); }
-  .jdp-comment-body { font-size: 13px; color: var(--text-1); padding-left: 2px; }
-  .jdp-add-comment { border-top: 1px solid var(--border-neutral); padding-top: 14px; }
-
-  /* Worklog — list of native Jira time entries + inline "Log time" form.
-     Same card aesthetic as .jdp-comment so the two sections feel like
-     siblings, but with a dedicated mono duration chip on the right. */
-  .jdp-worklogs { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
-  .jdp-worklog {
-    background: var(--bg-1);
-    border: 1px solid var(--border-neutral);
-    border-radius: 8px;
-    padding: 10px 12px;
-  }
-  .jdp-worklog-head { display: flex; align-items: center; gap: 8px; }
-  .jdp-worklog-author { font-size: 12.5px; color: var(--text-0); font-weight: 500; }
-  .jdp-worklog-dur {
-    font-size: 11px; font-weight: 600;
-    padding: 2px 7px; border-radius: 4px;
-    color: var(--accent-bright);
-    background: var(--accent-soft);
-    border: 1px solid rgba(62, 54, 32, 0.22);
-  }
-  .jdp-worklog-time { margin-left: auto; font-size: 11px; color: var(--text-mute); }
-  .jdp-worklog-del {
-    width: 22px; height: 22px; border-radius: 4px;
-    display: inline-flex; align-items: center; justify-content: center;
-    color: var(--text-mute); background: transparent;
-    opacity: 0; transition: all 120ms;
-  }
-  .jdp-worklog:hover .jdp-worklog-del { opacity: 1; }
-  .jdp-worklog-del:hover:not(:disabled) { color: var(--error); background: var(--bg-3); }
-  .jdp-worklog-del:disabled { opacity: 0.3; cursor: default; }
-  .jdp-worklog-body {
-    margin-top: 6px;
-    font-size: 12.5px; color: var(--text-1); line-height: 1.5;
-    padding-left: 2px;
-  }
-
-  .jdp-log-time {
-    border-top: 1px solid var(--border-neutral);
-    padding-top: 12px;
-    display: flex; flex-direction: column; gap: 8px;
-  }
-  .jdp-log-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-  .jdp-log-dur {
-    width: 110px; padding: 7px 10px;
-    background: var(--bg-0); border: 1px solid var(--border-neutral-hi);
-    border-radius: 6px; color: var(--text-0);
-    font-size: 12.5px;
-    font-feature-settings: 'zero';
-    text-align: center;
-  }
-  .jdp-log-dur:focus { outline: none; border-color: var(--accent); }
-  .jdp-log-note {
-    flex: 1; min-width: 180px;
-    padding: 7px 10px;
-    background: var(--bg-0); border: 1px solid var(--border-neutral-hi);
-    border-radius: 6px; color: var(--text-0);
-    font-size: 12.5px; font-family: inherit;
-  }
-  .jdp-log-note:focus { outline: none; border-color: var(--accent); }
-  .jdp-log-err { font-size: 11.5px; color: var(--error); }
-  .jdp-log-hint { font-size: 10.5px; color: var(--text-mute); }
+  .jrd-btn--primary:hover:not(:disabled) { background: var(--accent-bright); color: var(--accent-fg); }
 </style>

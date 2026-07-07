@@ -167,10 +167,10 @@
   .sj-shell--quiet { display: block; overflow-y: auto; padding: 18px 40px 40px; }
   .qsolo-doc { width: 100%; max-width: 800px; margin: 0 auto; display: flex; flex-direction: column; }
   .qsolo-pane { display: flex; min-height: 0; }
-  .qsolo-pane > :global(.jdp) { flex: 1; min-width: 0; background: transparent; }
+  .qsolo-pane > :global(.jrd) { flex: 1; min-width: 0; background: transparent; }
   /* The Cabin 52px toolbar head is replaced by the qsolo eyebrow above. */
-  .qsolo-pane :global(.jdp-head) { display: none; }
-  .qsolo-pane :global(.jdp-body) { padding: 4px 0 40px; max-width: none; }
+  .qsolo-pane :global(.jrd-head) { display: none; }
+  .qsolo-pane :global(.jrd-doc) { padding: 4px 0 40px; max-width: none; }
 
   .qsolo-key { font-size: 12px; font-weight: 600; color: var(--src-jira); }
   .qsolo-tag {
@@ -221,8 +221,8 @@
     min-width: 0;
     display: flex; flex-direction: column;
   }
-  /* JiraDetailPane root = `.jdp` — stretch it to fill the pane. */
-  .sj-detail :global(.jdp) {
+  /* JiraDetailPane root = `.jrd` — stretch it to fill the pane. */
+  .sj-detail :global(.jrd) {
     flex: 1; min-height: 0;
     display: flex; flex-direction: column;
     overflow-y: auto;

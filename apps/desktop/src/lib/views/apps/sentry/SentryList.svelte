@@ -296,7 +296,7 @@
   }
 </script>
 
-<aside class="lp sl">
+<aside class="lp snl">
   <header class="lp-head">
     <span class="lp-title">Issues</span>
     {#if filtered.length > 0}<span class="lp-count">{filtered.length}</span>{/if}
@@ -306,76 +306,76 @@
     </button>
   </header>
 
-    <label class="sl-search" bind:this={searchEl}>
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
-      <input
-        type="text"
-        placeholder="Search title, short-id, project…"
-        bind:value={query}
-        spellcheck="false"
-        onkeydown={handleSearchKeydown}
-        onfocus={openPicker}
-      />
-      {#if query}
-        <button class="sl-search-clear" onclick={() => (query = '')} aria-label="Clear search">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-        </button>
-      {/if}
-    </label>
-    <ListSearchPicker
-      bind:this={pickerEl}
-      anchor={searchEl}
-      open={pickerOpen}
-      rows={pickerRows}
-      source="sentry"
-      onPick={pickIssue}
-      onClose={closePicker}
+  <label class="snl-search" bind:this={searchEl}>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+    <input
+      type="text"
+      placeholder="Search title, short-id, project…"
+      bind:value={query}
+      spellcheck="false"
+      onkeydown={handleSearchKeydown}
+      onfocus={openPicker}
     />
-    <div class="lp-chips">
-      <button class="lp-chip" class:active={levelFilter === 'fatal'} onclick={() => toggleLevel('fatal')}>Fatal</button>
-      <button class="lp-chip" class:active={levelFilter === 'error'} onclick={() => toggleLevel('error')}>Error</button>
-      <button class="lp-chip" class:active={levelFilter === 'warning'} onclick={() => toggleLevel('warning')}>Warn</button>
-      <button class="lp-chip" class:active={levelFilter === 'info'} onclick={() => toggleLevel('info')}>Info</button>
-      <button class="lp-chip" class:active={statusFilter === 'unresolved'} onclick={() => toggleStatus('unresolved')}>Unresolved</button>
-      <button class="lp-chip" class:active={statusFilter === 'resolved'} onclick={() => toggleStatus('resolved')}>Resolved</button>
-      <button class="lp-chip" class:active={statusFilter === 'ignored'} onclick={() => toggleStatus('ignored')}>Ignored</button>
-      <span class="sl-dd">
-        <Dropdown
-          value={projectFilter ?? '__all__'}
-          options={projectOptions}
-          onChange={(v) => (projectFilter = v === '__all__' ? null : v)}
-          placeholder="Project"
-          ariaLabel="Filter by project"
-          variant="chip"
-          compact
-        />
-      </span>
-      {#if anyFilterActive}
-        <button class="sl-chip-clear" onclick={clearFilters} title="Clear all filters">Clear</button>
-      {/if}
-    </div>
+    {#if query}
+      <button class="snl-search-clear" onclick={() => (query = '')} aria-label="Clear search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    {/if}
+  </label>
+  <ListSearchPicker
+    bind:this={pickerEl}
+    anchor={searchEl}
+    open={pickerOpen}
+    rows={pickerRows}
+    source="sentry"
+    onPick={pickIssue}
+    onClose={closePicker}
+  />
+  <div class="lp-chips">
+    <button class="lp-chip" class:active={levelFilter === 'fatal'} onclick={() => toggleLevel('fatal')}>Fatal</button>
+    <button class="lp-chip" class:active={levelFilter === 'error'} onclick={() => toggleLevel('error')}>Error</button>
+    <button class="lp-chip" class:active={levelFilter === 'warning'} onclick={() => toggleLevel('warning')}>Warn</button>
+    <button class="lp-chip" class:active={levelFilter === 'info'} onclick={() => toggleLevel('info')}>Info</button>
+    <button class="lp-chip" class:active={statusFilter === 'unresolved'} onclick={() => toggleStatus('unresolved')}>Unresolved</button>
+    <button class="lp-chip" class:active={statusFilter === 'resolved'} onclick={() => toggleStatus('resolved')}>Resolved</button>
+    <button class="lp-chip" class:active={statusFilter === 'ignored'} onclick={() => toggleStatus('ignored')}>Ignored</button>
+    <span class="snl-dd">
+      <Dropdown
+        value={projectFilter ?? '__all__'}
+        options={projectOptions}
+        onChange={(v) => (projectFilter = v === '__all__' ? null : v)}
+        placeholder="Project"
+        ariaLabel="Filter by project"
+        variant="chip"
+        compact
+      />
+    </span>
+    {#if anyFilterActive}
+      <button class="snl-chip-clear" onclick={clearFilters} title="Clear all filters">Clear</button>
+    {/if}
+  </div>
 
   <div class="lp-list">
     {#if error}
-      <div class="sl-error">
-        <p class="sl-error-h serif">Couldn't load Sentry</p>
-        <p class="sl-error-p mono">{error}</p>
+      <div class="snl-error">
+        <p class="snl-error-h serif">Couldn't load Sentry</p>
+        <p class="snl-error-p mono">{error}</p>
       </div>
     {:else if loading && items.length === 0}
-      <div class="sl-loading">
-        <div class="sl-spinner"></div>
+      <div class="snl-loading">
+        <div class="snl-spinner"></div>
         <span class="mono">Loading…</span>
       </div>
     {:else if items.length === 0}
-      <div class="sl-empty">
-        <p class="sl-empty-h serif">No issues</p>
-        <p class="sl-empty-p">No Sentry issues yet.</p>
+      <div class="snl-empty">
+        <p class="snl-empty-h serif">No issues</p>
+        <p class="snl-empty-p">No Sentry issues yet.</p>
       </div>
     {:else if filtered.length === 0}
-      <div class="sl-empty">
-        <p class="sl-empty-h serif">No matches</p>
-        <p class="sl-empty-p">No issues match the current search and filters.</p>
-        <button class="sl-error-retry" onclick={clearFilters}>Clear filters</button>
+      <div class="snl-empty">
+        <p class="snl-empty-h serif">No matches</p>
+        <p class="snl-empty-p">No issues match the current search and filters.</p>
+        <button class="snl-error-retry" onclick={clearFilters}>Clear filters</button>
       </div>
     {:else}
       {#each groups as g (g.label)}
@@ -383,7 +383,7 @@
         {#each g.items as it (it.id)}
           {@const isActive = inboxState.sentryFocusId === it.id}
           <button
-            class="lp-row sl-row"
+            class="lp-row snl-row"
             class:active={isActive}
             draggable="true"
             onpointerdown={p.onCardMouseDown}
@@ -393,35 +393,35 @@
             ondblclick={() => p.onOpenBrowser(it.permalink)}
             oncontextmenu={(e) => openCtxMenu(e, it)}
           >
-            <div class="sl-card-top">
-              <span class="sl-level {sentryLevelClass(it.level)}">{it.level}</span>
-              <span class="sl-card-id mono">{it.short_id}</span>
-              <span class="sl-card-time mono">{relativeTime(it.last_seen, p.now)}</span>
+            <div class="snl-top">
+              <span class="state-pill {sentryLevelClass(it.level)}">{it.level}</span>
+              <span class="snl-id">{it.short_id}</span>
+              <span class="snl-time">{relativeTime(it.last_seen, p.now)}</span>
             </div>
-            <div class="sl-card-title">{it.title}</div>
+            <div class="snl-title">{it.title}</div>
             {#if sparkBars(it.stats_24h).length}
-              <div class="sl-spark" class:sl-spark--hot={it.level === 'error' || it.level === 'fatal'} aria-hidden="true">
+              <div class="snl-spark" class:snl-spark--hot={it.level === 'error' || it.level === 'fatal'} aria-hidden="true">
                 {#each sparkBars(it.stats_24h) as h, i (i)}
-                  <span class="sl-spark-bar" style:height="{h}px"></span>
+                  <span class="snl-spark-bar" style:height="{h}px"></span>
                 {/each}
               </div>
             {/if}
-            <div class="sl-card-meta">
-              <span class="sl-count mono" title={`${it.count} events`}>
+            <div class="snl-meta">
+              <span class="snl-count" title={`${it.count} events`}>
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 12a9 9 0 0 1 18 0M3 12a9 9 0 0 0 18 0"/></svg>
                 {it.count}
               </span>
-              <span class="sl-users mono" title={`${it.user_count} users`}>
+              <span class="snl-users" title={`${it.user_count} users`}>
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
                 {it.user_count}
               </span>
-              <span class="sl-project mono">{it.project_slug}</span>
-              {#if it.status === 'resolved'}<span class="sl-status sl-status--resolved">resolved</span>{/if}
-              {#if it.status === 'ignored'}<span class="sl-status sl-status--ignored">ignored</span>{/if}
+              <span class="snl-project">{it.project_slug}</span>
+              {#if it.status === 'resolved'}<span class="snl-status snl-status--resolved">resolved</span>{/if}
+              {#if it.status === 'ignored'}<span class="snl-status snl-status--ignored">ignored</span>{/if}
             </div>
-            <span class="sl-card-sends">
+            <span class="snl-sends">
               <span
-                class="sl-card-send sl-card-send--claude"
+                class="snl-send"
                 role="button"
                 tabindex="0"
                 onclick={(e) => clickSendToClaude(it, e)}
@@ -429,10 +429,7 @@
                 onpointerdown={(e) => e.stopPropagation()}
                 title="Send to Claude"
                 aria-label="Send to Claude"
-              >
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="m22 2-7 20-4-9-9-4 20-7z"/></svg>
-                <span>Claude</span>
-              </span>
+              >→ claude</span>
             </span>
           </button>
         {/each}
@@ -444,17 +441,16 @@
 <CardContextMenu coords={ctxCoords} items={ctxItems} onClose={closeCtxMenu} />
 
 <style>
-  .sl {
-    /* Width comes from the parent `app-shell` grid track. */
-    min-width: 0;
-  }
-  .sl .spin { animation: sl-spin 0.9s linear infinite; }
-  @keyframes sl-spin { to { transform: rotate(360deg); } }
+  /* Width comes from the parent `app-shell` grid track. */
+  .snl { min-width: 0; }
+  .snl .spin { animation: snl-spin 0.9s linear infinite; }
+  @keyframes snl-spin { to { transform: rotate(360deg); } }
   .lp-ghostbtn:disabled { opacity: 0.5; cursor: not-allowed; }
   .lp-chip:disabled { opacity: 0.45; cursor: not-allowed; }
 
-  /* Search field — ListPane grammar (§2.4): h30 r8, bg-0 (light bg-2). */
-  .sl-search {
+  /* Search field — §2.4: h30 r8, bg-0 (light bg-2), border --border,
+     text 12 faint. Kept identical to Github/Jira lists for consistency. */
+  .snl-search {
     position: relative;
     display: flex; align-items: center; gap: 6px;
     margin: 0 14px 8px;
@@ -465,58 +461,168 @@
     border: 1px solid var(--border);
     transition: border-color 120ms;
   }
-  :root[data-theme='light'] .sl-search { background: var(--bg-2); }
-  .sl-search:focus-within { border-color: var(--border-hi2, var(--border-hi)); }
-  .sl-search > svg { width: 12px; height: 12px; color: var(--text-mute); flex-shrink: 0; }
-  .sl-search input {
+  :root[data-theme='light'] .snl-search { background: var(--bg-2); }
+  .snl-search:focus-within { border-color: var(--border-hi2, var(--border-hi)); }
+  .snl-search > svg { width: 12px; height: 12px; color: var(--text-mute); flex-shrink: 0; }
+  .snl-search input {
     flex: 1; min-width: 0;
     background: transparent; border: 0; outline: 0;
     color: var(--text-0); font-size: 12px; font-family: inherit;
   }
-  .sl-search input::placeholder { color: var(--text-mute); }
-  .sl-search-clear {
+  .snl-search input::placeholder { color: var(--text-faint); }
+  .snl-search-clear {
     width: 16px; height: 16px;
     display: grid; place-items: center;
     border: 0; background: transparent; color: var(--text-mute);
     cursor: pointer; border-radius: 4px;
   }
-  .sl-search-clear:hover { color: var(--text-0); background: var(--bg-3); }
-  .sl-search-clear svg { width: 10px; height: 10px; }
+  .snl-search-clear:hover { color: var(--text-0); background: var(--bg-3); }
+  .snl-search-clear svg { width: 10px; height: 10px; }
 
-  .sl-dd { display: inline-flex; }
-  .sl-dd :global(.dd-trigger) {
-    border-radius: 999px;
+  /* Filter dropdown — align the shared Dropdown trigger to the §2.4
+     chip scale (pad 3/9, r6, 11px, --text-mute; active = border-hi2 +
+     accent-soft + text-0). Kept identical to Github/Jira lists. */
+  .snl-dd { display: inline-flex; }
+  .snl-dd :global(.dd-trigger) {
+    border-radius: 6px;
     border: 1px solid var(--border);
-    background: var(--bg-2);
-    color: var(--text-1);
+    background: transparent;
+    color: var(--text-mute);
     font-size: 11px;
     height: auto;
-    padding: 4px 10px;
-    transition: all 140ms;
+    padding: 3px 9px;
+    transition: color 120ms, border-color 120ms, background 120ms;
   }
-  .sl-dd :global(.dd-trigger:hover) {
-    color: var(--text-0); background: var(--bg-3); border-color: var(--border-hi);
-  }
-  .sl-dd :global(.dd-trigger[aria-expanded="true"]) {
-    color: var(--accent-bright);
-    background: color-mix(in srgb, var(--src-sentry) 14%, transparent);
-    border-color: color-mix(in srgb, var(--src-sentry) 40%, transparent);
+  .snl-dd :global(.dd-trigger:hover) { color: var(--text-1); }
+  .snl-dd :global(.dd-trigger[aria-expanded="true"]) {
+    border-color: var(--border-hi2, var(--border-hi));
+    background: var(--accent-soft);
+    color: var(--text-0);
   }
 
-  .sl-chip-clear {
-    padding: 4px 10px;
+  .snl-chip-clear {
+    padding: 3px 9px;
     background: transparent;
     border: 1px dashed var(--border-hi);
-    border-radius: 999px;
-    font-size: 10.5px;
+    border-radius: 6px;
+    font-size: 11px;
     color: var(--text-mute);
     cursor: pointer;
     margin-left: auto;
-    transition: all 120ms;
+    transition: color 120ms, border-color 120ms;
   }
-  .sl-chip-clear:hover { color: var(--text-0); border-color: var(--text-mute); border-style: solid; }
+  .snl-chip-clear:hover { color: var(--text-0); border-color: var(--text-mute); border-style: solid; }
 
-  .sl-error-retry {
+  /* Row = shared .lp-row shell; .snl-row adds the vertical stack. */
+  .snl-row {
+    position: relative;
+    display: flex; flex-direction: column; gap: 5px;
+    user-select: none;
+  }
+
+  .snl-top { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+  /* Level tag = shared .state-pill .tag--{fatal|error|warning|info};
+     sentryLevelClass drives the modifier (tokens live in src/app.css). */
+  .snl-id {
+    font-size: 11px; color: var(--text-faint);
+    font-family: var(--font-mono);
+  }
+  .snl-time {
+    margin-left: auto;
+    font-size: 11px; color: var(--text-faint);
+    font-family: var(--font-mono);
+  }
+
+  /* Title 13 --text-1; active row → 600 --text-0 (§2.4). */
+  .snl-title {
+    font-size: 13px; color: var(--text-1);
+    line-height: 1.4;
+    display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical;
+    overflow: hidden;
+    overflow-wrap: anywhere;
+  }
+  .lp-row.active .snl-title { color: var(--text-0); font-weight: 600; }
+
+  /* Sparkline — 10 bars, 5px wide, ink alpha; hot issues in err. */
+  .snl-spark {
+    display: flex; align-items: flex-end; gap: 2px;
+    height: 16px;
+  }
+  .snl-spark-bar {
+    width: 5px;
+    border-radius: 1.5px;
+    background: color-mix(in srgb, var(--text-0) 22%, transparent);
+  }
+  .snl-spark--hot .snl-spark-bar {
+    background: color-mix(in srgb, var(--err) 45%, transparent);
+  }
+
+  .snl-meta {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    font-size: 11px; color: var(--text-2);
+  }
+  .snl-count, .snl-users {
+    display: inline-flex; align-items: center; gap: 3px;
+    font-size: 11px; color: var(--text-faint);
+    font-family: var(--font-mono);
+  }
+  .snl-count svg, .snl-users svg { width: 10px; height: 10px; }
+  .snl-project {
+    font-size: 11px; color: var(--text-faint);
+    font-family: var(--font-mono);
+    max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .snl-status {
+    padding: 1px 6px; border-radius: 4px;
+    font-size: 9.5px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.04em;
+  }
+  .snl-status--resolved { color: var(--success); background: color-mix(in srgb, var(--ok) 10%, transparent); border: 1px solid color-mix(in srgb, var(--ok) 24%, transparent); }
+  .snl-status--ignored { color: var(--text-mute); background: var(--bg-3); border: 1px solid var(--border); }
+
+  /* Hover action — §2.4: dotted-underline 11px on the right, revealed
+     on row hover/focus/active. role="button" span (a nested <button>
+     would be invalid inside the row's own <button>). */
+  .snl-sends {
+    position: absolute;
+    top: 10px; right: 12px;
+    display: inline-flex; gap: 10px;
+    opacity: 0;
+    transition: opacity 140ms;
+  }
+  .snl-row:hover .snl-sends,
+  .snl-sends:focus-within,
+  .lp-row.active .snl-sends {
+    opacity: 1;
+  }
+  .snl-send {
+    font-size: 11px;
+    color: var(--text-mute);
+    text-decoration: underline dotted;
+    text-underline-offset: 2px;
+    cursor: pointer;
+    user-select: none;
+    background: transparent; border: 0; padding: 0;
+  }
+  .snl-send:hover { color: var(--text-0); }
+
+  .snl-empty, .snl-loading, .snl-error {
+    text-align: center;
+    padding: 50px 20px;
+    margin: auto;
+  }
+  .snl-empty-h, .snl-error-h {
+    font-family: var(--font-mono);
+    font-size: 22px; font-weight: 600; letter-spacing: -0.015em;
+    color: var(--text-0);
+    margin: 0 0 10px;
+  }
+  .snl-empty-p, .snl-error-p {
+    font-size: 12.5px; color: var(--text-2);
+    line-height: 1.55; margin: 0;
+  }
+  .snl-error-p { color: var(--error); }
+  .snl-error-retry {
     margin-top: 14px;
     padding: 6px 12px;
     border-radius: 7px;
@@ -526,146 +632,16 @@
     color: var(--text-1);
     cursor: pointer;
   }
-  .sl-error-retry:hover { color: var(--text-0); }
-
-  /* Row = shared .lp-row; .sl-row adds vertical stack + positioning. */
-  .sl-row {
-    position: relative;
-    display: flex; flex-direction: column; gap: 5px;
-    user-select: none;
-  }
-
-  .sl-card-top { display: flex; align-items: center; gap: 7px; }
-  .sl-level {
-    padding: 1px 6px;
-    border-radius: 4px;
-    font-size: 9.5px; font-weight: 700;
-    text-transform: uppercase; letter-spacing: 0.04em;
-    color: var(--text-1);
-    background: var(--bg-3);
-    border: 1px solid var(--border);
-  }
-  /* sentryLevelClass возвращает: tag--fatal | tag--error | tag--warning | tag--info | tag--debug */
-  .sl-level.tag--fatal   { color: #F0A38A; background: rgba(232, 130, 100, 0.14); border-color: rgba(232, 130, 100, 0.32); }
-  .sl-level.tag--error   { color: var(--error); background: rgba(232, 130, 100, 0.10); border-color: rgba(232, 130, 100, 0.24); }
-  .sl-level.tag--warning { color: var(--warning); background: rgba(217, 184, 110, 0.10); border-color: rgba(217, 184, 110, 0.24); }
-  .sl-level.tag--info    { color: var(--info); background: rgba(136, 194, 221, 0.08); border-color: rgba(136, 194, 221, 0.20); }
-  .sl-level.tag--debug   { color: var(--text-mute); }
-
-  .sl-card-id { font-size: 11px; color: var(--text-2); font-weight: 500; }
-  .sl-card-time {
-    margin-left: auto;
-    font-size: 10px; color: var(--text-mute);
-  }
-
-  .sl-card-title {
-    font-size: 13px; color: var(--text-0); font-weight: 500;
-    line-height: 1.4;
-    display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical;
-    overflow: hidden;
-    overflow-wrap: anywhere;
-  }
-  .sl-card-meta {
-    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-    font-size: 10.5px; color: var(--text-2);
-  }
-  .sl-count, .sl-users {
-    display: inline-flex; align-items: center; gap: 3px;
-    font-size: 10px; color: var(--text-mute);
-  }
-  .sl-count svg, .sl-users svg { width: 10px; height: 10px; }
-
-  .sl-project {
-    padding: 1px 5px;
-    border-radius: 3px;
-    font-size: 9.5px; color: var(--text-mute);
-    background: var(--bg-2);
-    border: 1px solid var(--border);
-  }
-  .sl-status {
-    padding: 1px 6px; border-radius: 3px;
-    font-size: 9.5px; font-weight: 600;
-    text-transform: uppercase; letter-spacing: 0.04em;
-  }
-  .sl-status--resolved { color: var(--success); background: color-mix(in srgb, var(--ok) 10%, transparent); border: 1px solid color-mix(in srgb, var(--ok) 24%, transparent); }
-  .sl-status--ignored { color: var(--text-mute); background: var(--bg-3); border: 1px solid var(--border); }
-
-  /* Send-to-Claude chip — appears on hover/active in the
-     top-right of the card. role="button" span (a real <button>
-     would be invalid HTML inside the row's <button>). */
-  .sl-card-sends {
-    position: absolute;
-    top: 8px; right: 10px;
-    display: inline-flex; gap: 4px;
-    opacity: 0;
-    transition: opacity 140ms;
-  }
-  .sl-row:hover .sl-card-sends,
-  .sl-card-sends:focus-within,
-  .sl-row.active .sl-card-sends {
-    opacity: 1;
-  }
-  .sl-card-send {
-    display: inline-flex; align-items: center; gap: 4px;
-    padding: 3px 8px 3px 7px;
-    border-radius: 5px;
-    font-size: 10px; font-weight: 600;
-    cursor: pointer;
-    transition: background 140ms, transform 140ms;
-    user-select: none;
-  }
-  .sl-card-send svg { width: 11px; height: 11px; }
-  .sl-card-send--claude {
-    color: var(--src-claude);
-    background: color-mix(in srgb, var(--src-claude) 12%, transparent);
-    border: 1px solid color-mix(in srgb, var(--src-claude) 28%, transparent);
-  }
-  .sl-card-send--claude:hover {
-    background: color-mix(in srgb, var(--src-claude) 22%, transparent);
-    color: var(--accent-bright);
-    transform: translateY(-1px);
-  }
-  .sl-card-send:active { transform: translateY(0); }
-
-  .sl-empty, .sl-loading, .sl-error {
-    text-align: center;
-    padding: 50px 20px;
-    margin: auto;
-  }
-  .sl-empty-h, .sl-error-h {
-    font-family: var(--font-mono);
-    font-size: 22px; font-weight: 600; letter-spacing: -0.015em;
-    color: var(--text-0);
-    margin: 0 0 10px;
-  }
-  .sl-empty-p, .sl-error-p {
-    font-size: 12.5px; color: var(--text-2);
-    line-height: 1.55; margin: 0;
-  }
-  .sl-error-p { color: var(--error); }
-  .sl-loading {
+  .snl-error-retry:hover { color: var(--text-0); }
+  .snl-loading {
     display: flex; align-items: center; justify-content: center; gap: 10px;
     color: var(--text-2); font-size: 12px;
   }
-  .sl-spinner {
+  .snl-spinner {
     width: 14px; height: 14px;
     border: 1.5px solid var(--border-hi);
     border-top-color: var(--accent);
     border-radius: 50%;
-    animation: sl-spin 0.7s linear infinite;
-  }
-  /* Mockup sparkline — 10 bars, 5px wide, ink alpha; hot issues in err. */
-  .sl-spark {
-    display: flex; align-items: flex-end; gap: 2px;
-    height: 16px;
-    margin-top: 5px;
-  }
-  .sl-spark-bar {
-    width: 5px;
-    border-radius: 1.5px;
-    background: color-mix(in srgb, var(--text-0) 22%, transparent);
-  }
-  .sl-spark--hot .sl-spark-bar {
-    background: color-mix(in srgb, var(--err) 45%, transparent);
+    animation: snl-spin 0.7s linear infinite;
   }
 </style>

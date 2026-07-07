@@ -147,10 +147,10 @@
   .ssn-shell--quiet { display: block; overflow-y: auto; padding: 18px 40px 40px; }
   .qsolo-doc { width: 100%; max-width: 800px; margin: 0 auto; display: flex; flex-direction: column; }
   .qsolo-pane { display: flex; min-height: 0; }
-  .qsolo-pane > :global(.sdp) { flex: 1; min-width: 0; background: transparent; }
-  .qsolo-pane :global(.sdp-head) { height: auto; padding: 8px 0; border-bottom: 0; background: transparent; }
-  .qsolo-pane :global(.sdp-back) { display: none; }
-  .qsolo-pane :global(.sdp-body) { padding: 4px 0 40px; max-width: none; }
+  .qsolo-pane > :global(.snd) { flex: 1; min-width: 0; background: transparent; }
+  .qsolo-pane :global(.snd-head) { height: auto; padding: 8px 0; border-bottom: 0; background: transparent; }
+  .qsolo-pane :global(.snd-back) { display: none; }
+  .qsolo-pane :global(.snd-doc) { padding: 4px 0 40px; max-width: none; }
 
   .qsolo-empty { padding: 64px 20px; text-align: center; }
   .qsolo-empty-h { font-size: 20px; font-weight: 600; color: var(--text-0); margin: 0 0 8px; letter-spacing: -0.015em; }
@@ -174,8 +174,8 @@
     min-width: 0;
     display: flex; flex-direction: column;
   }
-  /* SentryDetailPane root = `.sdp` — stretch it to fill the pane. */
-  .ssn-detail :global(.sdp) {
+  /* SentryDetailPane root = `.snd` — stretch it to fill the pane. */
+  .ssn-detail :global(.snd) {
     flex: 1; min-height: 0;
     display: flex; flex-direction: column;
     overflow-y: auto;

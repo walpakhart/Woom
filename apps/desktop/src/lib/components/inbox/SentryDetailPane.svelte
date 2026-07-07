@@ -172,228 +172,231 @@
     }
   }
 
-  function frameLabel(f: NonNullable<SentryEventDetail['exceptions'][number]['frames']>[number]): string {
-    const fn = f.function ?? '?';
+  /** `file:line` for a frame — the muted location half of the summary. */
+  function frameLoc(f: NonNullable<SentryEventDetail['exceptions'][number]['frames']>[number]): string {
     const file = f.filename ?? f.abs_path ?? '?';
     const line = f.lineno != null ? `:${f.lineno}` : '';
-    return `${fn} (${file}${line})`;
+    return `${file}${line}`;
+  }
+
+  /** Severity → tone token for the header dot (err/warn/info). */
+  function levelTone(level: string): 'err' | 'warn' | 'info' {
+    if (level === 'fatal' || level === 'error') return 'err';
+    if (level === 'warning') return 'warn';
+    return 'info';
   }
 </script>
 
-<div class="sdp">
-  <header class="sdp-head">
-    <button class="sdp-back" onclick={onClose} aria-label="Close" title="Close">
+<div class="snd">
+  <header class="snd-head">
+    <button class="snd-back" onclick={onClose} aria-label="Close" title="Close">
       <svg class="i i-sm" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12" /></svg>
     </button>
-    <span class="sdp-key mono">{issue?.short_id ?? issueId}</span>
+    {#if issue}<span class="snd-dot snd-dot--{levelTone(issue.level)}"></span>{/if}
+    <span class="snd-ref mono">{issue?.short_id ?? issueId}</span>
     {#if issue}
-      <span class="mini-tag {sentryLevelClass(issue.level)}">{issue.level}</span>
-      <span class="mini-tag {issue.status === 'resolved' ? 'tag--closed' : issue.status === 'ignored' ? 'tag--draft' : 'tag--open'}">{issue.status}</span>
-      {#if issue.platform}<span class="sdp-kind">· {issue.platform}</span>{/if}
-      <span class="sdp-kind">· {issue.project_slug}</span>
+      <span class="snd-meta">
+        {issue.level}{#if issue.platform} · {issue.platform}{/if} · {issue.project_slug}{#if issue.status !== 'unresolved'} · {issue.status}{/if}
+      </span>
     {/if}
-    <div style="flex:1"></div>
+    <div class="snd-spring"></div>
     {#if issue}
       {#if issue.status === 'resolved'}
-        <button class="sdp-btn" disabled={actionBusy !== null} onclick={() => void setStatus('unresolved', 'unresolve')}>
+        <button class="snd-btn" disabled={actionBusy !== null} onclick={() => void setStatus('unresolved', 'unresolve')}>
           {actionBusy === 'unresolve' ? 'Re-opening…' : 'Re-open'}
         </button>
       {:else}
-        <button class="sdp-btn sdp-btn--primary" disabled={actionBusy !== null} onclick={() => void setStatus('resolved', 'resolve')}>
+        <button class="snd-btn snd-btn--primary" disabled={actionBusy !== null} onclick={() => void setStatus('resolved', 'resolve')}>
           {actionBusy === 'resolve' ? 'Resolving…' : 'Resolve'}
         </button>
-        <button class="sdp-btn" disabled={actionBusy !== null || issue.status === 'ignored'} onclick={() => void setStatus('ignored', 'ignore')}>
+        <button class="snd-btn" disabled={actionBusy !== null || issue.status === 'ignored'} onclick={() => void setStatus('ignored', 'ignore')}>
           {actionBusy === 'ignore' ? 'Ignoring…' : 'Ignore'}
         </button>
       {/if}
     {/if}
     <button
-      class="sdp-btn sdp-btn--icon"
+      class="snd-iconbtn"
       onclick={() => { void loadIssue(); void loadEvent(); }}
       disabled={issueLoading || eventLoading}
       title="Refresh issue + latest event"
       aria-label="Refresh"
     >
-      <svg class="i i-sm" class:sdp-spin={issueLoading || eventLoading} viewBox="0 0 24 24">
+      <svg class="i i-sm" class:snd-spin={issueLoading || eventLoading} viewBox="0 0 24 24">
         <path d="M21 12a9 9 0 0 1-9 9 9 9 0 0 1-8.5-6"/>
         <path d="M3 12a9 9 0 0 1 9-9 9 9 0 0 1 8.5 6"/>
         <polyline points="21 3 21 9 15 9"/>
         <polyline points="3 21 3 15 9 15"/>
       </svg>
     </button>
-    {#if onSendToClaude}
-      <button class="sdp-btn sdp-btn--claude" onclick={onSendToClaude} disabled={!issue} title="Send this issue to Claude">
-        <svg class="i i-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="m22 2-7 20-4-9-9-4 20-7z"/></svg>
-        Send to Claude
-      </button>
-    {/if}
-    <button class="sdp-btn" onclick={() => issue?.permalink && onOpenBrowser(issue.permalink)} disabled={!issue?.permalink} title="Open on Sentry">
+    <button class="snd-ghostbtn" onclick={() => issue?.permalink && onOpenBrowser(issue.permalink)} disabled={!issue?.permalink} title="Open on Sentry">
+      Sentry
       <svg class="i i-sm" viewBox="0 0 24 24"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><path d="M15 3h6v6M10 14 21 3"/></svg>
-      Open on Sentry
     </button>
+    {#if onSendToClaude}
+      <button class="snd-claude-link" onclick={onSendToClaude} disabled={!issue} title="Send this issue to Claude">→ claude</button>
+    {/if}
   </header>
 
   {#if issueLoading && !issue}
-    <div class="sdp-state">Loading issue…</div>
+    <div class="snd-state">Loading issue…</div>
   {:else if issueError}
-    <div class="sdp-state sdp-err">
+    <div class="snd-state snd-err">
       {issueError}
-      <button class="sdp-link" onclick={() => void loadIssue()}>Retry</button>
+      <button class="snd-link" onclick={() => void loadIssue()}>Retry</button>
     </div>
   {:else if issue}
-    <div class="sdp-body">
-      <!-- Title -->
-      <h1 class="sdp-title">{issue.title}</h1>
+    <div class="snd-scroll">
+      <div class="snd-doc">
+        <!-- Exception title — mono 20/600 (spec §2.6: это exception-текст). -->
+        <h1 class="snd-title mono">{issue.title}</h1>
+        {#if issue.culprit}<div class="snd-culprit mono">{issue.culprit}</div>{/if}
 
-      {#if issue.metadata_value}
-        <div class="sdp-exception mono">
-          {#if issue.metadata_type}<span class="sdp-exc-type">{issue.metadata_type}:</span>{/if}
-          {issue.metadata_value}
+        <!-- Stats row (numbers mono 17 + caps labels 10.5) + tag chips. -->
+        <div class="snd-overview">
+          <div class="snd-stats">
+            <div class="snd-stat">
+              <div class="snd-stat-v mono">{issue.count}</div>
+              <div class="snd-stat-k">events</div>
+            </div>
+            <div class="snd-stat">
+              <div class="snd-stat-v mono">{issue.user_count}</div>
+              <div class="snd-stat-k">users</div>
+            </div>
+            <div class="snd-stat">
+              <div class="snd-stat-v mono">{relativeTime(issue.first_seen, now)}</div>
+              <div class="snd-stat-k">first seen</div>
+            </div>
+            <div class="snd-stat">
+              <div class="snd-stat-v mono">{relativeTime(issue.last_seen, now)}</div>
+              <div class="snd-stat-k">last seen</div>
+            </div>
+          </div>
+          {#if event}
+            <div class="snd-chips">
+              {#if event.release}<span class="snd-chip mono">release {event.release}</span>{/if}
+              {#if event.environment}<span class="snd-chip mono">env {event.environment}</span>{/if}
+              {#if event.user_email || event.user_id}<span class="snd-chip mono">{event.user_email ?? event.user_id}</span>{/if}
+              {#each event.tags.slice(0, 8) as [k, v] (k + v)}<span class="snd-chip mono">{k} {v}</span>{/each}
+            </div>
+          {/if}
         </div>
-      {/if}
 
-      {#if issue.culprit}
-        <div class="sdp-culprit mono">{issue.culprit}</div>
-      {/if}
-
-      <!-- Stat grid -->
-      <div class="sdp-stats">
-        <div class="sdp-stat">
-          <div class="sdp-stat-k">EVENTS</div>
-          <div class="sdp-stat-v mono">{issue.count}</div>
-        </div>
-        <div class="sdp-stat">
-          <div class="sdp-stat-k">USERS AFFECTED</div>
-          <div class="sdp-stat-v mono">{issue.user_count}</div>
-        </div>
-        <div class="sdp-stat">
-          <div class="sdp-stat-k">FIRST SEEN</div>
-          <div class="sdp-stat-v">{relativeTime(issue.first_seen, now)}</div>
-        </div>
-        <div class="sdp-stat">
-          <div class="sdp-stat-k">LAST SEEN</div>
-          <div class="sdp-stat-v">{relativeTime(issue.last_seen, now)}</div>
-        </div>
-      </div>
-
-      <!-- Other events picker. Collapsed by default to keep the pane
-           compact; expand to scan / pick a different occurrence. The
-           agent's `mcp__app__open_sentry_event` calls land on the
-           same `sentryFocusEventId` slot, so click-from-UI and
-           click-from-chat funnel through one path. -->
-      {#if events.length > 1 || eventsLoading || eventsError}
-        <section class="sdp-section">
-          <header class="sdp-section-head">
-            <h3 class="sdp-section-title">Other events</h3>
-            {#if events.length > 0}
-              <span class="sdp-section-sub mono">{events.length}{events.length === 30 ? '+' : ''}</span>
+        <!-- Other events picker. Collapsed by default to keep the pane
+             compact; expand to scan / pick a different occurrence. The
+             agent's `mcp__app__open_sentry_event` calls land on the
+             same `sentryFocusEventId` slot, so click-from-UI and
+             click-from-chat funnel through one path. -->
+        {#if events.length > 1 || eventsLoading || eventsError}
+          <section class="snd-sec">
+            <div class="snd-sec-head">
+              <span class="snd-sec-label">Other events</span>
+              {#if events.length > 0}
+                <span class="snd-sec-sub mono">{events.length}{events.length === 30 ? '+' : ''}</span>
+              {/if}
+              <span class="hatch" aria-hidden="true"></span>
+              <div class="snd-spring"></div>
+              <button
+                class="snd-iconbtn snd-iconbtn--sm"
+                onclick={() => void loadEvents()}
+                disabled={eventsLoading}
+                title="Reload events"
+                aria-label="Reload events"
+              >
+                <svg class="i i-sm" class:snd-spin={eventsLoading} viewBox="0 0 24 24">
+                  <path d="M21 12a9 9 0 0 1-9 9 9 9 0 0 1-8.5-6"/>
+                  <path d="M3 12a9 9 0 0 1 9-9 9 9 0 0 1 8.5 6"/>
+                  <polyline points="21 3 21 9 15 9"/>
+                  <polyline points="3 21 3 15 9 15"/>
+                </svg>
+              </button>
+              <button
+                class="snd-iconbtn snd-iconbtn--sm"
+                onclick={() => (eventsExpanded = !eventsExpanded)}
+                aria-expanded={eventsExpanded}
+                title={eventsExpanded ? 'Hide list' : 'Show list'}
+                aria-label={eventsExpanded ? 'Hide list' : 'Show list'}
+              >
+                <svg class="i i-sm snd-chevron" class:snd-chevron--open={eventsExpanded} viewBox="0 0 24 24">
+                  <path d="m9 18 6-6-6-6"/>
+                </svg>
+              </button>
+            </div>
+            {#if eventsError}
+              <div class="snd-state snd-err">{eventsError}</div>
+            {:else if eventsExpanded}
+              <div class="snd-events">
+                {#each events as ev (ev.event_id)}
+                  {@const active = (inboxState.sentryFocusEventId ?? '') === ev.event_id
+                    || (!inboxState.sentryFocusEventId && event?.event_id === ev.event_id)}
+                  <button
+                    class="snd-event-row"
+                    class:snd-event-row--active={active}
+                    onclick={() => openSentryFocus(issueId, ev.event_id)}
+                    title={ev.event_id}
+                  >
+                    <span class="snd-event-id mono">{ev.event_id.slice(0, 8)}</span>
+                    <span class="snd-event-when mono">{relativeTime(ev.date_created, now)}</span>
+                    <span class="snd-event-msg">{ev.exception_summary ?? ev.message ?? ''}</span>
+                    {#if ev.platform}<span class="snd-event-tag mono">{ev.platform}</span>{/if}
+                  </button>
+                {/each}
+                {#if inboxState.sentryFocusEventId}
+                  <button class="snd-link snd-link--center" onclick={() => openSentryFocus(issueId, null)}>
+                    ← Back to latest
+                  </button>
+                {/if}
+              </div>
             {/if}
-            <div style="flex:1"></div>
+          </section>
+        {/if}
+
+        <!-- Stack trace — charcoal inset (spec §2.6). -->
+        <section class="snd-sec">
+          <div class="snd-sec-head">
+            <span class="snd-sec-label">Stack trace</span>
+            <span class="snd-sec-sub mono">
+              {inboxState.sentryFocusEventId ? 'selected event' : 'latest event'}{#if event?.event_id} · {event.event_id.slice(0, 8)}{/if}
+            </span>
+            <span class="hatch" aria-hidden="true"></span>
+            <div class="snd-spring"></div>
             <button
-              class="sdp-icon-btn"
-              onclick={() => void loadEvents()}
-              disabled={eventsLoading}
-              title="Reload events"
-              aria-label="Reload events"
+              class="snd-iconbtn snd-iconbtn--sm"
+              onclick={() => void loadEvent()}
+              disabled={eventLoading}
+              title="Reload event"
+              aria-label="Reload event"
             >
-              <svg class="i i-sm" class:sdp-spin={eventsLoading} viewBox="0 0 24 24">
+              <svg class="i i-sm" class:snd-spin={eventLoading} viewBox="0 0 24 24">
                 <path d="M21 12a9 9 0 0 1-9 9 9 9 0 0 1-8.5-6"/>
                 <path d="M3 12a9 9 0 0 1 9-9 9 9 0 0 1 8.5 6"/>
                 <polyline points="21 3 21 9 15 9"/>
                 <polyline points="3 21 3 15 9 15"/>
               </svg>
             </button>
-            <button
-              class="sdp-icon-btn"
-              onclick={() => (eventsExpanded = !eventsExpanded)}
-              aria-expanded={eventsExpanded}
-              title={eventsExpanded ? 'Hide list' : 'Show list'}
-              aria-label={eventsExpanded ? 'Hide list' : 'Show list'}
-            >
-              <svg class="i i-sm sdp-chevron" class:sdp-chevron--open={eventsExpanded} viewBox="0 0 24 24">
-                <path d="m9 18 6-6-6-6"/>
-              </svg>
-            </button>
-          </header>
-          {#if eventsError}
-            <div class="sdp-state sdp-err">{eventsError}</div>
-          {:else if eventsExpanded}
-            <div class="sdp-events">
-              {#each events as ev (ev.event_id)}
-                {@const active = (inboxState.sentryFocusEventId ?? '') === ev.event_id
-                  || (!inboxState.sentryFocusEventId && event?.event_id === ev.event_id)}
-                <button
-                  class="sdp-event-row"
-                  class:sdp-event-row--active={active}
-                  onclick={() => openSentryFocus(issueId, ev.event_id)}
-                  title={ev.event_id}
-                >
-                  <span class="sdp-event-id mono">{ev.event_id.slice(0, 8)}</span>
-                  <span class="sdp-event-when mono">{relativeTime(ev.date_created, now)}</span>
-                  <span class="sdp-event-msg">{ev.exception_summary ?? ev.message ?? ''}</span>
-                  {#if ev.platform}<span class="sdp-event-tag mono">{ev.platform}</span>{/if}
-                </button>
-              {/each}
-              {#if inboxState.sentryFocusEventId}
-                <button class="sdp-link sdp-link--center" onclick={() => openSentryFocus(issueId, null)}>
-                  ← Back to latest
-                </button>
-              {/if}
-            </div>
-          {/if}
-        </section>
-      {/if}
-
-      <!-- Latest event -->
-      <section class="sdp-section">
-        <header class="sdp-section-head">
-          <h3 class="sdp-section-title">{inboxState.sentryFocusEventId ? 'Selected event' : 'Latest event'}</h3>
-          {#if event?.event_id}<span class="sdp-section-sub mono">{event.event_id.slice(0, 8)}</span>{/if}
-          <div style="flex:1"></div>
-          <button
-            class="sdp-icon-btn"
-            onclick={() => void loadEvent()}
-            disabled={eventLoading}
-            title="Reload event"
-            aria-label="Reload event"
-          >
-            <svg class="i i-sm" class:sdp-spin={eventLoading} viewBox="0 0 24 24">
-              <path d="M21 12a9 9 0 0 1-9 9 9 9 0 0 1-8.5-6"/>
-              <path d="M3 12a9 9 0 0 1 9-9 9 9 0 0 1 8.5 6"/>
-              <polyline points="21 3 21 9 15 9"/>
-              <polyline points="3 21 3 15 9 15"/>
-            </svg>
-          </button>
-        </header>
-        {#if eventLoading && !event}
-          <div class="sdp-state">Loading event…</div>
-        {:else if eventError}
-          <div class="sdp-state sdp-err">{eventError}</div>
-        {:else if event}
-          <div class="sdp-event-meta">
-            {#if event.release}<span class="sdp-chip mono">release: {event.release}</span>{/if}
-            {#if event.user_email || event.user_id}
-              <span class="sdp-chip">user: {event.user_email ?? event.user_id}</span>
-            {/if}
-            <span class="sdp-chip mono">{event.date_created}</span>
           </div>
 
-          {#each event.exceptions as exc, idx (idx)}
-            <div class="sdp-exception-block">
-              <div class="sdp-exception-head mono">
-                {#if exc.type}<span class="sdp-exc-type">{exc.type}</span>{/if}
-                {#if exc.value}<span class="sdp-exc-value"> : {exc.value}</span>{/if}
-              </div>
-              {#if exc.frames.length > 0}
-                <div class="sdp-frames">
+          {#if eventLoading && !event}
+            <div class="snd-state">Loading event…</div>
+          {:else if eventError}
+            <div class="snd-state snd-err">{eventError}</div>
+          {:else if event}
+            {#each event.exceptions as exc, idx (idx)}
+              <div class="snd-trace">
+                {#if exc.type || exc.value}
+                  <div class="snd-trace-err mono">{#if exc.type}<span class="snd-trace-err-type">{exc.type}</span>{/if}{#if exc.value}: {exc.value}{/if}</div>
+                {/if}
+                {#if exc.frames.length > 0}
                   {#each exc.frames.slice().reverse() as f, fi (fi)}
-                    <details class="sdp-frame" class:in-app={f.in_app} open={f.in_app && fi < 3}>
-                      <summary class="sdp-frame-summary mono">
-                        <span class="sdp-frame-fn">{frameLabel(f)}</span>
-                        {#if f.in_app}<span class="sdp-frame-tag">app</span>{/if}
+                    <details class="snd-frame" class:in-app={f.in_app} open={f.in_app && fi < 3}>
+                      <summary class="snd-frame-sum mono" title={frameLoc(f)}>
+                        <span class="snd-frame-at">at</span>
+                        <span class="snd-frame-fn">{f.function ?? '?'}</span>
+                        <span class="snd-frame-loc">({frameLoc(f)})</span>
+                        {#if f.in_app}<span class="snd-frame-inapp">in-app</span>{/if}
+                        <span class="snd-frame-spring"></span>
                         {#if f.abs_path || f.filename}
                           <button
-                            class="sdp-frame-open"
+                            class="snd-frame-open"
                             onclick={(e) => { e.preventDefault(); e.stopPropagation(); void openFrameInEditor(f); }}
                             title="Open in Woom's editor at this line"
                             aria-label="Open in editor"
@@ -401,291 +404,264 @@
                         {/if}
                       </summary>
                       {#if f.context.length > 0}
-                        <pre class="sdp-frame-source mono">{#each f.context as l (l.line)}<span class="sdp-src-line" class:active={l.line === f.lineno}><span class="sdp-src-num">{l.line}</span>{l.source}
+                        <pre class="snd-src mono">{#each f.context as l (l.line)}<span class="snd-src-line" class:active={l.line === f.lineno}><span class="snd-src-num">{l.line}</span>{l.source}
 </span>{/each}</pre>
                       {/if}
                     </details>
                   {/each}
-                </div>
-              {/if}
-            </div>
-          {/each}
-
-          {#if event.breadcrumbs_summary}
-            <section class="sdp-section">
-              <header class="sdp-section-head"><h3 class="sdp-section-title">Breadcrumbs (recent)</h3></header>
-              <pre class="sdp-breadcrumbs mono">{event.breadcrumbs_summary}</pre>
-            </section>
-          {/if}
-
-          {#if event.tags.length > 0}
-            <section class="sdp-section">
-              <header class="sdp-section-head"><h3 class="sdp-section-title">Tags</h3></header>
-              <div class="sdp-tags-grid">
-                {#each event.tags.slice(0, 30) as [k, v] (k + v)}
-                  <div class="sdp-tag-row">
-                    <span class="sdp-tag-k mono">{k}</span>
-                    <span class="sdp-tag-v mono">{v}</span>
-                  </div>
-                {/each}
+                {/if}
               </div>
-            </section>
+            {/each}
+
+            {#if event.breadcrumbs_summary}
+              <div class="snd-crumbs-head">
+                <span class="snd-sec-label">Breadcrumbs</span>
+                <span class="snd-sec-sub mono">recent</span>
+                <span class="hatch" aria-hidden="true"></span>
+              </div>
+              <pre class="snd-crumbs mono">{event.breadcrumbs_summary}</pre>
+            {/if}
           {/if}
+        </section>
+
+        <!-- Bottom hint card — surfaces the Claude handoff (spec §2.6). -->
+        {#if onSendToClaude}
+          <div class="snd-handoff">
+            <p class="snd-handoff-text">Hand this issue to Claude with the full stack trace and breadcrumbs.</p>
+            <button class="snd-handoff-claude" onclick={onSendToClaude} disabled={!issue} title="Send this issue to Claude">→ claude</button>
+          </div>
         {/if}
-      </section>
+      </div>
     </div>
   {/if}
 </div>
 
 <style>
-  /* Same shape as `.jdp` (JiraDetailPane) — fills the parent column,
-     header bar with close on the left + action buttons on the right, body
-     scrolls with consistent padding. Keeps both panes feeling the same. */
-  .sdp { height: 100%; display: flex; flex-direction: column; min-height: 0; background: var(--bg-0); }
-  /* Redesign v2 §2.6 — 52px document header, flush on bg-0. */
-  .sdp-head {
+  /* §2.6 Sentry detail (mockup 4g) — single scrolling document, no side
+     panels. Fresh `.snd-` grammar: 52px header (Resolve / Ignore triage),
+     centred document (max 800): exception title + stats + tag chips +
+     charcoal stack-trace inset + breadcrumbs + Claude handoff card. */
+
+  .snd { height: 100%; display: flex; flex-direction: column; min-height: 0; background: var(--bg-0); }
+
+  /* Header ------------------------------------------------------------- */
+  .snd-head {
+    flex: none;
     display: flex; align-items: center; gap: 10px;
-    height: 52px;
-    padding: 0 24px;
+    height: 52px; padding: 0 24px;
     border-bottom: 1px solid var(--border-lo);
     background: var(--bg-0);
-    flex-shrink: 0;
   }
-  .sdp-back {
+  .snd-back {
     width: 28px; height: 28px; border-radius: 5px;
     display: inline-flex; align-items: center; justify-content: center;
     background: transparent; color: var(--text-1); border: none; cursor: pointer;
   }
-  .sdp-back:hover { background: var(--bg-2); color: var(--text-0); }
-  .sdp-key { font-size: 13px; color: var(--accent-bright); font-weight: 600; }
-  .sdp-kind { font-size: 11px; color: var(--text-2); }
-  .sdp-btn {
+  .snd-back:hover { background: var(--bg-2); color: var(--text-0); }
+  .snd-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-mute); flex: none; }
+  .snd-dot--err { background: var(--err); }
+  .snd-dot--warn { background: var(--warn); }
+  .snd-dot--info { background: var(--text-mute); }
+  .snd-ref { font-size: 12px; color: var(--text-1); font-weight: 600; }
+  .snd-meta { font-size: 12px; color: var(--text-faint); }
+  .snd-spring { flex: 1; }
+  .snd-btn {
     display: inline-flex; align-items: center; gap: 6px;
     padding: 6px 12px; border-radius: 6px;
-    background: var(--bg-2); color: var(--text-1);
+    background: transparent; color: var(--text-1);
     font-size: 12px; border: 1px solid var(--border-neutral-hi); cursor: pointer;
   }
-  .sdp-btn:hover:not(:disabled) { background: var(--bg-3); color: var(--text-0); }
-  .sdp-btn:disabled { opacity: 0.5; cursor: default; }
-  .sdp-btn--icon { padding: 6px; }
-  .sdp-btn--icon .i-sm { width: 14px; height: 14px; }
-  .sdp-spin { animation: sdp-spin 0.8s linear infinite; }
-  @keyframes sdp-spin { to { transform: rotate(360deg); } }
-  .sdp-btn--primary {
+  .snd-btn:hover:not(:disabled) { background: var(--bg-2); color: var(--text-0); }
+  .snd-btn:disabled { opacity: 0.5; cursor: default; }
+  /* Resolve — triage primary (spec §2.6: Resolve primary, Ignore ghost). */
+  .snd-btn--primary {
     background: var(--accent); color: var(--accent-fg);
     border-color: transparent; font-weight: 600;
   }
-  .sdp-btn--primary:hover:not(:disabled) { background: var(--accent-bright); }
-  /* Send-to-Claude — brand-tinted ghost so the handoff stands apart
-     from the Sentry-native actions (Resolve / Ignore / Open). */
-  .sdp-btn--claude {
-    color: var(--src-claude);
-    background: color-mix(in srgb, var(--src-claude) 8%, transparent);
-    border-color: color-mix(in srgb, var(--src-claude) 30%, transparent);
+  .snd-btn--primary:hover:not(:disabled) { background: var(--accent-bright); color: var(--accent-fg); }
+  .snd-iconbtn {
+    width: 30px; height: 28px; border-radius: 6px;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: transparent; color: var(--text-2);
+    border: 1px solid var(--border-neutral); cursor: pointer;
   }
-  .sdp-btn--claude:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--src-claude) 18%, transparent);
-    color: var(--accent-bright);
-    border-color: color-mix(in srgb, var(--src-claude) 50%, transparent);
+  .snd-iconbtn:hover:not(:disabled) { background: var(--bg-2); color: var(--text-0); }
+  .snd-iconbtn:disabled { opacity: 0.45; cursor: default; }
+  .snd-iconbtn .i-sm { width: 14px; height: 14px; }
+  .snd-iconbtn--sm { width: 24px; height: 24px; border-color: transparent; }
+  .snd-iconbtn--sm .i-sm { width: 13px; height: 13px; }
+  .snd-spin { animation: snd-spin 0.8s linear infinite; }
+  @keyframes snd-spin { to { transform: rotate(360deg); } }
+  .snd-chevron { transition: transform var(--dur-base) var(--ease-spring); }
+  .snd-chevron--open { transform: rotate(90deg); }
+  .snd-ghostbtn {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 6px 12px; border-radius: 6px;
+    background: transparent; color: var(--text-1);
+    font-size: 12px; border: 1px solid var(--border-neutral-hi); cursor: pointer;
   }
+  .snd-ghostbtn:hover:not(:disabled) { background: var(--bg-2); color: var(--text-0); }
+  .snd-ghostbtn:disabled { opacity: 0.5; cursor: default; }
+  .snd-ghostbtn .i-sm { width: 13px; height: 13px; }
+  /* → claude — dotted hotspot link in the header (the primary handoff
+     lives in the bottom card, per mockup 4g). */
+  .snd-claude-link {
+    background: transparent; border: none; cursor: pointer;
+    font-size: 12px; color: var(--text-0); padding: 2px 0;
+    border-bottom: 1px dotted color-mix(in srgb, var(--text-0) 30%, transparent);
+  }
+  .snd-claude-link:hover:not(:disabled) { color: var(--accent-bright); border-bottom-color: var(--accent-bright); }
+  .snd-claude-link:disabled { opacity: 0.5; cursor: default; }
 
-  .sdp-state { padding: 40px; text-align: center; color: var(--text-2); }
-  .sdp-err { color: var(--error); }
-  .sdp-link {
+  .snd-state { padding: 40px; text-align: center; color: var(--text-2); }
+  .snd-err { color: var(--error); }
+  .snd-link {
     color: var(--accent-bright); margin-left: 6px; cursor: pointer;
     background: none; border: none; padding: 0; text-decoration: underline; font-size: 12px;
   }
-  .sdp-link:disabled { opacity: 0.5; cursor: default; }
-  /* Compact icon-button used inside section headers (Other events,
-     Latest event). Smaller than `.sdp-btn` because section headers are
-     dense; a square chip with just the icon. */
-  .sdp-icon-btn {
-    display: inline-flex; align-items: center; justify-content: center;
-    width: 24px; height: 24px;
-    background: transparent; border: 1px solid transparent;
-    border-radius: 5px;
-    color: var(--text-2); cursor: pointer;
-    transition: all 100ms;
-  }
-  .sdp-icon-btn:hover:not(:disabled) {
-    background: var(--bg-2); color: var(--text-0);
-    border-color: var(--border-neutral);
-  }
-  .sdp-icon-btn:disabled { opacity: 0.45; cursor: default; }
-  .sdp-icon-btn .i-sm { width: 13px; height: 13px; }
-  .sdp-chevron { transition: transform var(--dur-base) var(--ease-spring); }
-  .sdp-chevron--open { transform: rotate(90deg); }
+  .snd-link:disabled { opacity: 0.5; cursor: default; }
+  .snd-link--center { display: block; margin: 6px auto 0; text-align: center; font-size: 11px; }
 
-  /* Redesign v2 §2.6 — centred document (max 800), padding 30/40. */
-  .sdp-body {
-    flex: 1; min-height: 0; overflow-y: auto;
-    width: 100%; max-width: 800px; margin: 0 auto;
-    padding: 30px 40px 60px;
-    display: flex; flex-direction: column; gap: 18px;
-  }
-  /* Sentry h1 = exception text → mono 20/600 (spec §2.6). */
-  .sdp-title {
-    font-family: var(--font-mono);
+  /* Document ----------------------------------------------------------- */
+  .snd-scroll { flex: 1; min-height: 0; overflow-y: auto; }
+  .snd-doc { max-width: 800px; margin: 0 auto; padding: 30px 40px 60px; }
+
+  .snd-title {
     font-size: 20px; line-height: 1.3; font-weight: 600;
     color: var(--text-0); letter-spacing: -0.015em;
-    margin: 0;
+    margin: 0; overflow-wrap: anywhere;
+  }
+  .snd-culprit { font-size: 12.5px; color: var(--text-2); margin-top: 8px; overflow-wrap: anywhere; }
+
+  /* Stats row + tag chips --------------------------------------------- */
+  .snd-overview {
+    display: flex; align-items: flex-start; justify-content: space-between;
+    flex-wrap: wrap; gap: 16px 32px;
+    margin-top: 22px;
+    padding-bottom: 22px;
+    border-bottom: 1px solid var(--border);
+  }
+  .snd-stats { display: flex; flex-wrap: wrap; gap: 28px; }
+  .snd-stat { display: flex; flex-direction: column; gap: 3px; }
+  .snd-stat-v { font-size: 17px; font-weight: 600; color: var(--text-0); line-height: 1; }
+  .snd-stat-k {
+    font-size: 10.5px; font-weight: 600; color: var(--text-mute);
+    text-transform: uppercase; letter-spacing: 0.08em;
+  }
+  .snd-chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .snd-chip {
+    font-size: 11px; padding: 2px 8px; border-radius: 5px;
+    background: var(--accent-soft); color: var(--text-1);
     overflow-wrap: anywhere;
   }
-  .sdp-exception {
-    background: var(--bg-1); border: 1px solid var(--border-neutral);
-    border-radius: 8px; padding: 12px 14px; font-size: 13px;
-    color: var(--text-0); line-height: 1.5;
-    overflow-wrap: anywhere;
-  }
-  .sdp-exc-type { color: var(--accent-bright); font-weight: 600; }
-  .sdp-exc-value { color: var(--text-1); }
-  .sdp-culprit { font-size: 12.5px; color: var(--text-2); }
 
-  .sdp-stats {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-    gap: 10px;
+  /* Sections — caps label + hatch ornament. --------------------------- */
+  .snd-sec { margin-top: 28px; }
+  .snd-sec-head { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+  .snd-sec-label {
+    font-size: 10.5px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.09em;
+    color: var(--text-faint);
   }
-  .sdp-stat {
-    background: var(--bg-1); border: 1px solid var(--border-neutral);
-    border-radius: 8px; padding: 10px 14px;
-  }
-  .sdp-stat-k {
-    font-size: 9.5px; color: var(--text-mute);
-    text-transform: uppercase; letter-spacing: 0.10em; font-weight: 700;
-  }
-  .sdp-stat-v {
-    font-family: var(--font-mono);
-    font-size: 18px; font-weight: 600;
-    color: var(--text-0); margin-top: 4px;
-    line-height: 1;
-  }
+  .snd-sec-sub { font-size: 11px; color: var(--text-mute); }
 
-  .sdp-section { display: flex; flex-direction: column; gap: 10px; }
-  .sdp-section-head { display: flex; align-items: center; gap: 8px; }
-  .sdp-section-title {
-    font-size: 11px; font-weight: 700; color: var(--text-mute);
-    text-transform: uppercase; letter-spacing: 0.05em; margin: 0;
-  }
-  .sdp-section-sub { font-size: 11px; color: var(--text-mute); }
-
-  /* Other-events picker rows. Compact, click-to-load, highlight the
-     currently-loaded one so the user can tell which event the body
-     below corresponds to. */
-  .sdp-events { display: flex; flex-direction: column; gap: 2px; }
-  .sdp-event-row {
-    display: flex; align-items: center; gap: 10px;
-    padding: 6px 10px;
-    background: var(--bg-1); border: 1px solid var(--border-neutral);
-    border-radius: 6px; text-align: left; cursor: pointer;
-    color: var(--text-1); font-size: 12px;
-    transition: background 100ms;
-    width: 100%;
-  }
-  .sdp-event-row:hover { background: var(--bg-2); color: var(--text-0); }
-  .sdp-event-row--active {
-    background: var(--accent-soft); border-color: rgba(62, 54, 32, 0.3);
-    color: var(--text-0);
-  }
-  .sdp-event-id { color: var(--text-2); font-size: 11px; min-width: 70px; }
-  .sdp-event-when { color: var(--text-mute); font-size: 11px; min-width: 70px; }
-  .sdp-event-msg {
-    flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    font-size: 11.5px;
-  }
-  .sdp-event-tag {
-    font-size: 10px; padding: 1px 6px; border-radius: 3px;
-    background: var(--bg-2); color: var(--text-2);
-    border: 1px solid var(--border-neutral);
-  }
-  .sdp-link--center {
-    display: block; margin: 4px auto 0;
-    text-align: center; font-size: 11px;
-  }
-
-  .sdp-event-meta { display: flex; flex-wrap: wrap; gap: 6px; font-size: 11px; }
-  .sdp-chip {
-    padding: 2px 8px; border-radius: 6px; font-size: 11px;
-    background: var(--bg-2); color: var(--text-1);
-    border: 1px solid var(--border-neutral);
-  }
-
-  .sdp-exception-block {
-    display: flex; flex-direction: column; gap: 6px;
-    background: var(--bg-1); border: 1px solid var(--border-neutral);
-    border-radius: 8px; padding: 12px 14px;
-  }
-  .sdp-exception-head { font-size: 13px; color: var(--text-0); overflow-wrap: anywhere; }
-
-  /* Mockup: the stack trace is a CHARCOAL INSET — same --dark-1 in
-     both themes; app frames pop in warm var(--dark-text), library frames stay
-     muted cream. */
-  .sdp-frames {
-    display: flex; flex-direction: column; gap: 0;
-    background: var(--dark-1);
-    border: 1px solid rgba(0, 0, 0, 0.25);
-    border-radius: var(--r-card);
-    overflow: hidden;
-    box-shadow: var(--shadow-1);
-    padding: 6px 0;
-  }
-  .sdp-frame { background: transparent; border: 0; overflow: hidden; }
-  .sdp-frame.in-app { background: transparent; border: 0; }
-  .sdp-frame-summary {
-    list-style: none; cursor: pointer; padding: 4px 14px;
-    font-size: 11px; color: var(--dark-text);
-    display: flex; align-items: center; gap: 8px;
-    overflow-wrap: anywhere;
-  }
-  .sdp-frame.in-app .sdp-frame-summary { color: var(--dark-text); }
-  .sdp-frame-summary::-webkit-details-marker { display: none; }
-  .sdp-frame[open] .sdp-frame-summary { color: var(--dark-text); }
-  .sdp-frame:not(.in-app) .sdp-frame-summary { color: var(--dark-text-2); }
-  .sdp-frame-fn { flex: 1; }
-  .sdp-frame-tag {
-    font-size: 9px; font-weight: 700;
-    padding: 1px 6px; border-radius: 3px;
-    background: rgba(232, 180, 144, 0.14); color: var(--dark-text);
-    text-transform: uppercase; letter-spacing: 0.05em;
-  }
-  .sdp-frame-open {
-    font-size: 10px; color: var(--dark-mute);
-    padding: 1px 6px; border-radius: 3px;
-    background: transparent; border: 1px solid rgba(216, 210, 190, 0.2);
-    cursor: pointer; transition: all 100ms;
-  }
-  .sdp-frame-open:hover { color: var(--dark-text); border-color: rgba(216, 210, 190, 0.4); }
-  .sdp-frame-source {
-    margin: 0; padding: 8px 0;
+  /* Stack trace — charcoal inset (spec §2.6). ------------------------- */
+  .snd-trace {
     background: var(--dark-0);
-    font-size: 11px; line-height: 1.5;
-    overflow-x: auto; color: var(--dark-text-2);
-    white-space: pre;
+    border-radius: 10px;
+    padding: 14px 16px;
+    box-shadow: var(--shadow-1);
+    font-size: 12px; line-height: 1.7;
+    overflow: hidden;
   }
-  .sdp-src-line { display: inline-block; min-width: 100%; padding: 0 14px; }
-  .sdp-src-line.active { background: rgba(232, 180, 144, 0.10); }
-  .sdp-src-num {
-    display: inline-block; min-width: 36px;
-    color: var(--dark-mute); margin-right: 12px;
-    text-align: right;
+  .snd-trace + .snd-trace { margin-top: 10px; }
+  .snd-trace-err { color: var(--term-err); overflow-wrap: anywhere; margin-bottom: 4px; }
+  .snd-trace-err-type { font-weight: 600; }
+  .snd-frame { border: 0; background: transparent; }
+  .snd-frame-sum {
+    list-style: none; cursor: pointer;
+    display: flex; align-items: center; gap: 8px;
+    padding: 2px 0; color: var(--dark-text);
+    overflow-wrap: anywhere;
+  }
+  .snd-frame-sum::-webkit-details-marker { display: none; }
+  .snd-frame:not(.in-app) .snd-frame-sum { color: var(--dark-text-2); }
+  .snd-frame-at { color: var(--dark-mute); }
+  .snd-frame-fn { color: var(--dark-text); }
+  .snd-frame:not(.in-app) .snd-frame-fn { color: var(--dark-text-2); }
+  .snd-frame-loc { color: var(--dark-text-2); }
+  .snd-frame-inapp {
+    font-size: 10.5px; color: var(--dark-mute);
+    text-transform: lowercase; letter-spacing: 0.02em;
+  }
+  .snd-frame-spring { flex: 1; }
+  .snd-frame-open {
+    font-size: 10.5px; color: var(--dark-mute);
+    padding: 1px 6px; border-radius: 3px; cursor: pointer;
+    background: transparent; border: 1px solid color-mix(in srgb, var(--dark-text-2) 30%, transparent);
+    opacity: 0; transition: opacity 100ms, color 100ms, border-color 100ms;
+  }
+  .snd-frame-sum:hover .snd-frame-open { opacity: 1; }
+  .snd-frame-open:hover { color: var(--dark-text); border-color: color-mix(in srgb, var(--dark-text-2) 55%, transparent); }
+  .snd-src {
+    margin: 6px 0 8px; padding: 0;
+    font-size: 12px; line-height: 1.7;
+    color: var(--dark-text-2); white-space: pre; overflow-x: auto;
+  }
+  /* Highlight line — full-bleed to the inset padding via negative margins. */
+  .snd-src-line { display: block; margin: 0 -16px; padding: 0 16px; }
+  .snd-src-line.active { background: color-mix(in srgb, var(--term-err) 10%, transparent); }
+  .snd-src-num {
+    display: inline-block; min-width: 34px; margin-right: 12px;
+    color: var(--dark-mute); text-align: right;
   }
 
-  .sdp-breadcrumbs {
+  /* Breadcrumbs — mono block (data arrives pre-formatted as a summary
+     string, so it renders as text rather than the structured grid). */
+  .snd-crumbs-head { display: flex; align-items: center; gap: 8px; margin: 20px 0 10px; }
+  .snd-crumbs {
     background: var(--bg-1); border: 1px solid var(--border-neutral);
-    border-radius: 8px; padding: 12px 14px;
-    font-size: 11.5px; color: var(--text-1); margin: 0;
+    border-radius: 10px; padding: 12px 14px; margin: 0;
+    font-size: 11.5px; line-height: 1.6; color: var(--text-1);
     white-space: pre-wrap; overflow-wrap: anywhere;
   }
 
-  .sdp-tags-grid {
-    display: grid; grid-template-columns: max-content 1fr;
-    gap: 6px 18px; font-size: 12px;
+  /* Other-events picker rows. ----------------------------------------- */
+  .snd-events { display: flex; flex-direction: column; gap: 2px; }
+  .snd-event-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 6px 10px; width: 100%; text-align: left; cursor: pointer;
+    background: var(--bg-1); border: 1px solid var(--border-neutral);
+    border-radius: 6px; color: var(--text-1); font-size: 12px;
+    transition: background 100ms;
   }
-  .sdp-tag-k { color: var(--text-mute); }
-  .sdp-tag-v { color: var(--text-1); overflow-wrap: anywhere; }
+  .snd-event-row:hover { background: var(--bg-2); color: var(--text-0); }
+  .snd-event-row--active { background: var(--accent-soft); border-color: var(--border-hi); color: var(--text-0); }
+  .snd-event-id { color: var(--text-2); font-size: 11px; min-width: 70px; }
+  .snd-event-when { color: var(--text-mute); font-size: 11px; min-width: 70px; }
+  .snd-event-msg {
+    flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px;
+  }
+  .snd-event-tag {
+    font-size: 10px; padding: 1px 6px; border-radius: 3px;
+    background: var(--bg-2); color: var(--text-2); border: 1px solid var(--border-neutral);
+  }
 
-  .mini-tag {
-    padding: 2px 7px; border-radius: 4px; font-weight: 600;
-    text-transform: uppercase; font-size: 10px; letter-spacing: 0.05em;
+  /* Bottom hint card — bg-2, border, r10, shadow-1 (spec §2.6). ------- */
+  .snd-handoff {
+    display: flex; align-items: center; gap: 16px;
+    margin-top: 28px; padding: 14px 16px;
+    background: var(--bg-2); border: 1px solid var(--border-neutral);
+    border-radius: 10px; box-shadow: var(--shadow-1);
   }
+  .snd-handoff-text { flex: 1; margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--text-1); }
+  .snd-handoff-claude {
+    flex: none; display: inline-flex; align-items: center;
+    padding: 6px 14px; border-radius: 999px; cursor: pointer;
+    background: var(--accent); color: var(--accent-fg);
+    font-size: 12px; font-weight: 600; border: none;
+    box-shadow: var(--shadow-pill);
+  }
+  .snd-handoff-claude:hover:not(:disabled) { background: var(--accent-bright); color: var(--accent-fg); }
+  .snd-handoff-claude:disabled { opacity: 0.5; cursor: default; }
 </style>

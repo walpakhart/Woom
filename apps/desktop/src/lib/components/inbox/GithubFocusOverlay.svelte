@@ -12,7 +12,7 @@
     type CommitEntry,
     type ReviewComment
   } from '$lib/data';
-  import { firstLine, labelColorStyle, restLines } from '$lib/format';
+  import { labelColorStyle } from '$lib/format';
   import { inboxState } from '$lib/state/inbox.svelte';
 
   type DetailTab = 'conversation' | 'commits' | 'files' | 'reviews' | 'checks';
@@ -40,13 +40,14 @@
     onSendToClaude?: () => void;
   }
 
+  // `tab` / `onTabChange` stay in Props (the parent still passes them) but the
+  // §2.6 detail is a single scrolling document — Checks / Files / Conversation
+  // are stacked sections, not tabs — so they are intentionally not consumed.
   let {
     now,
-    tab,
     actionBusy,
     onCloseFocus,
     onRetryLoadDetail,
-    onTabChange,
     onToggleFile,
     onOpenCommit,
     onOpenComment,
@@ -80,8 +81,7 @@
     }
   }
 
-  // Group review comments by file path — used by the Files tab to pin each
-  // comment to its file.
+  // Group review comments by file path — pins each comment to its file block.
   const reviewCommentsByPath = $derived.by(() => {
     const map = new Map<string, ReviewComment[]>();
     for (const c of inboxState.reviewComments) {
@@ -105,12 +105,7 @@
     return map;
   });
 
-  // Per-review expansion state for the inline comments. The conversation
-  // tab renders an "X inline comments on Y files" pill — clicking it
-  // expands the comments inline (file path + line + body) right under
-  // the review block, instead of jumping to the Files tab. A small
-  // "Open in Files →" link still gives the old behaviour for users who
-  // want the diff context.
+  // Per-review expansion state for the inline comments in the conversation.
   let expandedReviews = $state(new Set<number>());
   function toggleReviewExpansion(id: number) {
     const next = new Set(expandedReviews);
@@ -119,7 +114,7 @@
     expandedReviews = next;
   }
 
-  // Rolled-up counts for the Checks tab badge and summary row.
+  // Rolled-up counts for the Checks section header + summary.
   const prChecksSummary = $derived.by(() => {
     const counts = {
       total: inboxState.prChecks.length,
@@ -133,449 +128,356 @@
     for (const c of inboxState.prChecks) counts[checkState(c)] += 1;
     return counts;
   });
+
+  // Two-segment 56px diffstat bar: ok (additions) + err (deletions).
+  function diffstat(additions: number, deletions: number): { ok: number; err: number } {
+    const total = additions + deletions;
+    if (total === 0) return { ok: 0, err: 0 };
+    const ok = Math.max(2, Math.min(54, Math.round((56 * additions) / total)));
+    return { ok, err: 56 - ok };
+  }
 </script>
 
 {#if inboxState.focusItem}
   {@const item = inboxState.focusItem}
   {@const stag = stateTag(item)}
+  {@const pr = inboxState.prDetail}
   <div
-    class="gfo"
+    class="ghd"
     onkeydown={(e) => { if (e.key === 'Escape') onCloseFocus(); }}
     role="region"
     aria-label="Pull request detail"
     tabindex="-1"
   >
-    <div class="gfo-panel">
-      <!-- Unified header bar: close-left, metadata center, "Open on
-           GitHub" right. Mirrors `.jdp-head` (Jira) and `.sdp-head`
-           (Sentry) so all three detail panes share the same skeleton. -->
-      <header class="gfo-head">
-        <button class="gfo-back" onclick={onCloseFocus} aria-label="Close" title="Close">
+    <div class="ghd-panel">
+      <!-- §2.6 document header, 52px, flush on --bg-0. -->
+      <header class="ghd-head">
+        <button class="ghd-back" onclick={onCloseFocus} aria-label="Close" title="Close">
           <svg class="i i-sm" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12" /></svg>
         </button>
-        <span class="gfo-key mono">{externalId(item)}</span>
-        <span class="chip-state {stag.className}">{stag.text}</span>
-        <span class="gfo-kind">{kindLabel(item).toLowerCase()}</span>
+        <span class="ghd-ref mono">{externalId(item)}</span>
+        <span class="state-pill {stag.className}">{stag.text}</span>
+        <span class="ghd-kind">{kindLabel(item).toLowerCase()}</span>
         {#if item.repo}
-          <span class="gfo-repo mono" title={repoLabel(item)}>{repoLabel(item)}</span>
+          <span class="ghd-repo mono" title={repoLabel(item)}>{repoLabel(item)}</span>
         {/if}
-        {#if item.is_pull_request && inboxState.prDetail}
-          <span class="gfo-branches mono">{inboxState.prDetail.base_ref} ← {inboxState.prDetail.head_ref}</span>
-        {/if}
-        <div style="flex:1"></div>
+        <div class="ghd-spring"></div>
         <button
-          class="gfo-btn gfo-btn--icon"
+          class="ghd-iconbtn"
           onclick={onRetryLoadDetail}
           disabled={inboxState.detailLoading}
           title="Refresh PR detail (PR/files/commits/checks)"
           aria-label="Refresh"
         >
-          <svg class="i i-sm" class:gfo-spin={inboxState.detailLoading} viewBox="0 0 24 24">
+          <svg class="i i-sm" class:ghd-spin={inboxState.detailLoading} viewBox="0 0 24 24">
             <path d="M21 12a9 9 0 0 1-9 9 9 9 0 0 1-8.5-6"/>
             <path d="M3 12a9 9 0 0 1 9-9 9 9 0 0 1 8.5 6"/>
             <polyline points="21 3 21 9 15 9"/>
             <polyline points="3 21 3 15 9 15"/>
           </svg>
         </button>
-        {#if onSendToClaude}
-          <button class="gfo-btn gfo-btn--claude" onclick={onSendToClaude} title="Send this PR to a Claude session">
-            <svg class="i i-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="m22 2-7 20-4-9-9-4 20-7z"/></svg>
-            Send to Claude
-          </button>
-        {/if}
-        <button class="gfo-btn" onclick={() => onOpenBrowser(item.url)} title="Open on GitHub">
-          <svg class="i i-sm" viewBox="0 0 24 24"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><path d="M15 3h6v6M10 14 21 3"/></svg>
+        <button class="ghd-ghostbtn" onclick={() => onOpenBrowser(item.url)} title="Open on GitHub">
           Open on GitHub
+          <svg class="i i-sm" viewBox="0 0 24 24"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><path d="M15 3h6v6M10 14 21 3"/></svg>
         </button>
+        {#if onSendToClaude}
+          <button class="ghd-claudebtn" onclick={onSendToClaude} title="Send this PR to a Claude session">→ claude</button>
+        {/if}
       </header>
-      <div class="focus-scroll">
-        <div class="focus-shell">
-          <h1 class="focus-title">{item.title}</h1>
+
+      <div class="ghd-scroll">
+        <div class="ghd-doc">
+          <h1 class="ghd-title">{item.title}</h1>
 
           {#if item.labels.length}
-            <div class="focus-labels">
+            <div class="ghd-labels">
               {#each item.labels as label (label.name)}
-                <span class="label-chip" style={labelColorStyle(label.color)}>{label.name}</span>
+                <span class="ghd-label" style={labelColorStyle(label.color)}>{label.name}</span>
               {/each}
             </div>
           {/if}
 
-          <div class="focus-meta">
+          <!-- Branch row: head → base chips + diffstat + files count + author. -->
+          <div class="ghd-branchrow">
+            {#if item.is_pull_request && pr}
+              <span class="ghd-branch mono">{pr.head_ref}</span>
+              <span class="ghd-branch-arrow" aria-hidden="true">→</span>
+              <span class="ghd-branch mono">{pr.base_ref}</span>
+              <span class="ghd-dotsep" aria-hidden="true"></span>
+              <span class="ghd-diffnum mono">
+                <span class="ghd-add">+{pr.additions.toLocaleString()}</span>
+                <span class="ghd-del">−{pr.deletions.toLocaleString()}</span>
+                · {pr.changed_files} file{pr.changed_files === 1 ? '' : 's'}
+              </span>
+            {/if}
             {#if item.author}
-              <span class="focus-meta-item">
-                <img src={item.author.avatar_url} alt="" class="meta-avatar" />
+              <span class="ghd-dotsep" aria-hidden="true"></span>
+              <span class="ghd-author">
+                <img src={item.author.avatar_url} alt="" class="ghd-avatar" />
                 <span class="mono">@{item.author.login}</span>
               </span>
-              <span class="divider"></span>
             {/if}
-            <span class="focus-meta-item">{item.comments} comments</span>
-            {#if item.is_pull_request && inboxState.prDetail}
-              <span class="divider"></span>
-              <span class="focus-meta-item">
-                <span class="chg-add">+{inboxState.prDetail.additions}</span>
-                <span class="chg-del">−{inboxState.prDetail.deletions}</span>
-              </span>
-            {/if}
-            <span class="divider"></span>
-            <span class="focus-meta-item">opened {relativeTime(item.created_at, now)} ago</span>
-          </div>
-
-          <div class="detail-tabs">
-            <button class="detail-tab" class:active={tab === 'conversation'} onclick={() => onTabChange('conversation')}>
-              Conversation
-              {#if inboxState.comments.length + inboxState.prReviews.length > 0}<span class="tab-count">{inboxState.comments.length + inboxState.prReviews.length}</span>{/if}
-            </button>
-            {#if item.is_pull_request}
-              <button class="detail-tab" class:active={tab === 'commits'} onclick={() => onTabChange('commits')}>
-                Commits{#if inboxState.prCommits.length}<span class="tab-count">{inboxState.prCommits.length}</span>{/if}
-              </button>
-              <button class="detail-tab" class:active={tab === 'files'} onclick={() => onTabChange('files')}>
-                Files{#if inboxState.prFiles.length}<span class="tab-count">{inboxState.prFiles.length}</span>{/if}
-              </button>
-              <button class="detail-tab" class:active={tab === 'checks'} onclick={() => onTabChange('checks')}>
-                Checks
-                {#if prChecksSummary.total > 0}
-                  <span class="tab-count tab-count--{prChecksSummary.failure > 0 ? 'err' : prChecksSummary.pending > 0 ? 'pending' : 'ok'}">
-                    {#if prChecksSummary.failure > 0}
-                      ✗ {prChecksSummary.failure}
-                    {:else if prChecksSummary.pending > 0}
-                      … {prChecksSummary.pending}/{prChecksSummary.total}
-                    {:else}
-                      ✓ {prChecksSummary.total}
-                    {/if}
-                  </span>
-                {/if}
-              </button>
-              <button class="detail-tab" class:active={tab === 'reviews'} onclick={() => onTabChange('reviews')}>
-                Reviews{#if inboxState.prReviews.length}<span class="tab-count">{inboxState.prReviews.length}</span>{/if}
-              </button>
-            {/if}
+            <span class="ghd-dotsep" aria-hidden="true"></span>
+            <span class="ghd-when mono">opened {relativeTime(item.created_at, now)} ago</span>
           </div>
 
           {#if inboxState.detailError}
-            <div class="tab-error">Failed to load detail: {inboxState.detailError}
-              <button class="link-inline" onclick={onRetryLoadDetail}>Retry</button>
+            <div class="ghd-error">
+              Failed to load detail: {inboxState.detailError}
+              <button class="ghd-link" onclick={onRetryLoadDetail}>Retry</button>
             </div>
           {/if}
 
-          {#if tab === 'conversation'}
-            <div class="tab-pane">
-              {#if item.body}
-                <div class="body-card">
-                  <div class="body-head">
-                    {#if item.author}
-                      <img src={item.author.avatar_url} alt="" class="meta-avatar" />
-                      <span class="mono">@{item.author.login}</span>
-                    {/if}
-                    <span class="meta-time mono">{relativeTime(item.created_at, now)} ago</span>
-                  </div>
-                  <Markdown source={item.body} />
-                </div>
+          <!-- CHECKS — grid [16][1fr][auto], mono 12. -->
+          {#if item.is_pull_request}
+            <section class="ghd-section">
+              <div class="ghd-sec-head">
+                <span class="ghd-sec-label">Checks</span>
+                {#if prChecksSummary.total > 0}
+                  <span
+                    class="ghd-sec-count mono"
+                    class:is-err={prChecksSummary.failure > 0}
+                    class:is-run={prChecksSummary.failure === 0 && prChecksSummary.pending > 0}
+                  >{prChecksSummary.success}/{prChecksSummary.total}</span>
+                {/if}
+              </div>
+              {#if inboxState.prChecksLoading && inboxState.prChecks.length === 0}
+                <div class="ghd-empty">Loading checks…</div>
+              {:else if inboxState.prChecks.length === 0}
+                <div class="ghd-empty">No checks configured for this PR's head commit.</div>
               {:else}
-                <div class="body-empty">No description.</div>
-              {/if}
-
-              {#if inboxState.detailLoading && !inboxState.comments.length && !inboxState.prReviews.length}
-                <div class="tab-state">Loading conversation…</div>
-              {:else}
-                {@const timeline = [
-                  ...inboxState.prReviews.map((r) => ({ type: 'review' as const, at: r.submitted_at ?? '', data: r, key: `review-${r.id}` })),
-                  ...inboxState.comments.map((c) => ({ type: 'comment' as const, at: c.created_at, data: c, key: `comment-${c.id}` })),
-                  // Commits get interleaved into the same timeline by their
-                  // author_date, so reviewers' "approved / changes requested"
-                  // bubbles surface next to the SHAs that triggered them —
-                  // matches GitHub's own conversation pane layout.
-                  ...inboxState.prCommits.map((c) => ({ type: 'commit' as const, at: c.author_date, data: c, key: `commit-${c.sha}` }))
-                ].sort((a, b) => a.at.localeCompare(b.at))}
-                {#each timeline as entry (entry.key)}
-                  {#if entry.type === 'review'}
-                    {@const r = entry.data}
-                    {@const rl = reviewStateLabel(r.state)}
-                    {@const inline = reviewCommentsByReview.get(r.id) ?? []}
-                    <div class="timeline-item review-item {rl.className}">
-                      <div class="timeline-head">
-                        {#if r.user}<img src={r.user.avatar_url} alt="" class="meta-avatar" /><span class="mono">@{r.user.login}</span>{/if}
-                        <span class="review-state">{rl.text}</span>
-                        {#if r.submitted_at}<span class="meta-time mono">{relativeTime(r.submitted_at, now)} ago</span>{/if}
-                      </div>
-                      {#if r.body}
-                        <Markdown source={r.body} />
-                      {:else if inline.length === 0}
-                        <div class="review-empty">No written feedback.</div>
-                      {/if}
-                      {#if inline.length > 0}
-                        {@const expanded = expandedReviews.has(r.id)}
-                        {@const fileCount = new Set(inline.map((c) => c.path)).size}
-                        <button class="review-inline-link" onclick={() => toggleReviewExpansion(r.id)} aria-expanded={expanded}>
-                          <svg class="i i-sm review-chevron" class:review-chevron--open={expanded} viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg>
-                          {inline.length} inline comment{inline.length > 1 ? 's' : ''} on {fileCount} file{fileCount > 1 ? 's' : ''}
+                <div class="ghd-checks">
+                  {#each inboxState.prChecks as c (c.id)}
+                    {@const st = checkState(c)}
+                    <div class="ghd-check ghd-check--{st}">
+                      <span class="ghd-check-icon" aria-hidden="true">
+                        {#if st === 'success'}✓
+                        {:else if st === 'failure'}✗
+                        {:else if st === 'pending'}<span class="ghd-run-dot"></span>
+                        {:else if st === 'skipped'}⊘
+                        {:else if st === 'cancelled'}⊗
+                        {:else}•{/if}
+                      </span>
+                      <span class="ghd-check-name mono">
+                        {c.name}{#if c.app_name}<span class="ghd-check-app"> · {c.app_name}</span>{/if}
+                      </span>
+                      {#if c.details_url}
+                        <button class="ghd-check-time mono" onclick={() => onOpenCheckDetails(c.details_url!)} title="Open on GitHub">
+                          {#if c.completed_at}{relativeTime(c.completed_at, now)}{:else if c.started_at}{relativeTime(c.started_at, now)}{:else}—{/if}
                         </button>
-                        {#if expanded}
-                          <div class="inline-comments inline-comments--review">
-                            {#each inline as ic (ic.id)}
-                              <div class="inline-comment">
-                                <div class="inline-comment-head">
-                                  {#if ic.user}<img src={ic.user.avatar_url} alt="" class="meta-avatar" /><span class="mono">@{ic.user.login}</span>{/if}
-                                  <span class="inline-path mono" title={ic.path}>{ic.path}</span>
-                                  {#if ic.line}<span class="inline-line mono">L{ic.line}</span>{/if}
-                                  <span class="meta-time mono">{relativeTime(ic.created_at, now)} ago</span>
-                                </div>
-                                <Markdown source={ic.body} />
-                              </div>
-                            {/each}
-                            <button class="review-inline-link review-inline-link--secondary" onclick={() => onTabChange('files')}>
-                              <svg class="i i-sm" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
-                              Open in Files →
-                            </button>
-                          </div>
-                        {/if}
-                      {/if}
-                    </div>
-                  {:else if entry.type === 'commit'}
-                    {@const cm = entry.data}
-                    <!-- Slim commit row matching GitHub's conversation
-                         timeline shape: tiny git icon, subject only (body
-                         omitted — same as GH), author chip, short SHA
-                         linking to the commit on github.com. -->
-                    <div class="timeline-commit">
-                      <span class="timeline-commit-icon" aria-hidden="true">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.5"/><path d="M3 12h5.5M15.5 12H21"/></svg>
-                      </span>
-                      <span class="timeline-commit-msg" title={cm.message}>{cm.message.split('\n')[0]}</span>
-                      {#if cm.author_avatar}
-                        <img class="meta-avatar timeline-commit-avatar" src={cm.author_avatar} alt="" />
-                      {/if}
-                      <span class="meta-time mono">{relativeTime(cm.author_date, now)} ago</span>
-                      <a class="timeline-commit-sha mono" href={cm.url} target="_blank" rel="noopener noreferrer" title="Open commit on GitHub">{cm.short_sha}</a>
-                    </div>
-                  {:else}
-                    {@const c = entry.data}
-                    <div class="timeline-item">
-                      <div class="timeline-head">
-                        {#if c.user}<img src={c.user.avatar_url} alt="" class="meta-avatar" /><span class="mono">@{c.user.login}</span>{/if}
-                        <span class="review-state">commented</span>
-                        <span class="meta-time mono">{relativeTime(c.created_at, now)} ago</span>
-                      </div>
-                      <Markdown source={c.body} />
-                    </div>
-                  {/if}
-                {/each}
-              {/if}
-            </div>
-
-          {:else if tab === 'commits' && item.is_pull_request}
-            <div class="tab-pane">
-              {#if inboxState.detailLoading && !inboxState.prCommits.length}
-                <div class="tab-state">Loading commits…</div>
-              {:else if inboxState.prCommits.length === 0}
-                <div class="tab-state">No commits.</div>
-              {:else}
-                {#each inboxState.prCommits as c (c.sha)}
-                  <button class="commit-row" onclick={() => onOpenCommit(c)}>
-                    <div class="commit-main">
-                      {#if c.author_avatar}<img src={c.author_avatar} alt="" class="meta-avatar" />{/if}
-                      <div class="commit-body">
-                        <div class="commit-title">{firstLine(c.message)}</div>
-                        {#if restLines(c.message)}
-                          <div class="commit-rest">{restLines(c.message)}</div>
-                        {/if}
-                        <div class="commit-meta mono">
-                          {c.author_login ? '@' + c.author_login : c.author_name}
-                          <span>·</span>
-                          <span>{relativeTime(c.author_date, now)} ago</span>
-                        </div>
-                      </div>
-                    </div>
-                    <span class="commit-sha mono">{c.short_sha}</span>
-                  </button>
-                {/each}
-              {/if}
-            </div>
-
-          {:else if tab === 'files' && item.is_pull_request}
-            <div class="tab-pane">
-              {#if inboxState.detailLoading && !inboxState.prFiles.length}
-                <div class="tab-state">Loading files…</div>
-              {:else if inboxState.prFiles.length === 0}
-                <div class="tab-state">No changed files.</div>
-              {:else}
-                <div class="files-summary mono">
-                  {inboxState.prFiles.length} file{inboxState.prFiles.length !== 1 ? 's' : ''} ·
-                  <span class="chg-add">+{inboxState.prFiles.reduce((a, f) => a + f.additions, 0)}</span>
-                  <span class="chg-del">−{inboxState.prFiles.reduce((a, f) => a + f.deletions, 0)}</span>
-                  <span> · {inboxState.reviewComments.length} inline comment{inboxState.reviewComments.length !== 1 ? 's' : ''}</span>
-                </div>
-                {#each inboxState.prFiles as f (f.filename)}
-                  {@const open = inboxState.expandedFiles.has(f.filename)}
-                  {@const fileComments = reviewCommentsByPath.get(f.filename) ?? []}
-                  <div class="file-block" class:open>
-                    <button class="file-head" onclick={() => onToggleFile(f.filename)}>
-                      <svg class="i i-sm chev" viewBox="0 0 24 24" style="transform: rotate({open ? 90 : 0}deg);"><path d="m9 18 6-6-6-6" /></svg>
-                      <span class="file-status file-status--{f.status}">{f.status}</span>
-                      <span class="file-name mono">{f.filename}</span>
-                      {#if fileComments.length}
-                        <span class="file-comments-badge">{fileComments.length}</span>
-                      {/if}
-                      <span class="file-changes mono">
-                        <span class="chg-add">+{f.additions}</span>
-                        <span class="chg-del">−{f.deletions}</span>
-                      </span>
-                    </button>
-                    {#if open}
-                      {#if f.patch}
-                        {@const lines = parsePatch(f.patch)}
-                        <div class="diff-scroller">
-                          <div class="diff-body">
-                            {#each lines as line, idx (idx)}
-                              {#if line.kind === 'header'}
-                                <div class="hunk-header mono">{line.text}</div>
-                              {:else}
-                                <div class="diff-line {line.kind}">
-                                  <span class="diff-line-num">{line.kind === 'add' ? '+' : line.kind === 'del' ? '−' : line.newLine ?? ''}</span>
-                                  <span class="diff-line-content">{line.text}</span>
-                                </div>
-                              {/if}
-                            {/each}
-                          </div>
-                        </div>
                       {:else}
-                        <div class="tab-state">Binary file or no patch available.</div>
+                        <span class="ghd-check-time mono">
+                          {#if c.completed_at}{relativeTime(c.completed_at, now)}{:else if c.started_at}{relativeTime(c.started_at, now)}{:else}—{/if}
+                        </span>
                       {/if}
-                      {#if fileComments.length}
-                        <div class="inline-comments">
-                          <div class="inline-comments-head">Inline comments</div>
-                          {#each fileComments as ic (ic.id)}
-                            <div class="inline-comment">
-                              <div class="inline-comment-head">
-                                {#if ic.user}<img src={ic.user.avatar_url} alt="" class="meta-avatar" /><span class="mono">@{ic.user.login}</span>{/if}
-                                {#if ic.line}<span class="inline-line mono">line {ic.line}</span>{/if}
-                                <span class="meta-time mono">{relativeTime(ic.created_at, now)} ago</span>
+                    </div>
+                  {/each}
+                </div>
+              {/if}
+            </section>
+          {/if}
+
+          <!-- FILES — name mono + ±n + 56×4 diffstat bar. -->
+          {#if item.is_pull_request}
+            <section class="ghd-section">
+              <div class="ghd-sec-head">
+                <span class="ghd-sec-label">Files</span>
+                {#if inboxState.prFiles.length}<span class="ghd-sec-count mono">{inboxState.prFiles.length}</span>{/if}
+              </div>
+              {#if inboxState.detailLoading && !inboxState.prFiles.length}
+                <div class="ghd-empty">Loading files…</div>
+              {:else if inboxState.prFiles.length === 0}
+                <div class="ghd-empty">No changed files.</div>
+              {:else}
+                <div class="ghd-files">
+                  {#each inboxState.prFiles as f (f.filename)}
+                    {@const open = inboxState.expandedFiles.has(f.filename)}
+                    {@const fileComments = reviewCommentsByPath.get(f.filename) ?? []}
+                    {@const bar = diffstat(f.additions, f.deletions)}
+                    <div class="ghd-file" class:open>
+                      <button class="ghd-file-head" onclick={() => onToggleFile(f.filename)}>
+                        <svg class="i i-sm ghd-chev" viewBox="0 0 24 24" style="transform: rotate({open ? 90 : 0}deg);"><path d="m9 18 6-6-6-6" /></svg>
+                        <span class="ghd-file-name mono">{f.filename}</span>
+                        {#if fileComments.length}<span class="ghd-file-badge">{fileComments.length}</span>{/if}
+                        <span class="ghd-file-chg mono">
+                          <span class="ghd-add">+{f.additions}</span>
+                          <span class="ghd-del">−{f.deletions}</span>
+                        </span>
+                        <span class="ghd-diffstat" aria-hidden="true">
+                          <span class="ghd-diffstat-ok" style="width:{bar.ok}px"></span>
+                          <span class="ghd-diffstat-err" style="width:{bar.err}px"></span>
+                        </span>
+                      </button>
+                      {#if open}
+                        {#if f.patch}
+                          {@const lines = parsePatch(f.patch)}
+                          <div class="ghd-diff-scroller">
+                            <div class="ghd-diff-body">
+                              {#each lines as line, idx (idx)}
+                                {#if line.kind === 'header'}
+                                  <div class="ghd-hunk mono">{line.text}</div>
+                                {:else}
+                                  <div class="ghd-diff-line {line.kind}">
+                                    <span class="ghd-diff-num">{line.kind === 'add' ? '+' : line.kind === 'del' ? '−' : line.newLine ?? ''}</span>
+                                    <span class="ghd-diff-content">{line.text}</span>
+                                  </div>
+                                {/if}
+                              {/each}
+                            </div>
+                          </div>
+                        {:else}
+                          <div class="ghd-empty">Binary file or no patch available.</div>
+                        {/if}
+                        {#if fileComments.length}
+                          <div class="ghd-file-comments">
+                            {#each fileComments as ic (ic.id)}
+                              <div class="ghd-quote">
+                                <div class="ghd-quote-head">
+                                  {#if ic.user}<img src={ic.user.avatar_url} alt="" class="ghd-avatar" /><span class="mono">@{ic.user.login}</span>{/if}
+                                  {#if ic.line}<span class="ghd-quote-line mono">line {ic.line}</span>{/if}
+                                  <span class="ghd-quote-time mono">{relativeTime(ic.created_at, now)} ago</span>
+                                </div>
+                                <div class="ghd-quote-body"><Markdown source={ic.body} /></div>
                               </div>
-                              <Markdown source={ic.body} />
+                            {/each}
+                          </div>
+                        {/if}
+                      {/if}
+                    </div>
+                  {/each}
+                </div>
+              {/if}
+            </section>
+          {/if}
+
+          <!-- CONVERSATION — description + timeline as border-left quotes. -->
+          <section class="ghd-section">
+            <div class="ghd-sec-head">
+              <span class="ghd-sec-label">Conversation</span>
+              {#if inboxState.comments.length + inboxState.prReviews.length > 0}
+                <span class="ghd-sec-count mono">{inboxState.comments.length + inboxState.prReviews.length}</span>
+              {/if}
+            </div>
+
+            {#if item.body}
+              <div class="ghd-quote">
+                <div class="ghd-quote-head">
+                  {#if item.author}
+                    <img src={item.author.avatar_url} alt="" class="ghd-avatar" />
+                    <span class="mono">@{item.author.login}</span>
+                  {/if}
+                  <span class="ghd-quote-time mono">{relativeTime(item.created_at, now)} ago</span>
+                </div>
+                <div class="ghd-quote-body"><Markdown source={item.body} /></div>
+              </div>
+            {:else}
+              <div class="ghd-empty">No description.</div>
+            {/if}
+
+            {#if inboxState.detailLoading && !inboxState.comments.length && !inboxState.prReviews.length}
+              <div class="ghd-empty">Loading conversation…</div>
+            {:else}
+              {@const timeline = [
+                ...inboxState.prReviews.map((r) => ({ type: 'review' as const, at: r.submitted_at ?? '', data: r, key: `review-${r.id}` })),
+                ...inboxState.comments.map((c) => ({ type: 'comment' as const, at: c.created_at, data: c, key: `comment-${c.id}` })),
+                // Commits interleave by author_date so reviewers' bubbles surface
+                // next to the SHAs that triggered them — matches GitHub's own pane.
+                ...inboxState.prCommits.map((c) => ({ type: 'commit' as const, at: c.author_date, data: c, key: `commit-${c.sha}` }))
+              ].sort((a, b) => a.at.localeCompare(b.at))}
+              {#each timeline as entry (entry.key)}
+                {#if entry.type === 'review'}
+                  {@const r = entry.data}
+                  {@const rl = reviewStateLabel(r.state)}
+                  {@const inline = reviewCommentsByReview.get(r.id) ?? []}
+                  <div class="ghd-quote ghd-quote--review {rl.className}">
+                    <div class="ghd-quote-head">
+                      {#if r.user}<img src={r.user.avatar_url} alt="" class="ghd-avatar" /><span class="mono">@{r.user.login}</span>{/if}
+                      <span class="ghd-review-state">{rl.text}</span>
+                      {#if r.submitted_at}<span class="ghd-quote-time mono">{relativeTime(r.submitted_at, now)} ago</span>{/if}
+                    </div>
+                    {#if r.body}
+                      <div class="ghd-quote-body"><Markdown source={r.body} /></div>
+                    {:else if inline.length === 0}
+                      <div class="ghd-quote-empty">No written feedback.</div>
+                    {/if}
+                    {#if inline.length > 0}
+                      {@const expanded = expandedReviews.has(r.id)}
+                      {@const fileCount = new Set(inline.map((c) => c.path)).size}
+                      <button class="ghd-inline-toggle" onclick={() => toggleReviewExpansion(r.id)} aria-expanded={expanded}>
+                        <svg class="i i-sm ghd-chev" class:ghd-chev--open={expanded} viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg>
+                        {inline.length} inline comment{inline.length > 1 ? 's' : ''} on {fileCount} file{fileCount > 1 ? 's' : ''}
+                      </button>
+                      {#if expanded}
+                        <div class="ghd-inline-list">
+                          {#each inline as ic (ic.id)}
+                            <div class="ghd-quote ghd-quote--nested">
+                              <div class="ghd-quote-head">
+                                {#if ic.user}<img src={ic.user.avatar_url} alt="" class="ghd-avatar" /><span class="mono">@{ic.user.login}</span>{/if}
+                                <span class="ghd-quote-line mono" title={ic.path}>{ic.path}</span>
+                                {#if ic.line}<span class="ghd-quote-line mono">L{ic.line}</span>{/if}
+                                <span class="ghd-quote-time mono">{relativeTime(ic.created_at, now)} ago</span>
+                              </div>
+                              <div class="ghd-quote-body"><Markdown source={ic.body} /></div>
                             </div>
                           {/each}
                         </div>
                       {/if}
                     {/if}
                   </div>
-                {/each}
-              {/if}
-            </div>
-
-          {:else if tab === 'checks' && item.is_pull_request}
-            <div class="tab-pane">
-              {#if inboxState.prChecksLoading && inboxState.prChecks.length === 0}
-                <div class="tab-state">Loading checks…</div>
-              {:else if inboxState.prChecks.length === 0}
-                <div class="tab-state">No checks configured for this PR's head commit.</div>
-              {:else}
-                <div class="checks-summary">
-                  <span class="check-pill check-pill--total">{prChecksSummary.total} total</span>
-                  {#if prChecksSummary.success > 0}<span class="check-pill check-pill--ok">✓ {prChecksSummary.success} passing</span>{/if}
-                  {#if prChecksSummary.failure > 0}<span class="check-pill check-pill--err">✗ {prChecksSummary.failure} failing</span>{/if}
-                  {#if prChecksSummary.pending > 0}<span class="check-pill check-pill--pending">… {prChecksSummary.pending} running</span>{/if}
-                  {#if prChecksSummary.skipped > 0}<span class="check-pill check-pill--skip">⊘ {prChecksSummary.skipped} skipped</span>{/if}
-                  {#if prChecksSummary.cancelled > 0}<span class="check-pill check-pill--skip">⊗ {prChecksSummary.cancelled} cancelled</span>{/if}
-                  {#if prChecksSummary.neutral > 0}<span class="check-pill">• {prChecksSummary.neutral} neutral</span>{/if}
-                </div>
-                <div class="check-list">
-                  {#each inboxState.prChecks as c (c.id)}
-                    {@const state = checkState(c)}
-                    <div class="check-row check-row--{state}">
-                      <span class="check-icon check-icon--{state}" aria-hidden="true">
-                        {#if state === 'success'}✓{:else if state === 'failure'}✗{:else if state === 'pending'}…{:else if state === 'skipped'}⊘{:else if state === 'cancelled'}⊗{:else}•{/if}
-                      </span>
-                      <div class="check-main">
-                        <div class="check-name">{c.name}</div>
-                        <div class="check-sub mono">
-                          {c.app_name ?? 'check'}
-                          · {c.status}{c.conclusion ? ` / ${c.conclusion}` : ''}
-                          {#if c.completed_at}
-                            · {relativeTime(c.completed_at, now)} ago
-                          {:else if c.started_at}
-                            · started {relativeTime(c.started_at, now)} ago
-                          {/if}
-                        </div>
-                      </div>
-                      {#if c.details_url}
-                        <button class="check-link mono" onclick={() => onOpenCheckDetails(c.details_url!)} title="Open on GitHub">
-                          details →
-                        </button>
-                      {/if}
+                {:else if entry.type === 'commit'}
+                  {@const cm = entry.data}
+                  <button class="ghd-commit" onclick={() => onOpenCommit(cm)} title={cm.message}>
+                    <span class="ghd-commit-icon" aria-hidden="true">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.5"/><path d="M3 12h5.5M15.5 12H21"/></svg>
+                    </span>
+                    <span class="ghd-commit-msg">{cm.message.split('\n')[0]}</span>
+                    {#if cm.author_avatar}<img class="ghd-avatar" src={cm.author_avatar} alt="" />{/if}
+                    <span class="ghd-quote-time mono">{relativeTime(cm.author_date, now)} ago</span>
+                    <span class="ghd-commit-sha mono">{cm.short_sha}</span>
+                  </button>
+                {:else}
+                  {@const c = entry.data}
+                  <div class="ghd-quote">
+                    <div class="ghd-quote-head">
+                      {#if c.user}<img src={c.user.avatar_url} alt="" class="ghd-avatar" /><span class="mono">@{c.user.login}</span>{/if}
+                      <span class="ghd-quote-time mono">{relativeTime(c.created_at, now)} ago</span>
                     </div>
-                  {/each}
-                </div>
-              {/if}
-            </div>
-
-          {:else if tab === 'reviews' && item.is_pull_request}
-            <div class="tab-pane">
-              {#if inboxState.detailLoading && !inboxState.prReviews.length}
-                <div class="tab-state">Loading reviews…</div>
-              {:else if inboxState.prReviews.length === 0}
-                <div class="tab-state">No reviews yet.</div>
-              {:else}
-                {#each inboxState.prReviews as r (r.id)}
-                  {@const rl = reviewStateLabel(r.state)}
-                  {@const inline = reviewCommentsByReview.get(r.id) ?? []}
-                  <div class="timeline-item review-item {rl.className}">
-                    <div class="timeline-head">
-                      {#if r.user}<img src={r.user.avatar_url} alt="" class="meta-avatar" /><span class="mono">@{r.user.login}</span>{/if}
-                      <span class="review-state">{rl.text}</span>
-                      {#if r.submitted_at}<span class="meta-time mono">{relativeTime(r.submitted_at, now)} ago</span>{/if}
-                    </div>
-                    {#if r.body}
-                      <Markdown source={r.body} />
-                    {:else if inline.length === 0}
-                      <div class="review-empty">No written feedback.</div>
-                    {/if}
-                    {#if inline.length > 0}
-                      <button class="review-inline-link" onclick={() => onTabChange('files')}>
-                        <svg class="i i-sm" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
-                        {inline.length} inline comment{inline.length > 1 ? 's' : ''} on {new Set(inline.map((c) => c.path)).size} file{new Set(inline.map((c) => c.path)).size > 1 ? 's' : ''} →
-                      </button>
-                    {/if}
+                    <div class="ghd-quote-body"><Markdown source={c.body} /></div>
                   </div>
-                {/each}
-              {/if}
-            </div>
-          {/if}
+                {/if}
+              {/each}
+            {/if}
+          </section>
         </div>
       </div>
 
-      <footer class="focus-actions">
-        <button class="btn btn--ghost" onclick={onOpenComment}>
-          <svg class="i i-sm" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></svg>
-          Comment
-        </button>
+      <!-- §2.6 actions: Approve ▾ primary, Merge · squash ▾ ghost, note faint. -->
+      <footer class="ghd-actions">
         {#if item.is_pull_request}
-          <button class="btn btn--ghost" onclick={onOpenReview}>
-            <svg class="i i-sm" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5" /></svg>
-            Review
+          <button class="ghd-act ghd-act--primary" onclick={onOpenReview}>
+            Approve
+            <svg class="i i-sm ghd-caret" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
+          </button>
+          <button class="ghd-act ghd-act--ghost" onclick={onOpenMerge} disabled={mergeDisabled()}>
+            {inboxState.prDetail?.merged ? 'Merged' : 'Merge · squash'}
+            <svg class="i i-sm ghd-caret" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
           </button>
         {/if}
+        <button class="ghd-act ghd-act--ghost" onclick={onOpenComment}>Comment</button>
         {#if item.state === 'open' && !item.merged}
-          <button class="btn btn--ghost" onclick={onAskClose} disabled={actionBusy !== null}>
-            <svg class="i i-sm" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12" /></svg>
+          <button class="ghd-act ghd-act--ghost" onclick={onAskClose} disabled={actionBusy !== null}>
             {actionBusy === 'closed' ? 'Closing…' : 'Close'}
           </button>
         {:else if item.merged}
-          <button class="btn btn--ghost" disabled>
-            <svg class="i i-sm" viewBox="0 0 24 24"><circle cx="6" cy="6" r="3" /><circle cx="18" cy="18" r="3" /><path d="M6 9v6a6 6 0 0 0 6 6h2" /></svg>
-            Merged
-          </button>
+          <button class="ghd-act ghd-act--ghost" disabled>Merged</button>
         {:else}
-          <button class="btn btn--ghost" onclick={onReopen} disabled={actionBusy !== null}>
-            <svg class="i i-sm" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /></svg>
+          <button class="ghd-act ghd-act--ghost" onclick={onReopen} disabled={actionBusy !== null}>
             {actionBusy === 'open' ? 'Reopening…' : 'Reopen'}
           </button>
         {/if}
-        <div style="flex:1"></div>
-        {#if item.is_pull_request}
-          <button class="btn btn--primary" onclick={onOpenMerge} disabled={mergeDisabled()}>
-            <svg class="i i-sm" viewBox="0 0 24 24"><circle cx="18" cy="18" r="3" /><circle cx="6" cy="6" r="3" /><path d="M6 9v6a6 6 0 0 0 6 6h2" /></svg>
-            {inboxState.prDetail?.merged ? 'Merged' : 'Merge'}
-          </button>
+        <div class="ghd-spring"></div>
+        {#if item.is_pull_request && mergeDisabled()}
+          <span class="ghd-merge-note">merge blocked until notarize</span>
         {/if}
       </footer>
     </div>
@@ -583,15 +485,27 @@
 {/if}
 
 <style>
-  /* Focus-pane styles that override or extend the base rules defined
-     globally in app.css. The pane fills its parent column (the right
-     pane of GithubApp). */
+  /* §2.6 GitHub detail (mockup 4e) — single scrolling document, no tabs.
+     Fresh `.ghd-` grammar: 52px header, centred document (max 800), stacked
+     Checks / Files / Conversation sections, sticky action bar. */
 
-  /* Unified header bar — close on the left, metadata in the middle,
-     "Open on GitHub" on the right. Same shape as `.jdp-head` (Jira) and
-     `.sdp-head` (Sentry). */
-  /* Redesign v2 §2.6 — 52px document header, flush on bg-0. */
-  .gfo-head {
+  .ghd {
+    flex: 1; min-height: 0;
+    display: flex;
+    width: 100%; height: 100%;
+    background: transparent;
+  }
+  .ghd-panel {
+    flex: 1; min-width: 0; min-height: 0;
+    display: flex; flex-direction: column;
+    background: var(--bg-0);
+    overflow: hidden;
+    position: relative;
+  }
+  .ghd-spring { flex: 1; }
+
+  /* Header ------------------------------------------------------------- */
+  .ghd-head {
     display: flex; align-items: center; gap: 10px;
     height: 52px;
     padding: 0 24px;
@@ -599,442 +513,308 @@
     background: var(--bg-0);
     flex-shrink: 0;
   }
-  .gfo-back {
+  .ghd-back {
     width: 28px; height: 28px; border-radius: 5px;
     display: inline-flex; align-items: center; justify-content: center;
     background: transparent; color: var(--text-1); border: none; cursor: pointer;
   }
-  .gfo-back:hover { background: var(--bg-2); color: var(--text-0); }
-  .gfo-key { font-size: 13px; color: var(--accent-bright); font-weight: 600; }
-  .gfo-kind { font-size: 11px; color: var(--text-2); }
-  .gfo-repo { font-size: 11.5px; color: var(--text-1); padding: 2px 8px; border-radius: 5px; background: var(--bg-2); border: 1px solid var(--border-neutral); max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .gfo-branches { font-size: 11.5px; color: var(--text-2); padding: 2px 8px; border-radius: 5px; background: var(--bg-2); border: 1px solid var(--border-neutral); }
-  .gfo-btn {
+  .ghd-back:hover { background: var(--bg-2); color: var(--text-0); }
+  .ghd-ref { font-size: 12px; color: var(--text-1); font-weight: 600; }
+  .ghd-kind { font-size: 12px; color: var(--text-faint); }
+  .ghd-repo {
+    font-size: 11.5px; color: var(--text-1);
+    padding: 2px 8px; border-radius: 5px;
+    background: var(--bg-2); border: 1px solid var(--border-neutral);
+    max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .ghd-iconbtn {
+    width: 30px; height: 28px; border-radius: 6px;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: transparent; color: var(--text-2);
+    border: 1px solid var(--border-neutral); cursor: pointer;
+  }
+  .ghd-iconbtn:hover:not(:disabled) { background: var(--bg-2); color: var(--text-0); }
+  .ghd-iconbtn:disabled { opacity: 0.45; cursor: not-allowed; }
+  .ghd-iconbtn .i-sm { width: 14px; height: 14px; }
+  .ghd-ghostbtn {
     display: inline-flex; align-items: center; gap: 6px;
     padding: 6px 12px; border-radius: 6px;
-    background: var(--bg-2); color: var(--text-1);
+    background: transparent; color: var(--text-1);
     font-size: 12px; border: 1px solid var(--border-neutral-hi); cursor: pointer;
   }
-  .gfo-btn:hover:not(:disabled) { background: var(--bg-3); color: var(--text-0); }
-  .gfo-btn:disabled { opacity: 0.45; cursor: not-allowed; }
-  .gfo-btn--icon { padding: 6px; }
-  .gfo-btn--icon .i-sm { width: 14px; height: 14px; }
-  /* Send-to-Claude — brand-tinted ghost so the handoff stands apart
-     from the GitHub-native actions. Mirrors `.jdp-btn--claude` /
-     `.sdp-btn--claude` so all three detail panes ship the same chip
-     in the same header position. */
-  .gfo-btn--claude {
-    color: var(--src-claude);
-    background: color-mix(in srgb, var(--src-claude) 8%, transparent);
-    border-color: color-mix(in srgb, var(--src-claude) 30%, transparent);
-  }
-  .gfo-btn--claude:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--src-claude) 18%, transparent);
-    color: var(--accent-bright);
-    border-color: color-mix(in srgb, var(--src-claude) 50%, transparent);
-  }
-  .gfo-spin { animation: gfo-spin 0.8s linear infinite; }
-  @keyframes gfo-spin { to { transform: rotate(360deg); } }
-
-  .focus-scroll { flex: 1; overflow-y: auto; }
-  /* Redesign v2 §2.6 — centred document, max 800, padding 30/40. */
-  .focus-shell { max-width: 800px; margin: 0 auto; padding: 30px 40px 80px; }
-
-  .chip-state { padding: 2px 9px; border-radius: 5px; font-size: 10.5px; font-weight: 500; }
-
-  .focus-title {
-    font-size: 22px;
-    line-height: 1.25;
-    letter-spacing: -0.015em;
-    font-weight: 600;
-    margin-bottom: 16px;
-    max-width: 720px;
-    color: var(--text-0);
-  }
-  .focus-labels { display: flex; gap: 6px; margin-bottom: 16px; flex-wrap: wrap; }
-  :global(.label-chip) {
-    padding: 2px 8px; border-radius: 999px;
-    font-size: 10.5px; font-weight: 500;
-    border: 1px solid;
-  }
-
-  .focus-meta {
-    display: flex; align-items: center; gap: 12px;
-    font-size: 12px; color: var(--text-2);
-    padding-bottom: 20px; margin-bottom: 20px;
-    border-bottom: 1px solid var(--border-neutral);
-    flex-wrap: wrap;
-  }
-  .focus-meta .divider { width: 3px; height: 3px; border-radius: 50%; background: var(--text-mute); }
-  .focus-meta-item { display: inline-flex; align-items: center; gap: 6px; }
-  .meta-avatar { width: 18px; height: 18px; border-radius: 50%; }
-  .chg-add { color: var(--accent-bright); }
-  .chg-del { color: #F0A38A; }
-
-  .detail-tabs {
-    display: flex; gap: 2px;
-    margin-bottom: 20px;
-    border-bottom: 1px solid var(--border);
-  }
-  .detail-tab {
-    padding: 10px 14px;
-    font-size: 12.5px; font-weight: 500;
-    color: var(--text-2);
-    border-bottom: 2px solid transparent;
-    margin-bottom: -1px;
-    transition: all 120ms;
-    background: transparent;
-    border-left: 0; border-right: 0; border-top: 0;
-    cursor: pointer;
-  }
-  .detail-tab:hover { color: var(--text-0); }
-  .detail-tab.active {
-    color: var(--accent-bright);
-    border-bottom-color: var(--accent);
-  }
-  .tab-count {
-    padding: 0 6px; min-width: 16px; height: 16px;
-    border-radius: 8px; background: var(--bg-3);
-    font-size: 10.5px; font-weight: 600;
-    display: inline-flex; align-items: center; justify-content: center;
-    color: var(--text-1); margin-left: 6px;
-  }
-  .detail-tab.active .tab-count { background: var(--accent-soft); color: var(--accent-bright); }
-  .tab-count--ok { background: color-mix(in srgb, var(--ok) 18%, transparent); color: #A8D9B8; }
-  .tab-count--err { background: rgba(232, 130, 100, 0.18); color: #F0A38A; }
-  .tab-count--pending { background: rgba(217, 184, 110, 0.16); color: #E4C885; }
-
-  .checks-summary { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
-  .check-pill {
-    font-size: 11px; padding: 3px 9px; border-radius: 12px;
-    border: 1px solid var(--border-neutral);
-    background: var(--bg-2); color: var(--text-1);
-  }
-  .check-pill--total { background: var(--bg-2); color: var(--text-1); }
-  .check-pill--ok { background: color-mix(in srgb, var(--ok) 12%, transparent); color: #A8D9B8; border-color: color-mix(in srgb, var(--ok) 30%, transparent); }
-  .check-pill--err { background: rgba(232, 130, 100, 0.12); color: #F0A38A; border-color: rgba(232, 130, 100, 0.3); }
-  .check-pill--pending { background: rgba(217, 184, 110, 0.12); color: #E4C885; border-color: rgba(217, 184, 110, 0.3); }
-  .check-pill--skip { background: var(--bg-2); color: var(--text-mute); }
-
-  /* Mockup CHECKS card: printed card + flat glyph rows. */
-  .check-list {
-    border: 1px solid var(--border); border-radius: var(--r-card);
-    overflow: hidden; background: var(--bg-2);
+  .ghd-ghostbtn:hover { background: var(--bg-2); color: var(--text-0); }
+  /* Send-to-Claude — primary inverse pill (spec: инверсный + shadow-pill). */
+  .ghd-claudebtn {
+    display: inline-flex; align-items: center;
+    padding: 6px 14px; border-radius: 999px;
+    background: var(--text-0); color: var(--bg-0);
+    font-size: 12px; font-weight: 600;
+    border: none; cursor: pointer;
     box-shadow: var(--shadow-1);
   }
-  .check-row {
-    display: flex; align-items: center; gap: 10px;
-    padding: 8px 14px;
-    border-bottom: 1px solid var(--border-lo);
-  }
-  .check-row:last-child { border-bottom: none; }
-  .check-icon {
-    width: 14px;
-    display: inline-flex; align-items: center; justify-content: center;
-    font-size: 11px; font-weight: 700;
-    flex-shrink: 0;
-    background: transparent;
-  }
-  .check-icon--success { color: var(--ok); }
-  .check-icon--failure { color: var(--err); }
-  .check-icon--pending { color: var(--warn); animation: check-spin 1.6s linear infinite; }
-  .check-icon--skipped,
-  .check-icon--cancelled,
-  .check-icon--neutral { color: var(--text-faint); }
+  .ghd-claudebtn:hover { background: var(--text-1); }
+  .ghd-spin { animation: ghd-spin 0.8s linear infinite; }
+  @keyframes ghd-spin { to { transform: rotate(360deg); } }
 
-  .check-main { flex: 1; min-width: 0; }
-  .check-name { color: var(--text-0); font-weight: 500; }
-  .check-sub { font-size: 10.5px; color: var(--text-mute); margin-top: 2px; }
-  .check-link {
-    font-size: 11px; color: var(--accent-bright);
-    padding: 5px 9px; border-radius: 6px;
-    background: transparent;
-  }
-  .check-link:hover { background: var(--bg-2); }
+  /* Document ----------------------------------------------------------- */
+  .ghd-scroll { flex: 1; overflow-y: auto; }
+  .ghd-doc { max-width: 800px; margin: 0 auto; padding: 30px 40px 80px; }
 
-  .tab-pane { min-height: 100px; }
-  .tab-state { padding: 40px; text-align: center; color: var(--text-2); font-size: 13px; }
-  .tab-error {
-    padding: 12px 14px; font-size: 12.5px; color: #F0A38A;
-    background: rgba(232, 130, 100, 0.06); border: 1px solid rgba(232, 130, 100, 0.22);
-    border-radius: 8px; margin-bottom: 16px;
+  .ghd-title {
+    font-size: 22px; line-height: 1.25;
+    letter-spacing: -0.015em; font-weight: 600;
+    color: var(--text-0);
+    margin-bottom: 14px; max-width: 720px;
+  }
+  .ghd-labels { display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap; }
+  .ghd-label {
+    padding: 2px 8px; border-radius: 999px;
+    font-size: 10.5px; font-weight: 500;
+    color: var(--label-color);
+    border: 1px solid color-mix(in srgb, var(--label-color) 45%, transparent);
+    background: color-mix(in srgb, var(--label-color) 12%, transparent);
   }
 
-  .body-card {
-    background: var(--bg-2); border: 1px solid var(--border);
-    border-radius: 11px; padding: 16px 18px; margin-bottom: 16px;
-  }
-  .body-head {
-    display: flex; align-items: center; gap: 8px;
-    padding-bottom: 12px; margin-bottom: 12px;
+  /* Branch row --------------------------------------------------------- */
+  .ghd-branchrow {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    font-size: 12px; color: var(--text-2);
+    padding-bottom: 22px; margin-bottom: 4px;
     border-bottom: 1px solid var(--border-neutral);
-    font-size: 12.5px; color: var(--text-1);
   }
-  .body-empty {
-    padding: 14px 16px; background: var(--bg-1);
-    border: 1px dashed var(--border-neutral-hi); border-radius: 10px;
-    color: var(--text-mute);  font-size: 12.5px; margin-bottom: 16px;
+  .ghd-branch {
+    font-size: 11.5px; color: var(--text-1);
+    padding: 2px 8px; border-radius: 5px;
+    background: var(--accent-soft);
   }
-  .timeline-item {
-    background: var(--bg-2); border: 1px solid var(--border);
-    border-radius: 11px; padding: 14px 16px; margin-bottom: 10px;
+  .ghd-branch-arrow { color: var(--text-mute); font-size: 12px; }
+  .ghd-diffnum { font-size: 11.5px; color: var(--text-2); }
+  .ghd-add { color: var(--accent-bright); }
+  .ghd-del { color: var(--err); }
+  .ghd-dotsep { width: 3px; height: 3px; border-radius: 50%; background: var(--text-mute); }
+  .ghd-author { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text-1); }
+  .ghd-when { font-size: 11.5px; color: var(--text-mute); }
+  .ghd-avatar { width: 16px; height: 16px; border-radius: 50%; }
+
+  .ghd-error {
+    margin: 18px 0 0;
+    padding: 12px 14px; font-size: 12.5px; color: var(--err);
+    background: color-mix(in srgb, var(--err) 7%, transparent);
+    border: 1px solid color-mix(in srgb, var(--err) 24%, transparent);
+    border-radius: 8px;
   }
-  /* Slim, sparse commit row in the conversation — visually softer than the
-     review/comment cards (no background, no border) so the surface still
-     reads as "those are the bubbles, this is just history". Matches the
-     way GitHub renders commit dots in the same timeline. */
-  .timeline-commit {
+  .ghd-link {
+    background: none; border: none; cursor: pointer;
+    color: var(--accent-bright); text-decoration: underline; font-size: inherit;
+  }
+
+  /* Sections ----------------------------------------------------------- */
+  .ghd-section { margin-top: 28px; }
+  .ghd-sec-head {
+    display: flex; align-items: baseline; gap: 10px;
+    margin-bottom: 12px;
+  }
+  .ghd-sec-label {
+    font-size: 10.5px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.09em;
+    color: var(--text-2);
+  }
+  .ghd-sec-count { font-size: 11px; color: var(--ok); }
+  .ghd-sec-count.is-err { color: var(--err); }
+  .ghd-sec-count.is-run { color: var(--warn); }
+  .ghd-empty {
+    padding: 18px 2px; font-size: 12.5px; color: var(--text-mute);
+  }
+
+  /* Checks — grid [16][1fr][auto], mono 12. --------------------------- */
+  .ghd-checks { display: flex; flex-direction: column; }
+  .ghd-check {
+    display: grid; grid-template-columns: 16px 1fr auto;
+    align-items: center; gap: 12px;
+    padding: 6px 0;
+    font-family: var(--font-mono); font-size: 12px;
+  }
+  .ghd-check-icon {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 16px; font-size: 12px; font-weight: 700;
+  }
+  .ghd-check--success .ghd-check-icon { color: var(--ok); }
+  .ghd-check--failure .ghd-check-icon { color: var(--err); }
+  .ghd-check--pending .ghd-check-icon { color: var(--warn); }
+  .ghd-check--skipped .ghd-check-icon,
+  .ghd-check--cancelled .ghd-check-icon,
+  .ghd-check--neutral .ghd-check-icon { color: var(--text-faint); }
+  .ghd-run-dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--warn);
+    animation: ghd-pulse 1.4s ease-in-out infinite;
+  }
+  @keyframes ghd-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+  .ghd-check-name { color: var(--text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ghd-check-app { color: var(--text-mute); }
+  .ghd-check-time {
+    font-size: 11.5px; color: var(--text-faint);
+    background: none; border: none; padding: 0; cursor: default;
+  }
+  button.ghd-check-time { cursor: pointer; }
+  button.ghd-check-time:hover { color: var(--accent-bright); }
+
+  /* Files — name mono + ±n + 56×4 diffstat bar. ---------------------- */
+  .ghd-files { display: flex; flex-direction: column; }
+  .ghd-file { border-bottom: 1px solid var(--border-lo); }
+  .ghd-file:last-child { border-bottom: none; }
+  .ghd-file-head {
+    display: flex; align-items: center; gap: 10px;
+    width: 100%; padding: 7px 0;
+    background: none; border: none; cursor: pointer; text-align: left;
+  }
+  .ghd-file-head:hover .ghd-file-name { color: var(--accent-bright); }
+  .ghd-chev { color: var(--text-mute); transition: transform 160ms; flex-shrink: 0; }
+  .ghd-chev--open { transform: rotate(90deg); }
+  .ghd-file-name {
+    flex: 1; min-width: 0;
+    font-size: 12px; color: var(--text-1);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .ghd-file-badge {
+    font-size: 10px; font-weight: 600;
+    padding: 1px 7px; border-radius: 999px;
+    background: var(--accent-soft); color: var(--accent-bright);
+  }
+  .ghd-file-chg { display: inline-flex; gap: 7px; font-size: 11.5px; flex-shrink: 0; }
+  .ghd-diffstat {
+    display: inline-flex; gap: 1px;
+    width: 56px; height: 4px; flex-shrink: 0;
+    border-radius: 2px; overflow: hidden;
+    background: var(--bg-3);
+  }
+  .ghd-diffstat-ok { height: 4px; background: var(--ok); }
+  .ghd-diffstat-err { height: 4px; background: var(--err); }
+
+  .ghd-diff-scroller {
+    margin: 2px 0 10px;
+    border: 1px solid var(--border-neutral); border-radius: 8px;
+    overflow: auto; max-height: 620px;
+    background: var(--bg-0);
+  }
+  .ghd-diff-body {
+    font-family: var(--font-mono); font-size: 12px; line-height: 1.65;
+    width: fit-content; min-width: 100%;
+  }
+  .ghd-hunk {
+    padding: 4px 16px; font-size: 11px; color: var(--text-mute);
+    background: var(--bg-1);
+    border-bottom: 1px solid var(--border-neutral);
+  }
+  .ghd-diff-line { display: grid; grid-template-columns: 44px 1fr; }
+  .ghd-diff-num {
+    text-align: right; padding: 0 10px;
+    color: var(--text-mute); font-size: 10.5px; user-select: none;
+    background: var(--bg-0); border-right: 1px solid var(--border-neutral);
+    position: sticky; left: 0;
+  }
+  .ghd-diff-content { padding: 0 14px; white-space: pre; color: var(--text-1); }
+  .ghd-diff-line.add .ghd-diff-content { background: color-mix(in srgb, var(--ok) 8%, transparent); color: color-mix(in srgb, var(--ok) 78%, var(--text-0)); }
+  .ghd-diff-line.add .ghd-diff-num { background: color-mix(in srgb, var(--ok) 12%, transparent); }
+  .ghd-diff-line.del .ghd-diff-content { background: color-mix(in srgb, var(--err) 8%, transparent); color: color-mix(in srgb, var(--err) 82%, var(--text-0)); }
+  .ghd-diff-line.del .ghd-diff-num { background: color-mix(in srgb, var(--err) 12%, transparent); }
+  .ghd-file-comments { padding: 0 0 12px 26px; }
+
+  /* Conversation — border-left quotes. -------------------------------- */
+  .ghd-quote {
+    border-left: 2px solid var(--border-hi);
+    padding-left: 14px;
+    margin-bottom: 18px;
+  }
+  .ghd-quote-head {
     display: flex; align-items: center; gap: 8px;
-    padding: 6px 4px;
+    font-size: 11.5px; color: var(--text-faint);
     margin-bottom: 6px;
-    font-size: 12px;
-    color: var(--text-1);
   }
-  .timeline-commit-icon {
-    width: 22px; height: 22px;
+  .ghd-quote-body {
+    font-size: 13.5px; line-height: 1.6; color: var(--text-1);
+  }
+  .ghd-quote-empty { font-size: 12.5px; color: var(--text-mute); }
+  .ghd-quote-time { margin-left: auto; color: var(--text-mute); font-size: 11px; }
+  .ghd-quote-line {
+    color: var(--text-2); font-size: 11px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 300px;
+  }
+  .ghd-review-state {
+    padding: 1px 8px; border-radius: 4px;
+    font-size: 10px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.04em;
+    color: var(--text-2); background: var(--bg-2);
+    border: 1px solid var(--border-neutral-hi);
+  }
+  .ghd-quote--review.rev--approved { border-left-color: var(--ok); }
+  .ghd-quote--review.rev--approved .ghd-review-state { color: var(--accent-bright); background: var(--accent-soft); border-color: color-mix(in srgb, var(--ok) 30%, transparent); }
+  .ghd-quote--review.rev--changes { border-left-color: var(--err); }
+  .ghd-quote--review.rev--changes .ghd-review-state { color: var(--err); background: color-mix(in srgb, var(--err) 8%, transparent); border-color: color-mix(in srgb, var(--err) 28%, transparent); }
+  .ghd-quote--review.rev--commented .ghd-review-state { color: var(--blue-bright); background: color-mix(in srgb, var(--blue) 10%, transparent); border-color: color-mix(in srgb, var(--blue) 24%, transparent); }
+  .ghd-quote--nested { margin-bottom: 12px; }
+
+  .ghd-inline-toggle {
+    margin-top: 8px;
+    display: inline-flex; align-items: center; gap: 6px;
+    background: none; border: none; padding: 0; cursor: pointer;
+    color: var(--accent-bright); font-size: 12px; font-weight: 500;
+  }
+  .ghd-inline-toggle:hover { text-decoration: underline; }
+  .ghd-inline-list { margin-top: 10px; }
+
+  /* Slim commit rows in the timeline. */
+  .ghd-commit {
+    display: flex; align-items: center; gap: 8px;
+    width: 100%; padding: 5px 0; margin-bottom: 12px;
+    background: none; border: none; cursor: pointer; text-align: left;
+    font-size: 12px; color: var(--text-1);
+  }
+  .ghd-commit-icon {
+    width: 22px; height: 22px; flex-shrink: 0;
     display: inline-flex; align-items: center; justify-content: center;
     border-radius: 50%;
-    background: var(--bg-2);
-    border: 1px solid var(--border-neutral-hi);
+    background: var(--bg-2); border: 1px solid var(--border-neutral-hi);
     color: var(--text-2);
-    flex-shrink: 0;
   }
-  .timeline-commit-icon svg { width: 12px; height: 12px; }
-  .timeline-commit-msg {
+  .ghd-commit-icon svg { width: 12px; height: 12px; }
+  .ghd-commit-msg {
     flex: 1; min-width: 0;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     color: var(--text-0);
   }
-  .timeline-commit-avatar { width: 16px; height: 16px; }
-  .timeline-commit-sha {
-    padding: 1px 6px;
-    border-radius: 4px;
-    background: var(--bg-2);
-    border: 1px solid var(--border-neutral-hi);
-    color: var(--text-1);
-    font-size: 10.5px;
-    text-decoration: none;
-    transition: all 120ms;
-  }
-  .timeline-commit-sha:hover {
-    color: var(--accent-bright);
-    border-color: var(--border-hi);
-    background: var(--accent-soft);
-  }
-  .timeline-head {
-    display: flex; align-items: center; gap: 8px;
-    padding-bottom: 10px; margin-bottom: 10px;
-    border-bottom: 1px solid var(--border-neutral);
-    font-size: 12.5px; color: var(--text-1);
-  }
-  .review-state {
-    padding: 1px 8px; border-radius: 4px;
-    font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;
-    color: var(--text-2); background: var(--bg-2);
-    border: 1px solid var(--border-neutral-hi);
-  }
-  .meta-time { margin-left: auto; color: var(--text-mute); font-size: 11px; }
-
-  .review-item.rev--approved .review-state { color: var(--accent-bright); background: var(--accent-soft); border-color: color-mix(in srgb, var(--ok) 30%, transparent); }
-  .review-item.rev--changes .review-state { color: #F0A38A; background: rgba(232, 130, 100, 0.08); border-color: rgba(232, 130, 100, 0.28); }
-  .review-item.rev--commented .review-state { color: var(--blue-bright); background: rgba(79, 142, 255, 0.08); border-color: rgba(79, 142, 255, 0.24); }
-  .review-item.rev--approved { border-left: 3px solid var(--accent); }
-  .review-item.rev--changes { border-left: 3px solid #F0A38A; }
-
-  .review-empty {
-    font-size: 12.5px; color: var(--text-mute);
-    
-  }
-  .review-inline-link {
-    margin-top: 10px;
-    display: inline-flex; align-items: center; gap: 6px;
-    padding: 6px 10px;
-    background: rgba(79, 142, 255, 0.08);
-    border: 1px solid rgba(79, 142, 255, 0.22);
-    border-radius: 7px;
-    color: var(--blue-bright);
-    font-size: 12px; font-weight: 500;
-    transition: all 120ms;
-    cursor: pointer;
-  }
-  .review-inline-link:hover {
-    background: rgba(79, 142, 255, 0.14);
-    border-color: rgba(79, 142, 255, 0.35);
-    transform: translateY(-1px);
-  }
-  .review-inline-link--secondary {
-    margin-top: 8px;
-    background: var(--bg-1);
-    border-color: var(--border-neutral-hi);
-    color: var(--text-1);
-  }
-  .review-inline-link--secondary:hover {
-    background: var(--bg-2);
-    color: var(--text-0);
-    transform: none;
-  }
-  .review-chevron {
-    transition: transform 140ms ease;
-  }
-  .review-chevron--open {
-    transform: rotate(90deg);
-  }
-  .inline-comments--review {
-    margin-top: 10px;
-  }
-  .inline-path {
-    color: var(--text-1);
-    font-size: 11px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    max-width: 320px;
-  }
-
-  /* Commits list */
-  .commit-row {
-    display: flex; align-items: flex-start; gap: 12px;
-    padding: 12px 14px; width: 100%;
-    background: var(--bg-1); border: 1px solid var(--border-neutral);
-    border-radius: 8px; margin-bottom: 6px;
-    text-align: left; transition: all 120ms;
-  }
-  .commit-row:hover { background: var(--bg-2); border-color: var(--border-neutral-hi); transform: translateY(-1px); }
-  .commit-main { display: flex; align-items: flex-start; gap: 10px; flex: 1; min-width: 0; }
-  .commit-body { flex: 1; min-width: 0; }
-  .commit-title { font-size: 13px; color: var(--text-0); font-weight: 500; line-height: 1.4; overflow-wrap: break-word; }
-  .commit-rest {
-    font-size: 12px; color: var(--text-2); margin-top: 3px;
-    white-space: pre-wrap;
-    font-family: var(--font-mono); line-height: 1.5;
-    max-height: 80px; overflow: hidden;
-  }
-  .commit-meta {
-    font-size: 10.5px; color: var(--text-mute);
-    margin-top: 6px; display: flex; gap: 6px;
-  }
-  .commit-sha {
-    font-size: 11px; padding: 3px 8px;
-    border-radius: 5px;
+  .ghd-commit:hover .ghd-commit-msg { color: var(--accent-bright); }
+  .ghd-commit-sha {
+    padding: 1px 6px; border-radius: 4px;
     background: var(--bg-2); border: 1px solid var(--border-neutral-hi);
-    color: var(--accent-bright); flex-shrink: 0;
+    color: var(--text-1); font-size: 10.5px;
   }
 
-  /* Files */
-  .files-summary { font-size: 12px; color: var(--text-2); margin-bottom: 12px; padding: 0 2px; }
-  .file-block {
-    background: var(--bg-1); border: 1px solid var(--border-neutral);
-    border-radius: 8px; margin-bottom: 6px; overflow: hidden;
-  }
-  .file-head {
-    display: flex; align-items: center; gap: 10px;
-    width: 100%; padding: 10px 14px;
-    text-align: left; transition: background 120ms;
-  }
-  .file-head:hover { background: var(--bg-2); }
-  .chev { color: var(--text-2); transition: transform 160ms; }
-  .file-status {
-    font-size: 10px; font-weight: 700; text-transform: uppercase;
-    letter-spacing: 0.06em; padding: 2px 7px; border-radius: 4px;
-  }
-  .file-status--added    { color: var(--accent-bright); background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--ok) 24%, transparent); }
-  .file-status--modified { color: var(--blue-bright); background: rgba(79, 142, 255, 0.08); border: 1px solid rgba(79, 142, 255, 0.22); }
-  .file-status--removed  { color: #F0A38A; background: rgba(232, 130, 100, 0.08); border: 1px solid rgba(232, 130, 100, 0.22); }
-  .file-status--renamed  { color: #E4C885; background: rgba(217, 184, 110, 0.06); border: 1px solid rgba(217, 184, 110, 0.22); }
-  .file-name { flex: 1; font-size: 12.5px; color: var(--text-0); overflow-wrap: anywhere; }
-  .file-changes { display: inline-flex; gap: 8px; font-size: 11px; }
-  .file-comments-badge {
-    font-size: 10px; font-weight: 600;
-    padding: 1px 7px;
-    border-radius: 999px;
-    background: var(--blue-deep); color: var(--blue-bright);
-    border: 1px solid rgba(79, 142, 255, 0.3);
-  }
-
-  /* Diff */
-  .diff-scroller {
-    border-top: 1px solid var(--border-neutral);
-    overflow-x: auto;
-    max-height: 640px;
-    overflow-y: auto;
-    background: var(--bg-0);
-  }
-  .diff-body {
-    font-family: var(--font-mono);
-    font-size: 12px; line-height: 1.65;
-    width: fit-content; min-width: 100%;
-  }
-  .hunk-header {
-    padding: 4px 16px;
-    font-size: 11px; color: var(--text-mute);
-    background: var(--bg-1);
-    border-top: 1px solid var(--border-neutral);
-    border-bottom: 1px solid var(--border-neutral);
-  }
-  .diff-line {
-    display: grid; grid-template-columns: 44px 1fr;
-  }
-  .diff-line-num {
-    text-align: right; padding: 0 10px;
-    color: var(--text-mute); font-size: 10.5px;
-    user-select: none;
-    background: var(--bg-0); border-right: 1px solid var(--border-neutral);
-    position: sticky; left: 0;
-  }
-  .diff-line-content { padding: 0 14px; white-space: pre; color: var(--text-1); }
-  .diff-line.add .diff-line-content { background: color-mix(in srgb, var(--ok) 8%, transparent); color: #A8DEC8; }
-  .diff-line.add .diff-line-num { background: color-mix(in srgb, var(--ok) 12%, transparent); color: #A8DEC8; }
-  .diff-line.del .diff-line-content { background: rgba(232, 130, 100, 0.07); color: #F0A38A; }
-  .diff-line.del .diff-line-num { background: rgba(232, 130, 100, 0.1); color: #F0A38A; }
-
-  /* Inline comments on files */
-  .inline-comments {
-    border-top: 1px solid var(--border-neutral);
-    padding: 12px 14px;
-    background: var(--bg-1);
-  }
-  .inline-comments-head {
-    font-size: 10.5px; font-weight: 600; color: var(--text-2);
-    text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 10px;
-  }
-  .inline-comment {
-    padding: 10px 12px;
-    background: var(--bg-1);
-    border: 1px solid var(--border-neutral);
-    border-radius: 8px; margin-bottom: 6px;
-    border-left: 3px solid var(--blue);
-  }
-  .inline-comment-head {
+  /* Action bar --------------------------------------------------------- */
+  .ghd-actions {
     display: flex; align-items: center; gap: 8px;
-    font-size: 12px; color: var(--text-1);
-    padding-bottom: 8px; margin-bottom: 8px;
-    border-bottom: 1px solid var(--border-neutral);
-  }
-  .inline-line { color: var(--blue-bright); font-size: 11px; }
-
-  /* Focus action bar */
-  .focus-actions {
-    border-top: 1px solid var(--border-neutral);
     padding: 12px 24px;
-    display: flex; align-items: center; gap: 8px;
+    border-top: 1px solid var(--border-neutral);
     background: var(--backdrop);
     backdrop-filter: blur(12px);
   }
-
-  /* Fills the parent column (GithubApp's right pane). Picks up the
-     surrounding `.app-pane` chrome from the parent's layout. */
-  .gfo {
-    flex: 1; min-height: 0;
-    display: flex;
-    width: 100%; height: 100%;
-    background: transparent;
+  .ghd-act {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 7px 14px; border-radius: 7px;
+    font-size: 12.5px; font-weight: 500; cursor: pointer;
+    transition: all 120ms;
   }
-  .gfo-panel {
-    flex: 1; min-width: 0; min-height: 0;
-    display: flex; flex-direction: column;
-    background: var(--bg-0);
-    overflow: hidden;
-    position: relative;
+  .ghd-act:disabled { opacity: 0.5; cursor: not-allowed; }
+  .ghd-caret { width: 13px; height: 13px; opacity: 0.7; }
+  .ghd-act--primary {
+    background: var(--accent); color: var(--accent-contrast, var(--bg-0));
+    border: 1px solid var(--accent);
   }
-  @keyframes check-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+  .ghd-act--primary:hover:not(:disabled) { background: var(--accent-bright); border-color: var(--accent-bright); }
+  .ghd-act--ghost {
+    background: transparent; color: var(--text-1);
+    border: 1px solid var(--border-neutral-hi);
+  }
+  .ghd-act--ghost:hover:not(:disabled) { background: var(--bg-2); color: var(--text-0); }
+  .ghd-merge-note { font-size: 11.5px; color: var(--text-faint); }
 </style>

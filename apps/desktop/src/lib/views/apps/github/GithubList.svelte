@@ -597,14 +597,14 @@
   }
 
   function stateClass(it: InboxItem): string {
-    if (it.merged) return 'st--merged';
-    if (it.draft) return 'st--draft';
-    if (it.state === 'closed') return 'st--closed';
-    return 'st--open';
+    if (it.merged) return 'tag--merged';
+    if (it.draft) return 'tag--draft';
+    if (it.state === 'closed') return 'tag--closed';
+    return 'tag--open';
   }
 </script>
 
-<aside class="lp gl">
+<aside class="lp ghl">
   <header class="lp-head">
     <span class="lp-title">Pull requests</span>
     {#if filtered.length > 0}<span class="lp-count">{filtered.length}</span>{/if}
@@ -617,118 +617,118 @@
     </button>
   </header>
 
-    <label class="gl-search" class:gl-search--remote={wantsRemoteSearch} bind:this={searchEl}>
-      {#if searching}
-        <span class="gl-search-spin" aria-hidden="true"></span>
-      {:else}
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
-      {/if}
-      <input
-        type="text"
-        placeholder={wantsRemoteSearch ? 'Searching all of GitHub…' : 'Search title, #number, @author, repo…'}
-        bind:value={query}
-        spellcheck="false"
-        onkeydown={handleSearchKeydown}
-        onfocus={openPicker}
-      />
-      {#if query}
-        <button class="gl-search-clear" onclick={() => (query = '')} aria-label="Clear search">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-        </button>
-      {/if}
-    </label>
-    <ListSearchPicker
-      bind:this={pickerEl}
-      anchor={searchEl}
-      open={pickerOpen}
-      rows={pickerRows}
-      source="github"
-      onPick={pickPr}
-      onClose={closePicker}
+  <label class="ghl-search" class:ghl-search--remote={wantsRemoteSearch} bind:this={searchEl}>
+    {#if searching}
+      <span class="ghl-search-spin" aria-hidden="true"></span>
+    {:else}
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+    {/if}
+    <input
+      type="text"
+      placeholder={wantsRemoteSearch ? 'Searching all of GitHub…' : 'Search title, #number, @author, repo…'}
+      bind:value={query}
+      spellcheck="false"
+      onkeydown={handleSearchKeydown}
+      onfocus={openPicker}
     />
+    {#if query}
+      <button class="ghl-search-clear" onclick={() => (query = '')} aria-label="Clear search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    {/if}
+  </label>
+  <ListSearchPicker
+    bind:this={pickerEl}
+    anchor={searchEl}
+    open={pickerOpen}
+    rows={pickerRows}
+    source="github"
+    onPick={pickPr}
+    onClose={closePicker}
+  />
 
-    <div class="lp-chips">
-      <button
-        class="lp-chip"
-        class:active={roleFilter === 'reviewer'}
-        disabled={!me}
-        onclick={() => toggleRole('reviewer')}
-        title="PRs awaiting your review"
-      >Reviewer</button>
-      <button
-        class="lp-chip"
-        class:active={stateFilter === 'open'}
-        onclick={() => toggleState('open')}
-        title="Open (non-draft)"
-      >Open</button>
-      <button
-        class="lp-chip"
-        class:active={stateFilter === 'draft'}
-        onclick={() => toggleState('draft')}
-        title="Drafts only"
-      >Draft</button>
+  <div class="lp-chips">
+    <button
+      class="lp-chip"
+      class:active={roleFilter === 'reviewer'}
+      disabled={!me}
+      onclick={() => toggleRole('reviewer')}
+      title="PRs awaiting your review"
+    >Reviewer</button>
+    <button
+      class="lp-chip"
+      class:active={stateFilter === 'open'}
+      onclick={() => toggleState('open')}
+      title="Open (non-draft)"
+    >Open</button>
+    <button
+      class="lp-chip"
+      class:active={stateFilter === 'draft'}
+      onclick={() => toggleState('draft')}
+      title="Drafts only"
+    >Draft</button>
 
-      <span class="gl-dd">
-        <Dropdown
-          value={repoFilter ?? '__inbox__'}
-          options={repoOptions}
-          onChange={(v) => (repoFilter = v === '__inbox__' ? null : v)}
-          placeholder="Repo"
-          ariaLabel="Repository scope"
-          variant="chip"
-          compact
-        />
-      </span>
-      <span class="gl-dd">
-        <Dropdown
-          value={authorFilter ?? '__all__'}
-          options={authorOptions}
-          onChange={(v) => (authorFilter = v === '__all__' ? null : v)}
-          placeholder="Author"
-          ariaLabel="Filter by author"
-          variant="chip"
-          compact
-        />
-      </span>
+    <span class="ghl-dd">
+      <Dropdown
+        value={repoFilter ?? '__inbox__'}
+        options={repoOptions}
+        onChange={(v) => (repoFilter = v === '__inbox__' ? null : v)}
+        placeholder="Repo"
+        ariaLabel="Repository scope"
+        variant="chip"
+        compact
+      />
+    </span>
+    <span class="ghl-dd">
+      <Dropdown
+        value={authorFilter ?? '__all__'}
+        options={authorOptions}
+        onChange={(v) => (authorFilter = v === '__all__' ? null : v)}
+        placeholder="Author"
+        ariaLabel="Filter by author"
+        variant="chip"
+        compact
+      />
+    </span>
 
-      {#if anyFilterActive}
-        <button class="gl-chip-clear" onclick={clearFilters} title="Clear all filters">Clear</button>
-      {/if}
-    </div>
+    {#if anyFilterActive}
+      <button class="ghl-chip-clear" onclick={clearFilters} title="Clear all filters">Clear</button>
+    {/if}
+  </div>
 
   <div class="lp-list">
     {#if searchError}
-      <div class="gl-error">
-        <p class="gl-error-h serif">Search failed</p>
-        <p class="gl-error-p mono">{searchError}</p>
-        <button class="gl-error-retry" onclick={() => { searchError = null; lastSearchKey = ''; }}>Retry</button>
+      <div class="ghl-error">
+        <p class="ghl-error-h serif">Search failed</p>
+        <p class="ghl-error-p mono">{searchError}</p>
+        <button class="ghl-error-retry" onclick={() => { searchError = null; lastSearchKey = ''; }}>Retry</button>
       </div>
     {:else if error}
-      <div class="gl-error">
-        <p class="gl-error-h serif">Couldn't load GitHub</p>
-        <p class="gl-error-p mono">{error}</p>
-        <button class="gl-error-retry" onclick={p.onRefresh}>Retry</button>
+      <div class="ghl-error">
+        <p class="ghl-error-h serif">Couldn't load GitHub</p>
+        <p class="ghl-error-p mono">{error}</p>
+        <button class="ghl-error-retry" onclick={p.onRefresh}>Retry</button>
       </div>
     {:else if loading && items.length === 0 && !wantsRemoteSearch}
-      <div class="gl-loading">
-        <div class="gl-spinner"></div>
+      <div class="ghl-loading">
+        <div class="ghl-spinner"></div>
         <span class="mono">Loading…</span>
       </div>
     {:else if searching && (searchResults?.length ?? 0) === 0}
-      <div class="gl-loading">
-        <div class="gl-spinner"></div>
+      <div class="ghl-loading">
+        <div class="ghl-spinner"></div>
         <span class="mono">Searching GitHub…</span>
       </div>
     {:else if !wantsRemoteSearch && items.length === 0}
-      <div class="gl-empty">
-        <p class="gl-empty-h serif">Nothing here</p>
-        <p class="gl-empty-p">No PRs or issues yet. Create one or refresh.</p>
+      <div class="ghl-empty">
+        <p class="ghl-empty-h serif">Nothing here</p>
+        <p class="ghl-empty-p">No PRs or issues yet. Create one or refresh.</p>
       </div>
     {:else if filtered.length === 0}
-      <div class="gl-empty">
-        <p class="gl-empty-h serif">No matches</p>
-        <p class="gl-empty-p">{wantsRemoteSearch ? 'No GitHub items match this query and filters.' : 'No items match the current filters.'}</p>
-        <button class="gl-error-retry" onclick={clearFilters}>Clear filters</button>
+      <div class="ghl-empty">
+        <p class="ghl-empty-h serif">No matches</p>
+        <p class="ghl-empty-p">{wantsRemoteSearch ? 'No GitHub items match this query and filters.' : 'No items match the current filters.'}</p>
+        <button class="ghl-error-retry" onclick={clearFilters}>Clear filters</button>
       </div>
     {:else}
       {#each groups as g (g.label)}
@@ -736,7 +736,7 @@
         {#each g.items as it (it.id)}
           {@const isActive = inboxState.focusItem?.id === it.id}
           <button
-            class="lp-row gl-row"
+            class="lp-row ghl-row"
             class:active={isActive}
             draggable="true"
             onpointerdown={p.onCardMouseDown}
@@ -746,9 +746,9 @@
             ondblclick={() => p.onOpenBrowser(it.url)}
             oncontextmenu={(e) => openCtxMenu(e, it)}
           >
-            <div class="gl-card-top">
-              <span class="gl-card-st {stateClass(it)}">{stateLabel(it)}</span>
-              <span class="gl-card-num mono">
+            <div class="ghl-top">
+              <span class="state-pill {stateClass(it)}">{stateLabel(it)}</span>
+              <span class="ghl-num">
                 {#if it.is_pull_request}
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="M6 8.5v7M8.5 6h7a3 3 0 0 1 3 3v6.5"/></svg>
                 {:else}
@@ -757,22 +757,22 @@
                 #{it.number}
               </span>
               {#if it.repo}
-                <span class="gl-card-repo mono" title={`${it.repo.owner}/${it.repo.name}`}>{it.repo.name}</span>
+                <span class="ghl-repo" title={`${it.repo.owner}/${it.repo.name}`}>{it.repo.name}</span>
               {/if}
-              <span class="gl-card-time mono">{relativeTime(it.updated_at, p.now)}</span>
+              <span class="ghl-time">{relativeTime(it.updated_at, p.now)}</span>
             </div>
-            <div class="gl-card-title">{it.title}</div>
-            <div class="gl-card-meta">
+            <div class="ghl-title">{it.title}</div>
+            <div class="ghl-meta">
               {#if it.labels.length > 0}
                 {#each it.labels.slice(0, 3) as l (l.name)}
-                  <span class="label" style="background: #{l.color}22; border-color: #{l.color}55; color: #{l.color};">
+                  <span class="ghl-label" style="background: #{l.color}22; border-color: #{l.color}55; color: #{l.color};">
                     {l.name}
                   </span>
                 {/each}
-                {#if it.labels.length > 3}<span class="label-more mono">+{it.labels.length - 3}</span>{/if}
+                {#if it.labels.length > 3}<span class="ghl-label-more">+{it.labels.length - 3}</span>{/if}
               {/if}
               {#if it.author}
-                <span class="ava" title={it.author.login}>
+                <span class="ghl-ava" title={it.author.login}>
                   {#if it.author.avatar_url}
                     <img src={it.author.avatar_url} alt={it.author.login} loading="lazy" />
                   {:else}
@@ -781,15 +781,15 @@
                 </span>
               {/if}
               {#if it.comments > 0}
-                <span class="gl-card-comments mono" title={`${it.comments} comments`}>
+                <span class="ghl-comments" title={`${it.comments} comments`}>
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
                   {it.comments}
                 </span>
               {/if}
             </div>
-            <span class="gl-card-sends">
+            <span class="ghl-sends">
               <span
-                class="gl-card-send gl-card-send--claude"
+                class="ghl-send"
                 role="button"
                 tabindex="0"
                 onclick={(e) => clickSendToClaude(it, e)}
@@ -797,13 +797,7 @@
                 onpointerdown={(e) => e.stopPropagation()}
                 title="Send to Claude"
                 aria-label="Send to Claude"
-              >
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M22 2 11 13"/>
-                  <path d="m22 2-7 20-4-9-9-4 20-7z"/>
-                </svg>
-                <span>Claude</span>
-              </span>
+              >→ claude</span>
             </span>
           </button>
         {/each}
@@ -815,18 +809,16 @@
 <CardContextMenu coords={ctxCoords} items={ctxItems} onClose={closeCtxMenu} />
 
 <style>
-  .gl {
-    /* Width comes from the parent `app-shell` grid track. */
-    min-width: 0;
-  }
-  .gl .spin { animation: gl-spin 0.9s linear infinite; }
-  @keyframes gl-spin { to { transform: rotate(360deg); } }
+  /* Width comes from the parent `app-shell` grid track. */
+  .ghl { min-width: 0; }
+  .ghl .spin { animation: ghl-spin 0.9s linear infinite; }
+  @keyframes ghl-spin { to { transform: rotate(360deg); } }
   .lp-add:disabled { opacity: 0.5; cursor: not-allowed; }
   .lp-ghostbtn:disabled { opacity: 0.5; cursor: not-allowed; }
   .lp-chip:disabled { opacity: 0.45; cursor: not-allowed; }
 
-  /* Search field — ListPane grammar (§2.4): h30 r8, bg-0 (light bg-2). */
-  .gl-search {
+  /* Search field — §2.4: h30 r8, bg-0 (light bg-2), border --border, text 12 faint. */
+  .ghl-search {
     position: relative;
     display: flex; align-items: center; gap: 6px;
     margin: 0 14px 8px;
@@ -837,38 +829,38 @@
     border: 1px solid var(--border);
     transition: border-color 120ms;
   }
-  :root[data-theme='light'] .gl-search { background: var(--bg-2); }
-  .gl-search:focus-within { border-color: var(--border-hi2, var(--border-hi)); }
-  .gl-search > svg {
+  :root[data-theme='light'] .ghl-search { background: var(--bg-2); }
+  .ghl-search:focus-within { border-color: var(--border-hi2, var(--border-hi)); }
+  .ghl-search > svg {
     width: 12px; height: 12px;
     color: var(--text-mute);
     flex-shrink: 0;
   }
-  /* Remote-search active — clay tint on the box border so the user
-     reads "this is hitting the GitHub Search API now". */
-  .gl-search.gl-search--remote {
+  /* Remote-search active — brand tint on the border so the user reads
+     "this is hitting the GitHub Search API now". */
+  .ghl-search.ghl-search--remote {
     border-color: color-mix(in srgb, var(--src-github) 36%, var(--border));
     box-shadow: 0 0 0 1px color-mix(in srgb, var(--src-github) 18%, transparent);
   }
-  /* Spinner that replaces the magnifier glyph during a remote
-     search — same 12px footprint so the input layout doesn't shift. */
-  .gl-search-spin {
+  /* Spinner replacing the magnifier during a remote search — same 12px
+     footprint so the input layout doesn't shift. */
+  .ghl-search-spin {
     width: 12px; height: 12px;
     border: 1.5px solid color-mix(in srgb, var(--src-github) 24%, var(--border));
     border-top-color: var(--src-github);
     border-radius: 50%;
-    animation: gl-spin 0.7s linear infinite;
+    animation: ghl-spin 0.7s linear infinite;
     flex-shrink: 0;
   }
-  .gl-search input {
+  .ghl-search input {
     flex: 1; min-width: 0;
     background: transparent; border: 0; outline: 0;
     color: var(--text-0);
     font-size: 12px;
     font-family: inherit;
   }
-  .gl-search input::placeholder { color: var(--text-mute); }
-  .gl-search-clear {
+  .ghl-search input::placeholder { color: var(--text-faint); }
+  .ghl-search-clear {
     width: 16px; height: 16px;
     display: grid; place-items: center;
     border: 0; background: transparent;
@@ -876,95 +868,83 @@
     cursor: pointer;
     border-radius: 4px;
   }
-  .gl-search-clear:hover { color: var(--text-0); background: var(--bg-3); }
-  .gl-search-clear svg { width: 10px; height: 10px; }
+  .ghl-search-clear:hover { color: var(--text-0); background: var(--bg-3); }
+  .ghl-search-clear svg { width: 10px; height: 10px; }
 
-  /* Dropdown wrapper — make the existing Dropdown trigger blend with
-     our pill scale. The component itself uses `.dd-trigger` internally
-     via global selectors here. */
-  .gl-dd { display: inline-flex; }
-  .gl-dd :global(.dd-trigger) {
-    border-radius: 999px;
+  /* Filter dropdowns — align the shared Dropdown trigger to the §2.4
+     chip scale (pad 3/9, r6, 11px, --text-mute; active = border-hi2 +
+     accent-soft + text-0). */
+  .ghl-dd { display: inline-flex; }
+  .ghl-dd :global(.dd-trigger) {
+    border-radius: 6px;
     border: 1px solid var(--border);
-    background: var(--bg-2);
-    color: var(--text-1);
+    background: transparent;
+    color: var(--text-mute);
     font-size: 11px;
     height: auto;
-    padding: 4px 10px;
-    transition: all 140ms;
+    padding: 3px 9px;
+    transition: color 120ms, border-color 120ms, background 120ms;
   }
-  .gl-dd :global(.dd-trigger:hover) {
+  .ghl-dd :global(.dd-trigger:hover) { color: var(--text-1); }
+  .ghl-dd :global(.dd-trigger[aria-expanded="true"]) {
+    border-color: var(--border-hi2, var(--border-hi));
+    background: var(--accent-soft);
     color: var(--text-0);
-    background: var(--bg-3);
-    border-color: var(--border-hi);
-  }
-  .gl-dd :global(.dd-trigger[aria-expanded="true"]) {
-    color: var(--accent-bright);
-    background: color-mix(in srgb, var(--src-github) 14%, transparent);
-    border-color: color-mix(in srgb, var(--src-github) 40%, transparent);
   }
 
-  .gl-chip-clear {
-    padding: 4px 10px;
+  .ghl-chip-clear {
+    padding: 3px 9px;
     background: transparent;
     border: 1px dashed var(--border-hi);
-    border-radius: 999px;
-    font-size: 10.5px;
+    border-radius: 6px;
+    font-size: 11px;
     color: var(--text-mute);
     cursor: pointer;
     margin-left: auto;
-    transition: all 120ms;
+    transition: color 120ms, border-color 120ms;
   }
-  .gl-chip-clear:hover { color: var(--text-0); border-color: var(--text-mute); border-style: solid; }
+  .ghl-chip-clear:hover { color: var(--text-0); border-color: var(--text-mute); border-style: solid; }
 
-  /* Row = shared .lp-row; .gl-row adds vertical stack + positioning. */
-  .gl-row {
+  /* Row = shared .lp-row shell; .ghl-row adds the vertical stack. */
+  .ghl-row {
     position: relative;
     display: flex; flex-direction: column; gap: 5px;
     user-select: none;
   }
 
-  .gl-card-top { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
-  .gl-card-st {
-    padding: 1px 6px;
-    border-radius: 4px;
-    font-size: 9.5px; font-weight: 600;
-    text-transform: uppercase; letter-spacing: 0.04em;
-  }
-  .st--open    { color: var(--success); background: color-mix(in srgb, var(--ok) 10%, transparent); border: 1px solid color-mix(in srgb, var(--ok) 24%, transparent); }
-  .st--draft   { color: var(--text-2); background: var(--bg-3); border: 1px solid var(--border-hi); }
-  .st--merged  { color: #C9A0E0; background: rgba(181, 132, 255, 0.10); border: 1px solid rgba(181, 132, 255, 0.24); }
-  .st--closed  { color: var(--text-mute); background: var(--bg-3); border: 1px solid var(--border); }
-
-  .gl-card-num {
+  .ghl-top { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+  .ghl-num {
     display: inline-flex; align-items: center; gap: 4px;
-    font-size: 11px; color: var(--text-2);
+    font-size: 11px; color: var(--text-faint);
+    font-family: var(--font-mono);
   }
-  .gl-card-num svg { width: 11px; height: 11px; color: var(--src-github); }
-  .gl-card-repo {
-    font-size: 10px; color: var(--text-mute);
-    padding: 1px 5px;
-    background: var(--bg-3);
-    border: 1px solid var(--border);
-    border-radius: 3px;
+  .ghl-num svg { width: 11px; height: 11px; color: var(--src-github); }
+  .ghl-repo {
+    font-size: 11px; color: var(--text-faint);
+    font-family: var(--font-mono);
     max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
-  .gl-card-time {
+  .ghl-time {
     margin-left: auto;
-    font-size: 10px; color: var(--text-mute);
+    font-size: 11px; color: var(--text-faint);
+    font-family: var(--font-mono);
   }
-  .gl-card-title {
-    font-size: 13px; color: var(--text-0); font-weight: 500;
+  /* Title 13 --text-1; active row → 600 --text-0 (§2.4). */
+  .ghl-title {
+    font-size: 13px; color: var(--text-1);
     line-height: 1.4;
     display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical;
     overflow: hidden;
   }
-  .gl-card-meta {
+  .lp-row.active .ghl-title { color: var(--text-0); font-weight: 600; }
+  .ghl-meta {
     display: flex; align-items: center; gap: 5px; flex-wrap: wrap;
-    font-size: 10.5px; color: var(--text-2);
+    font-size: 11px; color: var(--text-2);
   }
 
-  .label {
+  /* Label chip — background/border/text driven by GitHub's per-label
+     color (data, injected inline), not a theme token. */
+  .ghl-label {
     padding: 1px 6px;
     border-radius: 3px;
     font-size: 9.5px;
@@ -972,82 +952,70 @@
     max-width: 100px;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
-  .label-more { font-size: 10px; color: var(--text-mute); }
+  .ghl-label-more { font-size: 10px; color: var(--text-faint); font-family: var(--font-mono); }
 
-  .ava {
+  .ghl-ava {
     width: 16px; height: 16px;
     border-radius: 50%;
     background: linear-gradient(135deg, var(--accent-bright), var(--accent-deep));
-    color: #1F1410;
+    color: var(--accent-fg);
     font-size: 9px; font-weight: 700;
     display: grid; place-items: center;
     overflow: hidden;
     flex-shrink: 0;
   }
-  .ava img { width: 100%; height: 100%; object-fit: cover; }
+  .ghl-ava img { width: 100%; height: 100%; object-fit: cover; }
 
-  .gl-card-comments {
+  .ghl-comments {
     display: inline-flex; align-items: center; gap: 3px;
-    font-size: 10px; color: var(--text-mute);
+    font-size: 11px; color: var(--text-faint);
+    font-family: var(--font-mono);
   }
-  .gl-card-comments svg { width: 10px; height: 10px; }
+  .ghl-comments svg { width: 10px; height: 10px; }
 
-  /* Send-to-{agent} pair — appears on hover/active in the top-right of
-     the card. Two role="button" spans (a real <button> would be invalid
-     HTML inside the row's <button>). Each is brand-tinted by agent
-     kind so the user reads at-a-glance which way they're handing off. */
-  .gl-card-sends {
+  /* Hover action — §2.4: dotted-underline 11px on the right, revealed
+     on row hover/focus/active. role="button" span (a nested <button>
+     would be invalid inside the row's own <button>). */
+  .ghl-sends {
     position: absolute;
-    top: 8px; right: 10px;
-    display: inline-flex; gap: 4px;
+    top: 10px; right: 12px;
+    display: inline-flex; gap: 10px;
     opacity: 0;
     transition: opacity 140ms;
   }
-  .gl-row:hover .gl-card-sends,
-  .gl-card-sends:focus-within,
-  .gl-row.active .gl-card-sends {
+  .ghl-row:hover .ghl-sends,
+  .ghl-sends:focus-within,
+  .lp-row.active .ghl-sends {
     opacity: 1;
   }
-  .gl-card-send {
-    display: inline-flex; align-items: center; gap: 4px;
-    padding: 3px 8px 3px 7px;
-    border-radius: 5px;
-    font-size: 10px; font-weight: 600;
-    letter-spacing: 0.02em;
+  .ghl-send {
+    font-size: 11px;
+    color: var(--text-mute);
+    text-decoration: underline dotted;
+    text-underline-offset: 2px;
     cursor: pointer;
-    transition: background 140ms, transform 140ms;
     user-select: none;
+    background: transparent; border: 0; padding: 0;
   }
-  .gl-card-send svg { width: 11px; height: 11px; }
-  .gl-card-send--claude {
-    color: var(--src-claude);
-    background: color-mix(in srgb, var(--src-claude) 12%, transparent);
-    border: 1px solid color-mix(in srgb, var(--src-claude) 28%, transparent);
-  }
-  .gl-card-send--claude:hover {
-    background: color-mix(in srgb, var(--src-claude) 22%, transparent);
-    color: var(--accent-bright);
-    transform: translateY(-1px);
-  }
-  .gl-card-send:active { transform: translateY(0); }
+  .ghl-send:hover { color: var(--text-0); }
 
-  .gl-empty, .gl-loading, .gl-error {
+  .ghl-empty, .ghl-loading, .ghl-error {
     text-align: center;
     padding: 50px 20px;
     margin: auto;
   }
-  .gl-empty-h, .gl-error-h {
+  .ghl-empty-h, .ghl-error-h {
     font-family: var(--font-mono);
     font-size: 22px; font-weight: 600; letter-spacing: -0.015em;
     color: var(--text-0);
     margin: 0 0 10px;
   }
-  .gl-empty-p, .gl-error-p {
+  .ghl-empty-p, .ghl-error-p {
     font-size: 12.5px; color: var(--text-2);
     line-height: 1.55; margin: 0;
   }
-  .gl-error-p { color: var(--error); }
-  .gl-error-retry {
+  .ghl-error-p { color: var(--error); }
+  .ghl-error-retry {
     margin-top: 14px;
     padding: 6px 12px;
     border-radius: 7px;
@@ -1057,16 +1025,16 @@
     color: var(--text-1);
     cursor: pointer;
   }
-  .gl-error-retry:hover { color: var(--text-0); }
-  .gl-loading {
+  .ghl-error-retry:hover { color: var(--text-0); }
+  .ghl-loading {
     display: flex; align-items: center; justify-content: center; gap: 10px;
     color: var(--text-2); font-size: 12px;
   }
-  .gl-spinner {
+  .ghl-spinner {
     width: 14px; height: 14px;
     border: 1.5px solid var(--border-hi);
     border-top-color: var(--accent);
     border-radius: 50%;
-    animation: gl-spin 0.7s linear infinite;
+    animation: ghl-spin 0.7s linear infinite;
   }
 </style>
