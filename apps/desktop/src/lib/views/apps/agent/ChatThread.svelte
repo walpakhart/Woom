@@ -143,6 +143,32 @@
     return shortenFsPath(p);
   }
 
+  /* Textual trace glyph per redesign v2 §2.5 — boxless transcript
+     grammar leads each tool row with a monospace mark instead of an
+     SVG chip. The per-kind hue still comes from `--step-tone` on the
+     host span. */
+  function toolGlyph(kind: string): string {
+    switch (kind) {
+      case 'bash': return '$';
+      case 'read': return '◎';
+      case 'edit':
+      case 'write':
+      case 'create': return '±';
+      case 'delete': return '✕';
+      case 'grep':
+      case 'glob': return '⌕';
+      case 'webfetch':
+      case 'websearch': return '↗';
+      case 'commit':
+      case 'pr': return '⎇';
+      case 'switch_cwd': return '⇢';
+      case 'todos': return '☰';
+      case 'ask': return '?';
+      case 'mcp': return '◇';
+      default: return '◇';
+    }
+  }
+
   /* Viewport-based lazy mount. Long chats (100+ messages with rich
      Markdown + many trace events per assistant turn) used to render
      every body upfront — Markdown parse + syntax decorate is the
@@ -576,7 +602,6 @@
           use:observeArticle={i}
           oncontextmenu={(e) => openMsgCtxMenu(e, msg, i)}
         >
-          <div class="msg-byline msg-byline--user">@you</div>
           <div class="msg-body">
             {#if shouldRenderBody(i)}
               <Markdown source={msg.content} onOpenFile={p.onOpenFile} />
@@ -657,7 +682,6 @@
               <circle cx="15" cy="18" r="1.2" fill="currentColor"/>
             </svg>
           </span>
-          <div class="msg-byline msg-byline--assistant">{p.kind}</div>
           <div class="msg-body">
             {#if msg.thinking}
               <details class="thinking-pill">
@@ -699,45 +723,14 @@
                       <span class="trace-head-caret" aria-hidden="true">
                         <svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg>
                       </span>
+                      <span class="trace-head-ok mono" aria-hidden="true">✓</span>
                       <span class="trace-head-label"><strong>{ev.segments.length}</strong> step{ev.segments.length === 1 ? '' : 's'}</span>
                     </summary>
                     <div class="trace-body">
-                      {#snippet toolIcon(kind: string)}
-                        {#if kind === 'read'}
-                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
-                        {:else if kind === 'edit'}
-                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>
-                        {:else if kind === 'write' || kind === 'create'}
-                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
-                        {:else if kind === 'delete'}
-                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>
-                        {:else if kind === 'bash'}
-                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
-                        {:else if kind === 'grep'}
-                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="20" y1="20" x2="17" y2="17"/></svg>
-                        {:else if kind === 'glob'}
-                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v11a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-7L10 5H5a2 2 0 0 0-2 2z"/><path d="M9 13l2 2 4-4"/></svg>
-                        {:else if kind === 'webfetch' || kind === 'websearch'}
-                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>
-                        {:else if kind === 'commit' || kind === 'pr'}
-                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="M6 8.5V14a4 4 0 0 0 4 4h6"/></svg>
-                        {:else if kind === 'switch_cwd'}
-                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v11a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-7L10 5H5a2 2 0 0 0-2 2z"/><path d="M16 14l3-3-3-3M9 11h10"/></svg>
-                        {:else if kind === 'todos'}
-                          <!-- Three-line checklist with a tick on the first
-                               row — telegraphs "agent's plan" at a glance. -->
-                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 11 8 15 4"/><line x1="3" y1="6" x2="6" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
-                        {:else if kind === 'ask'}
-                          <!-- Speech bubble + question mark — the
-                               resolved trace step shows what the
-                               agent asked and what the user picked. -->
-                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
-                        {:else if kind === 'mcp'}
-                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5 12 2"/><line x1="12" y1="22" x2="12" y2="12"/><line x1="22" y1="8.5" x2="12" y2="12"/><line x1="2" y1="8.5" x2="12" y2="12"/></svg>
-                        {:else}
-                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9 1.65 1.65 0 0 0 4.27 7.18l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6 1.65 1.65 0 0 0 10 3.09V3a2 2 0 1 1 4 0v.09c0 .68.4 1.29 1 1.51"/></svg>
-                        {/if}
-                      {/snippet}
+                      <!-- Boxless transcript glyph (redesign v2 §2.5) —
+                           textual, not SVG: `$` bash, `⎇` commit, `◇` mcp,
+                           `±` edit, `◎` read, `⌕` grep … see toolGlyph(). -->
+                      {#snippet toolIcon(kind: string)}<span class="trace-glyph mono">{toolGlyph(kind)}</span>{/snippet}
                       {#each ev.segments as seg, si (si)}
                         {@const parsed = parseTraceSegment(seg)}
                         {#if parsed.kind === 'tool' && (parsed.cmd || parsed.output)}
@@ -766,7 +759,7 @@
                                 {#if fallbackBash}
                                   <code class="trace-cmd-target mono">{fallbackBash}</code>
                                 {/if}
-                                <span class="trace-cmd-meta mono" aria-label="output line count">{lineCount} line{lineCount === 1 ? '' : 's'}</span>
+                                <span class="trace-cmd-meta mono" aria-label="output line count">{lineCount}</span>
                                 <span class="trace-cmd-caret" aria-hidden="true">
                                   <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg>
                                 </span>
@@ -837,6 +830,7 @@
                   {@const stats = diffStats(ev.oldText ?? '', ev.newText ?? '')}
                   <details class="edit-card">
                     <summary class="edit-card-head">
+                      <span class="edit-glyph mono" aria-hidden="true">±</span>
                       {#if ev.isCreate}
                         <span class="edit-tag edit-tag--add">Create</span>
                       {:else if ev.isDelete}
@@ -962,43 +956,11 @@
     font-size: 10px;
   }
 
-  /* v7 — 76px byline column + 1fr body. */
-  .msg {
-    display: grid;
-    grid-template-columns: 76px 1fr;
-    gap: 16px;
-    align-items: start;
-  }
-  .msg--system { grid-template-columns: 1fr; }
-
-  /* Compact (agent dock, ~340px): drop the 76px byline gutter, stack
-     the author name inline above the body so prose + cards get the
-     full column width. Solo never gets `.msg--compact`. */
-  .msg--compact {
-    grid-template-columns: 1fr;
-    gap: 3px;
-  }
-  .msg--compact .msg-byline {
-    padding-top: 0;
-    padding-bottom: 1px;
-  }
-
-  .msg-byline {
-    font-size: 11px;
-    color: var(--text-mute);
-    letter-spacing: 0.04em;
-    font-weight: 600;
-    padding-top: 4px;
-  }
-  .msg-byline--user { color: var(--text-2); }
-  .msg-byline--assistant {
-    color: var(--app-tone, var(--src-claude));
-    text-transform: lowercase;
-    letter-spacing: -0.01em;
-    font-family: var(--font-mono);
-    font-size: 13px;
-    font-weight: 600;
-  }
+  /* Redesign v2 §2.5 — byline gutter dropped. Each turn is a single
+     column: assistant renders as a plain prose block, user as a
+     right-aligned bubble (see `.msg--user .msg-body`). Compact (agent
+     dock) needs no special case now that the 76px gutter is gone. */
+  .msg { display: block; }
 
   .msg-body { min-width: 0; position: relative; }
 
@@ -1050,14 +1012,15 @@
      bg-3 chip fill, 1px ink border, radius 10, 78% max width. */
   .msg--user .msg-body {
     position: relative;
-    justify-self: end;
+    margin-left: auto;
     max-width: 78%;
-    padding: 10px 14px;
+    padding: 12px 16px;
     background: var(--bg-3);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    font-size: 12.5px;
-    line-height: 1.65;
+    border: 1px solid var(--border-lo);
+    border-radius: 12px;
+    font-size: 13.5px;
+    line-height: 1.6;
+    color: var(--text-2);
   }
 
   /* Hover actions sit BELOW the bubble (not over it) — small, naked
@@ -1201,6 +1164,12 @@
     font-size: 11.5px;
     color: var(--text-mute);
   }
+  .trace-head-ok {
+    color: var(--ok);
+    font-size: 11px;
+    line-height: 1;
+    opacity: 0.9;
+  }
   .trace-head :global(strong) {
     color: var(--text-1);
     font-weight: 500;
@@ -1220,24 +1189,26 @@
   .trace-body {
     padding: 2px 0 4px;
     display: flex; flex-direction: column;
-    gap: 1px;
+    gap: 3px;
   }
   /* Step row — flat text line. No border, no bg, no hover panel; just
      glyph + label + target + scope + meta + caret on one baseline.
      `--step-tone` lives on for the glyph color only. */
-  /* Tool chip per the paper mockup: printed card (bg-2, 1px border,
-     radius 8, engraved step shadow), capped at 560px. */
+  /* Redesign v2 §2.5 — boxless transcript row. No card chrome (bg /
+     border / shadow / padding all dropped); the tool call reads as an
+     annotated text line on the prose surface. Per-kind hue lives on
+     `--step-tone` (glyph + target color only). */
   .trace-step {
     --step-tone: var(--text-1);
     display: flex; flex-direction: column;
-    background: var(--bg-2);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 6px 11px;
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    padding: 0;
     max-width: none;
-    margin: 0 0 8px;
-    overflow: hidden;
-    box-shadow: var(--shadow-1);
+    margin: 0;
+    overflow: visible;
+    box-shadow: none;
     transition: none;
   }
   .trace-step--has-output { cursor: pointer; }
@@ -1285,19 +1256,26 @@
   }
   .trace-cmd-row--toggle::-webkit-details-marker { display: none; }
   .trace-cmd-row--toggle::marker { content: ''; }
+  /* Glyph column — 20px text slot (redesign v2 §2.5), no chip. */
   .trace-cmd-icon {
     flex-shrink: 0;
-    width: 14px; height: 14px;
-    display: inline-grid; place-items: center;
+    width: 20px;
+    display: inline-flex; align-items: baseline;
     color: var(--step-tone);
     background: transparent;
     box-shadow: none;
-    /* Lift slightly so SVG aligns with text baseline. */
-    transform: translateY(2px);
   }
-  .trace-cmd-icon svg { width: 12px; height: 12px; }
+  .trace-glyph {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.55;
+    color: var(--step-tone);
+    opacity: 0.9;
+  }
+  /* Verb column — fixed 56px so targets align across rows. */
   .trace-cmd-label {
     flex-shrink: 0;
+    min-width: 56px;
     font-family: var(--font-mono);
     font-size: 11px;
     font-weight: 600;
@@ -1438,20 +1416,29 @@
      just a 2px editor-tone left stripe + 12px indent so the file
      edit reads as an annotation in the conversation. Expanded body
      (diff) keeps its content but loses the wrapper bg. */
-  /* Printed tool-chip grammar — same card as trace steps (bg-2,
-     hairline, r8, engraved step), replacing the old left-stripe
-     blockquote look. */
+  /* Redesign v2 §2.5 — boxless edit row, same transcript grammar as
+     trace steps. No card chrome; the file edit reads as an annotation
+     line, its diff unfurling underneath on expand. */
   .edit-card {
-    margin: 0 0 8px;
-    border: 1px solid var(--border);
-    border-left: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 6px 11px;
-    background: var(--bg-2);
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+    padding: 0;
+    background: transparent;
     max-width: none;
     font-size: 12.5px;
-    box-shadow: var(--shadow-1);
-    overflow: hidden;
+    box-shadow: none;
+    overflow: visible;
+  }
+  /* Leading ± glyph aligns edit rows to the trace 20px glyph column. */
+  .edit-glyph {
+    flex-shrink: 0;
+    width: 20px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.55;
+    color: var(--src-editor);
+    opacity: 0.9;
   }
   .edit-card-head {
     display: flex; align-items: baseline;
