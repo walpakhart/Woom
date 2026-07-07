@@ -35,10 +35,16 @@
 
   type Session = (typeof sessionsState.list)[number];
 
+  /* Search filter over chat titles (redesign v2 §2.5). */
+  let query = $state('');
+
   /* Flat, newest-first — the paper mockup has no date groups; the
      status dot + meta line carry the recency signal instead. */
   const sorted = $derived.by(() => {
-    const items = sessionsState.list.filter((s) => !s.archived);
+    const q = query.trim().toLowerCase();
+    const items = sessionsState.list.filter(
+      (s) => !s.archived && (!q || (s.title || 'Untitled chat').toLowerCase().includes(q))
+    );
     const sessTime = (s: Session) => {
       const last = s.messages[s.messages.length - 1]?.at;
       return last ? new Date(last).getTime() : 0;
@@ -46,14 +52,26 @@
     return [...items].sort((a, b) => sessTime(b) - sessTime(a));
   });
 
-  /** Meta line per the mockup: `sonnet-4-6 · streaming · 2m` /
-   *  `idle · wt/branch` / `done · yesterday`. */
+  /** Shorten a model id for the meta line: `claude-opus-4-8[1m]` →
+   *  `opus-4.8·1m`, `claude-sonnet-4-6` → `sonnet-4.6`,
+   *  `claude-haiku-4-5-20251001` → `haiku-4.5`. */
+  function shortModel(m: string | null | undefined): string {
+    if (!m) return '';
+    let s = m.replace(/^claude-/, '');
+    s = s.replace(/-(\d+)-(\d+)/, '-$1.$2'); // 4-8 → 4.8
+    s = s.replace('[1m]', '·1m');
+    s = s.replace(/-\d{8}$/, '');            // drop haiku date suffix
+    return s;
+  }
+
+  /** Meta line per the mockup: `opus-4.8·1m · idle · 19:26` /
+   *  `… · wt/branch`. */
   function sessMeta(sess: Session): string {
     const parts: string[] = [];
-    const model = sess.claudeModel?.replace(/^claude-/, '');
+    const model = shortModel(sess.claudeModel);
     if (model) parts.push(model);
     parts.push(sess.sending ? 'streaming' : 'idle');
-    if (sess.worktreeBranch) parts.push(sess.worktreeBranch);
+    if (sess.worktreeBranch) parts.push(`wt/${sess.worktreeBranch}`);
     const lastAt = sess.messages[sess.messages.length - 1]?.at;
     const t = shortTime(lastAt ?? undefined);
     if (t) parts.push(t);
@@ -261,11 +279,23 @@
   }
 </script>
 
-<aside class="ssb app-pane">
+<aside class="ssb">
   <div class="ssb-head">
-    <span class="ssb-h">Sessions</span>
-    <button class="ssb-headbtn" onclick={createNew} title="New session (⌘N)">+</button>
+    <span class="ssb-title">Chats</span>
+    <span class="ssb-count mono">{totalCount}</span>
+    <span class="ssb-head-spring"></span>
+    <button class="ssb-add" onclick={createNew} title="New chat (⌘N)" aria-label="New chat">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+    </button>
   </div>
+
+  <input
+    class="ssb-search"
+    bind:value={query}
+    placeholder="Search chats"
+    spellcheck="false"
+    aria-label="Search chats"
+  />
 
   <div class="ssb-list">
     {#if sorted.length === 0}
@@ -377,29 +407,40 @@
   .ssb {
     display: flex; flex-direction: column;
     min-height: 0; min-width: 0;
+    background: var(--bg-1);
+    border-right: 1px solid var(--border-lo);
   }
 
   .ssb-head {
-    display: flex; align-items: center; justify-content: space-between;
-    padding: 14px 18px 10px;
+    display: flex; align-items: center; gap: 8px;
+    padding: 14px 14px 10px;
     flex-shrink: 0;
   }
-  .ssb-h {
-    font-size: 9.5px; font-weight: 600;
-    letter-spacing: 0.14em; text-transform: uppercase;
-    color: var(--text-faint);
-  }
-  .ssb-headbtn {
-    font-size: 12px;
-    color: var(--text-mute);
-    border: 1px solid var(--border-hi);
-    border-radius: var(--r-chip);
-    padding: 0 6px;
-    background: transparent;
+  .ssb-title { font-size: 13px; font-weight: 600; color: var(--text-0); }
+  .ssb-count { font-size: 12px; color: var(--text-faint); }
+  .ssb-head-spring { flex: 1; }
+  .ssb-add {
+    width: 26px; height: 26px; flex: none;
+    display: grid; place-items: center;
+    border: 0; border-radius: 8px;
+    background: var(--accent); color: var(--accent-fg);
     cursor: pointer;
-    line-height: 1.5;
+    box-shadow: 1.5px 1.5px 0 rgba(var(--ink-shadow), 0.22), 3px 3px 0 rgba(var(--ink-shadow), 0.12);
   }
-  .ssb-headbtn:hover { color: var(--text-0); border-color: var(--border-hi2); }
+  .ssb-add:hover { filter: brightness(1.05); }
+  .ssb-add svg { width: 14px; height: 14px; }
+
+  .ssb-search {
+    margin: 0 14px 8px;
+    height: 30px; padding: 0 10px;
+    border: 1px solid var(--border); border-radius: 8px;
+    background: var(--bg-0);
+    color: var(--text-1); font-size: 12px;
+    font-family: var(--font-ui);
+    outline: none;
+  }
+  :global(:root[data-theme='light']) .ssb-search { background: var(--bg-2); }
+  .ssb-search::placeholder { color: var(--text-faint); }
 
   .ssb-list {
     flex: 1; overflow-y: auto;
@@ -420,26 +461,28 @@
     transition: background 120ms;
   }
   .ssb-row:hover { background: var(--bg-hover); }
-  .ssb-row.active { background: var(--bg-nav); }
+  .ssb-row.active { background: var(--bg-nav); box-shadow: var(--shadow-1); }
 
   .ssb-row-top { display: flex; align-items: center; gap: 7px; }
   .ssb-status {
     width: 6px; height: 6px; border-radius: 50%;
     flex: none;
-    background: var(--text-faint);
+    background: var(--text-linenum);
   }
   .ssb-status.pulse {
-    background: var(--src-claude);
+    background: var(--ok);
     animation: ssb-pulsedot 1.6s infinite;
   }
-  .ssb-title {
-    font-size: 12px; color: var(--text-0);
+  /* Row title uses Geist (var(--font-ui) via body); metrics stay mono. */
+  .ssb-row .ssb-title {
+    font-size: 13px; font-weight: 400; color: var(--text-1);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     min-width: 0; flex: 1;
   }
-  .ssb-title.bold { font-weight: 600; }
+  .ssb-row .ssb-title.bold { font-weight: 600; color: var(--text-0); }
   .ssb-meta {
-    font-size: 10px; color: var(--text-faint);
+    font-size: 11px; color: var(--text-faint);
+    font-family: var(--font-mono);
     margin-top: 3px;
     padding-left: 13px;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
