@@ -24,6 +24,7 @@
   } from '$lib/services/slashCommands';
   import { skillsState, refreshSkills, type Skill } from '$lib/state/skills.svelte';
   import { statuslineState } from '$lib/state/statusline.svelte';
+  import { layoutModeState } from '$lib/state/layoutMode.svelte';
   import { getRtkStatus, type RtkStatus } from '$lib/services/rtk';
   import {
     claudeEffort,
@@ -174,6 +175,13 @@
      `attachPathsToSession` pipeline as drag-drop (folders get
      `asDir=true` so they're @-mentioned with a trailing slash). */
   let attachMenu = $state(false);
+
+  /* Quiet composer pill (§3.3): run controls (model / rtk / fast /
+     launchers) collapse behind a ⋯ toggle so the input is a single
+     line. Only in the Quiet direction on the full solo (not the
+     compact AgentDock composer). */
+  const quietPill = $derived(layoutModeState.mode === 'quiet' && !p.compact);
+  let runOpen = $state(false);
 
   async function pickAttachments(asDir: boolean) {
     attachMenu = false;
@@ -1003,6 +1011,8 @@
       class="cmp-shell"
       class:cmp-shell--filled={(sess.input?.length ?? 0) > 0}
       class:cmp-shell--drop={dragOver}
+      class:cmp-shell--quiet={quietPill}
+      class:cmp-shell--run-open={runOpen}
     >
       {#if attachments.length > 0}
         <div class="cmp-attach">
@@ -1290,10 +1300,26 @@
             </div>
           {/if}
 
+          {#if quietPill}
+            <!-- Run-settings toggle (§3.3) — reveals the model / rtk /
+                 fast / launcher controls that are hidden in the Quiet
+                 single-line pill. -->
+            <button
+              class="cmp-run-toggle"
+              class:active={runOpen}
+              onclick={() => (runOpen = !runOpen)}
+              title="Run settings — model · rtk · fast · launchers"
+              aria-label="Run settings"
+              aria-expanded={runOpen}
+            >
+              <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
+            </button>
+          {/if}
+
           {#if sess.sending}
             <button class="cmp-stop" onclick={p.onStop} title="Stop the running turn">
               <svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
-              Stop
+              <span class="cmp-send-label">Stop</span>
             </button>
             <button
               class="cmp-send cmp-send--queue"
@@ -1301,12 +1327,12 @@
               disabled={!sess.input?.trim()}
               title="Queue this message — fires automatically when the current turn finishes"
             >
-              Queue
+              <span class="cmp-send-label">Queue</span>
               <span class="cmp-send-kbd">⏎</span>
             </button>
           {:else}
             <button class="cmp-send" onclick={doSend} disabled={!sess.input?.trim()}>
-              Send
+              <span class="cmp-send-label">Send</span>
               <span class="cmp-send-kbd">⏎</span>
             </button>
           {/if}
@@ -1526,6 +1552,45 @@
     border-color: var(--accent-bright);
     border-style: dashed;
     box-shadow: 0 0 0 4px var(--accent-soft), var(--shadow-3);
+  }
+
+  /* ── Quiet composer pill (§3.3) — single line; run controls hide
+     behind the ⋯ toggle; send is a 32px inverse circle. ── */
+  .cmp-shell--quiet { border-radius: 14px; }
+  .cmp-shell--quiet .cmp-foot { flex-wrap: wrap; }
+  /* Run controls (model + launchers/toggles) collapse unless ⋯ open. */
+  .cmp-shell--quiet .cmp-model,
+  .cmp-shell--quiet .cmp-grp { display: none; }
+  .cmp-shell--quiet.cmp-shell--run-open .cmp-model { display: inline-flex; }
+  .cmp-shell--quiet.cmp-shell--run-open .cmp-grp { display: inline-flex; }
+  /* ⋯ toggle — 28×28 ghost-border square. */
+  .cmp-run-toggle {
+    width: 28px; height: 28px; flex: none;
+    display: grid; place-items: center;
+    border: 1px solid var(--border); border-radius: 8px;
+    background: transparent; color: var(--text-2);
+    cursor: pointer;
+    transition: color 120ms, border-color 120ms, background 120ms;
+  }
+  .cmp-run-toggle:hover { color: var(--text-0); border-color: var(--border-hi); }
+  .cmp-run-toggle.active { color: var(--text-0); background: var(--bg-3); border-color: var(--border-hi); }
+  .cmp-run-toggle svg { width: 15px; height: 15px; }
+  /* Send → inverse circle; the ⏎ kbd is the glyph, the word hides. */
+  .cmp-shell--quiet .cmp-send {
+    width: 32px; height: 32px; padding: 0; gap: 0;
+    border-radius: 50%;
+    justify-content: center;
+  }
+  .cmp-shell--quiet .cmp-send-label { display: none; }
+  .cmp-shell--quiet .cmp-send-kbd {
+    opacity: 1; padding: 0; background: transparent; border: 0;
+    font-size: 12px;
+  }
+  /* Stop collapses to an icon-only circle too. */
+  .cmp-shell--quiet .cmp-stop {
+    width: 32px; height: 32px; padding: 0; gap: 0;
+    border-radius: 50%;
+    justify-content: center;
   }
 
   /* Attachments strip — externals only (OS drag, paste). Each chip is
