@@ -125,6 +125,9 @@
      *  (source control stays reachable) and the main pane swaps the tab
      *  strip for a path breadcrumb. Cabin (default) is untouched. */
     quiet?: boolean;
+    /** Pending agent-edit count — shown in the Quiet breadcrumb's right
+     *  readout (`review · N`, mockup 4j). Owned by EditorApp. */
+    reviewCount?: number;
   }
   let {
     repoPath = $bindable(''),
@@ -138,7 +141,8 @@
     instanceId = 'default',
     onRequestReviewTab,
     onQuickSend,
-    quiet = false
+    quiet = false,
+    reviewCount = 0
   }: Props = $props();
 
   const linkedAiKind = $derived<'claude' | null>(
@@ -209,6 +213,24 @@
   let watchUnlisten: UnlistenFn | null = null;
   let gitStatusByPath = $state<Record<string, string>>({});
   let diffTarget = $state<{ path: string; staged: boolean } | null>(null);
+
+  /* ── Quiet breadcrumb data (mockup 4j) ─────────────────────────────
+     The Quiet main pane shows a path breadcrumb instead of the tab
+     strip. Compute the active file's repo-relative directory + owning
+     repo label, plus the changed-file count for the right readout. */
+  const crumbPath = $derived(diffTarget ? `${roots.length > 1 ? activeGitRoot : repoPath}/${diffTarget.path}` : activePath);
+  const crumbName = $derived(crumbPath ? fileName(crumbPath) : '');
+  const crumbDir = $derived.by(() => {
+    if (!crumbPath) return '';
+    const root = rootForPath(crumbPath);
+    let rel = crumbPath;
+    if (root && (rel === root || rel.startsWith(root + '/'))) rel = rel.slice(root.length);
+    rel = rel.replace(/^\/+/, '');
+    const parts = rel.split('/');
+    parts.pop();
+    return [fileName(root), ...parts].filter(Boolean).join('/');
+  });
+  const gitChangedCount = $derived(Object.keys(gitStatusByPath).length);
 
   /* Live line range + viewport anchor of the user's selection in
      CodeMirror, mirrored up from <Editor> via `onSelectionChange`.
@@ -1361,6 +1383,13 @@
             {tabDisplayName}
             {cursorInfo}
             readoutLang={extOf(diffTarget?.path ?? activePath)}
+            {quiet}
+            {reviewCount}
+            crumbName={crumbName}
+            crumbDir={crumbDir}
+            repoLabel={rootLabel}
+            {instanceLabel}
+            gitCount={gitChangedCount}
             onSwitch={(p) => void switchTab(p)}
             onClose={(p, e) => void closeTab(p, e)}
             onMiddleClick={(p, e) => void onTabMiddleClick(p, e)}

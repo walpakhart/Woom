@@ -249,6 +249,7 @@
         {instanceLabel}
         instanceId={p.instanceId}
         quiet
+        {reviewCount}
         onLinkToAgent={p.onLinkToAgent}
         onUnlinkAgent={unlinkSession}
         onRequestReviewTab={focusReviewTab}
