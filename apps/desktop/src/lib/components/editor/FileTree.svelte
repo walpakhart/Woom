@@ -236,9 +236,11 @@
       }
     }
     await tick();
-    const rowIdx = items.findIndex((it) => it.path === target);
-    if (rowIdx < 0 || !treeContainer) return;
-    const row = treeContainer.querySelectorAll('.etree-row')[rowIdx] as HTMLElement | undefined;
+    if (!treeContainer) return;
+    // Compact folders mean row index ≠ item index — locate by path instead.
+    const row = treeContainer.querySelector(
+      `.etree-row[data-path="${CSS.escape(target)}"]`
+    ) as HTMLElement | null;
     row?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   }
 
@@ -308,6 +310,56 @@
   function rowCode(it: Item): string {
     return it.is_dir ? (folderStatusByPath[it.path] ?? '') : (gitStatusByPath[it.path] ?? '');
   }
+
+  /* Compact folders (mockup 4i / 4j) — a directory whose parent dir has
+     exactly ONE child (and that child is also a dir) merges up into a
+     single row: `apps/desktop/src`, `views/apps/agent`. Purely a display
+     transform over the flat `items` list — `toggle` / expand-cache /
+     `revealPath` keep operating on the real per-dir items, so persistence
+     and reveal are untouched. Each output row carries the DEEPEST item in
+     its merged chain (drives chevron / selection / toggle) and a compacted
+     `depth` (merged chains count as one indent level). */
+  interface Row { item: Item; idx: number; display: string; depth: number; }
+  const rows = $derived.by<Row[]>(() => {
+    const n = items.length;
+    if (n === 0) return [];
+    // Parent index = nearest preceding item one depth shallower.
+    const parent = new Array<number>(n).fill(-1);
+    const stack: number[] = [];
+    for (let i = 0; i < n; i++) {
+      const d = items[i].depth;
+      parent[i] = d > 0 ? (stack[d - 1] ?? -1) : -1;
+      stack[d] = i;
+      stack.length = d + 1;
+    }
+    const childCount = new Map<number, number>();
+    for (let i = 0; i < n; i++) {
+      const p = parent[i];
+      if (p >= 0) childCount.set(p, (childCount.get(p) ?? 0) + 1);
+    }
+    const out: Row[] = [];
+    const rowOf = new Array<number>(n).fill(-1);
+    for (let i = 0; i < n; i++) {
+      const it = items[i];
+      const p = parent[i];
+      const mergeUp =
+        p >= 0 && rowOf[p] >= 0 &&
+        items[p].is_dir && it.is_dir &&
+        childCount.get(p) === 1;
+      if (mergeUp) {
+        const r = out[rowOf[p]];
+        r.display += '/' + it.name;
+        r.item = it;
+        r.idx = i;
+        rowOf[i] = rowOf[p];
+      } else {
+        const depth = p >= 0 && rowOf[p] >= 0 ? out[rowOf[p]].depth + 1 : 0;
+        out.push({ item: it, idx: i, display: it.name, depth });
+        rowOf[i] = out.length - 1;
+      }
+    }
+    return out;
+  });
 
   /* Right-click context menu (M4 §2.1.2). Standard macOS Finder
    * complement: Reveal, Copy path, Rename, Delete. Anchored at the
@@ -496,15 +548,17 @@
   {#if creating && creating.parentDir === (rootPath ?? '')}
     {@render createRow(0)}
   {/if}
-  {#each items as it, i (it.path)}
+  {#each rows as r (r.item.path)}
+    {@const it = r.item}
     <button
       class="etree-row"
       class:selected={selectedPath === it.path && !it.is_dir}
       class:dir={it.is_dir}
       class:ignored={it.ignored}
       class:create-target={creating?.parentDir === it.path}
-      style="padding-left: {8 + it.depth * 12}px"
-      onclick={() => toggle(i)}
+      style="padding-left: {8 + r.depth * 12}px"
+      data-path={it.path}
+      onclick={() => toggle(r.idx)}
       oncontextmenu={(e) => openContextMenu(e, it)}
       title={it.ignored ? `${it.path}\n(gitignored)` : it.path}
       draggable="true"
@@ -547,7 +601,7 @@
           onblur={commitRename}
         />
       {:else}
-        <span class="etree-name mono">{it.name}</span>
+        <span class="etree-name mono">{r.display}</span>
       {/if}
       {#if rowCode(it)}
         {@const code = rowCode(it)}
@@ -558,7 +612,7 @@
       {/if}
     </button>
     {#if creating && creating.parentDir === it.path}
-      {@render createRow(it.depth + 1)}
+      {@render createRow(r.depth + 1)}
     {/if}
   {/each}
 </div>
