@@ -627,17 +627,17 @@ fn walk_size(p: &Path) -> u64 {
     total
 }
 
-/// Dynamic Workflow per-subagent worktree (also hosts Ledger's shared
-/// + wave worktrees). Each subagent runs in an isolated branch off HEAD so
-/// concurrent claude spawns don't trample shared working-tree state.
+/// Per-worker worktree (hosts Ledger's shared + wave worktrees). Each
+/// worker runs in an isolated branch off HEAD so concurrent claude spawns
+/// don't trample shared working-tree state.
 /// Branch name: `woom/dw-<wf>-<sub>`. Path: `<storage_root>/dw/<wf>/<sub>/`.
 /// Sequential creation only — `git worktree add` takes a repo-level
-/// lock; running 20 in parallel deadlocks.
+/// lock; running many in parallel deadlocks.
 /// Make `repo_path` capable of hosting `git worktree add … HEAD`:
-/// `git init` when it isn't a repo yet (DW launched on a plain folder),
+/// `git init` when it isn't a repo yet (launched on a plain folder),
 /// then an empty initial commit when HEAD is unborn (repo with zero
-/// commits). Idempotent. Without this, fan-out on a non-repo folder or
-/// an empty repo fails EVERY subagent with `not a git repository` /
+/// commits). Idempotent. Without this, a run on a non-repo folder or
+/// an empty repo fails EVERY worker with `not a git repository` /
 /// `invalid reference: HEAD` — they come back $0 with no output.
 fn ensure_worktree_base(repo_path: &str) -> Result<(), String> {
     let succeeds = |args: &[&str]| {

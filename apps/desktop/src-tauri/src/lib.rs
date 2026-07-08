@@ -6,7 +6,6 @@ mod claude_bg;
 mod claude_mcp;
 mod claude_quota;
 mod claudemd;
-mod dw;
 mod ledger;
 mod crash_reporting;
 mod fs;
@@ -428,7 +427,6 @@ pub fn run() {
         .manage(terminal::TerminalRegistry::default())
         .manage(bg_tasks::BgRegistry::new())
         .manage(claude_bg::ClaudeBgRegistry::new())
-        .manage(dw::DwRegistry::new())
         .manage(ledger::LedgerRegistry::new())
         .manage(std::sync::Arc::new(updater::UpdaterState::new()))
         .manage(action_ipc_state())
@@ -514,22 +512,6 @@ pub fn run() {
             rtk::rtk_install_hook,
             rtk::rtk_uninstall_hook,
             rtk::rtk_hook_state,
-            dw::dw_plan,
-            dw::dw_approve,
-            dw::dw_cancel,
-            dw::dw_apply_subagent,
-            dw::dw_finalize,
-            dw::dw_create,
-            dw::dw_set_task,
-            dw::dw_add_subagent,
-            dw::dw_retry_subagent,
-            dw::dw_launch,
-            dw::dw_run,
-            dw::dw_status,
-            dw::dw_list,
-            dw::dw_get,
-            dw::dw_has_running,
-            dw::dw_cancel_all,
             ledger::ledger_create,
             ledger::ledger_set_task,
             ledger::ledger_set_plan,
@@ -859,7 +841,7 @@ pub fn run() {
                     claude::evict_stale_warm(warm_pool_handle.clone()).await;
                 }
             });
-            // DW persistence recovery (Phase 5). Hydrate workflows from
+            // Ledger persistence recovery. Hydrate workflows from
             // disk, mark in-flight runs as failed-interrupted (the parent
             // process died while they were mid-flight), then sweep stale
             // terminal workflows older than the 7-day retain window. The
@@ -867,19 +849,6 @@ pub fn run() {
             let ledger_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 ledger::recover_on_startup(ledger_handle).await;
-            });
-            let dw_handle = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                dw::recover_on_startup(dw_handle.clone()).await;
-                let mut ticker = tokio::time::interval(std::time::Duration::from_secs(6 * 60 * 60));
-                ticker.tick().await; // skip immediate first tick — startup pass already ran
-                loop {
-                    ticker.tick().await;
-                    let removed = dw::cleanup_stale_workflows(&dw_handle, 7);
-                    if removed > 0 {
-                        eprintln!("[dw] periodic sweep removed {} stale workflows", removed);
-                    }
-                }
             });
             // RTK bootstrap. Resolves the
             // bundled `rtk` sidecar, copies the woom-managed wrapper

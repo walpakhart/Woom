@@ -29,7 +29,6 @@
     isClickNotDrag: (e: MouseEvent) => boolean;
     refreshAllJiraInboxes: (opts?: { silent?: boolean }) => Promise<void>;
     onSendToClaude: (item: JiraItem) => void;
-    onFixWithDw: (item: JiraItem) => void;
   }
   let p: Props = $props();
 
@@ -47,9 +46,6 @@
   }
   function sendFocusedToClaude() {
     if (focusItem) p.onSendToClaude(focusItem);
-  }
-  function dwFocused() {
-    if (focusItem) p.onFixWithDw(focusItem);
   }
 </script>
 
@@ -80,7 +76,6 @@
             onCardMouseDown={p.onCardMouseDown}
             isClickNotDrag={p.isClickNotDrag}
             onSendToClaude={p.onSendToClaude}
-            onFixWithDw={p.onFixWithDw}
             onNavigate={close}
           />
         {/snippet}
@@ -95,7 +90,6 @@
           {#if focusItem}
             <button class="qsolo-act" onclick={() => focusItem && p.onOpenBrowser(focusItem.url)}>in Jira ↗</button>
             <button class="qsolo-act qsolo-act--claude" onclick={sendFocusedToClaude}>→ claude</button>
-            <button class="qsolo-act" onclick={dwFocused}>/dw</button>
           {/if}
         {/snippet}
       </QuietSoloHeader>
@@ -139,7 +133,6 @@
         onCardMouseDown={p.onCardMouseDown}
         isClickNotDrag={p.isClickNotDrag}
         onSendToClaude={p.onSendToClaude}
-        onFixWithDw={p.onFixWithDw}
       />
     {/snippet}
     {#snippet end()}

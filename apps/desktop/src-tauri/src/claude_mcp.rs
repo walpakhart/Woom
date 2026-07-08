@@ -182,15 +182,6 @@ pub(crate) fn build_mcp_config(
         allowed.push("mcp__app__terminal_buffer".into());
         allowed.push("mcp__app__propose_bash".into());
         allowed.push("mcp__app__propose_switch_cwd".into());
-        // Workflow kickoff (0.2.6) — let the agent START a DW when the
-        // user asks it to. Without this in the allowlist the
-        // `--allowedTools` filter strips it: the agent sees the tool
-        // in its catalog but every call is rejected.
-        allowed.push("mcp__app__start_dw".into());
-        // Live DW build (0.2.16) — agent constructs the workflow itself.
-        allowed.push("mcp__app__dw_set_task".into());
-        allowed.push("mcp__app__dw_add_subagent".into());
-        allowed.push("mcp__app__dw_launch".into());
         // Live Ledger build — sequential machine-checked checklist.
         allowed.push("mcp__app__ledger_set_task".into());
         allowed.push("mcp__app__ledger_set_plan".into());

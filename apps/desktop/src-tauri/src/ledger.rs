@@ -1,8 +1,7 @@
-//! Ledger workflows — the sequential, machine-checked sibling of DW.
+//! Ledger workflows — sequential, machine-checked task execution.
 //!
-//! Where DW fans out N parallel subagents in isolated worktrees and
-//! grades results with an LLM verifier, a Ledger runs a CHECKLIST of
-//! discrete requirements sequentially in ONE shared worktree:
+//! A Ledger runs a CHECKLIST of discrete requirements sequentially in
+//! ONE shared worktree:
 //!
 //!   - every item carries a *verification command* (shell, exit 0 =
 //!     pass) — "done" is an objective machine verdict, not LLM opinion;
@@ -21,8 +20,8 @@
 //!     with the full branch diff — the approval gate is BEHAVIOR
 //!     (diff + green checks), not a markdown document.
 //!
-//! Storage mirrors `dw.rs`: in-memory registry + one JSON per workflow
-//! under `<app_data>/ledgers/`, every transition flowing through
+//! Storage: in-memory registry + one JSON per workflow under
+//! `<app_data>/ledgers/`, every transition flowing through
 //! `mutate_persist` and emitted as `ledger:*` events.
 
 use std::collections::HashMap;
@@ -473,8 +472,8 @@ async fn call_oneshot(
         return Err("claude CLI not authenticated".into());
     }
     let bin = status.path.as_deref().unwrap_or("claude");
-    // Unbounded like DW subagents: real work runs minutes; the stop
-    // controls are cancel + quota-pause, not a turn timer.
+    // Unbounded: real work runs minutes; the stop controls are
+    // cancel + quota-pause, not a turn timer.
     crate::claude::run_claude_oneshot(bin, prompt, None, None, cwd, Some(model))
         .await
         .map(|r| (r.text, r.usage))
@@ -1064,8 +1063,8 @@ async fn run_ledger(app: &AppHandle, reg: &Arc<LedgerRegistry>, wf_id: &str) -> 
     let model = wf.model.clone();
 
     // ONE shared worktree for the whole ledger — sequential items build
-    // on each other's committed changes. (Reuses the DW worktree infra;
-    // the on-disk dir is `dw/<wf-id>/work`.)
+    // on each other's committed changes. (Uses the shared `worktree`
+    // module; its on-disk layout roots the dir at `dw/<wf-id>/work`.)
     let (wt_path, base) = match (&wf.worktree_path, &wf.base_sha) {
         (Some(p), Some(b)) if Path::new(p).exists() => (p.clone(), b.clone()),
         _ => {

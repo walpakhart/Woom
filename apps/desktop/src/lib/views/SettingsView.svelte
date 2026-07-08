@@ -10,7 +10,6 @@
   import SettingsEditor from './settings/SettingsEditor.svelte';
   import SettingsMemory from './settings/SettingsMemory.svelte';
   import SettingsUpdates from './settings/SettingsUpdates.svelte';
-  import SettingsWorkflows from './settings/SettingsWorkflows.svelte';
   import SettingsPrivacy from './settings/SettingsPrivacy.svelte';
   import SettingsLogs from './settings/SettingsLogs.svelte';
   import SettingsAgents from './settings/SettingsAgents.svelte';
@@ -22,7 +21,6 @@
     { id: 'set-editor', label: 'Editor' },
     { id: 'set-memory', label: 'Memory' },
     { id: 'set-updates', label: 'Updates', dot: true },
-    { id: 'set-workflows', label: 'Workflows' },
     { id: 'set-privacy', label: 'Privacy' },
     { id: 'set-logs', label: 'Logs' },
     { id: 'set-agents', label: 'Agents' },
@@ -75,7 +73,6 @@
     <div class="set-section" id="set-editor"><SettingsEditor /></div>
     <div class="set-section" id="set-memory"><SettingsMemory /></div>
     <div class="set-section" id="set-updates"><SettingsUpdates /></div>
-    <div class="set-section" id="set-workflows"><SettingsWorkflows /></div>
     <div class="set-section" id="set-privacy"><SettingsPrivacy /></div>
     <div class="set-section" id="set-logs"><SettingsLogs /></div>
     <div class="set-section" id="set-agents"><SettingsAgents /></div>

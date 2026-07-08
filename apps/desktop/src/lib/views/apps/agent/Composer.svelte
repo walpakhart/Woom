@@ -1154,8 +1154,8 @@
           </div>
 
           {#if runOpen}
-            <!-- Run controls revealed by ⋯ (§3.3) — model chip, /dw /ledger
-                 launchers, RTK/FAST toggles. Fresh qpill- markup; same wiring
+            <!-- Run controls revealed by ⋯ (§3.3) — model chip, /ledger
+                 launcher, RTK/FAST toggles. Fresh qpill- markup; same wiring
                  as the Cabin footer. -->
             <div class="qpill-run-panel">
               <ModelEngine
@@ -1167,18 +1167,6 @@
                 onEffortChange={setEffort}
               />
               <span class="qpill-run-launchers">
-                <button
-                  class="qpill-launch"
-                  onclick={() => {
-                    if (!sess) return;
-                    updateSession(sess.id, { input: '/dw ' });
-                    queueMicrotask(() => { if (ta) { ta.selectionStart = ta.value.length; ta.selectionEnd = ta.value.length; ta.focus(); } });
-                  }}
-                  aria-label="Start a Dynamic Workflow"
-                  title="DW — planner fans out parallel subagents, then a verifier synthesises one answer."
-                >
-                  <span class="qpill-launch-glyph">/dw</span>
-                </button>
                 <button
                   class="qpill-launch"
                   onclick={() => {
@@ -1279,34 +1267,12 @@
           </span>
 
           <!-- launchers + toggles. Two semantic sub-clusters: launchers
-               (/dw /ledger) are one-shot slash-command shortcuts, styled
+               (/ledger) are one-shot slash-command shortcuts, styled
                as mono ghost chips with a leading slash. Toggles (RTK/FAST)
                are persistent session modes, styled as on/off pills with a
                5px status dot (filled = on, hollow = off). -->
           <span class="cbar-run">
           <span class="cbar-launchers">
-          <!-- DW button — prefills `/dw ` into the composer. Same code
-               path as typing the slash command (`runDwFromSlash` in
-               routes/handleSlashCommand.ts). -->
-          <button
-            class="cbar-launch"
-            onclick={() => {
-              if (!sess) return;
-              updateSession(sess.id, { input: '/dw ' });
-              queueMicrotask(() => {
-                if (ta) {
-                  ta.selectionStart = ta.value.length;
-                  ta.selectionEnd = ta.value.length;
-                  ta.focus();
-                }
-              });
-            }}
-            aria-label="Start a Dynamic Workflow"
-            title="DW — planner fans out parallel subagents (each in its own git worktree), then a verifier synthesises one answer. Shows a cost estimate before it runs."
-          >
-            <span class="cbar-launch-glyph">/dw</span>
-          </button>
-
           <!-- Ledger button — prefills `/ledger `. Same code path as the
                slash command (`runLedgerFromSlash`). -->
           <button
@@ -1790,7 +1756,7 @@
     gap: 4px;
   }
   .qpill-run-toggles:empty { display: none; }
-  /* /dw /ledger launchers — mono ghost chips. */
+  /* /ledger launcher — mono ghost chip. */
   .qpill-launch {
     display: inline-flex; align-items: center;
     padding: 2px 7px;
@@ -2026,7 +1992,7 @@
   }
 
   /* ── Footer control bar (§2.5, mockup 3a). Single centered row:
-     [+] [@] · divider · model chip · /dw /ledger · RTK/FAST · spring ·
+     [+] [@] · divider · model chip · /ledger · RTK/FAST · spring ·
      queue · ctx · Send. `align-items: center` keeps every control on
      the textarea's baseline; when the draft grows multi-line the row
      stays vertically centered against the taller textarea above it. ── */
@@ -2283,7 +2249,7 @@
   /* Compact (agent dock, ~340px): the single row can't hold textarea +
      full control run. Go two-tier — textarea gets its own full-width
      line, controls drop to a second line below. Shed the group divider.
-     Keep /dw + RTK/FAST + model + send — the second tier has room for
+     Keep /ledger + RTK/FAST + model + send — the second tier has room for
      them. Solo never gets `.cmp--compact`. */
   .cmp--compact .cbar-divider { display: none; }
   .cmp--compact .cbar {
@@ -2308,7 +2274,7 @@
     display: inline-flex; align-items: center; gap: 6px;
     min-width: 0;
   }
-  /* Launchers (/dw /ledger) and toggles (RTK/FAST) sit a hair apart so
+  /* Launchers (/ledger) and toggles (RTK/FAST) sit a hair apart so
      the "command shortcut" cluster reads distinctly from the "session
      mode" pair without a hard divider between them. */
   .cbar-launchers, .cbar-toggles {
@@ -2339,7 +2305,7 @@
   .cbar-ctx--warn { color: var(--warn); }
   .cbar-ctx--err  { color: var(--err); }
 
-  /* Launchers (/dw /ledger) — mono ghost chips; click prefills the
+  /* Launchers (/ledger) — mono ghost chips; click prefills the
      slash command into the input. */
   .cbar-launch {
     display: inline-flex; align-items: center;

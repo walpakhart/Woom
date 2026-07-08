@@ -5,7 +5,6 @@
      memory chip and the `linked:` label moved to the ContextDock. */
   import { sessionsState, updateSession } from '$lib/state/sessions.svelte';
   import { sessionUsageTotals, formatTokens, formatCostUsd } from '$lib/usage';
-  import { sessionDwTotals } from '$lib/state/dw.svelte';
   import BudgetPopover from '$lib/components/agent/BudgetPopover.svelte';
   import { tick } from 'svelte';
 
@@ -28,8 +27,7 @@
   );
 
   const budget = $derived(sessionUsageTotals(sess));
-  const dwTotals = $derived(sess ? sessionDwTotals(sess.id) : { costUsd: 0, runs: 0 });
-  const chipCostUsd = $derived(budget.costUsd + dwTotals.costUsd);
+  const chipCostUsd = $derived(budget.costUsd);
   const totalTokens = $derived(budget.input + budget.output);
 
   /* Working folder — surfaced in the header so the session's cwd is
@@ -162,7 +160,7 @@
 
   <div class="ch-spring"></div>
 
-  {#if sess && (budget.turns > 0 || dwTotals.runs > 0)}
+  {#if sess && budget.turns > 0}
     <div class="ch-spend-wrap">
       <button
         class="ch-spend mono"

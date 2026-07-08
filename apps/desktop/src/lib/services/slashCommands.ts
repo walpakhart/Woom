@@ -33,7 +33,6 @@ export type SlashCommand =
   | 'ps'
   | 'loop'
   | 'unloop'
-  | 'dw'
   | 'ledger'
   | 'remember';
 
@@ -47,7 +46,6 @@ export const KNOWN_SLASH_COMMANDS: SlashCommand[] = [
   'ps',
   'loop',
   'unloop',
-  'dw',
   'ledger',
   'remember'
 ];
@@ -55,7 +53,7 @@ export const KNOWN_SLASH_COMMANDS: SlashCommand[] = [
 /** Commands that accept inline arguments after the slash (`/preview pnpm dev`).
  *  Arg-less commands stay in the strict-exact-match path so they remain
  *  unambiguous. */
-const ARG_BEARING: Set<SlashCommand> = new Set(['preview', 'kill', 'loop', 'dw', 'ledger']);
+const ARG_BEARING: Set<SlashCommand> = new Set(['preview', 'kill', 'loop', 'ledger']);
 
 /** Display-shape for the inline slash-picker. Picker lives in
  *  Composer.svelte and filters this list by prefix as the user types
@@ -71,7 +69,6 @@ export const SLASH_COMMAND_DESCRIPTIONS: Record<SlashCommand, string> = {
   ps:      'List running background tasks inline',
   loop:    'Re-send a prompt on a fixed cadence: /loop 5m check the deploy',
   unloop:  'Stop the active loop on this chat',
-  dw:      'Dynamic Workflow — planner → parallel subagent fan-out → verifier synthesis',
   ledger:  'Ledger — sequential checklist, each item machine-checked + auto-retried',
   remember: 'Distill durable prefs/feedback from this chat into memory-save cards'
 };
@@ -106,7 +103,7 @@ export function parseSlashCommandWithArgs(
   const trimmed = input.trim();
   if (!trimmed.startsWith('/')) return null;
   // `s` flag: args may span multiple lines (e.g. a multi-paragraph
-  // `/dw` brief). Without it `.` stops at the first `\n` and the `$`
+  // `/ledger` brief). Without it `.` stops at the first `\n` and the `$`
   // anchor fails, so the whole command silently falls through to the CLI.
   const m = /^\/([a-z]+)\s+(.+)$/is.exec(trimmed);
   if (!m) return null;
@@ -194,7 +191,6 @@ export function appendSlashHelp(session: ClaudeSession): void {
     '- `/preview [cmd]` — open the Preview pane; with args, spawn a background task',
     '- `/kill <id|label>` — kill a tracked background task',
     '- `/ps` — list running background tasks',
-    '- `/dw <ask>` — Dynamic Workflow: planner fans out parallel subagents → verifier synthesises',
     '- `/loop <duration> <prompt>` / `/unloop` — re-send a prompt on a cadence',
     '- `/remember` — distill durable prefs / feedback from this chat into memory-save cards',
     '- `/help` — show this list'

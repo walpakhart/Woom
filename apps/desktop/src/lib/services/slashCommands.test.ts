@@ -84,14 +84,14 @@ describe('parseSlashCommandWithArgs', () => {
     expect(parseSlashCommandWithArgs('/foo bar')).toBeNull();
   });
 
-  it('matches multi-line args (multi-paragraph /dw briefs)', () => {
+  it('matches multi-line args (multi-paragraph /ledger briefs)', () => {
     /* Regression: without the `s` flag the args group stopped at the
      *  first newline and the `$` anchor failed, so a multi-line brief
-     *  silently fell through to the CLI instead of triggering DW. */
+     *  silently fell through to the CLI instead of triggering the ledger. */
     const brief = 'build a portal\n\nfirst module is docs\nthen more modules';
-    expect(parseSlashCommandWithArgs(`/dw ${brief}`))
-      .toEqual({ name: 'dw', args: brief });
-    expect(parseSlashCommandWithArgs(`/dw line one\nline two`))
-      .toEqual({ name: 'dw', args: 'line one\nline two' });
+    expect(parseSlashCommandWithArgs(`/ledger ${brief}`))
+      .toEqual({ name: 'ledger', args: brief });
+    expect(parseSlashCommandWithArgs(`/ledger line one\nline two`))
+      .toEqual({ name: 'ledger', args: 'line one\nline two' });
   });
 });

@@ -128,9 +128,6 @@ export async function handleSlashCommand(
     } else if (withArgs.name === 'loop') {
       await startLoopFromSlash(session, withArgs.args);
       void deps.scrollChatBottom();
-    } else if (withArgs.name === 'dw') {
-      await runDwFromSlash(session, withArgs.args, deps);
-      void deps.scrollChatBottom();
     } else if (withArgs.name === 'ledger') {
       await runLedgerFromSlash(session, withArgs.args, deps);
       void deps.scrollChatBottom();
@@ -179,69 +176,8 @@ export async function handleSlashCommand(
   return true;
 }
 
-/** `/dw <ask>` runner. Calls backend planner, registers workflow in
- *  reactive state, opens the preflight modal with the planner output
- *  + cost estimate. On approve fires `dw_approve` (kicks off fan-out)
- *  and appends an assistant message carrying `dwWorkflowId` — ChatThread
- *  renders <DynamicWorkflowCard> after that message. On cancel drops
- *  the workflow from state (server-side will GC the orphan entry). */
-export async function runDwFromSlash(
-  session: ClaudeSession,
-  userPrompt: string,
-  deps: SlashCommandDeps,
-): Promise<void> {
-  appendSessionMessage(session.id, {
-    role: 'user',
-    content: `/dw ${userPrompt}`,
-    at: new Date().toISOString(),
-  });
-  const cwd = session.worktreePath ?? session.cwd ?? null;
-  // Phase 2a: create an EMPTY `building` workflow, then let the MAIN
-  // chat agent construct it live (survey → dw_set_task → dw_add_subagent
-  // ×N → dw_launch) — no hidden planner oneshot, no pre-flight modal.
-  let workflowId: string;
-  try {
-    workflowId = await invoke('dw_create', {
-      sessionId: session.id,
-      task: userPrompt,
-      cwd,
-      model: session.claudeModel ?? null,
-      fast: session.fastMode === true,
-    });
-  } catch (e) {
-    appendSessionMessage(session.id, {
-      role: 'assistant',
-      content: `_DW create failed: ${String(e)}_`,
-      at: new Date().toISOString(),
-    });
-    return;
-  }
-  // Assistant message that HOSTS the card once the workflow finishes
-  // (terminal workflows render at their origin message; the active one
-  // is shown in the pinned bottom slot meanwhile).
-  appendSessionMessage(session.id, {
-    role: 'assistant',
-    content: '',
-    at: new Date().toISOString(),
-    dwWorkflowId: workflowId,
-  });
-  // Silent build brief — drives a normal (visible) agent turn that
-  // populates the workflow via the dw_* tools.
-  const brief =
-    `You are building Dynamic Workflow \`${workflowId}\` for this task:\n\n${userPrompt}\n\n` +
-    `Survey the repo just enough to split this into INDEPENDENT slices (no cross-slice deps). Then:\n` +
-    `1. mcp__app__dw_set_task — workflowId "${workflowId}", a one-line task summary.\n` +
-    `2. mcp__app__dw_add_subagent — workflowId "${workflowId}", one self-contained prompt per slice (call repeatedly). Spell out what to investigate/change + what to report.\n` +
-    `3. mcp__app__dw_launch — workflowId "${workflowId}" once all slices are added.\n` +
-    `Use read-only tools for the survey. Keep it tight — no long preamble, just build it.`;
-  // Programmatic send via `prompt` (NOT updateSession({ input })): the
-  // brief is hidden orchestration traffic and must not clobber whatever
-  // the user is typing in the composer (architecture rule, commit 24ffc4c).
-  await deps.sendClaudeMessage({ silent: true, prompt: brief });
-}
-
-/** `/ledger <ask>` runner — the sequential machine-checked sibling of
- *  `/dw`. Creates an empty `building` ledger, then a silent build brief
+/** `/ledger <ask>` runner — the sequential machine-checked
+ *  workflow. Creates an empty `building` ledger, then a silent build brief
  *  drives the MAIN chat agent to construct the checklist live
  *  (ledger_set_task → ledger_add_item ×N → ledger_launch). The user
  *  approves the checklist on the card; execution runs items one by one

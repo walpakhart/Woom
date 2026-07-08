@@ -8,7 +8,6 @@
   import { sessionsState, updateSession, setActiveSessionInInstance, newClaudeSession, deleteClaudeSession, restoreClaudeSession } from '$lib/state/sessions.svelte';
   import { notify } from '$lib/state/toaster.svelte';
   import { sessionUsageTotals, formatTokens, formatCostUsd } from '$lib/usage';
-  import { sessionDwTotals } from '$lib/state/dw.svelte';
   import BudgetPopover from '$lib/components/agent/BudgetPopover.svelte';
   import ModelEngine from './ModelEngine.svelte';
   import { claudeModels, claudeEffort } from './composerHelpers';
@@ -45,8 +44,7 @@
   );
 
   const budget = $derived(sessionUsageTotals(sess));
-  const dwTotals = $derived(sess ? sessionDwTotals(sess.id) : { costUsd: 0, runs: 0 });
-  const chipCostUsd = $derived(budget.costUsd + dwTotals.costUsd);
+  const chipCostUsd = $derived(budget.costUsd);
   const totalTokens = $derived(budget.input + budget.output);
 
   const elapsed = $derived.by(() => {
@@ -247,7 +245,7 @@
       </button>
     {/if}
 
-    {#if sess && (budget.turns > 0 || dwTotals.runs > 0)}
+    {#if sess && budget.turns > 0}
       <div class="qh-budget-wrap">
         <button class="qh-spend mono" class:open={budgetOpen} onclick={() => (budgetOpen = !budgetOpen)} title="Session budget">
           {budget.turns} turns{#if chipCostUsd > 0}&nbsp;· {formatCostUsd(chipCostUsd)}{/if} · {formatTokens(totalTokens)}

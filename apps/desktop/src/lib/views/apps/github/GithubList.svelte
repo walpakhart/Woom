@@ -35,9 +35,6 @@
      *  the row onto the rail icon, but for users who prefer
      *  a button over a drag gesture. Shown on each PR/issue card. */
     onSendToClaude: (item: InboxItem) => void;
-    /** Seed a Dynamic Workflow from this item — templates a task and
-     *  routes through the live-build DW pipeline. */
-    onFixWithDw: (item: InboxItem) => void;
     /** Fired after a row navigates (Quiet: closes the switcher popover). */
     onNavigate?: () => void;
   }
@@ -110,11 +107,6 @@
         label: 'Send to Claude',
         icon: 'M22 2 11 13 M22 2l-7 20-4-9-9-4 20-7z',
         onClick: () => p.onSendToClaude(it)
-      },
-      {
-        label: 'Fix with DW',
-        icon: 'M12 2v4 M12 18v4 M4.93 4.93l2.83 2.83 M16.24 16.24l2.83 2.83 M2 12h4 M18 12h4 M4.93 19.07l2.83-2.83 M16.24 7.76l2.83-2.83',
-        onClick: () => p.onFixWithDw(it)
       },
       {
         label: 'Open in browser',

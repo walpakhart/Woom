@@ -53,7 +53,7 @@
   } from './mcpInputParse';
   import { handleCanvasMcp } from './appNavigationCanvas';
   import { handleInboxOrViewMcp } from './appNavigationInbox';
-  import { handleSlashCommand as handleSlashCommandImpl, runDwFromSlash } from './handleSlashCommand';
+  import { handleSlashCommand as handleSlashCommandImpl } from './handleSlashCommand';
   import * as _modalActions from './modalActions';
   import * as _agentDrop from './agentDrop';
   import * as _worktree from './worktreeActions';
@@ -230,9 +230,7 @@
   import { initScale } from '$lib/state/scale.svelte';
   import { initDensity, toggleDensity } from '$lib/state/density.svelte';
   import { initBgTasks } from '$lib/state/bgTasks.svelte';
-  import { dwState, addWorkflow, getWorkflow, updateWorkflow, loadPersistedWorkflows } from '$lib/state/dw.svelte';
   import { upsertLedger, loadPersistedLedgers, type LedgerWorkflow } from '$lib/state/ledger.svelte';
-  import type { DynamicWorkflow } from '$lib/types';
   import {
     initUpdatesStore,
     updateState as updatesPhaseStore,
@@ -774,10 +772,6 @@
   /* Window-close lifecycle handles. Both are unlisten-style — see
      the close-flush hook inside onMount for what they catch. */
   let tauriCloseUnlisten: UnlistenFn | null = null;
-  let dwDoneUnlistenRef: UnlistenFn | null = null;
-  let dwCreatedUnlistenRef: UnlistenFn | null = null;
-  let dwUpdatedUnlistenRef: UnlistenFn | null = null;
-  let dwRecoverUnlistenRef: UnlistenFn | null = null;
   const ledgerUnlistenRefs: UnlistenFn[] = [];
   let beforeUnloadHandler: (() => void) | null = null;
   let closeFlushInProgress = false;
@@ -1285,50 +1279,6 @@
         if (closeFlushInProgress) return;
         closeFlushInProgress = true;
         event.preventDefault();
-        /* DW running-workflow guard (Phase 5). Probe the registry
-           BEFORE flushing — if a /dw workflow is in flight, surface
-           the styled ConfirmModal. Cancel keeps the window open
-           (reset the flush flag so a second close-request can
-           re-enter); Confirm SIGTERMs every in-flight workflow then
-           proceeds with the normal flush + destroy inside onConfirm.
-           Probe failure is non-fatal — fall through to the flush as
-           if no workflows were running. */
-        let probe: { count: number; ids: string[] } | null = null;
-        try {
-          probe = await invoke<{ count: number; ids: string[] }>('dw_has_running');
-        } catch (e) {
-          console.warn('dw_has_running probe failed', e);
-        }
-        if (probe && probe.count > 0) {
-          const flushDeadlineInner = () =>
-            new Promise<void>((resolve) => setTimeout(resolve, 2_500));
-          openModal('confirm', {
-            title: `${probe.count} Dynamic Workflow${probe.count === 1 ? '' : 's'} still running`,
-            body: 'Close anyway? Subagents will be cancelled and partial transcripts saved.',
-            confirmText: 'Close anyway',
-            danger: true,
-            busy: false,
-            onConfirm: async () => {
-              try {
-                await invoke<number>('dw_cancel_all');
-              } catch (e) {
-                console.warn('dw_cancel_all failed', e);
-              }
-              try {
-                await Promise.race([flushSessionsNow(), flushDeadlineInner()]);
-              } catch { /* best effort */ }
-              try {
-                await win.destroy();
-              } catch {
-                try { await win.close(); } catch { /* tearing down */ }
-              }
-            },
-            onCancel: () => {
-              closeFlushInProgress = false;
-            }
-          });
-          return;
-        }
         /* Hard cap on the flush so a stuck disk write can never
            strand the user in a "won't quit" window. 2.5s is
            generous — `flushToDisk` is parallel Promise.all over
@@ -1481,88 +1431,6 @@
       }).catch(() => {/* silent — Settings has manual button */});
     }, 8000);
 
-    /* DW persistence (Phase 5) — hydrate workflows from disk before
-     * wiring the live event listeners so backend-emitted updates land
-     * on already-mounted entries instead of triggering a no-op. */
-    void loadPersistedWorkflows();
-    /* Recovery banner — backend emits once on startup with the count
-     * of workflows that died non-terminally on the previous shutdown. */
-    const dwRecoverUnlisten = await listen<{ count: number }>(
-      'dw:recovered_interrupted',
-      (e) => {
-        const n = e.payload?.count ?? 0;
-        if (n <= 0) return;
-        notify({
-          kind: 'info',
-          title: `${n} workflow${n === 1 ? '' : 's'} interrupted on last close`,
-          body: 'Reload the chat to inspect partial transcripts.'
-        });
-      }
-    );
-    dwRecoverUnlistenRef = dwRecoverUnlisten;
-
-    /* Dynamic Workflows — workflow-done listener. Folds the verifier
-     * synthesis back into the parent chat as a SEPARATE assistant
-     * ClaudeMessage (per Phase 4 spec — synthesis behaves like any
-     * normal claude reply: copy / drag / context-menu / quoted into
-     * the next turn). The DW card stays focused on per-subagent
-     * progress; this listener mirrors `final_answer` from the workflow
-     * payload into the chat transcript. */
-    const dwDoneUnlisten = await listen<DynamicWorkflow>('dw:workflow_done', (e) => {
-      const wf = e.payload as DynamicWorkflow | (Partial<DynamicWorkflow> & { workflowId?: string; error?: string });
-      if (!wf) return;
-      // Error path: backend emits `{ workflowId, error }` when fanout or
-      // verifier fails. Surface as a system message so the user sees
-      // why no synthesis arrived.
-      if ((wf as { error?: string }).error) {
-        const wfId = (wf as { workflowId?: string }).workflowId;
-        const target = wfId
-          ? dwState.workflows.find((w) => w.id === wfId)
-          : null;
-        if (target) {
-          appendSessionMessage(target.sessionId, {
-            role: 'system',
-            content: `_Dynamic Workflow failed: ${(wf as { error: string }).error}_`,
-            at: new Date().toISOString()
-          });
-        }
-        return;
-      }
-      const full = wf as DynamicWorkflow;
-      // Keep reactive state in lockstep with the backend snapshot.
-      updateWorkflow(full.id, {
-        status: full.status,
-        verifierResult: full.verifierResult,
-        finalAnswer: full.finalAnswer,
-        completedAt: full.completedAt,
-        quotaDelta5h: full.quotaDelta5h,
-        quotaDelta7d: full.quotaDelta7d
-      });
-      if (full.status === 'done' && full.finalAnswer && full.finalAnswer.trim().length > 0) {
-        appendSessionMessage(full.sessionId, {
-          role: 'assistant',
-          content: full.finalAnswer,
-          at: new Date().toISOString()
-        });
-      }
-    });
-    dwDoneUnlistenRef = dwDoneUnlisten;
-
-    // Live-build (Phase 2a): the agent's dw_create / dw_set_task /
-    // dw_add_subagent tool calls emit these so the card appears + grows
-    // in real time.
-    dwCreatedUnlistenRef = await listen<DynamicWorkflow>('dw:created', (e) => {
-      const wf = e.payload as DynamicWorkflow;
-      if (!wf?.id) return;
-      if (!getWorkflow(wf.id)) addWorkflow(wf);
-    });
-    dwUpdatedUnlistenRef = await listen<DynamicWorkflow>('dw:updated', (e) => {
-      const wf = e.payload as DynamicWorkflow;
-      if (!wf?.id) return;
-      if (getWorkflow(wf.id)) updateWorkflow(wf.id, wf);
-      else addWorkflow(wf);
-    });
-
     // Ledger workflows — most backend transitions ship the FULL
     // workflow snapshot, so one upsert handler covers created/updated/
     // review/done alike. `ledger:item_done` is a slim ping (no
@@ -1621,10 +1489,6 @@
     claudeBgUnlisten?.();
     bgAgentDoneUnlisten?.();
     tauriCloseUnlisten?.();
-    dwDoneUnlistenRef?.();
-    dwCreatedUnlistenRef?.();
-    dwUpdatedUnlistenRef?.();
-    dwRecoverUnlistenRef?.();
     for (const u of ledgerUnlistenRefs) u();
     if (beforeUnloadHandler && typeof window !== 'undefined') {
       window.removeEventListener('beforeunload', beforeUnloadHandler);
@@ -1936,34 +1800,6 @@
       target = sessionsState.list.find((s) => s.id === id) ?? null;
     }
     return target;
-  }
-
-  /** Seed a live-build Dynamic Workflow from an inbox item. Templates a
-   *  task from the item snapshot (title + body / culprit), attaches the
-   *  @id mention, then routes through the REAL `/dw` path (runDwFromSlash
-   *  → dw_create → silent build brief). */
-  async function sendInboxItemToWorkflow(
-    payload:
-      | { kind: 'github'; item: InboxItem }
-      | { kind: 'jira'; item: JiraItem }
-      | { kind: 'sentry'; item: SentryIssue }
-  ) {
-    const target = resolveAgentTarget();
-    if (!target) return;
-    const mention = mentionFromInboxPayload(payload);
-    const dedup = target.mentions.filter(
-      (m) => !(m.source === mention.source && m.externalId === mention.externalId)
-    );
-    updateSession(target.id, { mentions: [...dedup, mention] });
-    setActiveSessionInInstance(APP_INSTANCE_IDS.claude, target.id);
-    view = 'claudeApp';
-    const body = mention.body ? '\n\n' + mention.body.slice(0, 4000) : '';
-    const task = `Fix ${mention.title}: @${mention.externalId}${body}`;
-    await runDwFromSlash(target, task, {
-      sendClaudeMessage,
-      scrollChatBottom,
-      runCompactSession,
-    });
   }
 
   function sendInboxItemToAgent(
@@ -2344,47 +2180,6 @@
   // queueSavedDrafts moved into the sendClaudeMessage factory deps
   // (wave-39); shim below declares + passes it.
 
-  /** Run a DW verifier as a VISIBLE streamed chat turn (Phase 2b), then
-   *  finalise the workflow. The conclusion streams in chat (thinking →
-   *  answer) instead of arriving silently from a backend oneshot. */
-  async function onDwVerify(workflowId: string): Promise<void> {
-    const w = getWorkflow(workflowId);
-    if (!w) return;
-    const parts = w.subagents
-      .map((s) =>
-        s.result
-          ? `## ${s.id}\n${s.result}`
-          : s.error
-            ? `## ${s.id} (FAILED: ${s.error})`
-            : ''
-      )
-      .filter(Boolean)
-      .join('\n\n');
-    const vp =
-      w.verifierPrompt ||
-      'Consolidate the subagent results into a single deduplicated, prioritized answer. Flag conflicts.';
-    const prompt =
-      `${vp}\n\nSubagent results:\n\n${parts}\n\n` +
-      `Some of these changes may already be applied to this repo — inspect git status / git diff, ` +
-      `reconcile any conflicts, and write the final conclusion grounded in the real post-apply state. Be concise.`;
-    sessionsState.activeClaudeId = w.sessionId;
-    sessionsState.activeIds.claude = w.sessionId;
-    try {
-      // SILENT: the verifier prompt (subagent results dump) is internal —
-      // mark it hidden so it doesn't show as a giant user bubble. The
-      // agent's streamed reply (the conclusion) stays visible. Travels
-      // via opts.prompt so the user's composer draft survives.
-      await sendClaudeMessage({ silent: true, kind: 'claude', prompt });
-    } catch (e) {
-      console.warn('dw verify turn failed', e);
-    }
-    try {
-      await invoke('dw_finalize', { workflowId });
-    } catch (e) {
-      console.warn('dw_finalize failed', e);
-    }
-  }
-
   // sendClaudeMessage moved to ./sendClaudeMessage.ts (wave-39 split) —
   // SendOpts (silent / kind / prompt) is documented there.
   // The factory returns a self-aware closure so recursive retries
@@ -2435,46 +2230,9 @@
     const str = (k: string): string => _mcpStr(input, k);
     const num = (k: string): number => _mcpNum(input, k);
     const pick = (...keys: string[]): string => pickFrom(input, ...keys);
-    /* Agent-initiated workflow kickoff. `start_dw` routes straight
-     * through the same slash pipeline a user types, so plan / budget
-     * approval gates still apply — the agent starts the workflow but
-     * can't bypass the user's go-ahead. */
-    if (name === 'mcp__app__start_dw') {
-      const session = sessionsState.list.find((s) => s.id === _sessionId);
-      const prompt = str('prompt').trim();
-      if (session && prompt) {
-        void handleSlashCommand(`/dw ${prompt}`, session);
-      } else if (session) {
-        /* Sidecar already acked "Starting…" to the agent, so a silent
-         * no-op here would lie. Surface why nothing happened. */
-        appendSessionMessage(session.id, {
-          role: 'system',
-          content: `_start_dw ignored — empty prompt._`,
-          at: new Date().toISOString(),
-        });
-      }
-      return;
-    }
-    /* Live DW build (Phase 2a) — the agent constructs the workflow via
-     * these tools; each invoke mutates Rust state + emits dw:created /
-     * dw:updated / dw:workflow_started, which the global listeners below
-     * fold into dwState so the card grows live. */
-    if (name === 'mcp__app__dw_set_task') {
-      void invoke('dw_set_task', { workflowId: str('workflow_id'), task: str('task') });
-      return;
-    }
-    if (name === 'mcp__app__dw_add_subagent') {
-      void invoke('dw_add_subagent', { workflowId: str('workflow_id'), prompt: str('prompt') });
-      return;
-    }
-    if (name === 'mcp__app__dw_launch') {
-      const vp = str('verifier_prompt');
-      void invoke('dw_launch', { workflowId: str('workflow_id'), verifierPrompt: vp || null });
-      return;
-    }
-    /* Live Ledger build — same shape as the DW build tools; each invoke
-     * mutates Rust state + emits ledger:created / ledger:updated which
-     * the global listeners fold into ledgerState. */
+    /* Live Ledger build — each invoke mutates Rust state + emits
+     * ledger:created / ledger:updated which the global listeners fold
+     * into ledgerState. */
     if (name === 'mcp__app__ledger_set_task') {
       void invoke('ledger_set_task', { workflowId: str('workflow_id'), task: str('task') });
       return;
@@ -3164,7 +2922,6 @@
           {onCardMouseDown}
           {isClickNotDrag}
           onSendToClaude={(item) => sendInboxItemToAgent({ kind: 'github', item })}
-          onFixWithDw={(item) => sendInboxItemToWorkflow({ kind: 'github', item })}
         />
       {/if}
 
@@ -3185,7 +2942,6 @@
           {isClickNotDrag}
           {refreshAllJiraInboxes}
           onSendToClaude={(item) => sendInboxItemToAgent({ kind: 'jira', item })}
-          onFixWithDw={(item) => sendInboxItemToWorkflow({ kind: 'jira', item })}
         />
       {/if}
 
@@ -3203,7 +2959,6 @@
           {onCardMouseDown}
           {isClickNotDrag}
           onSendToClaude={(item) => sendInboxItemToAgent({ kind: 'sentry', item })}
-          onFixWithDw={(item) => sendInboxItemToWorkflow({ kind: 'sentry', item })}
         />
       {/if}
 
@@ -3286,7 +3041,6 @@
           onDragOver={(e) => onAgentDragOver(APP_INSTANCE_IDS.claude, e)}
           onDrop={(e) => onAgentDrop(APP_INSTANCE_IDS.claude, e)}
           onDragLeave={() => onAgentDragLeave(APP_INSTANCE_IDS.claude)}
-          onDwVerify={onDwVerify}
           onResumeAfterQuota={onResumeAfterQuota}
           onOpenFile={openChatFileInEditor}
         />
@@ -3317,7 +3071,6 @@
             onRemoveAction: dismissAction,
             onExecuteAction: executeAction,
             onOpenPrInWoom: openPrUrlInWoom,
-            onDwVerify,
             onResumeAfterQuota,
             /* Dock lives inside the editor already — resolve relatives
                the same way, but skip the view switch. */

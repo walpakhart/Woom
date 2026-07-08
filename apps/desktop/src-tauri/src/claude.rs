@@ -1425,8 +1425,8 @@ pub(crate) struct OneshotResponse {
 }
 
 /// One-shot non-interactive `claude -p --output-format json` invocation.
-/// Exposed `pub(crate)` so `dw.rs` can drive real planner / per-subagent
-/// / verifier turns through the same primitive `compact_session` uses.
+/// Exposed `pub(crate)` so callers like `ledger.rs` can drive per-item
+/// / grader turns through the same primitive `compact_session` uses.
 /// `Err` surfaces ClaudeRunError up to the caller; on success returns
 /// the JSON envelope's `result` text alongside whatever `usage` block
 /// the CLI emitted (may be `None`).

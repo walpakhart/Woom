@@ -10,9 +10,7 @@
   import Markdown from '$lib/components/ui/Markdown.svelte';
   import ClaudeActionCard from '$lib/components/agent/ClaudeActionCard.svelte';
   import QuestionCard from '$lib/components/agent/QuestionCard.svelte';
-  import DynamicWorkflowCard from '$lib/components/agent/DynamicWorkflowCard.svelte';
   import ResumePill from '$lib/components/agent/ResumePill.svelte';
-  import { activeWorkflowForSession, isWorkflowActive } from '$lib/state/dw.svelte';
   import { activeLedgerForSession, isLedgerActive } from '$lib/state/ledger.svelte';
   import LedgerCard from '$lib/components/agent/LedgerCard.svelte';
   import CardContextMenu, { type MenuItem } from '$lib/views/apps/_shared/CardContextMenu.svelte';
@@ -47,7 +45,6 @@
      *  worktree / linked editor, so all we have to do here is plumb
      *  the path through. */
     onOpenFile?: (path: string) => void;
-    onDwVerify?: (workflowId: string) => void;
     /** Quota-resume click. Drains the session's
      *  pendingQueue[0] and fires `sendClaudeMessage`. Owned by the
      *  parent so ResumePill stays decoupled from the send-pipeline. */
@@ -546,17 +543,6 @@
          floating full-width below the conversation. Rendered once,
          under whichever message is `lastVisibleIndex`. -->
     {#snippet inlineActions()}
-      {#if activeWorkflowForSession(sess.id)}
-        {@const activeDw = activeWorkflowForSession(sess.id)}
-        {#if activeDw}
-          <!-- Active DW pinned to follow the conversation bottom.
-               Terminal workflows render at their origin message
-               instead. -->
-          <div class="action-wrap">
-            <DynamicWorkflowCard workflowId={activeDw.id} onVerify={() => p.onDwVerify?.(activeDw.id)} />
-          </div>
-        {/if}
-      {/if}
       {#if activeLedgerForSession(sess.id)}
         {@const activeLedger = activeLedgerForSession(sess.id)}
         {#if activeLedger}
@@ -662,11 +648,11 @@
             {#if i === lastVisibleIndex}{@render inlineActions()}{/if}
           </div>
         </article>
-      {:else if msg.role === 'assistant' && !(msg.dwWorkflowId && !msg.content?.trim() && !msg.thinking && isWorkflowActive(msg.dwWorkflowId)) && !(msg.ledgerWorkflowId && !msg.content?.trim() && !msg.thinking && isLedgerActive(msg.ledgerWorkflowId))}
-        <!-- Skip the empty DW-host bubble while its workflow is active:
-             the live card renders in the pinned slot, so this would
-             otherwise show as a blank "claude" byline. Once terminal it
-             renders here (the card's resting place). -->
+      {:else if msg.role === 'assistant' && !(msg.ledgerWorkflowId && !msg.content?.trim() && !msg.thinking && isLedgerActive(msg.ledgerWorkflowId))}
+        <!-- Skip the empty workflow-host bubble while its workflow is
+             active: the live card renders in the pinned slot, so this
+             would otherwise show as a blank "claude" byline. Once
+             terminal it renders here (the card's resting place). -->
         <article
           class="msg msg--assistant"
           class:msg--compact={p.compact}
@@ -703,13 +689,6 @@
                 <summary>✳ thought</summary>
                 <pre class="thinking-body">{msg.thinking}</pre>
               </details>
-            {/if}
-            {#if msg.dwWorkflowId && !isWorkflowActive(msg.dwWorkflowId)}
-              <!-- Terminal workflows stay as a record at their origin
-                   message. The ACTIVE one renders in the pinned
-                   bottom-following slot (inlineActions) so it stays
-                   visible instead of scrolling away. -->
-              <DynamicWorkflowCard workflowId={msg.dwWorkflowId} onVerify={() => p.onDwVerify?.(msg.dwWorkflowId!)} />
             {/if}
             {#if msg.ledgerWorkflowId && !isLedgerActive(msg.ledgerWorkflowId)}
               <LedgerCard workflowId={msg.ledgerWorkflowId} />

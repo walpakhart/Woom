@@ -139,12 +139,6 @@ export type ClaudeMessage = {
    *  on the LAST message; the field is per-message so multi-turn
    *  histories with one paused turn don't all show pills. */
   interrupted?: 'quota' | 'user' | 'crash';
-  /** When set, this assistant message hosts a Dynamic Workflow (Phase 4).
-   *  ChatThread renders `<DynamicWorkflowCard>` reading the workflow
-   *  from `dwState.workflows` by this id. The text content carries the
-   *  user's `/dw <prompt>` echo so the chat stays readable when the
-   *  card is collapsed / off-screen. */
-  dwWorkflowId?: string;
   /** When set, this assistant message hosts a Ledger workflow —
    *  ChatThread renders `<LedgerCard>` reading from `ledgerState`. */
   ledgerWorkflowId?: string;
@@ -504,63 +498,4 @@ export interface RepoInfo {
   missing: boolean;
 }
 
-/* Dynamic Workflows — Anthropic's
- * research-preview feature replicated locally. Planner emits a JSON
- * plan with up to 20 subagents; each runs in an isolated git worktree;
- * verifier synthesises the final answer. State lives in
- * `state/dw.svelte.ts`; the Rust side mirrors these shapes via serde. */
-
-export interface DwSubagent {
-  id: string;
-  prompt: string;
-  cwdStrategy: 'inherit' | 'subpath';
-  cwdSubpath?: string;
-  expectedArtifacts: string[];
-  status: 'queued' | 'streaming' | 'done' | 'failed' | 'cancelled';
-  claudeUuid?: string;
-  worktreePath?: string;
-  result?: string;
-  error?: string;
-  tokensIn: number;
-  tokensOut: number;
-  costUsd: number;
-  /** Unified diff the subagent produced in its worktree. Absent/empty for
-   *  research-only runs. Surfaced in the card with a per-subagent Apply. */
-  diff?: string;
-  /** True once the user applied this subagent's diff to the parent repo. */
-  applied?: boolean;
-}
-
-export interface DynamicWorkflow {
-  id: string;
-  sessionId: string;
-  userPrompt: string;
-  status:
-    | 'planning'
-    | 'building'
-    | 'awaiting_launch'
-    | 'awaiting_approval'
-    | 'running'
-    | 'awaiting_verify'
-    | 'verifying'
-    | 'paused_quota'
-    | 'done'
-    | 'failed'
-    | 'cancelled';
-  planRationale?: string;
-  subagents: DwSubagent[];
-  verifierPrompt?: string;
-  verifierResult?: string;
-  finalAnswer?: string;
-  budgetCapUsd: number;
-  totalCostUsd: number;
-  /** Account-wide quota util (%) this workflow's fan-out consumed (end −
-   *  start). Folded into the budget popover's per-session limits line so
-   *  DW burn isn't invisible there. Approximate (shared bucket). */
-  quotaDelta5h?: number;
-  quotaDelta7d?: number;
-  createdAt: number;
-  startedAt?: number;
-  completedAt?: number;
-}
 

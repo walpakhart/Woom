@@ -38,7 +38,6 @@
     onCardMouseDown: (e: MouseEvent) => void;
     isClickNotDrag: (e: MouseEvent) => boolean;
     onSendToClaude: (item: InboxItem) => void;
-    onFixWithDw: (item: InboxItem) => void;
   }
   let p: Props = $props();
 
@@ -61,9 +60,6 @@
   }
   function sendFocusedToClaude() {
     if (inboxState.focusItem) p.onSendToClaude(inboxState.focusItem);
-  }
-  function dwFocused() {
-    if (inboxState.focusItem) p.onFixWithDw(inboxState.focusItem);
   }
 </script>
 
@@ -95,7 +91,6 @@
             onCardMouseDown={p.onCardMouseDown}
             isClickNotDrag={p.isClickNotDrag}
             onSendToClaude={p.onSendToClaude}
-            onFixWithDw={p.onFixWithDw}
             onNavigate={close}
           />
         {/snippet}
@@ -111,7 +106,6 @@
           {#if focusItem}
             <button class="qsolo-act" onclick={() => focusItem && p.onOpenBrowser(focusItem.url)}>on GitHub ↗</button>
             <button class="qsolo-act qsolo-act--claude" onclick={sendFocusedToClaude}>→ claude</button>
-            <button class="qsolo-act" onclick={dwFocused}>/dw</button>
           {/if}
         {/snippet}
       </QuietSoloHeader>
@@ -167,7 +161,6 @@
         onCardMouseDown={p.onCardMouseDown}
         isClickNotDrag={p.isClickNotDrag}
         onSendToClaude={p.onSendToClaude}
-        onFixWithDw={p.onFixWithDw}
       />
     {/snippet}
     {#snippet end()}

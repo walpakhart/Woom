@@ -14,7 +14,6 @@
     formatTokens,
     sessionUsageTotals,
   } from '$lib/usage';
-  import { sessionDwTotals } from '$lib/state/dw.svelte';
 
   interface Props {
     session: ClaudeSession;
@@ -24,10 +23,7 @@
 
   const totals = $derived(sessionUsageTotals(session));
   const rtkSavings = $derived(estimateRtkSavings(session));
-  /* DW fan-out spend isn't on chat-message usage, so fold it into the
-   * grand total + show it as its own line. */
-  const dw = $derived(sessionDwTotals(session.id));
-  const grandCostUsd = $derived(totals.costUsd + dw.costUsd);
+  const grandCostUsd = $derived(totals.costUsd);
 
   /* Cost contribution per bucket. MUST cost each turn at the model it
    * actually ran on (`m.usage.model`), NOT the session's CURRENT model
@@ -80,10 +76,6 @@
       if (c5 !== null) prev5 = c5;
       if (c7 !== null) prev7 = c7;
     }
-    // Fold in DW fan-out quota burn — DW runs no chat turns, so its
-    // consumption isn't in the per-message stamps above.
-    d5 += dw.quota5h;
-    d7 += dw.quota7d;
     return { d5, d7, has: d5 > 0 || d7 > 0 };
   });
 
@@ -123,9 +115,6 @@
     lines.push(`totals,output,${totals.output},${bucketCost('output').toFixed(6)}`);
     lines.push(`totals,cache_read,${totals.cacheRead},${bucketCost('cacheRead').toFixed(6)}`);
     lines.push(`totals,cache_creation,${totals.cacheCreation},${bucketCost('cacheCreation').toFixed(6)}`);
-    if (dw.runs > 0) {
-      lines.push(`dw,workflows,${dw.runs},${dw.costUsd.toFixed(6)}`);
-    }
     lines.push(`totals,total,${totals.input + totals.output},${grandCostUsd.toFixed(6)}`);
     if (rtkSavings.bashCalls >= 3) {
       lines.push(`rtk,saved,${rtkSavings.tokensSaved},${rtkSavings.usdSaved.toFixed(6)}`);
@@ -191,13 +180,6 @@
       <span class="bp-bucket-vals mono">{formatTokens(totals.cacheCreation)} · {formatCostUsd(bucketCost('cacheCreation'))}</span>
     </li>
   </ul>
-
-  {#if dw.runs > 0}
-    <div class="bp-dw">
-      <span class="bp-dw-label">Dynamic Workflows · {dw.runs}</span>
-      <span class="bp-dw-vals mono">{formatCostUsd(dw.costUsd)}</span>
-    </div>
-  {/if}
 
   {#if limitDelta.has}
     <div class="bp-limits" title="Approximate. Quota buckets are account-wide (shared with other sessions / clients) and the API exposes no absolute cap — this sums how much this session's turns pushed each rolling limit up. First turn has no baseline, so it under-reports.">
@@ -307,17 +289,6 @@
   }
   .bp-limits-label { color: var(--text-mute); font-size: 12px; }
   .bp-limits-vals { color: var(--text-1); font-size: 11.5px; }
-  .bp-dw {
-    margin-top: 8px;
-    padding-top: 8px;
-    border-top: 1px solid var(--border);
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    gap: 8px;
-  }
-  .bp-dw-label { color: var(--text-mute); font-size: 12px; }
-  .bp-dw-vals { color: var(--text-1); font-size: 11.5px; }
   .bp-rtk {
     margin-top: 10px;
     padding: 7px 9px;

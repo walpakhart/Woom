@@ -16,7 +16,6 @@
   import { bgTasksState } from '$lib/state/bgTasks.svelte';
   import { quotaState } from '$lib/state/quota.svelte';
   import { sessionUsageTotals, contextWindowFor, formatCostUsd, formatTokens } from '$lib/usage';
-  import { sessionDwTotals } from '$lib/state/dw.svelte';
   import { claudeModels, claudeEffort } from './composerHelpers';
   import ModelEngine from './ModelEngine.svelte';
   import BudgetPopover from '$lib/components/agent/BudgetPopover.svelte';
@@ -120,8 +119,7 @@
 
   /* ---------- Budget ---------- */
   const totals = $derived(sess ? sessionUsageTotals(sess) : null);
-  const dw = $derived(sess ? sessionDwTotals(sess.id) : { costUsd: 0, runs: 0 });
-  const grandCost = $derived((totals?.costUsd ?? 0) + dw.costUsd);
+  const grandCost = $derived((totals?.costUsd ?? 0));
   const ctxPct = $derived.by(() => {
     if (!sess) return 0;
     let size = 0;
@@ -283,11 +281,11 @@
             </button>
           {/if}
         </div>
-        <div class="cd-hint">launch: <span class="mono">/dw</span> · <span class="mono">/ledger</span> — type in the field</div>
+        <div class="cd-hint">launch: <span class="mono">/ledger</span> — type in the field</div>
       </section>
 
       <!-- 4 · Budget -->
-      {#if totals && (totals.turns > 0 || dw.runs > 0)}
+      {#if totals && totals.turns > 0}
         <section class="cd-sec">
           <div class="cd-label-row"><span class="cd-label">Budget</span><span class="hatch"></span></div>
           <div class="cd-budget-tot mono">{totals.turns} turns · {formatCostUsd(grandCost)} · {formatTokens(totals.input + totals.output)} tok</div>

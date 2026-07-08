@@ -58,7 +58,6 @@
     onDrop?: (e: DragEvent) => void;
     onDragLeave?: (e: DragEvent) => void;
     onOpenFile?: (path: string) => void;
-    onDwVerify?: (workflowId: string) => void;
     onResumeAfterQuota?: (sessionId: string) => void;
   }
   let p: Props = $props();
@@ -135,7 +134,6 @@
         onStartEditMessage={p.onStartEditMessage}
         onResendMessage={p.onResendMessage}
         onOpenFile={p.onOpenFile}
-        onDwVerify={p.onDwVerify}
         onResumeAfterQuota={p.onResumeAfterQuota}
       />
     {/key}
