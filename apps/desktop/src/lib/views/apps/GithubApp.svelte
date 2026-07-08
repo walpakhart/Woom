@@ -217,8 +217,18 @@
   .sg-shell--quiet { display: block; overflow-y: auto; padding: 18px 40px 40px; }
   .qsolo-doc { width: 100%; max-width: 800px; margin: 0 auto; display: flex; flex-direction: column; }
   .qsolo-pane { display: flex; min-height: 0; }
-  .qsolo-pane > :global(.gfo) { flex: 1; min-width: 0; background: transparent; }
-  .qsolo-pane :global(.gfo-head) { display: none; }
+  /* GithubFocusOverlay root is `.ghd` (not `.gfo`) — target the real
+     classes so Quiet renders a FLUSH document (mockup 4f): no nested
+     panel fill, no duplicate 52px header (the qsolo header already owns
+     lead + actions), and an action bar flush on the sheet — not a
+     backdrop-blurred band. */
+  .qsolo-pane > :global(.ghd) { flex: 1; min-width: 0; background: transparent; }
+  .qsolo-pane :global(.ghd-panel) { background: transparent; overflow: visible; }
+  .qsolo-pane :global(.ghd-head) { display: none; }
+  .qsolo-pane :global(.ghd-actions) {
+    background: transparent; backdrop-filter: none;
+    border-top: 0; padding-left: 0; padding-right: 0;
+  }
 
   .qsolo-key { font-size: 12px; font-weight: 600; color: var(--src-github); }
   .qsolo-sub { font-size: 11px; color: var(--text-mute); }

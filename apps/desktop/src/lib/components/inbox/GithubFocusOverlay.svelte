@@ -791,12 +791,14 @@
   }
 
   /* Action bar --------------------------------------------------------- */
+  /* Flush on the sheet (mockup 4e) — the footer is pinned, nothing
+     scrolls under it, so the old --backdrop blur just read as an odd
+     lighter band. Match the document bg + a hairline separator. */
   .ghd-actions {
     display: flex; align-items: center; gap: 8px;
     padding: 12px 24px;
-    border-top: 1px solid var(--border-neutral);
-    background: var(--backdrop);
-    backdrop-filter: blur(12px);
+    border-top: 1px solid var(--border-lo);
+    background: var(--bg-0);
   }
   .ghd-act {
     display: inline-flex; align-items: center; gap: 5px;

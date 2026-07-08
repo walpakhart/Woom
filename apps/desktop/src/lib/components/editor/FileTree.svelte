@@ -4,7 +4,6 @@
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import { setDragPayload } from '$lib/state/drag.svelte';
   import { attachDragChip } from '$lib/dragImage';
-  import { iconFor } from '$lib/components/editor/fileIcons';
   import { foldStatus } from '$lib/components/editor/gitDecorations';
 
   interface Entry { name: string; path: string; is_dir: boolean; size: number; }
@@ -472,13 +471,8 @@
   {#if loading}<div class="etree-state">Loading…</div>{/if}
   {#if error}<div class="etree-state etree-error">{error}</div>{/if}
   {#snippet createRow(depth: number)}
-    {@const cIcon = iconFor(creating?.draft || (creating?.isDir ? 'folder' : 'file'), creating?.isDir ?? false, true)}
     <div class="etree-row etree-creating" style="padding-left: {8 + depth * 12}px">
       <span class="etree-chevron"><span class="etree-chevron-pad"></span></span>
-      <svg class="etree-icon" viewBox="0 0 24 24" aria-hidden="true">
-        <path d={cIcon.d}/>
-        {#if cIcon.d2}<path d={cIcon.d2}/>{/if}
-      </svg>
       <!-- svelte-ignore a11y_autofocus -->
       <input
         class="etree-rename mono"
@@ -536,14 +530,6 @@
           <span class="etree-chevron-pad"></span>
         {/if}
       </span>
-      {#snippet typeIcon()}
-        {@const icon = iconFor(it.name, it.is_dir, it.expanded)}
-        <svg class="etree-icon" viewBox="0 0 24 24" aria-hidden="true">
-          <path d={icon.d}/>
-          {#if icon.d2}<path d={icon.d2}/>{/if}
-        </svg>
-      {/snippet}
-      {@render typeIcon()}
       {#if renaming && renaming.path === it.path}
         <!-- Inline rename input — replaces the name label until the
              user commits (Enter) or cancels (Esc / blur). -->
@@ -643,22 +629,8 @@
     transition: transform var(--dur-base) var(--ease-spring);
   }
   .etree-chevron-pad { width: 11px; height: 11px; }
-  /* Type icon — drawn from `fileIcons.ts` SVG paths. Stroke-only,
-     inherits row colour so dimmed / ignored rows fade with their label. */
-  .etree-icon {
-    width: 14px; height: 14px;
-    flex-shrink: 0;
-    fill: none;
-    stroke: currentColor;
-    stroke-width: 1.5;
-    stroke-linecap: round;
-    stroke-linejoin: round;
-    color: var(--text-2);
-    opacity: 0.85;
-  }
-  .etree-row.dir .etree-icon { color: var(--text-1); opacity: 1; }
-  .etree-row.selected .etree-icon { color: var(--accent-bright); }
-  .etree-row.ignored .etree-icon { color: var(--text-mute); opacity: 0.55; }
+  /* Mockup 4i / 4j tree is icon-less: chevron for dirs, text + a
+     trailing git badge. No per-file type glyphs. */
   .etree-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
   /* Git status — bare mono letter, right-aligned, warn/ok tinted. */
   .etree-git {
