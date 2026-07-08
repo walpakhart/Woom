@@ -18,7 +18,7 @@ import { notify } from '$lib/state/toaster.svelte';
 import { isImagePath } from '$lib/format';
 import { contextWindowFor } from '$lib/usage';
 import { quotaState } from '$lib/state/quota.svelte';
-import { buildContinuationRecap } from '$lib/services/sessionCwd';
+import { buildContinuationRecap, resolveSessionCwd } from '$lib/services/sessionCwd';
 import {
   applyOpsToSession,
   drainStreamQueue,
@@ -611,10 +611,29 @@ export function newClaudeSession(
   const n = sessionsState.list.length + 1;
   const title = opts.title ?? `Chat ${n}`;
   const agentInstanceId = opts.agentInstanceId ?? null;
+  // When the caller doesn't specify a cwd (undefined), inherit the
+  // currently-active session's RESOLVED cwd for this instance so a fresh
+  // unlinked chat already runs in — and its header already shows — the
+  // folder the previous chat was using. An explicit null/string is
+  // honored verbatim (linked-chat callers rely on passing null).
+  let inheritedCwd: string | null = opts.cwd ?? null;
+  if (opts.cwd === undefined) {
+    const lastAt = (s: ClaudeSession) => {
+      const at = s.messages[s.messages.length - 1]?.at;
+      return at ? new Date(at).getTime() : 0;
+    };
+    const prior =
+      (agentInstanceId ? activeSessionInInstance(agentInstanceId) : null) ??
+      [...sessionsState.list]
+        .filter((s) => !s.archived)
+        .sort((a, b) => lastAt(b) - lastAt(a))[0] ??
+      null;
+    inheritedCwd = resolveSessionCwd(prior);
+  }
   sessionsState.list = [
     {
       id, title, mentions: [], messages: [], input: '', sending: false,
-      cwd: opts.cwd ?? null,
+      cwd: inheritedCwd,
       worktreePath: null, worktreeBranch: null, worktreeRepo: null,
       actions: [],
       claudeUuid: genUuid(),

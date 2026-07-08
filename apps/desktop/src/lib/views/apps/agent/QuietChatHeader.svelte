@@ -6,6 +6,7 @@
      the turns/spend chip → BudgetPopover, a dotted meta line, and a
      "context ▾" chip that toggles the context popover. */
   import { sessionsState, updateSession, setActiveSessionInInstance, newClaudeSession, deleteClaudeSession, restoreClaudeSession } from '$lib/state/sessions.svelte';
+  import { resolveSessionCwd } from '$lib/services/sessionCwd';
   import { notify } from '$lib/state/toaster.svelte';
   import { sessionUsageTotals, formatTokens, formatCostUsd } from '$lib/usage';
   import BudgetPopover from '$lib/components/agent/BudgetPopover.svelte';
@@ -56,7 +57,7 @@
   });
 
   const repoLabel = $derived.by(() => {
-    const cwd = sess?.worktreePath ?? sess?.cwd ?? null;
+    const cwd = resolveSessionCwd(sess);
     if (!cwd) return '';
     return cwd.split('/').filter(Boolean).pop() ?? '';
   });
@@ -320,7 +321,9 @@
     background: var(--bg-1); border: 1px solid var(--border-hi);
     border-radius: 12px; box-shadow: var(--shadow-3);
     display: flex; flex-direction: column; gap: 1px;
+    scrollbar-width: none; -ms-overflow-style: none;
   }
+  .qh-switch-pop::-webkit-scrollbar { display: none; }
   .qh-switch-item {
     display: flex; align-items: center; gap: 8px;
     padding: 8px 10px; border-radius: 8px;

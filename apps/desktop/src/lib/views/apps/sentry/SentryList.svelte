@@ -444,6 +444,10 @@
   @keyframes snl-spin { to { transform: rotate(360deg); } }
   .lp-ghostbtn:disabled { opacity: 0.5; cursor: not-allowed; }
   .lp-chip:disabled { opacity: 0.45; cursor: not-allowed; }
+  /* Hide the scroll bar on the issue list (scoped to this component's
+     .lp-list so canvas/terminal list panes keep theirs). */
+  .lp-list { scrollbar-width: none; -ms-overflow-style: none; }
+  .lp-list::-webkit-scrollbar { display: none; }
 
   /* Search field — §2.4: h30 r8, bg-0 (light bg-2), border --border,
      text 12 faint. Kept identical to Github/Jira lists for consistency. */

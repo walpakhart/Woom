@@ -582,6 +582,10 @@
   .lp-add:disabled { opacity: 0.5; cursor: not-allowed; }
   .lp-ghostbtn:disabled { opacity: 0.5; cursor: not-allowed; }
   .lp-chip:disabled { opacity: 0.45; cursor: not-allowed; }
+  /* Hide the scroll bar on the ticket list (scoped to this component's
+     .lp-list so canvas/terminal list panes keep theirs). */
+  .lp-list { scrollbar-width: none; -ms-overflow-style: none; }
+  .lp-list::-webkit-scrollbar { display: none; }
 
   /* Search field — §2.4: h30 r8, bg-0 (light bg-2), border --border,
      text 12 faint. Wrapper keeps the magnifier + clear + picker anchor. */

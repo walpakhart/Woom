@@ -4,6 +4,7 @@
      Right: spend chip (→ BudgetPopover) + Context toggle. The project-
      memory chip and the `linked:` label moved to the ContextDock. */
   import { sessionsState, updateSession } from '$lib/state/sessions.svelte';
+  import { resolveSessionCwd } from '$lib/services/sessionCwd';
   import { sessionUsageTotals, formatTokens, formatCostUsd } from '$lib/usage';
   import BudgetPopover from '$lib/components/agent/BudgetPopover.svelte';
   import { tick } from 'svelte';
@@ -33,7 +34,7 @@
   /* Working folder — surfaced in the header so the session's cwd is
      visible at a glance (was Context-dock-only). Mirrors QuietChatHeader. */
   const repoLabel = $derived.by(() => {
-    const cwd = sess?.worktreePath ?? sess?.cwd ?? null;
+    const cwd = resolveSessionCwd(sess);
     if (!cwd) return '';
     return cwd.split('/').filter(Boolean).pop() ?? '';
   });
