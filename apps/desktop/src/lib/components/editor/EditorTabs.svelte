@@ -17,6 +17,7 @@
      38px chip-tab strip (active bg-3 + modified warn-dot) and a
      right-anchored cursor/lang readout (`1042:17 · svelte · lf`). */
   import { layoutState, addInstance, setActiveInstance, removeInstance } from '$lib/state/layout.svelte';
+  import { sessionsState } from '$lib/state/sessions.svelte';
 
   interface Props {
     tabs: string[];
@@ -111,6 +112,17 @@
     e.stopPropagation();
     removeInstance('editor', id);
   }
+  /** Open-folder label for an editor instance row: basename of its
+   *  repoPath, with "+N" when it holds multiple roots. Empty when no
+   *  folder is open. */
+  function folderFor(id: string): string {
+    const st = sessionsState.editorInstanceState[id];
+    if (!st) return '';
+    const paths = st.repoPaths?.length ? st.repoPaths : st.repoPath ? [st.repoPath] : [];
+    if (paths.length === 0) return '';
+    const base = paths[0].split('/').filter(Boolean).pop() ?? '';
+    return paths.length > 1 ? `${base} +${paths.length - 1}` : base;
+  }
   $effect(() => {
     if (!instOpen) return;
     const onDown = (e: MouseEvent) => {
@@ -181,6 +193,7 @@
                     aria-selected={inst.id === instanceId}
                   >
                     <span class="etab-inst-name">{inst.name}</span>
+                    {#if folderFor(inst.id)}<span class="etab-inst-sub mono">{folderFor(inst.id)}</span>{/if}
                     {#if !inst.primary}
                       <span
                         class="etab-inst-x"
@@ -370,7 +383,8 @@
   }
   .etab-inst-item:hover { background: var(--bg-hover); color: var(--text-0); }
   .etab-inst-item.active { background: var(--bg-3); color: var(--text-0); box-shadow: var(--shadow-1); }
-  .etab-inst-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .etab-inst-name { flex: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .etab-inst-sub { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10.5px; color: var(--text-mute); }
   .etab-inst-x {
     flex: none; display: inline-flex; align-items: center; justify-content: center;
     width: 18px; height: 18px; border-radius: 5px;
