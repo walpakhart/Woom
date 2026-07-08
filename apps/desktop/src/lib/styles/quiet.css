@@ -37,11 +37,12 @@
 :root[data-layout='quiet'] .msg--user .msg-body {
   margin-left: 0;
   max-width: 100%;
-  background: transparent;
+  background: var(--accent-soft);
   border: 0;
-  border-left: 2px solid var(--border-hi);
-  border-radius: 0;
-  padding: 2px 0 2px 16px;
+  border-left: 2px solid var(--accent);
+  border-radius: 0 8px 8px 0;
+  padding: 8px 14px 8px 16px;
+  color: var(--text-0);
 }
 
 /* Terminal / Canvas grids reserved a 264 track for the (now hidden)

@@ -179,9 +179,10 @@
   --scrollbar-hover: rgba(46, 42, 30, 0.3);
   --desk: #E2DACB;
 
-  /* Typography — Geist for UI + prose, Geist Mono for paths / commits /
-     metrics / code / PTY (redesign v2; was single IBM Plex Mono). */
-  --font-ui:   'Geist', -apple-system, 'Helvetica Neue', sans-serif;
+  /* Typography — Avenir Next (macOS system, humanist) for UI + prose;
+     Geist Mono for paths / commits / metrics / code / PTY. Geist kept in
+     the fallback stack so non-macOS still gets the redesign grotesk. */
+  --font-ui:   'Avenir Next', 'Avenir', 'Geist', -apple-system, 'Helvetica Neue', sans-serif;
   --font-mono: 'Geist Mono', ui-monospace, Menlo, monospace;
 
   /* Radii — chip 5 · btn 6 · item 7 · card 9 · panel 10 · input 11. */

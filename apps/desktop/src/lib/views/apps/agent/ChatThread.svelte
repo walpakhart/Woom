@@ -1038,12 +1038,12 @@
     margin-left: auto;
     max-width: 78%;
     padding: 12px 16px;
-    background: var(--bg-3);
-    border: 1px solid var(--border-lo);
+    background: var(--accent-soft);
+    border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
     border-radius: 12px;
     font-size: 13.5px;
     line-height: 1.6;
-    color: var(--text-2);
+    color: var(--text-0);
   }
 
   /* Hover actions sit BELOW the bubble (not over it) — small, naked
