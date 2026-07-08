@@ -1384,6 +1384,7 @@
             crumbDir={crumbDir}
             repoLabel={rootLabel}
             {instanceLabel}
+            {instanceId}
             gitCount={gitChangedCount}
             onSwitch={(p) => void switchTab(p)}
             onClose={(p, e) => void closeTab(p, e)}

@@ -8,9 +8,16 @@
      The tabbar element ref is bound back out to the parent so its
      "scroll active tab into view" effect can keep working.
 
+     Quiet §3.4 — the breadcrumb's `{instance} · {repo}` readout doubles
+     as the editor instance SWITCHER (parity with the canvas in-toolbar
+     `.cv-qsw` and terminal solos). It lives in the bar itself so it
+     never floats over / collides with the breadcrumb chrome.
+
      Rebuilt to mockup 4i / README §2.7 with fresh `.etab-` markup:
      38px chip-tab strip (active bg-3 + modified warn-dot) and a
      right-anchored cursor/lang readout (`1042:17 · svelte · lf`). */
+  import { layoutState, addInstance, setActiveInstance } from '$lib/state/layout.svelte';
+
   interface Props {
     tabs: string[];
     activePath: string;
@@ -40,6 +47,10 @@
     crumbDir?: string;
     repoLabel?: string;
     instanceLabel?: string;
+    /** Active editor instance id — drives the Quiet breadcrumb's
+     *  instance switcher (active-row highlight + which row we swap away
+     *  from on pick). Threaded down EditorApp → EditorView → here. */
+    instanceId?: string;
     gitCount?: number;
     reviewCount?: number;
   }
@@ -61,6 +72,7 @@
     crumbDir = '',
     repoLabel = '',
     instanceLabel = '',
+    instanceId = '',
     gitCount = 0,
     reviewCount = 0,
   }: Props = $props();
@@ -77,6 +89,30 @@
       const t = e.target as HTMLElement | null;
       if (t?.closest?.('.etab-crumb-wrap')) return;
       crumbOpen = false;
+    };
+    window.addEventListener('mousedown', onDown, true);
+    return () => window.removeEventListener('mousedown', onDown, true);
+  });
+
+  /* Editor-instance switcher for the Quiet breadcrumb's right-hand
+     `{instance}` readout — same open-on-click / close-on-pick /
+     close-on-outside-click rhythm as the file-switcher crumb above. */
+  const editorInstances = $derived(layoutState.instances.editor);
+  let instOpen = $state(false);
+  function pickInstance(id: string) {
+    setActiveInstance('editor', id);
+    instOpen = false;
+  }
+  function newInstance() {
+    addInstance('editor');
+    instOpen = false;
+  }
+  $effect(() => {
+    if (!instOpen) return;
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t?.closest?.('.etab-inst-wrap')) return;
+      instOpen = false;
     };
     window.addEventListener('mousedown', onDown, true);
     return () => window.removeEventListener('mousedown', onDown, true);
@@ -117,7 +153,40 @@
         {#if dirtyByPath[activePath] && !diffTarget}<span class="etab-crumb-mod">● изменён</span>{/if}
         {#if gitCount > 0}<span>git · {gitCount}</span>{/if}
         {#if reviewCount > 0}<span>review · {reviewCount}</span>{/if}
-        <span class="etab-crumb-loc">{#if instanceLabel}{instanceLabel} · {/if}{repoLabel}</span>
+        <span class="etab-crumb-loc">
+          <span class="etab-inst-wrap">
+            <button
+              class="etab-inst-trigger"
+              class:open={instOpen}
+              onclick={() => (instOpen = !instOpen)}
+              aria-haspopup="listbox"
+              aria-expanded={instOpen}
+              aria-label="Switch editor instance"
+            >
+              {instanceLabel || 'Editor'}
+              <span class="etab-inst-caret" aria-hidden="true">▾</span>
+            </button>
+            {#if instOpen}
+              <div class="etab-inst-pop" role="listbox" aria-label="Editors">
+                {#each editorInstances as inst (inst.id)}
+                  <button
+                    class="etab-inst-item"
+                    class:active={inst.id === instanceId}
+                    onclick={() => pickInstance(inst.id)}
+                    role="option"
+                    aria-selected={inst.id === instanceId}
+                  >
+                    <span class="etab-inst-name">{inst.name}</span>
+                  </button>
+                {/each}
+                <button class="etab-inst-add" onclick={newInstance} aria-label="New editor">
+                  + New editor
+                </button>
+              </div>
+            {/if}
+          </span>
+          {#if repoLabel} · {repoLabel}{/if}
+        </span>
       </div>
     {:else}
       <div class="etab-empty">Pick a file in the tree to open it here.</div>
@@ -256,6 +325,42 @@
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   .etab-crumb-empty { padding: 8px 10px; font-size: 12px; color: var(--text-mute); }
+  /* Quiet §3.4 — instance switcher living inside the right-hand
+     `{instance} · {repo}` readout. Trigger is the bare instance name +
+     a ▾ caret; popover mirrors the `.etab-crumb-pop` file switcher and
+     the canvas `.cv-qsw` styling. Sits above the editor content. */
+  .etab-inst-wrap { position: relative; display: inline-flex; }
+  .etab-inst-trigger {
+    display: inline-flex; align-items: center; gap: 3px;
+    padding: 0; background: transparent; border: 0; cursor: pointer;
+    font: inherit; color: inherit;
+  }
+  .etab-inst-caret { font-size: 9px; color: var(--text-faint); }
+  .etab-inst-trigger:hover, .etab-inst-trigger.open { color: var(--accent-bright); }
+  .etab-inst-trigger:hover .etab-inst-caret, .etab-inst-trigger.open .etab-inst-caret { color: var(--accent-bright); }
+  .etab-inst-pop {
+    position: absolute; top: calc(100% + 6px); right: 0; z-index: 200;
+    min-width: 200px; max-height: 340px; overflow-y: auto; padding: 4px;
+    background: var(--bg-1); border: 1px solid var(--border-hi);
+    border-radius: 10px; box-shadow: var(--shadow-3);
+    display: flex; flex-direction: column; gap: 1px;
+    text-align: left;
+  }
+  .etab-inst-item {
+    display: flex; align-items: center; gap: 8px;
+    padding: 7px 10px; border-radius: 7px;
+    background: transparent; border: 0; cursor: pointer; text-align: left;
+    color: var(--text-1); font-size: 12px;
+  }
+  .etab-inst-item:hover { background: var(--bg-hover); color: var(--text-0); }
+  .etab-inst-item.active { background: var(--bg-3); color: var(--text-0); box-shadow: var(--shadow-1); }
+  .etab-inst-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .etab-inst-add {
+    margin-top: 2px; padding: 7px 10px; border-radius: 7px;
+    background: transparent; border: 0; cursor: pointer; text-align: left;
+    color: var(--text-2); font-size: 12px;
+  }
+  .etab-inst-add:hover { background: var(--bg-hover); color: var(--text-0); }
   .etab-tabs {
     display: flex; align-items: center; gap: 3px;
     flex: 1 1 auto; min-width: 0;

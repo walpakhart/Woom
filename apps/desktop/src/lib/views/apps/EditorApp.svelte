@@ -396,12 +396,14 @@
     height: 100%;
     display: flex;
     min-height: 0;
+    position: relative;
   }
   .qeditor :global(.ev) {
     flex: 1;
     min-height: 0;
     width: 100%;
   }
+
   /* Splitter snippets render bare into the panes — let them stretch
      to fill the available pixels in each side of the splitter. */
   .se-shell :global(.s-start),

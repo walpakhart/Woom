@@ -57,7 +57,7 @@
   import { applyLayout, type LayoutAlgorithm } from '$lib/services/canvasLayout';
   import { dragState, setDragPayload, type DragPayload } from '$lib/state/drag.svelte';
   import { sessionsState } from '$lib/state/sessions.svelte';
-  import { layoutState } from '$lib/state/layout.svelte';
+  import { layoutState, addInstance, setActiveInstance } from '$lib/state/layout.svelte';
   import {
     canvasState,
     ensureCanvasLoaded,
@@ -98,9 +98,14 @@
     instanceId: string;
     /** Forwarded to live-card shapes — see CanvasShape's `onCardOpen`. */
     onCardOpen?: (shape: Shape) => void;
+    /** Quiet-mode flag. When set, the toolbar grows a leading
+     *  name/switcher segment (canvas documents + canvas panes) so the
+     *  Quiet solo doesn't need CanvasApp's floating `.qsolo-float`
+     *  overlay — which otherwise collides with these very tools. */
+    quiet?: boolean;
   }
 
-  let { instanceId, onCardOpen }: Props = $props();
+  let { instanceId, onCardOpen, quiet = false }: Props = $props();
 
   const instState = $derived(canvasState.byInstance[instanceId]);
   const activeCanvasId = $derived(instState?.activeId ?? null);
@@ -143,6 +148,56 @@
     camZoom = 1;
     pushViewport();
   }
+
+  /* ---- Quiet toolbar switcher (§3.4) ----
+     In Quiet there's no list column and no icon rail, so the canvas
+     name/switcher lives as a leading segment INSIDE `.cv-toolbar`
+     (never floating over the tools). It exposes two axes:
+       • DOCUMENTS — the open canvases (tabs) of THIS instance.
+       • PANES — the canvas instances themselves (setActiveInstance).
+     Two distinct "+" actions: "New canvas" (document) and
+     "New canvas pane" (instance). Only rendered when `quiet`. */
+  let paneSwitchOpen = $state(false);
+  const paneInstanceLabel = $derived(
+    layoutState.instances.canvas.find((i) => i.id === instanceId)?.name ?? 'Canvas'
+  );
+  /** Title shown on the toolbar trigger — the active canvas document's
+   *  name, falling back to the pane label when nothing is open. */
+  const quietTitle = $derived(activeCanvas?.name ?? paneInstanceLabel);
+  const quietDocs = $derived.by(() => {
+    const ids = instState?.tabs ?? [];
+    return ids.map((id) => {
+      const c = canvasState.open[id];
+      return { id, name: c?.name ?? 'Untitled', shapes: c?.shapes.length ?? 0 };
+    });
+  });
+  const quietPanes = $derived(layoutState.instances.canvas);
+  function pickQuietDoc(id: string) {
+    setActiveCanvasTab(instanceId, id);
+    paneSwitchOpen = false;
+  }
+  function pickQuietPane(id: string) {
+    setActiveInstance('canvas', id);
+    paneSwitchOpen = false;
+  }
+  function newQuietDoc() {
+    createAndOpenInInstance(instanceId);
+    paneSwitchOpen = false;
+  }
+  function newQuietPane() {
+    addInstance('canvas');
+    paneSwitchOpen = false;
+  }
+  $effect(() => {
+    if (!paneSwitchOpen) return;
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t?.closest?.('.cv-qsw')) return;
+      paneSwitchOpen = false;
+    };
+    window.addEventListener('mousedown', onDown, true);
+    return () => window.removeEventListener('mousedown', onDown, true);
+  });
 
   // ---- Camera (local mirror of viewport) -------------------------------
 
@@ -1604,7 +1659,71 @@
         <span class="cv-tool-glyph cv-tool-glyph--mmd">mmd</span>
       {/if}
     {/snippet}
-    <header class="cv-toolbar">
+    <header class="cv-toolbar" class:cv-toolbar--quiet={quiet}>
+      {#if quiet}
+        <!-- Quiet §3.4 — canvas name + switcher lives INSIDE the toolbar
+             (leading segment) so it never floats over the tool glyphs.
+             Lists documents + panes; two distinct "+" actions. -->
+        <div class="cv-qsw">
+          <button
+            class="cv-qsw-title"
+            class:open={paneSwitchOpen}
+            onclick={() => (paneSwitchOpen = !paneSwitchOpen)}
+            aria-expanded={paneSwitchOpen}
+            aria-label="Switch canvas"
+          >
+            {quietTitle} <span class="cv-qsw-caret" aria-hidden="true">▾</span>
+          </button>
+          {#if paneSwitchOpen}
+            <div class="cv-qsw-pop" role="listbox" aria-label="Canvases">
+              {#each quietDocs as c (c.id)}
+                <button
+                  class="cv-qsw-item"
+                  class:active={c.id === activeCanvasId}
+                  onclick={() => pickQuietDoc(c.id)}
+                  role="option"
+                  aria-selected={c.id === activeCanvasId}
+                >
+                  <span class="cv-qsw-name">{c.name}</span>
+                  <span class="cv-qsw-sub mono">{c.shapes}</span>
+                  {#if quietDocs.length > 1}
+                    <span
+                      class="cv-qsw-x"
+                      role="button"
+                      tabindex="-1"
+                      aria-label="Close {c.name}"
+                      onclick={(e) => onCloseTab(e, c.id)}
+                      onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onCloseTab(e as unknown as MouseEvent, c.id); } }}
+                    >
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="6" y1="18" x2="18" y2="6"/></svg>
+                    </span>
+                  {/if}
+                </button>
+              {/each}
+              <button class="cv-qsw-add" onclick={newQuietDoc} aria-label="New canvas">
+                + New canvas
+              </button>
+              <div class="cv-qsw-group" role="presentation">Panes</div>
+              {#each quietPanes as pane (pane.id)}
+                <button
+                  class="cv-qsw-item"
+                  class:active={pane.id === instanceId}
+                  onclick={() => pickQuietPane(pane.id)}
+                  role="option"
+                  aria-selected={pane.id === instanceId}
+                >
+                  <span class="cv-qsw-name">{pane.name}</span>
+                  <span class="cv-qsw-sub mono">pane</span>
+                </button>
+              {/each}
+              <button class="cv-qsw-add" onclick={newQuietPane} aria-label="New canvas pane">
+                + New canvas pane
+              </button>
+            </div>
+          {/if}
+        </div>
+        <span class="cv-tb-sep" aria-hidden="true"></span>
+      {/if}
       <div class="cv-tool-seg">
         {#each toolbarTools as t (t.id)}
           <button
@@ -2086,6 +2205,56 @@
     font-variant-numeric: tabular-nums;
   }
   .cv-zoom:hover { color: var(--text-0); background: var(--bg-2); border-color: var(--border); }
+
+  /* Quiet §3.4 — canvas name/switcher, in-toolbar (no float, no overlap). */
+  .cv-toolbar--quiet { padding-left: 96px; }
+  .cv-qsw { position: relative; flex: none; }
+  .cv-qsw-title {
+    background: transparent; border: 0; cursor: pointer;
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 14px; font-weight: 600; color: var(--text-0);
+    letter-spacing: -0.01em; max-width: 200px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .cv-qsw-caret { font-size: 10px; color: var(--text-faint); flex: none; }
+  .cv-qsw-title:hover, .cv-qsw-title.open { color: var(--accent-bright); }
+  .cv-qsw-pop {
+    position: absolute; top: calc(100% + 8px); left: 0; z-index: 60;
+    min-width: 220px; max-height: 360px; overflow-y: auto; padding: 4px;
+    background: var(--bg-1); border: 1px solid var(--border-hi);
+    border-radius: 12px; box-shadow: var(--shadow-3);
+    display: flex; flex-direction: column; gap: 1px;
+  }
+  .cv-qsw-item {
+    display: flex; align-items: center; gap: 8px;
+    padding: 7px 10px; border-radius: 8px;
+    background: transparent; border: 0; cursor: pointer; text-align: left;
+    color: var(--text-1); font-size: 13px;
+  }
+  .cv-qsw-item:hover { background: var(--bg-hover); color: var(--text-0); }
+  .cv-qsw-item.active { background: var(--bg-3); color: var(--text-0); box-shadow: var(--shadow-1); }
+  .cv-qsw-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cv-qsw-sub { flex: none; font-size: 10.5px; color: var(--text-mute); }
+  .cv-qsw-x {
+    flex: none; width: 18px; height: 18px;
+    display: grid; place-items: center;
+    border-radius: 4px; color: var(--text-mute); cursor: pointer;
+    opacity: 0; transition: opacity 120ms, color 120ms, background 120ms;
+  }
+  .cv-qsw-x svg { width: 11px; height: 11px; }
+  .cv-qsw-item:hover .cv-qsw-x { opacity: 0.8; }
+  .cv-qsw-x:hover { opacity: 1; color: var(--err); background: var(--bg-3); }
+  .cv-qsw-group {
+    margin-top: 4px; padding: 5px 10px 2px;
+    font-size: 9.5px; font-weight: 700; letter-spacing: 0.10em;
+    text-transform: uppercase; color: var(--text-mute);
+  }
+  .cv-qsw-add {
+    margin-top: 2px; padding: 7px 10px; border-radius: 8px;
+    background: transparent; border: 0; cursor: pointer; text-align: left;
+    color: var(--text-2); font-size: 12px;
+  }
+  .cv-qsw-add:hover { background: var(--bg-hover); color: var(--text-0); }
 
   .canvas-status {
     flex-shrink: 0;
