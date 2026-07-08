@@ -2207,7 +2207,7 @@
   .cv-zoom:hover { color: var(--text-0); background: var(--bg-2); border-color: var(--border); }
 
   /* Quiet §3.4 — canvas name/switcher, in-toolbar (no float, no overlap). */
-  .cv-toolbar--quiet { padding-left: 96px; }
+  .cv-toolbar--quiet { padding-left: 14px; }
   .cv-qsw { position: relative; flex: none; }
   .cv-qsw-title {
     background: transparent; border: 0; cursor: pointer;

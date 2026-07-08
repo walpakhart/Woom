@@ -16,7 +16,7 @@
      Rebuilt to mockup 4i / README §2.7 with fresh `.etab-` markup:
      38px chip-tab strip (active bg-3 + modified warn-dot) and a
      right-anchored cursor/lang readout (`1042:17 · svelte · lf`). */
-  import { layoutState, addInstance, setActiveInstance } from '$lib/state/layout.svelte';
+  import { layoutState, addInstance, setActiveInstance, removeInstance } from '$lib/state/layout.svelte';
 
   interface Props {
     tabs: string[];
@@ -107,6 +107,10 @@
     addInstance('editor');
     instOpen = false;
   }
+  function delInstance(id: string, e: MouseEvent) {
+    e.stopPropagation();
+    removeInstance('editor', id);
+  }
   $effect(() => {
     if (!instOpen) return;
     const onDown = (e: MouseEvent) => {
@@ -177,6 +181,18 @@
                     aria-selected={inst.id === instanceId}
                   >
                     <span class="etab-inst-name">{inst.name}</span>
+                    {#if !inst.primary}
+                      <span
+                        class="etab-inst-x"
+                        role="button"
+                        tabindex="-1"
+                        aria-label="Delete {inst.name}"
+                        onclick={(e) => delInstance(inst.id, e)}
+                        onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); delInstance(inst.id, e as unknown as MouseEvent); } }}
+                      >
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="6" y1="18" x2="18" y2="6"/></svg>
+                      </span>
+                    {/if}
                   </button>
                 {/each}
                 <button class="etab-inst-add" onclick={newInstance} aria-label="New editor">
@@ -355,6 +371,14 @@
   .etab-inst-item:hover { background: var(--bg-hover); color: var(--text-0); }
   .etab-inst-item.active { background: var(--bg-3); color: var(--text-0); box-shadow: var(--shadow-1); }
   .etab-inst-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .etab-inst-x {
+    flex: none; display: inline-flex; align-items: center; justify-content: center;
+    width: 18px; height: 18px; border-radius: 5px;
+    color: var(--text-faint); opacity: 0; cursor: pointer; transition: opacity 120ms, color 120ms, background 120ms;
+  }
+  .etab-inst-x svg { width: 11px; height: 11px; }
+  .etab-inst-item:hover .etab-inst-x { opacity: 0.8; }
+  .etab-inst-x:hover { opacity: 1; color: var(--err); background: var(--bg-3); }
   .etab-inst-add {
     margin-top: 2px; padding: 7px 10px; border-radius: 7px;
     background: transparent; border: 0; cursor: pointer; text-align: left;

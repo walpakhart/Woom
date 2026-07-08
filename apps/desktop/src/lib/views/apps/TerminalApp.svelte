@@ -453,7 +453,7 @@
      margin, which is declared LATER in source — otherwise the quiet PTY
      inset started at 14px and collided with the floating header. */
   .st-main.st-main--quiet { margin: 52px 40px 18px; }
-  .qsolo-float { position: absolute; top: 13px; left: 96px; z-index: 40; display: flex; align-items: baseline; gap: 10px; }
+  .qsolo-float { position: absolute; top: 13px; left: 14px; z-index: 40; display: flex; align-items: baseline; gap: 10px; }
   .qsolo-float-title {
     background: transparent; border: 0; cursor: pointer;
     display: inline-flex; align-items: center; gap: 5px;
