@@ -1166,7 +1166,7 @@
   }
 </script>
 
-<div class="ev">
+<div class="ev" class:ev--quiet={quiet}>
   {#if !repoPath}
     <section class="ev-empty">
       <div class="ev-empty-card">
@@ -1184,18 +1184,13 @@
           <div class="ev-left-head">
             <div class="ev-root-stack">
               <div class="ev-root-line">
-                <span class="ev-root-name" title={rootTitle}>{rootLabel}</span>
+                <!-- The folder name IS the switch-folder control — click
+                     it to open/replace the workspace root. Branch moved
+                     out of the explorer head to the git panel. -->
+                <button class="ev-root-name" onclick={pickFolder} title={`${rootTitle} — click to switch folder`}>{rootLabel}</button>
                 {#if instanceLabel}<span class="ev-root-instance">{instanceLabel}</span>{/if}
               </div>
-              {#if gitBranch}
-                <span class="ev-root-branch mono">wt <b>{gitBranch}</b></span>
-              {/if}
             </div>
-            <!-- Chat linking lives in the right-side AgentDock — the old
-                 tree-head chain button duplicated it and confused. -->
-            <button class="ev-icon-btn" onclick={pickFolder} title="Open another folder">
-              <svg class="i i-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 7v11a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-7L10 5H5a2 2 0 0 0-2 2z" /></svg>
-            </button>
           </div>
 
           <!-- Quiet "linked apps" row — only renders when something IS
@@ -1744,6 +1739,57 @@
 <style>
   .ev { position: relative; display: flex; height: 100%; min-height: 0; flex: 1; background: var(--bg-0); }
 
+  /* ── Quiet 4j — "код — центр сцены" ──────────────────────────────
+     Cabin fills a bordered two-pane shell; Quiet turns the same DOM
+     into a padded STAGE holding two floating cards — the explorer+git
+     aside and the code card — split by a 22px gutter. Structure copies
+     mockup 4j; every surface is a theme token so cream-light (paper)
+     and noir-dark both read the same shapes. */
+  .ev--quiet { padding: 22px 40px 16px; background: var(--bg-0); }
+
+  /* Divider → invisible 22px gutter. Resize still works (hit-target
+     kept) — the groove and its hover accent just disappear. */
+  .ev--quiet :global(.s-divider) { width: 22px; }
+  .ev--quiet :global(.s-divider::before),
+  .ev--quiet :global(.s-divider:hover::before),
+  .ev--quiet :global(.s-divider:focus-visible::before) { background: transparent; }
+
+  /* Explorer aside → floating card: bg-2 surface, full engraved border
+     on every side, rounded, offset-band shadow. Overrides the Cabin
+     right-only border. */
+  .ev--quiet .ev-left {
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: var(--shadow-1);
+    overflow: hidden;
+  }
+  /* Head → single baseline row `woom  Vermeer … wt <branch>`. The
+     folder-pick button is dropped (⌘P / the tree cover it in Quiet). */
+  .ev--quiet .ev-left-head { background: transparent; padding: 12px 14px 8px; }
+  .ev--quiet .ev-root-stack { flex-direction: row; align-items: baseline; gap: 8px; }
+  .ev--quiet .ev-root-line { flex: 0 1 auto; min-width: 0; }
+  /* Folder name is the anchor — never crush it to "e…". */
+  .ev--quiet .ev-root-name { flex: 0 1 auto; }
+  .ev--quiet .ev-root-instance { flex: 0 1 auto; }
+
+  /* Main column → breadcrumb / code card / status line on an 18px
+     vertical rhythm (mockup gap). */
+  .ev--quiet .ev-main { gap: 18px; }
+  /* Code card — rounded, bordered, engraved; clips CodeMirror's square
+     corners (its surface is already bg-2, so card + code are seamless).
+     The apply/compose popovers are position:fixed, so overflow:hidden
+     doesn't clip them. */
+  .ev--quiet .ev-editor-wrap {
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: var(--shadow-1);
+    overflow: hidden;
+  }
+  /* Status line → plain mono caption below the card, no bar chrome. */
+  .ev--quiet .ev-statusbar { background: transparent; padding: 0 2px; }
+
   /* Multi-root explorer — one collapsible group per workspace root. Only
      rendered when >1 root is open; single-root keeps the bare tree. */
   .ev-root-group { border-bottom: 1px solid var(--border-neutral); }
@@ -1862,24 +1908,21 @@
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     flex-shrink: 0;
   }
+  /* The repo name doubles as the switch-folder button — text button,
+     no chrome at rest, dotted-underline affordance on hover. */
   .ev-root-name {
     min-width: 0;
+    margin: 0; padding: 0; border: 0; background: transparent;
+    font: inherit;
     font-size: 13px; font-weight: 600;
     letter-spacing: -0.01em;
     color: var(--text-0);
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  }
-  .ev-icon-btn {
-    position: relative;
-    width: 26px; height: 26px; border-radius: 6px;
-    display: inline-flex; align-items: center; justify-content: center;
-    color: var(--text-2);
-    background: transparent;
-    border: 0;
     cursor: pointer;
-    transition: background 120ms, color 120ms;
+    text-align: left;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    border-bottom: 1px dotted transparent;
   }
-  .ev-icon-btn:hover { background: var(--bg-3); color: var(--text-0); }
+  .ev-root-name:hover { border-bottom-color: var(--border-hi, var(--border)); }
 
 
   /* "Linked apps" row — one quiet line under the head. Brand dot per
@@ -2366,10 +2409,4 @@
     border-radius: 6px;
     font-size: 12px;
   }
-  .ev-root-branch {
-    font-size: 10px; color: var(--text-mute);
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-    min-width: 0;
-  }
-  .ev-root-branch b { color: var(--src-editor); font-weight: 500; }
 </style>

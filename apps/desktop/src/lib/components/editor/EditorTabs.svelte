@@ -194,11 +194,11 @@
      {instance} · {repo}` readout on the right. Transparent bar so it
      reads as document chrome, not a toolbar. */
   .etab-bar--quiet {
-    min-height: 44px;
-    padding: 0 20px;
+    min-height: 30px;
+    padding: 0 2px;
     background: transparent;
-    border-bottom: 1px solid var(--border-lo, var(--border));
-    gap: 10px;
+    border-bottom: 0;
+    gap: 12px;
   }
   .etab-crumb-wrap { position: relative; flex: none; }
   .etab-crumb {
@@ -207,8 +207,8 @@
     background: transparent; border: 0; cursor: pointer;
     color: var(--text-0);
   }
-  .etab-crumb-name { font-size: 14px; font-weight: 600; }
-  .etab-crumb-caret { font-size: 9px; color: var(--text-faint); }
+  .etab-crumb-name { font-size: 19px; font-weight: 600; letter-spacing: -0.01em; }
+  .etab-crumb-caret { font-size: 11px; color: var(--text-faint); }
   .etab-crumb:hover .etab-crumb-caret { color: var(--text-1); }
   .etab-crumb-dot {
     width: 6px; height: 6px; border-radius: 50%;
@@ -230,6 +230,11 @@
   }
   .etab-crumb-mod { color: var(--warn); }
   .etab-crumb-loc { color: var(--text-2); }
+  /* Mockup 4j — git / review / instance chips read as dotted-underline
+     affordances; the `● изменён` state dot stays a plain caption. */
+  .etab-crumb-status > span:not(.etab-crumb-mod) {
+    border-bottom: 1px dotted var(--border-hi, var(--border));
+  }
   .etab-crumb-pop {
     position: absolute; top: calc(100% + 6px); left: 0; z-index: 200;
     min-width: 240px; max-width: 420px; max-height: 340px; overflow-y: auto;

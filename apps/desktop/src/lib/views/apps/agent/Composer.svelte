@@ -1439,23 +1439,35 @@
         {/if}
     </div>
 
+    {#if quietPill && (sess.pendingQueue?.length ?? 0) > 0}
+      <!-- Quiet queue — a distinctive always-open stack of the pending
+           turns instead of a hidden dropdown. Each chip is a numbered
+           mini-card (accent spine, message preview, remove ×) that
+           reads as "these fire next, in order". -->
+      <div class="qpill-queue">
+        <div class="qpill-queue-head">
+          <span class="qpill-queue-glyph" aria-hidden="true">⧗</span>
+          <span class="qpill-queue-title">{sess.pendingQueue?.length} queued · fires in order</span>
+          <span class="qpill-queue-spring" aria-hidden="true"></span>
+          <button class="qpill-queue-clear" onclick={clearQueue}>Clear all</button>
+        </div>
+        <div class="qpill-queue-items">
+          {#each sess.pendingQueue ?? [] as msg, i (i)}
+            <div class="qpill-queue-chip">
+              <span class="qpill-queue-n mono">{i + 1}</span>
+              <span class="qpill-queue-txt">{msg.text || (msg.mentions.find((m) => m.attached)?.title ?? 'attachment')}</span>
+              <button class="qpill-queue-x" onclick={() => removeFromQueue(i)} aria-label="Remove from queue" title="Remove">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M6 18L18 6"/></svg>
+              </button>
+            </div>
+          {/each}
+        </div>
+      </div>
+    {/if}
+
     {#if quietPill}
-      <!-- §3.3 — one ghost mono row under the pill: queued · ctx · statusline. -->
+      <!-- §3.3 — one ghost mono row under the pill: ctx · statusline. -->
       <div class="qpill-meta">
-        {#if (sess.pendingQueue?.length ?? 0) > 0}
-          <div class="qpill-meta-queue" bind:this={queueWrapEl}>
-            <button
-              class="qpill-meta-btn"
-              class:qpill-meta-btn--open={queueOpen}
-              onclick={toggleQueue}
-              title="Show queued messages"
-            >⧗ {sess.pendingQueue?.length} queued</button>
-            {#if queueOpen}
-              {@render queuePanel()}
-            {/if}
-          </div>
-          <span class="qpill-meta-sep" aria-hidden="true">·</span>
-        {/if}
         <span
           class="qpill-meta-ctx"
           class:qpill-meta-ctx--warn={ctxPct >= 70 && ctxPct < 90}
@@ -1829,6 +1841,71 @@
 
   /* ── Ghost mono meta row under the pill (§3.3): ⧗ N queued · ctx X% ·
      ▸ statusline. One line, mono 10.5, linenum tone. ── */
+  /* Quiet queue stack — distinctive, always-open list of pending turns.
+     Numbered mini-cards with an accent spine; reads top-to-bottom as
+     the firing order. */
+  .qpill-queue {
+    width: 100%;
+    max-width: min(1280px, 94%);
+    margin: 8px auto 0;
+    padding: 0 2px;
+  }
+  .qpill-queue-head {
+    display: flex; align-items: center; gap: 6px;
+    font: 10.5px / 1.5 var(--font-mono), ui-monospace, monospace;
+    color: var(--text-mute);
+    margin-bottom: 5px;
+  }
+  .qpill-queue-glyph { color: var(--accent); }
+  .qpill-queue-title { letter-spacing: 0.01em; }
+  .qpill-queue-spring { flex: 1; }
+  .qpill-queue-clear {
+    font: inherit; color: var(--text-faint);
+    background: transparent; border: 0; padding: 0; cursor: pointer;
+    transition: color 120ms;
+  }
+  .qpill-queue-clear:hover { color: var(--err); }
+  .qpill-queue-items {
+    display: flex; flex-direction: column; gap: 4px;
+  }
+  .qpill-queue-chip {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 8px 6px 9px;
+    background: color-mix(in srgb, var(--accent) 5%, var(--bg-1));
+    border: 1px solid var(--border);
+    border-left: 2px solid color-mix(in srgb, var(--accent) 70%, transparent);
+    border-radius: 8px;
+    transition: background 120ms, border-color 120ms;
+  }
+  .qpill-queue-chip:hover {
+    background: color-mix(in srgb, var(--accent) 9%, var(--bg-1));
+    border-left-color: var(--accent);
+  }
+  .qpill-queue-n {
+    flex: none;
+    width: 16px; height: 16px;
+    display: grid; place-items: center;
+    font-size: 9.5px; font-variant-numeric: tabular-nums;
+    color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+    border-radius: 5px;
+  }
+  .qpill-queue-txt {
+    flex: 1; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-size: 12px; color: var(--text-1);
+  }
+  .qpill-queue-x {
+    flex: none; width: 18px; height: 18px;
+    display: grid; place-items: center;
+    border-radius: 4px; color: var(--text-mute); cursor: pointer;
+    background: transparent; border: 0;
+    opacity: 0; transition: opacity 120ms, color 120ms, background 120ms;
+  }
+  .qpill-queue-x svg { width: 11px; height: 11px; }
+  .qpill-queue-chip:hover .qpill-queue-x { opacity: 0.8; }
+  .qpill-queue-x:hover { opacity: 1; color: var(--err); background: var(--bg-3); }
+
   .qpill-meta {
     display: flex;
     align-items: baseline;
@@ -1842,18 +1919,6 @@
     font-variant-numeric: tabular-nums;
   }
   .qpill-meta-sep { opacity: 0.55; flex: none; }
-  .qpill-meta-queue { position: relative; flex: none; }
-  .qpill-meta-btn {
-    font: inherit;
-    color: inherit;
-    background: transparent;
-    border: 0;
-    padding: 0;
-    cursor: pointer;
-    transition: color 120ms;
-  }
-  .qpill-meta-btn:hover,
-  .qpill-meta-btn--open { color: var(--text-1); }
   .qpill-meta-ctx { flex: none; }
   .qpill-meta-ctx--warn { color: var(--warn); }
   .qpill-meta-ctx--err { color: var(--err); }

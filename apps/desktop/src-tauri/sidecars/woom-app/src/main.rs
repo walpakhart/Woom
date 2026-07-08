@@ -2451,6 +2451,36 @@ impl App {
     }
 
     #[tool(
+        description = "Set the durable PLAN / contract of a LEDGER workflow you're BUILDING (status `building`). Pass the `workflowId` from your 'Building ledger <id>' brief plus `plan` — a short markdown contract: what we're doing, why, and the approach. This is the anchor that survives context resets — write it FIRST (before ledger_add_item), then derive the checklist items from it. Renders at the top of the ledger card, editable by the user. Keep it tight: goal, approach, key constraints — not a wall of text."
+    )]
+    async fn ledger_set_plan(
+        &self,
+        Parameters(LedgerSetPlanParams { workflow_id, plan }): Parameters<LedgerSetPlanParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        if workflow_id.trim().is_empty() || plan.trim().is_empty() {
+            return Err(ErrorData::invalid_params("workflowId and plan required", None));
+        }
+        Ok(CallToolResult::success(vec![Content::text(
+            "Plan set. Now decompose it into checklist items with ledger_add_item (in execution order), then ledger_launch.",
+        )]))
+    }
+
+    #[tool(
+        description = "Set the integration FINAL CHECK (a.k.a. Janitor gate) of a LEDGER workflow you're BUILDING. Pass `workflowId` + `cmd` — a shell command (build + test/lint) run ONCE against the whole branch AFTER every item passes, before apply is allowed. Use it to catch cross-item regressions a per-item check can't (e.g. the full type-check / test suite). OPTIONAL but recommended for multi-item code changes. Verify the command actually runs in this repo first."
+    )]
+    async fn ledger_set_final_check(
+        &self,
+        Parameters(LedgerSetFinalCheckParams { workflow_id, cmd }): Parameters<LedgerSetFinalCheckParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        if workflow_id.trim().is_empty() || cmd.trim().is_empty() {
+            return Err(ErrorData::invalid_params("workflowId and cmd required", None));
+        }
+        Ok(CallToolResult::success(vec![Content::text(
+            "Final check set. It runs against the whole branch after every item passes; apply is blocked until it's green.",
+        )]))
+    }
+
+    #[tool(
         description = "Add ONE checklist item to a Ledger workflow you're building. Call repeatedly, in EXECUTION ORDER — items run sequentially in one shared worktree, each by a fresh agent context; consecutive `parallel: true` items run concurrently as a wave. `title` = one-line requirement (what must become true). `detail` = optional expanded instructions (include relevant file paths). `check_cmd` = shell command run from the repo root whose exit code verifies the item (exit 0 = pass) — ALWAYS provide one when possible (test run, grep, build); items without it fall back to a slower LLM grader. `parallel` = true ONLY when the item touches files no other item touches. `deps` = optional ids of earlier items that must pass first (e.g. [\"item-1\"]); leave empty for plain linear order, use it to model a DAG (fan-out sharing a prerequisite, or a join waiting on several branches). `parent_id` = optional id of an earlier item to nest THIS one under it as a sub-item (that parent becomes a non-executed grouping header whose status rolls up from its children). Survey the repo FIRST so checks are real commands that exist."
     )]
     async fn ledger_add_item(
@@ -2792,6 +2822,27 @@ struct DwLaunchParams {
     /// the tool input (the sidecar stub itself doesn't).
     #[allow(dead_code)]
     verifier_prompt: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct LedgerSetPlanParams {
+    /// Ledger workflow id from your `Building ledger <id>` brief.
+    workflow_id: String,
+    /// The durable plan / contract (markdown). A short "what we're doing
+    /// and why + approach" that survives context resets and anchors the
+    /// checklist. The desktop side stores it on the workflow.
+    plan: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct LedgerSetFinalCheckParams {
+    /// Ledger workflow id from your `Building ledger <id>` brief.
+    workflow_id: String,
+    /// Shell command (build + test) run ONCE against the whole branch
+    /// after every item passes, before apply is allowed — the integration
+    /// gate. e.g. "pnpm -C apps/desktop run check". The desktop side
+    /// stores it on the workflow.
+    cmd: String,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]

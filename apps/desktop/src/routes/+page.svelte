@@ -2479,6 +2479,14 @@
       void invoke('ledger_set_task', { workflowId: str('workflow_id'), task: str('task') });
       return;
     }
+    if (name === 'mcp__app__ledger_set_plan') {
+      void invoke('ledger_set_plan', { workflowId: str('workflow_id'), plan: str('plan') });
+      return;
+    }
+    if (name === 'mcp__app__ledger_set_final_check') {
+      void invoke('ledger_set_final_check', { workflowId: str('workflow_id'), cmd: str('cmd') || null });
+      return;
+    }
     if (name === 'mcp__app__ledger_add_item') {
       void invoke('ledger_add_item', {
         workflowId: str('workflow_id'),
@@ -3500,7 +3508,7 @@
      the native traffic lights + carries the ⌘K hint, charcoal Dock at
      the bottom. */
   .quiet-strip {
-    flex: none; height: 30px;
+    flex: none; height: 40px;
     display: flex; align-items: center; justify-content: flex-end;
     padding: 0 18px 0 88px;
     background: var(--bg-0);

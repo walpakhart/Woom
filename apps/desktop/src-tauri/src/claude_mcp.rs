@@ -193,6 +193,8 @@ pub(crate) fn build_mcp_config(
         allowed.push("mcp__app__dw_launch".into());
         // Live Ledger build — sequential machine-checked checklist.
         allowed.push("mcp__app__ledger_set_task".into());
+        allowed.push("mcp__app__ledger_set_plan".into());
+        allowed.push("mcp__app__ledger_set_final_check".into());
         allowed.push("mcp__app__ledger_add_item".into());
         allowed.push("mcp__app__ledger_launch".into());
     }

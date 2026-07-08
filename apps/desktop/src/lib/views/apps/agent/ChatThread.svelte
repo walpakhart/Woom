@@ -24,6 +24,7 @@
   import { computeDiffRows, diffStats, type DiffRow } from './chatDiff';
   import { shortenFsPath } from '$lib/format';
   import { overlayScrollbars } from '$lib/actions/overlayScrollbars';
+  import ChatMarkerRail from './ChatMarkerRail.svelte';
 
   type Kind = 'claude';
 
@@ -231,6 +232,16 @@
     if (absIdx >= lastVisibleIndex - FRESH_TAIL) return true;
     return false;
   }
+
+  /* Signal the marker rail to rebuild. Folds every cause of geometry
+     change into one number: message count (turns added), the last
+     message's content length (streaming grows the tail), and how many
+     bodies have lazy-mounted (headings appear → new topic markers). */
+  const railRevision = $derived(
+    (sess?.messages.length ?? 0) * 1_000_003 +
+      (sess?.messages[sess.messages.length - 1]?.content?.length ?? 0) +
+      visibleArticleSet.size * 31
+  );
 
   /* Right-click context menu on chat messages. Captures the message
      + its index so action closures can address it after the menu
@@ -512,8 +523,10 @@
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <!-- wheel/touch handlers are passive scroll-intent detectors (break the
        stick-to-bottom lock when the user scrolls up), not interactions. -->
+  <div class="ct-shell">
   <div
     class="ct"
+    id="chat-scroll"
     bind:this={chatEl}
     onscroll={onChatScroll}
     onwheel={onChatWheel}
@@ -600,6 +613,7 @@
           class="msg msg--user"
           class:msg--compact={p.compact}
           use:observeArticle={i}
+          data-msg-role="user"
           oncontextmenu={(e) => openMsgCtxMenu(e, msg, i)}
         >
           <div class="msg-body">
@@ -657,6 +671,7 @@
           class="msg msg--assistant"
           class:msg--compact={p.compact}
           use:observeArticle={i}
+          data-msg-role="assistant"
           oncontextmenu={(e) => openMsgCtxMenu(e, msg, i)}
         >
           <!-- Floating drag handle. Pinned to the article's top-right
@@ -744,7 +759,11 @@
                                  the BODY. Click anywhere on the header to
                                  expand the inline output — same widget,
                                  instead of two stacked pills. -->
-                            <details class="trace-step trace-step--{hint.kind} trace-step--has-output">
+                            <details
+                              class="trace-step trace-step--{hint.kind} trace-step--has-output"
+                              data-mark-kind={hint.kind}
+                              data-mark-label={hint.target || fallbackBash || hint.label}
+                            >
                               <summary class="trace-cmd-row trace-cmd-row--toggle">
                                 <span class="trace-cmd-icon" aria-hidden="true">
                                   {@render toolIcon(hint.kind)}
@@ -802,7 +821,12 @@
                                  `data-status="running"` triggers the
                                  leading-glyph pulse animation so the
                                  user sees this step is in-flight. -->
-                            <div class="trace-step trace-step--{hint.kind}" data-status="running">
+                            <div
+                              class="trace-step trace-step--{hint.kind}"
+                              data-status="running"
+                              data-mark-kind={hint.kind}
+                              data-mark-label={hint.target || fallbackBash || hint.label}
+                            >
                               <div class="trace-cmd-row">
                                 <span class="trace-cmd-icon" aria-hidden="true">
                                   {@render toolIcon(hint.kind)}
@@ -828,7 +852,11 @@
                   </details>
                 {:else if ev.kind === 'edit'}
                   {@const stats = diffStats(ev.oldText ?? '', ev.newText ?? '')}
-                  <details class="edit-card">
+                  <details
+                    class="edit-card"
+                    data-mark-kind={ev.isCreate ? 'create' : ev.isDelete ? 'delete' : ev.wholeFile ? 'write' : 'edit'}
+                    data-mark-label={displayEditPath(ev.filePath)}
+                  >
                     <summary class="edit-card-head">
                       <span class="edit-glyph mono" aria-hidden="true">±</span>
                       {#if ev.isCreate}
@@ -907,24 +935,39 @@
           <ResumePill session={sess} onResume={p.onResumeAfterQuota} />
         {/if}
       {:else}
-        <article class="msg msg--system" use:observeArticle={i}>
+        <article class="msg msg--system" use:observeArticle={i} data-msg-role="system">
           <div class="msg-system">{msg.content}</div>
           {#if i === lastVisibleIndex}{@render inlineActions()}{/if}
         </article>
       {/if}
     {/each}
   </div>
+  <ChatMarkerRail scroller={chatEl} sessionId={sess.id} revision={railRevision} />
+  </div>
 {/if}
 
 <CardContextMenu coords={ctxCoords} items={ctxItems} onClose={closeMsgCtxMenu} />
 
 <style>
+  /* Shell hosts the scroller + the absolutely-positioned marker rail.
+     It's the flex child now; .ct fills it. */
+  .ct-shell {
+    flex: 1; min-height: 0;
+    position: relative;
+    display: flex;
+  }
   .ct {
     flex: 1; min-height: 0;
     overflow-y: auto;
     padding: 20px 22px 8px;
     display: flex; flex-direction: column; gap: 26px;
   }
+  /* ChatMarkerRail owns the visible thumb + markers. Kill the native
+     bar entirely — even with the macOS "always show scrollbars" setting
+     it otherwise renders a classic bar UNDER the rail, which reads as a
+     doubled/ugly scroll track. */
+  .ct { scrollbar-width: none; -ms-overflow-style: none; }
+  .ct::-webkit-scrollbar { width: 0; height: 0; display: none; }
   /* Thread column: wide reading measure that grows with the window
      (was a fixed 680px that left huge side gutters on wide screens). */
   .ct > :global(*) {

@@ -289,15 +289,21 @@ export async function runLedgerFromSlash(
     `runs here (you may execute it) — a checklist with broken checks is worthless. For large ` +
     `tasks spend several tool calls here; the checklist quality is decided in this phase.\n\n` +
     `Then build:\n` +
-    `1. mcp__app__ledger_set_task — workflowId "${workflowId}", a one-line task summary.\n` +
-    `2. mcp__app__ledger_add_item — workflowId "${workflowId}", once per item IN EXECUTION ORDER. ` +
+    `1. mcp__app__ledger_set_plan — workflowId "${workflowId}", a SHORT markdown contract: ` +
+    `goal, approach, key constraints. This is the durable anchor that survives context resets — ` +
+    `write it FIRST, then derive the checklist from it. Keep it tight (a few lines), not an essay.\n` +
+    `2. mcp__app__ledger_set_task — workflowId "${workflowId}", a one-line task summary.\n` +
+    `3. mcp__app__ledger_add_item — workflowId "${workflowId}", once per item IN EXECUTION ORDER. ` +
     `Each item: \`title\` = one-line requirement (what must become true), \`detail\` = precise ` +
     `instructions incl. relevant file paths from your research, \`check_cmd\` = shell command ` +
     `from the repo root whose exit code proves the item (test run, build, grep — ALWAYS provide ` +
     `one when possible; omit only for judgment-call items, those get an LLM grader), ` +
     `\`parallel\` = true ONLY when the item touches files no other item touches (consecutive ` +
     `parallel items run concurrently; when unsure, false).\n` +
-    `3. mcp__app__ledger_launch — workflowId "${workflowId}" once the checklist is complete.\n` +
+    `4. mcp__app__ledger_set_final_check (OPTIONAL, recommended for multi-item code changes) — ` +
+    `workflowId "${workflowId}", a whole-branch build+test/lint command that gates apply (catches ` +
+    `cross-item regressions a per-item check misses). Verify it runs here first.\n` +
+    `5. mcp__app__ledger_launch — workflowId "${workflowId}" once the checklist is complete.\n` +
     `Sizing: 2-8 items for most tasks, up to 15 for large features (cap 30) — split big items; ` +
     `each should be one coherent change a single focused turn can land. If the task is trivial ` +
     `(one obvious edit), SKIP the ledger — say so and just do it directly instead of calling ` +

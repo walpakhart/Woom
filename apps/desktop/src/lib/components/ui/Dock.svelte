@@ -59,9 +59,7 @@
 </script>
 
 <footer class="dock" aria-label="Quiet dock">
-  <span class="dock-mark" aria-hidden="true">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M3 6l3.5 12L12 8l5.5 10L21 6"/></svg>
-  </span>
+  <span class="dock-mark" aria-hidden="true"></span>
 
   <nav class="dock-nav">
     {#each words as w (w.view)}
@@ -87,10 +85,15 @@
     <span class="dock-quota" title="Claude — 5h quota window">
       <span class="dock-quota-label mono">5h</span>
       <span class="dock-quota-track"><span class="dock-quota-fill" class:full={fiveHourPct >= 100} style="width:{fiveHourPct}%"></span></span>
+      <span class="dock-quota-pct mono">{fiveHourPct}%</span>
     </span>
   {/if}
   {#if p.view === 'claudeApp' && weekPct !== null}
-    <span class="dock-week mono">week {weekPct}%</span>
+    <span class="dock-quota" title="Claude — 7-day quota window">
+      <span class="dock-quota-label mono">week</span>
+      <span class="dock-quota-track"><span class="dock-quota-fill" class:full={weekPct >= 100} style="width:{weekPct}%"></span></span>
+      <span class="dock-quota-pct mono">{weekPct}%</span>
+    </span>
   {/if}
 </footer>
 
@@ -106,13 +109,16 @@
   }
   :global(:root[data-theme='light']) .dock { background: var(--dark-1); }
 
+  /* Real engraved W — alpha mask re-inked (matches Titlebar + mockup
+     footer). Mockup 4j: 24×12 mark, ink #98A0A8 (= --dark-text-2). */
   .dock-mark {
     flex: none;
-    display: inline-grid; place-items: center;
-    width: 24px; height: 24px;
-    color: var(--dark-text-2);
+    display: block;
+    width: 24px; height: 12px;
+    background: var(--dark-text-2);
+    -webkit-mask: url('/woom-mark-ink.png') center / contain no-repeat;
+    mask: url('/woom-mark-ink.png') center / contain no-repeat;
   }
-  .dock-mark svg { width: 22px; height: 22px; }
 
   .dock-nav {
     display: flex; align-items: center; gap: 14px;
@@ -154,5 +160,5 @@
   }
   .dock-quota-fill { display: block; height: 100%; background: var(--dark-text-2); border-radius: 2px; }
   .dock-quota-fill.full { background: var(--term-warn); }
-  .dock-week { font-size: 11px; color: var(--dark-mute); flex: none; }
+  .dock-quota-pct { font-size: 11px; color: var(--dark-mute); min-width: 30px; }
 </style>

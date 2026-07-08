@@ -77,6 +77,9 @@ fn default_max_attempts() -> u32 {
 fn default_squash() -> bool {
     true
 }
+fn default_true() -> bool {
+    true
+}
 
 // ---- Serde types (mirror the TS shapes in `lib/types.ts`) -----------------
 
@@ -154,6 +157,25 @@ pub struct LedgerWorkflow {
     pub session_id: String,
     /// The overall task this checklist decomposes.
     pub task: String,
+    /// Durable plan / contract (markdown) the agent authors while
+    /// building — the "what we're doing and why" that survives context
+    /// resets. Rendered at the top of the card, editable pre-run. Empty
+    /// until the agent calls `ledger_set_plan`.
+    #[serde(default)]
+    pub plan: String,
+    /// Integration "Janitor" gate — a shell command (build + test) run
+    /// ONCE against the whole branch after every item passes, before the
+    /// review gate lets you apply. `None` = no gate. Set via
+    /// `ledger_set_final_check`.
+    #[serde(default)]
+    pub final_check: Option<String>,
+    /// Result of the last final-check run. Defaults true so a workflow
+    /// with NO gate applies freely; flipped by the run loop / recheck.
+    #[serde(default = "default_true")]
+    pub final_check_ok: bool,
+    /// Captured stdout/stderr tail of the last final-check run.
+    #[serde(default)]
+    pub final_check_output: Option<String>,
     /// 'building' | 'awaiting_launch' | 'running' | 'paused_quota' |
     /// 'paused' (user) | 'paused_budget' (cap hit) | 'awaiting_review' |
     /// 'done' | 'failed' | 'cancelled'
@@ -706,6 +728,15 @@ fn build_worker_prompt(
         title = item.title,
         detail = item.detail.as_deref().unwrap_or(""),
     );
+    // The durable plan/contract, when set, anchors every worker to the
+    // same intent — the "why + approach" behind the flat checklist.
+    if !wf.plan.trim().is_empty() {
+        p.push_str(&format!(
+            "\nPLAN / CONTRACT for the whole workflow (honor it; your item is one step \
+             toward this):\n{}\n",
+            wf.plan.trim()
+        ));
+    }
     let learned = learnings(wf);
     if !learned.is_empty() {
         p.push_str(&format!(
@@ -753,15 +784,21 @@ fn build_worker_prompt(
 }
 
 fn build_grader_prompt(wf: &LedgerWorkflow, item: &LedgerItem, diff: &str) -> String {
+    let plan_ctx = if wf.plan.trim().is_empty() {
+        String::new()
+    } else {
+        format!("\n\nPlan / contract (judge against this intent):\n{}", wf.plan.trim())
+    };
     format!(
         "You are an independent verifier. You did NOT write this change. Requirement:\n\
-         {title}\n{detail}\n\nOverall task context:\n{task}\n\nThe diff produced for \
+         {title}\n{detail}\n\nOverall task context:\n{task}{plan_ctx}\n\nThe diff produced for \
          this requirement:\n```diff\n{diff}\n```\n\nVerdict: does the diff fully satisfy \
          the requirement? Reply with STRICT JSON only, no fences, no prose:\n\
          {{\"pass\": true|false, \"reason\": \"one short sentence\"}}",
         title = item.title,
         detail = item.detail.as_deref().unwrap_or(""),
         task = wf.task,
+        plan_ctx = plan_ctx,
         diff = truncate_tail(diff, 60_000),
     )
 }
@@ -890,6 +927,38 @@ fn is_container(wf: &LedgerWorkflow, id: &str) -> bool {
     wf.items.iter().any(|i| i.parent_id.as_deref() == Some(id))
 }
 
+/// Outcome of scanning for the next runnable item — pure, so the run
+/// loop's termination is unit-testable without the async machinery.
+enum ItemPick {
+    /// A queued leaf with satisfied deps — run it.
+    Run(LedgerItem),
+    /// Queued leaves remain but none is ready (dangling/cyclic deps that
+    /// slipped past add-time validation) — hard error, never spin.
+    Deadlock,
+    /// Nothing left to run: every leaf is passed/skipped/blocked → done.
+    /// `blocked` items are NOT queued, so a skipped-prereq subtree parks
+    /// the workflow at the review gate instead of deadlocking it.
+    Done,
+}
+
+fn next_ready_item(wf: &LedgerWorkflow) -> ItemPick {
+    if let Some(i) = wf
+        .items
+        .iter()
+        .find(|i| i.status == "queued" && !is_container(wf, &i.id) && deps_ready(wf, i))
+    {
+        return ItemPick::Run(i.clone());
+    }
+    if wf
+        .items
+        .iter()
+        .any(|i| i.status == "queued" && !is_container(wf, &i.id))
+    {
+        return ItemPick::Deadlock;
+    }
+    ItemPick::Done
+}
+
 /// Derive every container's status from its children. `passed` once all
 /// children settle (passed/skipped), `failed` if any child failed,
 /// `working` while children are in flight, else `queued`. Reverse order
@@ -922,6 +991,46 @@ fn rollup_containers(w: &mut LedgerWorkflow) {
         .to_string();
         if let Some(it) = w.items.iter_mut().find(|i| &i.id == id) {
             it.status = next;
+        }
+    }
+}
+
+/// Propagate `blocked` down dependency edges: a not-yet-run item whose
+/// dependency was skipped or failed (or is itself blocked) can't run
+/// honestly, so it parks as `blocked` instead of executing against an
+/// unmet prerequisite. Fixpoint so a skip cascades through a chain; fully
+/// reversible — retrying the culprit until it passes clears the taint and
+/// re-queues the subtree on the next call. Only ever moves items between
+/// `queued` and `blocked`; never touches passed/working/failed/skipped.
+fn recompute_blocked(w: &mut LedgerWorkflow) {
+    loop {
+        let mut changed = false;
+        let ids: Vec<String> = w.items.iter().map(|i| i.id.clone()).collect();
+        for id in ids {
+            let (status, deps) = match w.items.iter().find(|i| i.id == id) {
+                Some(i) => (i.status.clone(), i.deps.clone()),
+                None => continue,
+            };
+            if status != "queued" && status != "blocked" {
+                continue;
+            }
+            let tainted = deps.iter().any(|d| {
+                w.items
+                    .iter()
+                    .find(|i| &i.id == d)
+                    .map(|i| matches!(i.status.as_str(), "skipped" | "failed" | "blocked"))
+                    .unwrap_or(false)
+            });
+            let next = if tainted { "blocked" } else { "queued" };
+            if next != status {
+                if let Some(it) = w.items.iter_mut().find(|i| i.id == id) {
+                    it.status = next.to_string();
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            break;
         }
     }
 }
@@ -993,24 +1102,14 @@ async fn run_ledger(app: &AppHandle, reg: &Arc<LedgerRegistry>, wf_id: &str) -> 
         // queued" (classic order). If queued leaves remain but none is
         // ready, the only cause is a bad dep graph (dangling/cyclic) —
         // filtered at add time, so treat it as a hard error, not a spin.
-        let item = match wf
-            .items
-            .iter()
-            .find(|i| i.status == "queued" && !is_container(&wf, &i.id) && deps_ready(&wf, i))
-        {
-            Some(i) => i.clone(),
-            None => {
-                if wf
-                    .items
-                    .iter()
-                    .any(|i| i.status == "queued" && !is_container(&wf, &i.id))
-                {
-                    return Err(
-                        "ledger deadlocked: remaining items have unsatisfiable dependencies".into(),
-                    );
-                }
-                break;
+        let item = match next_ready_item(&wf) {
+            ItemPick::Run(i) => i,
+            ItemPick::Deadlock => {
+                return Err(
+                    "ledger deadlocked: remaining items have unsatisfiable dependencies".into(),
+                );
             }
+            ItemPick::Done => break,
         };
 
         if !wait_quota(app, reg, wf_id).await {
@@ -1201,6 +1300,9 @@ async fn run_ledger(app: &AppHandle, reg: &Arc<LedgerRegistry>, wf_id: &str) -> 
                             it.error = None;
                         }
                     }
+                    // A pass may clear a skip/fail taint — re-queue any
+                    // subtree that was blocked waiting on this prereq.
+                    recompute_blocked(w);
                     rollup_containers(w);
                     w.current_item = None;
                 });
@@ -1259,6 +1361,19 @@ async fn run_ledger(app: &AppHandle, reg: &Arc<LedgerRegistry>, wf_id: &str) -> 
         }
     }
 
+    // Integration "Janitor" gate — one shell run against the WHOLE branch
+    // after every item passed, catching cross-item regressions a per-item
+    // check can't. On red, the workflow still parks at the review gate (so
+    // the user sees the diff + the failure), but apply is blocked until a
+    // green re-check. No gate configured → ok stays true.
+    let (fc_ok, fc_out) = match reg.get(wf_id).and_then(|w| w.final_check.clone()) {
+        Some(cmd) if !cmd.trim().is_empty() => {
+            let (ok, out) = run_shell_check(&wt_path, &cmd).await;
+            (ok, Some(out))
+        }
+        _ => (true, None),
+    };
+
     // Every item passed (or was skipped) — capture the branch diff and
     // park for the behavioral review gate.
     let full = range_diff(&wt_path, &base);
@@ -1267,6 +1382,8 @@ async fn run_ledger(app: &AppHandle, reg: &Arc<LedgerRegistry>, wf_id: &str) -> 
         // gate once every child settled.
         rollup_containers(w);
         w.full_diff = full.clone();
+        w.final_check_ok = fc_ok;
+        w.final_check_output = fc_out.clone();
         w.status = "awaiting_review".to_string();
         w.current_item = None;
         w.completed_at = Some(unix_ms());
@@ -1455,6 +1572,10 @@ async fn run_wave(
                                 it.error = None;
                             }
                         }
+                        // Mirror the sequential pass path: a wave member
+                        // passing can clear a taint and re-queue a blocked
+                        // subtree.
+                        recompute_blocked(w);
                         rollup_containers(w);
                     });
                     let _ = app.emit(
@@ -1501,6 +1622,10 @@ pub async fn ledger_create(
         id: id.clone(),
         session_id,
         task,
+        plan: String::new(),
+        final_check: None,
+        final_check_ok: true,
+        final_check_output: None,
         status: "building".to_string(),
         items: vec![],
         current_item: None,
@@ -1538,6 +1663,67 @@ pub async fn ledger_set_task(
         .ok_or_else(|| format!("ledger not found: {}", workflow_id))?;
     let _ = app.emit("ledger:updated", &wf);
     Ok(())
+}
+
+#[tauri::command]
+pub async fn ledger_set_plan(
+    app: AppHandle,
+    workflow_id: String,
+    plan: String,
+) -> Result<(), String> {
+    let registry: tauri::State<'_, Arc<LedgerRegistry>> = app.state();
+    let wf = registry
+        .inner()
+        .mutate_persist(&app, &workflow_id, |w| w.plan = plan.clone())
+        .ok_or_else(|| format!("ledger not found: {}", workflow_id))?;
+    let _ = app.emit("ledger:updated", &wf);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn ledger_set_final_check(
+    app: AppHandle,
+    workflow_id: String,
+    cmd: Option<String>,
+) -> Result<(), String> {
+    let registry: tauri::State<'_, Arc<LedgerRegistry>> = app.state();
+    let wf = registry
+        .inner()
+        .mutate_persist(&app, &workflow_id, |w| {
+            w.final_check = cmd.as_ref().map(|c| c.trim().to_string()).filter(|c| !c.is_empty());
+        })
+        .ok_or_else(|| format!("ledger not found: {}", workflow_id))?;
+    let _ = app.emit("ledger:updated", &wf);
+    Ok(())
+}
+
+/// Re-run the integration final-check against the current worktree (used
+/// from the review gate after a failed janitor run). Updates
+/// `final_check_ok` / `final_check_output` and re-emits.
+#[tauri::command]
+pub async fn ledger_recheck(app: AppHandle, workflow_id: String) -> Result<bool, String> {
+    let registry: tauri::State<'_, Arc<LedgerRegistry>> = app.state();
+    let wf = registry
+        .inner()
+        .get(&workflow_id)
+        .ok_or_else(|| format!("ledger not found: {}", workflow_id))?;
+    let cmd = match wf.final_check.as_deref() {
+        Some(c) if !c.trim().is_empty() => c.to_string(),
+        _ => return Ok(true), // no gate → nothing to check
+    };
+    let wt = wf
+        .worktree_path
+        .clone()
+        .ok_or_else(|| "ledger has no worktree".to_string())?;
+    let (ok, out) = run_shell_check(&wt, &cmd).await;
+    let updated = registry.inner().mutate_persist(&app, &workflow_id, |w| {
+        w.final_check_ok = ok;
+        w.final_check_output = Some(out.clone());
+    });
+    if let Some(w) = updated {
+        let _ = app.emit("ledger:updated", &w);
+    }
+    Ok(ok)
 }
 
 #[tauri::command]
@@ -1958,6 +2144,10 @@ pub async fn ledger_skip_item(
                     it.status = "skipped".to_string();
                 }
             }
+            // Skipping a prerequisite blocks its dependent subtree — those
+            // items won't run against an unmet dep (reversible if the user
+            // later retries the skipped item to green).
+            recompute_blocked(w);
             if w.status == "failed" {
                 w.status = "running".to_string();
                 w.completed_at = None;
@@ -1982,6 +2172,12 @@ pub async fn ledger_apply(app: AppHandle, workflow_id: String) -> Result<(), Str
         .ok_or_else(|| format!("ledger not found: {}", workflow_id))?;
     if wf.status != "awaiting_review" {
         return Err(format!("ledger not reviewable from status {}", wf.status));
+    }
+    // Janitor gate: a configured final-check must be green before the
+    // branch can land — blocks applying a diff that passes every item but
+    // breaks the integrated build.
+    if wf.final_check.as_deref().map(|c| !c.trim().is_empty()).unwrap_or(false) && !wf.final_check_ok {
+        return Err("final check is red — fix the branch and re-check before applying".into());
     }
     let parent = wf.parent_cwd.clone().ok_or("ledger has no parent cwd")?;
     let diff = wf.full_diff.clone().unwrap_or_default();
@@ -2174,6 +2370,10 @@ mod tests {
             id: "ledger-test".into(),
             session_id: "s".into(),
             task: "task".into(),
+            plan: String::new(),
+            final_check: None,
+            final_check_ok: true,
+            final_check_output: None,
             status: "running".into(),
             items,
             current_item: None,
@@ -2300,5 +2500,144 @@ mod tests {
         w.items[1].status = "failed".into();
         rollup_containers(&mut w);
         assert_eq!(w.items[0].status, "failed");
+    }
+
+    fn dep_item(id: &str, status: &str, deps: &[&str]) -> LedgerItem {
+        let mut i = item(id, status);
+        i.deps = deps.iter().map(|d| d.to_string()).collect();
+        i
+    }
+    fn status_of<'a>(w: &'a LedgerWorkflow, id: &str) -> &'a str {
+        w.items.iter().find(|i| i.id == id).unwrap().status.as_str()
+    }
+
+    #[test]
+    fn skip_blocks_dependent_subtree() {
+        // item-1 skipped → item-2 (deps [1]) and item-3 (deps [2]) block.
+        let mut w = wf(vec![
+            item("item-1", "skipped"),
+            dep_item("item-2", "queued", &["item-1"]),
+            dep_item("item-3", "queued", &["item-2"]),
+        ]);
+        recompute_blocked(&mut w);
+        assert_eq!(status_of(&w, "item-2"), "blocked");
+        assert_eq!(status_of(&w, "item-3"), "blocked", "block cascades down the chain");
+    }
+
+    #[test]
+    fn failed_dep_also_blocks() {
+        let mut w = wf(vec![
+            item("item-1", "failed"),
+            dep_item("item-2", "queued", &["item-1"]),
+        ]);
+        recompute_blocked(&mut w);
+        assert_eq!(status_of(&w, "item-2"), "blocked");
+    }
+
+    #[test]
+    fn pass_unblocks_subtree() {
+        // The culprit was retried to green — its blocked subtree re-queues.
+        let mut w = wf(vec![
+            item("item-1", "passed"),
+            dep_item("item-2", "blocked", &["item-1"]),
+            dep_item("item-3", "blocked", &["item-2"]),
+        ]);
+        recompute_blocked(&mut w);
+        assert_eq!(status_of(&w, "item-2"), "queued");
+        assert_eq!(status_of(&w, "item-3"), "queued", "unblock cascades once the taint clears");
+    }
+
+    #[test]
+    fn independent_items_never_block() {
+        let mut w = wf(vec![
+            item("item-1", "skipped"),
+            item("item-2", "queued"), // no deps
+        ]);
+        recompute_blocked(&mut w);
+        assert_eq!(status_of(&w, "item-2"), "queued");
+    }
+
+    #[test]
+    fn recompute_blocked_is_idempotent() {
+        let mut w = wf(vec![
+            item("item-1", "skipped"),
+            dep_item("item-2", "queued", &["item-1"]),
+        ]);
+        recompute_blocked(&mut w);
+        let once = status_of(&w, "item-2").to_string();
+        recompute_blocked(&mut w);
+        assert_eq!(status_of(&w, "item-2"), once);
+    }
+
+    #[test]
+    fn picker_runs_first_ready_leaf() {
+        let w = wf(vec![item("item-1", "queued"), item("item-2", "queued")]);
+        match next_ready_item(&w) {
+            ItemPick::Run(i) => assert_eq!(i.id, "item-1"),
+            _ => panic!("expected Run(item-1)"),
+        }
+    }
+
+    #[test]
+    fn picker_skips_unready_dep_but_runs_available() {
+        // item-2 gated on item-1; picker still finds item-1.
+        let w = wf(vec![
+            item("item-1", "queued"),
+            dep_item("item-2", "queued", &["item-1"]),
+        ]);
+        match next_ready_item(&w) {
+            ItemPick::Run(i) => assert_eq!(i.id, "item-1"),
+            _ => panic!("expected Run(item-1)"),
+        }
+    }
+
+    #[test]
+    fn picker_done_when_all_settled() {
+        let w = wf(vec![item("item-1", "passed"), item("item-2", "skipped")]);
+        assert!(matches!(next_ready_item(&w), ItemPick::Done));
+    }
+
+    #[test]
+    fn picker_done_not_deadlock_with_blocked_subtree() {
+        // THE deadlock-freedom guarantee: a skipped prereq parks its
+        // dependent as `blocked`; nothing is queued → Done, never spin.
+        let w = wf(vec![
+            item("item-1", "skipped"),
+            dep_item("item-2", "blocked", &["item-1"]),
+        ]);
+        assert!(
+            matches!(next_ready_item(&w), ItemPick::Done),
+            "blocked items must not be treated as queued"
+        );
+    }
+
+    #[test]
+    fn picker_deadlock_on_unsatisfiable_cycle() {
+        // Both queued, each waiting on the other → nothing ready but
+        // queued leaves remain → hard Deadlock (never an infinite spin).
+        let w = wf(vec![
+            dep_item("item-1", "queued", &["item-2"]),
+            dep_item("item-2", "queued", &["item-1"]),
+        ]);
+        assert!(matches!(next_ready_item(&w), ItemPick::Deadlock));
+    }
+
+    #[test]
+    fn deps_ready_gates_on_settled_deps() {
+        let w = wf(vec![
+            item("item-1", "queued"),
+            dep_item("item-2", "queued", &["item-1"]),
+        ]);
+        assert!(!deps_ready(&w, &w.items[1]), "queued dep not ready");
+        let w2 = wf(vec![
+            item("item-1", "passed"),
+            dep_item("item-2", "queued", &["item-1"]),
+        ]);
+        assert!(deps_ready(&w2, &w2.items[1]), "passed dep is ready");
+        let w3 = wf(vec![
+            item("item-1", "skipped"),
+            dep_item("item-2", "queued", &["item-1"]),
+        ]);
+        assert!(deps_ready(&w3, &w3.items[1]), "skipped dep satisfies deps_ready (blocking is separate)");
     }
 }

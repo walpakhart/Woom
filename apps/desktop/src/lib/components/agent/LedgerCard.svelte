@@ -6,7 +6,7 @@
    * action feed; the review gate exposes the branch diff + Apply. */
   import { invoke } from '@tauri-apps/api/core';
   import { slide, fade } from 'svelte/transition';
-  import { ledgerState, setLedgerSquash, injectLedgerNote, type LedgerItem } from '$lib/state/ledger.svelte';
+  import { ledgerState, setLedgerSquash, injectLedgerNote, recheckLedger, type LedgerItem } from '$lib/state/ledger.svelte';
   import { formatCostUsd } from '$lib/usage';
 
   interface Props {
@@ -66,6 +66,9 @@
   let eDeps = $state('');
   let eParent = $state('');
   let adding = $state(false);
+  /* Plan/contract editor — one textarea toggled open pre-run. */
+  let editingPlan = $state(false);
+  let planDraft = $state('');
 
   const passed = $derived(wf ? wf.items.filter((i) => i.status === 'passed').length : 0);
   const settled = $derived(
@@ -99,6 +102,7 @@
       case 'passed': return '●';
       case 'failed': return '✕';
       case 'skipped': return '−';
+      case 'blocked': return '⊘';
       case 'working': return '◐';
       case 'checking': return '◒';
       default: return '○';
@@ -181,6 +185,15 @@
     } finally {
       busy = false;
     }
+  }
+
+  function openPlanEdit(): void {
+    editingPlan = true;
+    planDraft = wf?.plan ?? '';
+  }
+  async function savePlan(): Promise<void> {
+    await call('ledger_set_plan', { plan: planDraft.trim() });
+    if (!actionErr) editingPlan = false;
   }
 
   function openEdit(item: LedgerItem): void {
@@ -358,13 +371,54 @@
         <button class="lg-btn lg-btn--ink" disabled={busy} onclick={() => resumeLedger(true)}>resume</button>
         <button class="lg-btn" disabled={busy} onclick={() => call('ledger_cancel')}>cancel</button>
       {:else if wf.status === 'awaiting_review'}
-        <button class="lg-btn lg-btn--ink" disabled={busy} onclick={() => call('ledger_apply')}>apply</button>
+        {#if wf.finalCheck && !wf.finalCheckOk}
+          <button class="lg-btn" disabled={busy} onclick={() => recheckLedger(workflowId)} title="Re-run the final check">re-check</button>
+        {/if}
+        <button
+          class="lg-btn lg-btn--ink"
+          disabled={busy || (!!wf.finalCheck && !wf.finalCheckOk)}
+          title={wf.finalCheck && !wf.finalCheckOk ? 'Final check is red — re-check before applying' : 'Apply the branch'}
+          onclick={() => call('ledger_apply')}
+        >apply</button>
         <button class="lg-btn" disabled={busy} onclick={() => call('ledger_discard')}>discard</button>
       {/if}
     </header>
 
     {#if actionErr}
       <p class="lg-err" transition:slide={{ duration: 140 }}>{actionErr}</p>
+    {/if}
+
+    <!-- Plan / contract — the durable "what & why" that anchors the
+         checklist and survives context resets. Editable pre-run. -->
+    {#if editingPlan}
+      <div class="lg-plan lg-plan--edit" transition:slide={{ duration: 140 }}>
+        <textarea
+          class="lg-plan-input mono"
+          bind:value={planDraft}
+          rows="6"
+          placeholder="Plan / contract — goal, approach, key constraints (markdown)"
+          spellcheck="false"
+        ></textarea>
+        <div class="lg-plan-actions">
+          <button class="lg-btn lg-btn--ink" disabled={busy} onclick={savePlan}>save plan</button>
+          <button class="lg-btn" disabled={busy} onclick={() => (editingPlan = false)}>cancel</button>
+        </div>
+      </div>
+    {:else if wf.plan}
+      <details class="lg-plan" open>
+        <summary class="lg-plan-head">
+          <span class="lg-plan-caret" aria-hidden="true">▾</span>
+          <span class="lg-plan-label mono">plan</span>
+          {#if editableWf}
+            <button class="lg-plan-edit" onclick={openPlanEdit} title="Edit plan">edit</button>
+          {/if}
+        </summary>
+        <div class="lg-plan-body">{wf.plan}</div>
+      </details>
+    {:else if editableWf}
+      <button class="lg-plan-add" onclick={openPlanEdit} title="Add a plan / contract">
+        + add plan
+      </button>
     {/if}
 
     {#if wf.items.length > 0}
@@ -508,6 +562,18 @@
       </div>
       {#if showFullDiff}
         {@render diffBlock(wf.fullDiff ?? '', false)}
+      {/if}
+      {#if wf.finalCheck}
+        <div class="lg-janitor" class:lg-janitor--red={!wf.finalCheckOk} class:lg-janitor--ok={wf.finalCheckOk}>
+          <div class="lg-janitor-head mono">
+            <span class="lg-janitor-glyph" aria-hidden="true">{wf.finalCheckOk ? '✓' : '✕'}</span>
+            final check {wf.finalCheckOk ? 'passed' : 'failed'}
+            <code class="lg-janitor-cmd">{wf.finalCheck}</code>
+          </div>
+          {#if !wf.finalCheckOk && wf.finalCheckOutput}
+            <pre class="lg-janitor-out mono">{wf.finalCheckOutput}</pre>
+          {/if}
+        </div>
       {/if}
     {/if}
 
@@ -1055,6 +1121,123 @@
     padding: 4px 8px 4px 22px;
     font-size: 10.5px;
     color: var(--error, #e88264);
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  /* Plan / contract block — a quiet parchment panel with a clay spine,
+     sitting between the header and the checklist. */
+  .lg-plan {
+    margin: 2px 0 10px;
+    border: 1px solid var(--border);
+    border-left: 2px solid var(--accent);
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--accent) 4%, var(--bg-1));
+    overflow: hidden;
+  }
+  .lg-plan-head {
+    display: flex; align-items: center; gap: 6px;
+    padding: 5px 9px;
+    cursor: pointer;
+    list-style: none;
+    user-select: none;
+  }
+  .lg-plan-head::-webkit-details-marker { display: none; }
+  .lg-plan-caret {
+    font-size: 9px; color: var(--text-faint);
+    transition: transform 140ms;
+  }
+  .lg-plan:not([open]) .lg-plan-caret { transform: rotate(-90deg); }
+  .lg-plan-label {
+    font-size: 10px; letter-spacing: 0.04em; text-transform: uppercase;
+    color: var(--accent);
+  }
+  .lg-plan-edit {
+    margin-left: auto;
+    font: inherit; font-size: 10px;
+    background: transparent; border: 0; cursor: pointer;
+    color: var(--text-faint);
+    transition: color 120ms;
+  }
+  .lg-plan-edit:hover { color: var(--text-1); }
+  .lg-plan-body {
+    padding: 2px 11px 9px;
+    font-size: 12px;
+    line-height: 1.55;
+    color: var(--text-1);
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .lg-plan--edit { padding: 8px; background: var(--bg-1); }
+  .lg-plan-input {
+    width: 100%;
+    box-sizing: border-box;
+    resize: vertical;
+    font-size: 12px;
+    line-height: 1.5;
+    padding: 7px 9px;
+    color: var(--text-0);
+    background: var(--bg-0);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+  }
+  .lg-plan-input:focus {
+    outline: none;
+    border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  }
+  .lg-plan-actions {
+    display: flex; gap: 6px; margin-top: 7px;
+  }
+  .lg-plan-add {
+    display: inline-flex; align-items: center;
+    margin: 0 0 10px;
+    padding: 3px 10px;
+    font: inherit; font-size: 10.5px;
+    color: var(--text-faint);
+    background: transparent;
+    border: 1px dashed var(--border);
+    border-radius: 5px;
+    cursor: pointer;
+    transition: color 120ms, border-color 120ms, background 120ms;
+  }
+  .lg-plan-add:hover {
+    color: var(--accent);
+    border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+    background: color-mix(in srgb, var(--accent) 5%, transparent);
+  }
+  /* Janitor (final-check) result at the review gate. */
+  .lg-janitor {
+    margin: 8px 0 4px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .lg-janitor--ok { border-left: 2px solid var(--ok, #65d396); }
+  .lg-janitor--red { border-left: 2px solid var(--error, #e88264); }
+  .lg-janitor-head {
+    display: flex; align-items: center; gap: 6px;
+    padding: 5px 9px;
+    font-size: 11px;
+    color: var(--text-1);
+  }
+  .lg-janitor--ok .lg-janitor-glyph { color: var(--ok, #65d396); }
+  .lg-janitor--red .lg-janitor-glyph { color: var(--error, #e88264); }
+  .lg-janitor-cmd {
+    margin-left: auto;
+    font-size: 10px;
+    color: var(--text-faint);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    max-width: 55%;
+  }
+  .lg-janitor-out {
+    margin: 0;
+    padding: 7px 9px;
+    max-height: 180px;
+    overflow: auto;
+    font-size: 10.5px;
+    line-height: 1.5;
+    color: var(--text-2);
+    background: color-mix(in srgb, var(--error, #e88264) 5%, var(--bg-1));
+    border-top: 1px solid var(--border);
     white-space: pre-wrap;
     word-break: break-word;
   }

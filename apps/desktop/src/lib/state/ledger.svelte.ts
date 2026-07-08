@@ -9,7 +9,7 @@ export interface LedgerItem {
   title: string;
   detail?: string | null;
   checkCmd?: string | null;
-  status: 'queued' | 'working' | 'checking' | 'passed' | 'failed' | 'skipped';
+  status: 'queued' | 'working' | 'checking' | 'passed' | 'failed' | 'skipped' | 'blocked';
   attempts: number;
   maxAttempts: number;
   diff?: string | null;
@@ -35,6 +35,18 @@ export interface LedgerWorkflow {
   id: string;
   sessionId: string;
   task: string;
+  /** Durable plan / contract (markdown) the agent authors while building
+   *  — survives context resets, rendered at the top of the card. Empty
+   *  until the agent calls `ledger_set_plan`. */
+  plan: string;
+  /** Integration "Janitor" gate — shell command run against the whole
+   *  branch after every item passes; apply is blocked until green.
+   *  Null = no gate. */
+  finalCheck?: string | null;
+  /** Result of the last final-check run (true when no gate). */
+  finalCheckOk: boolean;
+  /** Captured output tail of the last final-check run. */
+  finalCheckOutput?: string | null;
   status:
     | 'building'
     | 'awaiting_launch'
@@ -131,6 +143,12 @@ export async function setLedgerSquash(id: string, squash: boolean): Promise<void
 /** Queue a mid-run steering note. Backend rejects unless running. */
 export async function injectLedgerNote(id: string, note: string): Promise<void> {
   await invoke('ledger_inject', { workflowId: id, note });
+}
+
+/** Re-run the integration final-check against the current worktree.
+ *  Backend updates finalCheckOk/Output and echoes `ledger:updated`. */
+export async function recheckLedger(id: string): Promise<boolean> {
+  return (await invoke('ledger_recheck', { workflowId: id })) as boolean;
 }
 
 /** Hydrate from disk on app boot. `ledger_list` returns full workflows

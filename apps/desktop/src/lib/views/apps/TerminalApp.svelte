@@ -209,6 +209,19 @@
               >
                 <span class="qsolo-float-name">{inst.name}</span>
                 <span class="qsolo-float-sub mono">zsh</span>
+                {#if !inst.primary}
+                  <span
+                    class="qsolo-float-x"
+                    role="button"
+                    tabindex="-1"
+                    title="Close {inst.name}"
+                    aria-label="Close {inst.name}"
+                    onclick={(e) => removeTerminal(inst.id, e)}
+                    onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); removeTerminal(inst.id, e as unknown as MouseEvent); } }}
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="6" y1="18" x2="18" y2="6"/></svg>
+                  </span>
+                {/if}
               </button>
             {/each}
             <button class="qsolo-float-add" onclick={() => { addInstance('terminal'); termSwitchOpen = false; }}>
@@ -436,7 +449,10 @@
   /* Quiet §3.4 — PTY inset almost full-window, no list column. */
   .st-shell.st-shell--quiet { display: block; grid-template-columns: none; }
   .qsolo-term { position: relative; display: flex; flex-direction: column; height: 100%; }
-  .st-main--quiet { margin: 52px 40px 18px; }
+  /* Specificity bump (two classes) so this wins over the base `.st-main`
+     margin, which is declared LATER in source — otherwise the quiet PTY
+     inset started at 14px and collided with the floating header. */
+  .st-main.st-main--quiet { margin: 52px 40px 18px; }
   .qsolo-float { position: absolute; top: 13px; left: 96px; z-index: 40; display: flex; align-items: baseline; gap: 10px; }
   .qsolo-float-title {
     background: transparent; border: 0; cursor: pointer;
@@ -464,6 +480,15 @@
   .qsolo-float-item.active { background: var(--bg-3); color: var(--text-0); box-shadow: var(--shadow-1); }
   .qsolo-float-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .qsolo-float-sub { flex: none; font-size: 10.5px; color: var(--text-mute); }
+  .qsolo-float-x {
+    flex: none; width: 18px; height: 18px;
+    display: grid; place-items: center;
+    border-radius: 4px; color: var(--text-mute); cursor: pointer;
+    opacity: 0; transition: opacity 120ms, color 120ms, background 120ms;
+  }
+  .qsolo-float-x svg { width: 11px; height: 11px; }
+  .qsolo-float-item:hover .qsolo-float-x { opacity: 0.8; }
+  .qsolo-float-x:hover { opacity: 1; color: var(--err); background: var(--bg-3); }
   .qsolo-float-add {
     margin-top: 2px; padding: 7px 10px; border-radius: 8px;
     background: transparent; border: 0; cursor: pointer; text-align: left;
