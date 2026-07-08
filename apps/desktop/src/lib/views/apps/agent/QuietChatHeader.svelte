@@ -289,7 +289,7 @@
   .qh {
     flex: none;
     display: flex; flex-direction: column; gap: 6px;
-    width: 100%; max-width: min(1280px, 94%); margin: 0 auto;
+    width: 100%; max-width: var(--quiet-measure, min(1100px, 90%)); margin: 0 auto;
     padding: 6px 0 14px;
   }
   .qh-titlerow { display: flex; align-items: baseline; gap: 10px; }

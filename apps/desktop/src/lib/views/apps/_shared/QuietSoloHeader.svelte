@@ -27,6 +27,12 @@
     lead?: Snippet;
     /** Solo actions rendered on the right as dotted links. */
     actions?: Snippet;
+    /** Optional custom popover body — receives a `close` callback. When
+     *  provided it REPLACES the built-in `items` list; used in Quiet to
+     *  host the full Cabin list panel (search + filter chips + rows) so
+     *  filtering survives the Cabin→Quiet collapse (README §3.3: "поповер
+     *  со списком = замена списочной панели"). */
+    panel?: Snippet<[() => void]>;
   }
   let p: Props = $props();
 
@@ -63,6 +69,11 @@
         {p.count} {p.noun} <span class="qsolo-caret" aria-hidden="true">▾</span>
       </button>
       {#if switcherOpen}
+        {#if p.panel}
+          <div class="qsolo-switch-pop qsolo-switch-pop--panel">
+            {@render p.panel(() => (switcherOpen = false))}
+          </div>
+        {:else}
         <div class="qsolo-switch-pop" role="listbox" aria-label={p.ariaLabel ?? 'Switch'}>
           {#each p.items as it (it.id)}
             <button
@@ -81,6 +92,7 @@
             <div class="qsolo-switch-empty">Nothing here yet.</div>
           {/if}
         </div>
+        {/if}
       {/if}
     </div>
 
@@ -138,6 +150,25 @@
   .qsolo-switch-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .qsolo-switch-sub { flex: none; font-size: 10.5px; color: var(--text-mute); }
   .qsolo-switch-empty { padding: 8px 10px; font-size: 12px; color: var(--text-mute); }
+
+  /* Panel mode — the popover hosts the full Cabin list component (`.lp`)
+     so its search + filter chips + grouped rows come along in Quiet. */
+  .qsolo-switch-pop--panel {
+    width: 360px; max-width: 92vw; padding: 0;
+    max-height: min(560px, 74vh);
+    overflow: hidden;
+    display: flex;
+  }
+  /* `.lp` is force-hidden in Quiet by quiet.css (blunt global for the
+     terminal/canvas instance lists). Re-show it inside the popover and
+     strip its sidebar chrome so it reads as popover content. !important
+     is deliberate — it overrides that global utility, not local CSS. */
+  .qsolo-switch-pop--panel :global(.lp) {
+    display: flex !important;
+    width: 100%; min-width: 0; flex: 1;
+    background: transparent; border: 0;
+  }
+  .qsolo-switch-pop--panel :global(.lp-list) { max-height: none; }
 
   .qsolo-spring { flex: 1; }
   .qsolo-actions { display: inline-flex; align-items: center; gap: 14px; flex: none; }

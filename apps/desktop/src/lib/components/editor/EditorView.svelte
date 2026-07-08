@@ -120,6 +120,11 @@
      *  provided, the inline composer falls back to "pin mention,
      *  user finishes the prompt elsewhere". */
     onQuickSend?: (sessionId: string, text: string) => void;
+    /** Quiet direction (README §3.4, mockup 4j). No activity bar exists
+     *  in Quiet, so the explorer folds the git commit box under the tree
+     *  (source control stays reachable) and the main pane swaps the tab
+     *  strip for a path breadcrumb. Cabin (default) is untouched. */
+    quiet?: boolean;
   }
   let {
     repoPath = $bindable(''),
@@ -132,7 +137,8 @@
     instanceLabel,
     instanceId = 'default',
     onRequestReviewTab,
-    onQuickSend
+    onQuickSend,
+    quiet = false
   }: Props = $props();
 
   const linkedAiKind = $derived<'claude' | null>(
@@ -1247,6 +1253,20 @@
                   {gitStatusByPath}
                 />
               {/if}
+              {#if quiet && repoPath}
+                <!-- Quiet 4j — the activity bar is gone, so fold the git
+                     commit box under the tree; source control stays a
+                     click away. Compact (no history splitter). -->
+                <div class="ev-quiet-git">
+                  <GitPanel
+                    bind:this={gitPanel}
+                    repo={roots.length > 1 ? activeGitRoot : repoPath}
+                    onStatusChange={(files) => { onGitStatusChange(files, roots.length > 1 ? activeGitRoot : repoPath); gitChangeCount += 1; }}
+                    onOpenDiff={openDiff}
+                    aiKind={linkedAiKind}
+                  />
+                </div>
+              {/if}
             {:else if sidebarTab === 'git'}
               {#if roots.length > 1}
                 <!-- Per-root SOURCE CONTROL: switcher picks which repo the
@@ -1892,6 +1912,21 @@
      scrollbars stay intact. */
   .ev-sidebar-body :global(*) { scrollbar-width: thin; }
   .ev-sidebar-body :global(*::-webkit-scrollbar:horizontal) { height: 0; display: none; }
+
+  /* Quiet 4j — git commit box folded under the tree. `margin-top:auto`
+     pins it to the bottom of the sidebar column (the tree keeps the top
+     and scrolls on its own); a border + capped height keep it a compact
+     source-control footer, not a second full pane. */
+  .ev-quiet-git {
+    flex: none;
+    margin-top: auto;
+    max-height: 48%;
+    min-height: 0;
+    display: flex;
+    overflow: hidden;
+    border-top: 1px solid var(--border);
+  }
+  .ev-quiet-git > :global(*) { flex: 1; min-height: 0; width: 100%; }
 
   /* Active-pane label — small uppercase caption above the body, in
      place of the old VSCode-style bottom tab strip. The activity bar

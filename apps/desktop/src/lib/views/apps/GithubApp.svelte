@@ -81,6 +81,24 @@
         onPick={pickItem}
         ariaLabel="Pull requests"
       >
+        {#snippet panel(close)}
+          <GithubList
+            instanceId={p.instanceId}
+            githubStatus={p.githubStatus}
+            now={p.now}
+            onRefresh={p.onRefresh}
+            onOpenCreatePr={p.onOpenCreatePr}
+            onOpenBrowser={p.onOpenBrowser}
+            onSelect={p.onSelect}
+            onDragStart={p.onDragStart}
+            onDragEnd={p.onDragEnd}
+            onCardMouseDown={p.onCardMouseDown}
+            isClickNotDrag={p.isClickNotDrag}
+            onSendToClaude={p.onSendToClaude}
+            onFixWithDw={p.onFixWithDw}
+            onNavigate={close}
+          />
+        {/snippet}
         {#snippet lead()}
           {#if focusItem}
             <span class="qsolo-tag qsolo-tag--{focusItem.state}">{focusItem.state}</span>

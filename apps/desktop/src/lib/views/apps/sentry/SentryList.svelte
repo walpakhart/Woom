@@ -32,6 +32,8 @@
     onSendToClaude: (item: SentryIssue) => void;
     /** Seed a Dynamic Workflow from this issue via the live-build pipeline. */
     onFixWithDw: (item: SentryIssue) => void;
+    /** Fired after a row navigates (Quiet: closes the switcher popover). */
+    onNavigate?: () => void;
   }
   let p: Props = $props();
 
@@ -153,6 +155,7 @@
   function clickItem(it: SentryIssue, e: MouseEvent) {
     if (!p.isClickNotDrag(e)) return;
     openSentryFocus(it.id);
+    p.onNavigate?.();
   }
 
   /* Right-click context menu — Send to Claude + Open + Copy.
@@ -289,6 +292,7 @@
     openSentryFocus(id);
     query = '';
     pickerOpen = false;
+    p.onNavigate?.();
   }
 
   function handleSearchKeydown(e: KeyboardEvent) {

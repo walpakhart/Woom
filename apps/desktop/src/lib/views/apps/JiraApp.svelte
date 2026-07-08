@@ -67,6 +67,23 @@
         onPick={pickTicket}
         ariaLabel="Tickets"
       >
+        {#snippet panel(close)}
+          <JiraList
+            instanceId={p.instanceId}
+            jiraStatus={p.jiraStatus}
+            now={p.now}
+            onRefresh={p.onRefresh}
+            onOpenCreateIssue={p.onOpenCreateIssue}
+            onOpenBrowser={p.onOpenBrowser}
+            onDragStart={p.onDragStart}
+            onDragEnd={p.onDragEnd}
+            onCardMouseDown={p.onCardMouseDown}
+            isClickNotDrag={p.isClickNotDrag}
+            onSendToClaude={p.onSendToClaude}
+            onFixWithDw={p.onFixWithDw}
+            onNavigate={close}
+          />
+        {/snippet}
         {#snippet lead()}
           {#if focusItem}
             <span class="qsolo-key mono">{focusItem.key}</span>

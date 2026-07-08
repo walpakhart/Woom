@@ -32,6 +32,14 @@
   const chipCostUsd = $derived(budget.costUsd + dwTotals.costUsd);
   const totalTokens = $derived(budget.input + budget.output);
 
+  /* Working folder — surfaced in the header so the session's cwd is
+     visible at a glance (was Context-dock-only). Mirrors QuietChatHeader. */
+  const repoLabel = $derived.by(() => {
+    const cwd = sess?.worktreePath ?? sess?.cwd ?? null;
+    if (!cwd) return '';
+    return cwd.split('/').filter(Boolean).pop() ?? '';
+  });
+
   const elapsed = $derived.by(() => {
     const startedAt = sess ? p.thinkingStartedAt[sess.id] ?? null : null;
     if (!startedAt || !sess?.sending) return '';
@@ -128,6 +136,21 @@
     <span class="ch-name ch-name--empty">No session</span>
   {/if}
 
+  {#if repoLabel}
+    <button
+      class="ch-folder"
+      onclick={p.onToggleContext}
+      title="Working folder — open Context"
+      aria-label="Working folder {repoLabel}"
+    >
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+      </svg>
+      <span class="ch-folder-name">{repoLabel}</span>
+      {#if sess?.worktreeBranch}<span class="ch-folder-wt mono">wt {sess.worktreeBranch}</span>{/if}
+    </button>
+  {/if}
+
   {#if sess?.sending}
     <span class="ch-state ch-state--live">streaming{elapsed ? ` · ${elapsed}` : ''}</span>
     <button class="ch-stop" onclick={p.onStop} title="Stop generation" aria-label="Stop generation">
@@ -210,6 +233,22 @@
     font-size: 15px; font-weight: 600;
     outline: none;
   }
+
+  .ch-folder {
+    display: inline-flex; align-items: center; gap: 5px;
+    flex: none; min-width: 0; max-width: 220px;
+    padding: 3px 8px;
+    border-radius: var(--r-chip);
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--text-2);
+    font-size: 12px; cursor: pointer;
+    transition: color 120ms, background 120ms, border-color 120ms;
+  }
+  .ch-folder:hover { color: var(--text-0); background: var(--bg-hover); border-color: var(--border); }
+  .ch-folder svg { width: 12px; height: 12px; flex: none; color: var(--text-faint); }
+  .ch-folder-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .ch-folder-wt { font-size: 11px; color: var(--text-faint); flex: none; }
 
   .ch-state {
     font-size: 12px; color: var(--text-faint);

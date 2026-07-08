@@ -38,6 +38,8 @@
     /** Seed a Dynamic Workflow from this item — templates a task and
      *  routes through the live-build DW pipeline. */
     onFixWithDw: (item: InboxItem) => void;
+    /** Fired after a row navigates (Quiet: closes the switcher popover). */
+    onNavigate?: () => void;
   }
   let p: Props = $props();
 
@@ -452,6 +454,7 @@
   function clickItem(it: InboxItem, e: MouseEvent) {
     if (!p.isClickNotDrag(e)) return;
     p.onSelect(it.id);
+    p.onNavigate?.();
   }
 
   /* ─── Search picker (server-side) ───────────────────────────────
@@ -554,6 +557,7 @@
     else p.onSelect(numId);
     query = '';
     pickerOpen = false;
+    p.onNavigate?.();
   }
 
   /** Open the typed `#NNN` directly when the picker is empty (PR

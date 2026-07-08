@@ -40,6 +40,8 @@
     onSendToClaude: (item: JiraItem) => void;
     /** Seed a Dynamic Workflow from this ticket via the live-build pipeline. */
     onFixWithDw: (item: JiraItem) => void;
+    /** Fired after a row navigates (Quiet: closes the switcher popover). */
+    onNavigate?: () => void;
   }
   let p: Props = $props();
 
@@ -208,6 +210,7 @@
     inboxState.jiraFocusKey = key;
     query = '';
     pickerOpen = false;
+    p.onNavigate?.();
   }
 
   function handleSearchKeydown(e: KeyboardEvent) {
@@ -325,6 +328,7 @@
   function clickItem(it: JiraItem, e: MouseEvent) {
     if (!p.isClickNotDrag(e)) return;
     inboxState.jiraFocusKey = it.key;
+    p.onNavigate?.();
   }
 
   /* Right-click context menu — same pattern as GithubList. Holds the

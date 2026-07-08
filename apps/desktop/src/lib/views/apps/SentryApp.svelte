@@ -68,6 +68,21 @@
         onPick={pickIssue}
         ariaLabel="Issues"
       >
+        {#snippet panel(close)}
+          <SentryList
+            instanceId={p.instanceId}
+            sentryStatus={p.sentryStatus}
+            now={p.now}
+            onOpenBrowser={p.onOpenBrowser}
+            onDragStart={p.onDragStart}
+            onDragEnd={p.onDragEnd}
+            onCardMouseDown={p.onCardMouseDown}
+            isClickNotDrag={p.isClickNotDrag}
+            onSendToClaude={p.onSendToClaude}
+            onFixWithDw={p.onFixWithDw}
+            onNavigate={close}
+          />
+        {/snippet}
         {#snippet lead()}
           {#if focusItem}
             <span class="qsolo-key mono">{focusItem.short_id}</span>
