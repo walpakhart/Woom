@@ -46,16 +46,18 @@
   /* Surfaces — dim paper, progressively raised. NO pure white
      anywhere: the brightest surface (cards/code) tops out at
      ~L95 so large editor/code areas don't burn. */
-  --bg-0: #EDEFF2;              /* page */
-  --bg-1: #E7EAED;              /* titlebar, sidebar, row hover */
-  --bg-2: #F3F5F7;              /* cards, code bg, composer */
-  --bg-3: #DFE3E7;              /* chips, user bubble */
-  --bg-4: #D3D9DE;              /* meter tracks, blocked buttons */
-  --bg-sel: #E2E6EA;            /* selected list row */
-  --bg-nav: #D9DEE3;            /* active nav item / session / tab */
-  --bg-hover: #E1E5E9;          /* nav + tree hover */
-  --bg-glass: rgba(237, 239, 242, 0.86);
-  --bg-elev: rgba(31, 35, 40, 0.05);
+  /* Warm paper (cream) — matches the app icon's warm off-white, not a
+     cool blue-grey. Hue ~40°, low saturation; lightness order preserved. */
+  --bg-0: #F0EBE1;              /* page */
+  --bg-1: #EAE4D8;              /* titlebar, sidebar, row hover */
+  --bg-2: #F7F3EB;              /* cards, code bg, composer */
+  --bg-3: #E3DCCD;              /* chips, user bubble */
+  --bg-4: #D9D0BF;              /* meter tracks, blocked buttons */
+  --bg-sel: #E7E1D4;            /* selected list row */
+  --bg-nav: #DFD8C8;            /* active nav item / session / tab */
+  --bg-hover: #EBE5D9;          /* nav + tree hover */
+  --bg-glass: rgba(240, 235, 225, 0.86);
+  --bg-elev: rgba(46, 42, 30, 0.05);
 
   /* Charcoal insets — SAME in both themes (terminal, status strip,
      bg-task card, Sentry stack trace). */
@@ -65,34 +67,34 @@
   --dark-text-2: #98A0A8;
   --dark-mute: #6B7278;
 
-  /* Text — warm ink. */
-  --text-0: #24292F;
-  --text-1: #454C54;
-  --text-2: #363C43;
-  --text-mute: #6E7781;
-  --text-faint: #9AA4AE;
-  --text-linenum: #B4BCC4;
+  /* Text — warm ink (brown-charcoal, not blue-grey). */
+  --text-0: #2A2620;
+  --text-1: #4B463C;
+  --text-2: #3B362D;
+  --text-mute: #6F6A5E;
+  --text-faint: #9E9788;
+  --text-linenum: #B8B1A2;
 
   /* Borders — ink at low alpha. */
-  --border:        rgba(31, 35, 40, 0.12);
-  --border-lo:     rgba(31, 35, 40, 0.07);
-  --border-hi:     rgba(31, 35, 40, 0.18);
-  --border-hi2:    rgba(31, 35, 40, 0.25);
-  --border-solid:  rgba(31, 35, 40, 0.85);
-  --border-neutral: rgba(31, 35, 40, 0.07);
-  --border-neutral-hi: rgba(31, 35, 40, 0.14);
-  --border-accent:   rgba(31, 35, 40, 0.5);
-  --border-accent-2: rgba(31, 35, 40, 0.25);
-  --canvas-dot: rgba(31, 35, 40, 0.13);
+  --border:        rgba(46, 42, 30, 0.12);
+  --border-lo:     rgba(46, 42, 30, 0.07);
+  --border-hi:     rgba(46, 42, 30, 0.18);
+  --border-hi2:    rgba(46, 42, 30, 0.25);
+  --border-solid:  rgba(46, 42, 30, 0.85);
+  --border-neutral: rgba(46, 42, 30, 0.07);
+  --border-neutral-hi: rgba(46, 42, 30, 0.14);
+  --border-accent:   rgba(46, 42, 30, 0.5);
+  --border-accent-2: rgba(46, 42, 30, 0.25);
+  --canvas-dot: rgba(46, 42, 30, 0.13);
 
   /* Accent — in the paper system the accent IS the ink. Primary
      actions render as inversion: ink fill, paper text. */
   --accent: #24292F;
   --accent-bright: #363C43;
   --accent-deep: #14171A;
-  --accent-soft: rgba(31, 35, 40, 0.08);
-  --accent-glow: rgba(31, 35, 40, 0.18);
-  --accent-fg: #F0F2F5;
+  --accent-soft: rgba(46, 42, 30, 0.08);
+  --accent-glow: rgba(46, 42, 30, 0.18);
+  --accent-fg: #F4F0E8;
 
   /* Legacy `--blue*` aliases — repointed at ink. */
   --blue: #1F2328;
@@ -113,11 +115,11 @@
   --src-editor:  #454C54;
   --src-term:    #D5DAE0;
   --src-mono:    #6E7781;
-  --src-jira-border:   rgba(31, 35, 40, 0.35);
-  --src-github-border: rgba(31, 35, 40, 0.35);
-  --src-sentry-border: rgba(31, 35, 40, 0.35);
-  --src-claude-border: rgba(31, 35, 40, 0.4);
-  --src-canvas-border: rgba(31, 35, 40, 0.35);
+  --src-jira-border:   rgba(46, 42, 30, 0.35);
+  --src-github-border: rgba(46, 42, 30, 0.35);
+  --src-sentry-border: rgba(46, 42, 30, 0.35);
+  --src-claude-border: rgba(46, 42, 30, 0.4);
+  --src-canvas-border: rgba(46, 42, 30, 0.35);
 
   /* Syntax palette (editor + inline code) — light paper set. */
   --tk-key:    #CF222E;
@@ -131,7 +133,7 @@
   --tk-tag:    #CF222E;
   --tk-attr:   #8250DF;
   --tk-plain:  #24292F;
-  --tk-ghost:  rgba(31, 35, 40, 0.4);
+  --tk-ghost:  rgba(46, 42, 30, 0.4);
   --tk-hl-line: rgba(26, 127, 55, 0.10);
 
   /* Diff. */
@@ -170,12 +172,12 @@
   --light-red: #E58B80;  --light-yellow: #D9B96A;  --light-green: #8CC694;
 
   /* Modal & popover backdrop — ink haze. */
-  --backdrop: rgba(31, 35, 40, 0.32);
+  --backdrop: rgba(46, 42, 30, 0.32);
 
   /* Scrollbars / desk. */
-  --scrollbar: rgba(31, 35, 40, 0.16);
-  --scrollbar-hover: rgba(31, 35, 40, 0.3);
-  --desk: #DCE0E4;
+  --scrollbar: rgba(46, 42, 30, 0.16);
+  --scrollbar-hover: rgba(46, 42, 30, 0.3);
+  --desk: #E2DACB;
 
   /* Typography — Geist for UI + prose, Geist Mono for paths / commits /
      metrics / code / PTY (redesign v2; was single IBM Plex Mono). */
