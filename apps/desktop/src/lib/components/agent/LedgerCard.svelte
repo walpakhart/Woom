@@ -8,6 +8,7 @@
   import { slide, fade } from 'svelte/transition';
   import { ledgerState, setLedgerSquash, injectLedgerNote, recheckLedger, type LedgerItem } from '$lib/state/ledger.svelte';
   import { formatCostUsd } from '$lib/usage';
+  import Markdown from '$lib/components/ui/Markdown.svelte';
 
   interface Props {
     workflowId: string;
@@ -71,8 +72,16 @@
   let planDraft = $state('');
 
   const passed = $derived(wf ? wf.items.filter((i) => i.status === 'passed').length : 0);
+  /* Blocked counts as settled: its deps were skipped/failed so it can
+     never run, and the workflow reaches review with it terminal — the
+     progress bar would otherwise sit < 100% on a legitimately finished
+     run. */
   const settled = $derived(
-    wf ? wf.items.filter((i) => i.status === 'passed' || i.status === 'skipped').length : 0
+    wf
+      ? wf.items.filter(
+          (i) => i.status === 'passed' || i.status === 'skipped' || i.status === 'blocked'
+        ).length
+      : 0
   );
   const editableWf = $derived(
     wf ? ['building', 'awaiting_launch', 'failed'].includes(wf.status) : false
@@ -413,7 +422,7 @@
             <button class="lg-plan-edit" onclick={openPlanEdit} title="Edit plan">edit</button>
           {/if}
         </summary>
-        <div class="lg-plan-body">{wf.plan}</div>
+        <div class="lg-plan-body"><Markdown source={wf.plan} /></div>
       </details>
     {:else if editableWf}
       <button class="lg-plan-add" onclick={openPlanEdit} title="Add a plan / contract">
@@ -471,7 +480,7 @@
                 aria-expanded={expandedId === item.id}
               >
                 <span class="lg-num mono">{String(num).padStart(2, '0')}</span>
-                <span class="lg-glyph mono" class:lg-glyph--live={item.status === 'working' || item.status === 'checking'}>{glyph(item.status)}</span>
+                <span class="lg-glyph mono" class:lg-glyph--live={item.status === 'working' || item.status === 'checking'} title={item.status === 'blocked' ? 'blocked — an upstream dependency was skipped or failed' : item.status}>{glyph(item.status)}</span>
                 <span class="lg-title">{item.title}</span>
                 {#if item.parallel}<span class="lg-par mono" title="parallel-safe — may run in a wave">∥</span>{/if}
                 {#if item.deps?.length}<span class="lg-deps mono" title="waits for {item.deps.join(', ')}">⤺ {item.deps.length}</span>{/if}
@@ -843,6 +852,11 @@
   }
   .lg-item[data-status='passed'] .lg-glyph { color: var(--ok, #6cb87a); }
   .lg-item[data-status='failed'] .lg-glyph { color: var(--error, #e88264); }
+  /* Blocked = an upstream dep was skipped/failed so this can't run.
+     Reads as inert (muted glyph + dimmed title), distinct from a
+     deliberately skipped item (− at default color). */
+  .lg-item[data-status='blocked'] .lg-glyph { color: var(--text-mute); }
+  .lg-item[data-status='blocked'] .lg-title { color: var(--text-2); }
   .lg-glyph--live { animation: lg-pulse 1.2s ease-in-out infinite; }
   @keyframes lg-pulse {
     0%, 100% { opacity: 1; }
@@ -1160,13 +1174,15 @@
   }
   .lg-plan-edit:hover { color: var(--text-1); }
   .lg-plan-body {
-    padding: 2px 11px 9px;
-    font-size: 12px;
-    line-height: 1.55;
-    color: var(--text-1);
-    white-space: pre-wrap;
+    padding: 4px 11px 9px;
     word-break: break-word;
   }
+  /* Plan is markdown (Markdown.svelte / .prose). Trim its outer margins
+     so the boxed section stays tight, and dial the body font down a
+     touch to fit the card. */
+  .lg-plan-body :global(.prose) { font-size: 12.5px; line-height: 1.55; }
+  .lg-plan-body :global(.prose > :first-child) { margin-top: 0; }
+  .lg-plan-body :global(.prose > :last-child) { margin-bottom: 0; }
   .lg-plan--edit { padding: 8px; background: var(--bg-1); }
   .lg-plan-input {
     width: 100%;
