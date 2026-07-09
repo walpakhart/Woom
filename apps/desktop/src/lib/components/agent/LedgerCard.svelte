@@ -118,6 +118,15 @@
     }
   }
 
+  /** Strip the ledger's worktree prefix from a feed line so paths read
+   *  repo-relative (…/worktrees/dw/ledger-<id>/work/src/x → src/x) instead
+   *  of the noisy absolute path into Application Support. */
+  function shortFeed(line: string): string {
+    const wt = wf?.worktreePath;
+    if (!wt) return line;
+    return line.split(`${wt}/`).join('').split(wt).join('');
+  }
+
   /** Per-line class for the colorized diff view. Meta lines (+++/---,
    *  headers) are checked before +/- so they don't read as add/del. */
   function diffCls(ln: string): string {
@@ -515,7 +524,7 @@
           {#if (item.status === 'working' || item.status === 'checking') && item.feed.length > 0}
             <div class="lg-feed mono" transition:slide={{ duration: 160 }}>
               {#each item.feed.slice(-6) as line, li (item.feed.length - 6 + li)}
-                <div class="lg-feed-line" in:fade={{ duration: 200 }}>{line}</div>
+                <div class="lg-feed-line" in:fade={{ duration: 200 }}>{shortFeed(line)}</div>
               {/each}
             </div>
           {/if}
