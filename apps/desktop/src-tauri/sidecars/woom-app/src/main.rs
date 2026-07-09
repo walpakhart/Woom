@@ -2370,6 +2370,21 @@ impl App {
     }
 
     #[tool(
+        description = "Kick off a NEW Ledger workflow (a machine-checked checklist run in a git worktree) for the CURRENT chat session — same as the user typing `/ledger <prompt>`. Use this when you decide a task is big enough to warrant a ledger and want to build + run it end-to-end yourself, WITHOUT the user having to click the ledger button. Woom mints the workflow and hands you a 'Building ledger <id>' brief on your NEXT turn: read it, then call ledger_set_plan → ledger_set_task → ledger_add_item (once per item, in execution order) → ledger_launch (or ledger_run to skip the approval gate). `prompt` = the full task brief the ledger should accomplish."
+    )]
+    async fn start_ledger(
+        &self,
+        Parameters(StartLedgerParams { prompt }): Parameters<StartLedgerParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        if prompt.trim().is_empty() {
+            return Err(ErrorData::invalid_params("prompt required", None));
+        }
+        Ok(CallToolResult::success(vec![Content::text(
+            "Ledger starting. On your NEXT turn Woom hands you a 'Building ledger <id>' brief with the workflow_id and step-by-step instructions — follow it: research the repo first, then ledger_set_plan, ledger_set_task, ledger_add_item per item, and ledger_launch / ledger_run.",
+        )]))
+    }
+
+    #[tool(
         description = "Set/refine the task description of a LEDGER workflow you're BUILDING live (status `building`). Pass the `workflowId` from your 'Building ledger <id>' brief. Call this once you understand the task, before adding items."
     )]
     async fn ledger_set_task(
@@ -2726,6 +2741,13 @@ struct DwSetTaskParams {
     workflow_id: String,
     /// One-line task description for the workflow (shown on the card).
     task: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct StartLedgerParams {
+    /// The full task brief the ledger should accomplish — same text you'd
+    /// type after `/ledger `. Be specific; this seeds the whole workflow.
+    prompt: String,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]

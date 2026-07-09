@@ -1460,7 +1460,12 @@
            focused); ↑/↓ + Enter/Tab handled by the textarea's onKey
            above. Picker stays open while the input is a single bare
            slash token; a space or no-match dismisses. -->
-      <div class="slash-picker" role="listbox" aria-label="Slash command picker">
+      <div
+        class="slash-picker"
+        role="listbox"
+        aria-label="Slash command picker"
+        style="left: {slashAnchor?.left ?? 0}px; top: {slashAnchor?.top ?? 0}px"
+      >
         {#each slashMatches as cmd, idx (cmd + '|' + idx)}
           <button
             type="button"
@@ -1547,10 +1552,15 @@
      would be nicer but the picker only fires when the input starts
      with `/`, so it always sits under "/", which is always the first
      glyph of the first line — fixed anchor reads as natural. */
+  /* Anchored to the textarea's viewport rect (slashAnchor, set in
+     detectSlashTrigger) via position:fixed + translateY(-100%) so the
+     picker sits just above the input regardless of which layout
+     (Cabin / Quiet) hosts the composer — the old position:absolute
+     resolved against the wrong offset parent in Quiet and floated the
+     picker to the top-left of the chat. */
   .slash-picker {
-    position: absolute;
-    left: 36px;
-    bottom: calc(100% + 6px);
+    position: fixed;
+    transform: translateY(calc(-100% - 6px));
     min-width: 240px;
     max-width: 380px;
     padding: 4px;

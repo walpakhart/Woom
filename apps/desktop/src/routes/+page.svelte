@@ -2230,6 +2230,17 @@
     const str = (k: string): string => _mcpStr(input, k);
     const num = (k: string): number => _mcpNum(input, k);
     const pick = (...keys: string[]): string => pickFrom(input, ...keys);
+    /* Agent-initiated ledger kickoff. Routes through the exact same
+     * slash pipeline as the user typing `/ledger <prompt>` — mints the
+     * workflow via ledger_create + injects the 'Building ledger <id>'
+     * brief, so the agent can drive a ledger end-to-end itself instead
+     * of needing the user to press the ledger button first. */
+    if (name === 'mcp__app__start_ledger') {
+      const sess = sessionsState.list.find((s) => s.id === _sessionId);
+      const prompt = str('prompt');
+      if (sess && prompt.trim()) void handleSlashCommand(`/ledger ${prompt}`, sess);
+      return;
+    }
     /* Live Ledger build — each invoke mutates Rust state + emits
      * ledger:created / ledger:updated which the global listeners fold
      * into ledgerState. */
