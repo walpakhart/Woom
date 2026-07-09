@@ -42,6 +42,10 @@ pub const DEFAULT_MAX_ATTEMPTS: u32 = 3;
 /// Ceiling for one shell check run. Test suites routinely take
 /// minutes; anything past this is a hung check, not a slow one.
 const CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+/// Default hard wall-clock cap for one worker attempt.
+const ITEM_TIMEOUT_SECS: u64 = 600;
+/// Default no-stream-activity window before a worker attempt is stalled.
+const STALL_TIMEOUT_SECS: u64 = 120;
 /// Tail of check output kept on the item (feedback prompt + card UI).
 const CHECK_OUTPUT_TAIL: usize = 4_000;
 /// Per-item budget headroom. The whole-run cap scales with checklist
@@ -212,6 +216,9 @@ pub struct LedgerWorkflow {
     /// on resume. Per-workflow so a big redesign can opt into more.
     #[serde(default = "default_budget_cap")]
     pub budget_cap_usd: f64,
+    /// Optional per-workflow worker wall-clock cap (seconds). None → ITEM_TIMEOUT_SECS.
+    #[serde(default)]
+    pub item_timeout_secs: Option<u64>,
     pub created_at: i64,
     #[serde(default)]
     pub started_at: Option<i64>,
@@ -516,6 +523,7 @@ async fn run_worker_streaming(
     prompt: &str,
     cwd: &Path,
     model: &str,
+    item_timeout_secs: u64,
 ) -> Result<(String, Option<crate::claude::OneshotUsage>), String> {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
@@ -559,52 +567,90 @@ async fn run_worker_streaming(
 
     let mut result_text = String::new();
     let mut usage: Option<crate::claude::OneshotUsage> = None;
-    while let Ok(Some(line)) = lines.next_line().await {
-        let v: serde_json::Value = match serde_json::from_str(&line) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-        match v.get("type").and_then(|t| t.as_str()) {
-            Some("assistant") => {
-                let blocks = v
-                    .get("message")
-                    .and_then(|m| m.get("content"))
-                    .and_then(|c| c.as_array())
-                    .cloned()
-                    .unwrap_or_default();
-                for b in blocks {
-                    if b.get("type").and_then(|t| t.as_str()) != Some("tool_use") {
-                        continue;
-                    }
-                    let name = b.get("name").and_then(|n| n.as_str()).unwrap_or("tool");
-                    let entry = feed_line(
-                        name,
-                        b.get("input").unwrap_or(&serde_json::Value::Null),
-                    );
-                    reg.mutate_emit(app, wf_id, |w| {
-                        for it in w.items.iter_mut() {
-                            if it.id == item_id {
-                                it.feed.push(entry.clone());
-                                if it.feed.len() > FEED_CAP {
-                                    let drop = it.feed.len() - FEED_CAP;
-                                    it.feed.drain(0..drop);
+
+    // Bound the worker turn: race each stream line against a 5s tick that
+    // consults the pure watchdog. A blocked child (hung `pnpm install`
+    // emitting no tokens) trips the stall window; a slow-but-alive worker
+    // trips the wall-clock cap. On either, kill the child and return a
+    // structured reason — never hang the run.
+    let started = std::time::Instant::now();
+    let mut last_activity = std::time::Instant::now();
+    let lim = WorkerLimits {
+        item_secs: item_timeout_secs,
+        stall_secs: STALL_TIMEOUT_SECS,
+    };
+    loop {
+        let tick = tokio::time::sleep(std::time::Duration::from_secs(5));
+        tokio::select! {
+            line = lines.next_line() => {
+                match line {
+                    Ok(Some(l)) => {
+                        last_activity = std::time::Instant::now();
+                        let v: serde_json::Value = match serde_json::from_str(&l) {
+                            Ok(v) => v,
+                            Err(_) => continue,
+                        };
+                        match v.get("type").and_then(|t| t.as_str()) {
+                            Some("assistant") => {
+                                let blocks = v
+                                    .get("message")
+                                    .and_then(|m| m.get("content"))
+                                    .and_then(|c| c.as_array())
+                                    .cloned()
+                                    .unwrap_or_default();
+                                for b in blocks {
+                                    if b.get("type").and_then(|t| t.as_str()) != Some("tool_use") {
+                                        continue;
+                                    }
+                                    let name = b.get("name").and_then(|n| n.as_str()).unwrap_or("tool");
+                                    let entry = feed_line(
+                                        name,
+                                        b.get("input").unwrap_or(&serde_json::Value::Null),
+                                    );
+                                    reg.mutate_emit(app, wf_id, |w| {
+                                        for it in w.items.iter_mut() {
+                                            if it.id == item_id {
+                                                it.feed.push(entry.clone());
+                                                if it.feed.len() > FEED_CAP {
+                                                    let drop = it.feed.len() - FEED_CAP;
+                                                    it.feed.drain(0..drop);
+                                                }
+                                            }
+                                        }
+                                    });
                                 }
                             }
+                            Some("result") => {
+                                result_text = v
+                                    .get("result")
+                                    .and_then(|r| r.as_str())
+                                    .unwrap_or_default()
+                                    .to_string();
+                                usage = v
+                                    .get("usage")
+                                    .and_then(|u| serde_json::from_value(u.clone()).ok());
+                            }
+                            _ => {}
                         }
-                    });
+                    }
+                    Ok(None) | Err(_) => break,
                 }
             }
-            Some("result") => {
-                result_text = v
-                    .get("result")
-                    .and_then(|r| r.as_str())
-                    .unwrap_or_default()
-                    .to_string();
-                usage = v
-                    .get("usage")
-                    .and_then(|u| serde_json::from_value(u.clone()).ok());
+            _ = tick => {
+                let elapsed = started.elapsed().as_secs();
+                let idle = last_activity.elapsed().as_secs();
+                match worker_watchdog(elapsed, idle, lim) {
+                    WorkerTick::Continue => {}
+                    WorkerTick::Stall => {
+                        let _ = child.start_kill();
+                        return Err(format!("worker stalled: no output for {idle}s"));
+                    }
+                    WorkerTick::Timeout => {
+                        let _ = child.start_kill();
+                        return Err(format!("worker timed out after {elapsed}s"));
+                    }
+                }
             }
-            _ => {}
         }
     }
     let exit = child.wait().await.map_err(|e| format!("worker wait: {}", e))?;
@@ -1201,7 +1247,7 @@ async fn run_ledger(app: &AppHandle, reg: &Arc<LedgerRegistry>, wf_id: &str) -> 
 
             // 1. Fresh-context worker turn (streamed — live feed).
             let prompt = build_worker_prompt(&wf_now, &item, feedback_now.as_deref(), false);
-            let (text, usage) = run_worker_streaming(
+            let (text, usage) = match run_worker_streaming(
                 app,
                 reg,
                 wf_id,
@@ -1209,8 +1255,59 @@ async fn run_ledger(app: &AppHandle, reg: &Arc<LedgerRegistry>, wf_id: &str) -> 
                 &prompt,
                 Path::new(&wt_path),
                 &model,
+                wf_now.item_timeout_secs.unwrap_or(ITEM_TIMEOUT_SECS),
             )
-            .await?;
+            .await
+            {
+                Ok(v) => v,
+                Err(reason) => {
+                    // Bounded worker failure (timeout / stall / spawn) is a
+                    // NORMAL attempt failure, never a run abort. Reset the
+                    // worktree debris and route it through the SAME retry /
+                    // settle path a failed check uses: feed the reason back
+                    // to the next attempt, and after `max_attempts` settle
+                    // the item to `failed` with the reason surfaced in
+                    // `check_output` so the run reaches the review gate.
+                    let mut reset = git_in(&wt_path);
+                    reset.args(["reset", "--hard", "HEAD"]);
+                    let _ = run_git(reset);
+                    let mut clean = git_in(&wt_path);
+                    clean.args(["clean", "-fd"]);
+                    let _ = run_git(clean);
+
+                    if attempt >= item.max_attempts {
+                        reg.mutate_persist(app, wf_id, |w| {
+                            for it in w.items.iter_mut() {
+                                if it.id == item.id {
+                                    it.status = "failed".to_string();
+                                    it.check_output = Some(reason.clone());
+                                    it.error = Some(format!(
+                                        "worker failed after {} attempts: {}",
+                                        attempt, reason
+                                    ));
+                                }
+                            }
+                            w.status = "failed".to_string();
+                            w.current_item = None;
+                            w.completed_at = Some(unix_ms());
+                        });
+                        if let Some(w) = reg.get(wf_id) {
+                            let _ = app.emit(
+                                "ledger:item_done",
+                                serde_json::json!({
+                                    "workflowId": wf_id,
+                                    "itemId": item.id,
+                                    "status": "failed",
+                                }),
+                            );
+                            let _ = app.emit("ledger:workflow_done", &w);
+                        }
+                        return Ok(());
+                    }
+                    feedback = Some(reason);
+                    continue;
+                }
+            };
             let (tin, tout, cost) = turn_cost(&usage, prompt.len(), text.len(), &model);
             let spent = reg
                 .mutate_persist(app, wf_id, |w| {
@@ -1462,6 +1559,7 @@ async fn run_wave(
         let prompt = build_worker_prompt(&wf_now, &item, item.check_output.as_deref(), true);
         let (app_t, reg_t, wf_t, model_t) =
             (app.clone(), reg.clone(), wf_id.to_string(), model.to_string());
+        let timeout_t = wf_now.item_timeout_secs.unwrap_or(ITEM_TIMEOUT_SECS);
         handles.push(tauri::async_runtime::spawn(async move {
             let run = run_worker_streaming(
                 &app_t,
@@ -1471,6 +1569,7 @@ async fn run_wave(
                 &prompt,
                 Path::new(&wt.path),
                 &model_t,
+                timeout_t,
             )
             .await;
             match run {
@@ -1638,6 +1737,7 @@ pub async fn ledger_create(
         model: model.filter(|m| !m.trim().is_empty()).unwrap_or_else(default_model),
         total_cost_usd: 0.0,
         budget_cap_usd: default_budget_cap(),
+        item_timeout_secs: None,
         created_at: unix_ms(),
         started_at: None,
         completed_at: None,
@@ -2336,6 +2436,34 @@ fn uuid_v4() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct WorkerLimits {
+    /// Hard wall-clock cap for one worker attempt, seconds.
+    pub item_secs: u64,
+    /// Max seconds with no stream activity before the attempt is stalled.
+    pub stall_secs: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WorkerTick {
+    Continue,
+    Stall,
+    Timeout,
+}
+
+/// Pure watchdog decision. `elapsed_secs` = seconds since the attempt
+/// started; `idle_secs` = seconds since the last stream event. Timeout
+/// wins over stall so the surfaced reason names the harder bound.
+pub(crate) fn worker_watchdog(elapsed_secs: u64, idle_secs: u64, lim: WorkerLimits) -> WorkerTick {
+    if elapsed_secs >= lim.item_secs {
+        WorkerTick::Timeout
+    } else if idle_secs >= lim.stall_secs {
+        WorkerTick::Stall
+    } else {
+        WorkerTick::Continue
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2386,6 +2514,7 @@ mod tests {
             model: default_model(),
             total_cost_usd: 0.0,
             budget_cap_usd: default_budget_cap(),
+            item_timeout_secs: None,
             created_at: 0,
             started_at: None,
             completed_at: None,
@@ -2638,5 +2767,19 @@ mod tests {
             dep_item("item-2", "queued", &["item-1"]),
         ]);
         assert!(deps_ready(&w3, &w3.items[1]), "skipped dep satisfies deps_ready (blocking is separate)");
+    }
+
+    #[test]
+    fn watchdog_flags_stall_and_timeout() {
+        // limits: item wall-clock 600s, stall 120s
+        let lim = WorkerLimits { item_secs: 600, stall_secs: 120 };
+        // healthy: recent activity, well under wall-clock
+        assert_eq!(worker_watchdog(10, 5, lim), WorkerTick::Continue);
+        // stalled: no activity for >= stall window
+        assert_eq!(worker_watchdog(200, 130, lim), WorkerTick::Stall);
+        // timed out: total elapsed >= item window (even if just active)
+        assert_eq!(worker_watchdog(601, 1, lim), WorkerTick::Timeout);
+        // timeout takes precedence over stall when both trip
+        assert_eq!(worker_watchdog(700, 300, lim), WorkerTick::Timeout);
     }
 }
