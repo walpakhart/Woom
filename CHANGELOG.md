@@ -8,6 +8,36 @@ release runbook (how this CHANGELOG feeds `latest-mac.json`) lives in
 
 ## Unreleased
 
+## 0.7.1 — 2026-07-09
+
+Ledger robustness: a run can no longer freeze, degrades gracefully on
+failure, applies the repo's Node toolchain to its workers, and can be
+stopped by the agent.
+
+### Added
+
+- **`ledger_stop` tool** — the agent can cancel a running (stuck or
+  misbehaving) workflow itself; committed items are kept and the run is
+  resumable.
+- **Toolchain preflight** — before dispatching workers, Ledger resolves
+  the repo's declared Node (`.nvmrc` → `package.json` engines.node →
+  `.tool-versions`) and, on a mismatch, injects a matching toolchain
+  (nvm/fnm/asdf/volta) onto every worker + check `PATH`, or refuses the
+  run with a clear reason instead of letting `pnpm install` hang.
+
+### Changed
+
+- **Bounded worker turns** — each worker attempt has a wall-clock cap and
+  a no-output watchdog; a stalled or runaway worker is killed and surfaced
+  as a normal attempt failure rather than freezing the run.
+- **Continue-on-fail** — a failed item no longer aborts the whole run; it
+  blocks only its dependents while independent items keep running, and the
+  workflow parks at review. Apply is gated until failed items are retried
+  or skipped.
+- **Richer inter-item context** — the learnings chain now carries notes
+  from failed attempts (tagged) and is size-capped; parallel-wave workers
+  see their concurrent siblings; the grader receives the learnings chain.
+
 ## 0.7.0 — 2026-07-09
 
 The redesign release: Woom moves to the "Cabin / Quiet" direction, the
