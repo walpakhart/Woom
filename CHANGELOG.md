@@ -8,6 +8,46 @@ release runbook (how this CHANGELOG feeds `latest-mac.json`) lives in
 
 ## Unreleased
 
+## 0.7.0 — 2026-07-09
+
+The redesign release: Woom moves to the "Cabin / Quiet" direction, the
+Ledger engine grows a durable plan + integration gate, and the old
+Dynamic Workflow engine is retired.
+
+### Added
+
+- **Cabin / Quiet layout modes** (toggle with `⌘.`) — a full visual
+  redesign. Cabin keeps the icon rail + full chrome; Quiet strips to a
+  single calm column with per-solo headers and a bottom Dock.
+- **Quiet instance management** — switch between and create new editor /
+  canvas / terminal instances directly from each solo's switcher (Quiet
+  has no rail). The editor switcher shows each instance's open folder and
+  a delete control.
+- **Plan orchestrator (Ledger, phase 1)** — a durable `plan` contract the
+  agent authors and re-reads across context resets; a `final_check`
+  "Janitor" gate that must pass before a branch can be applied; a
+  dependency graph that parks a dependent as `blocked` when its
+  prerequisite is skipped/failed and re-queues it on retry.
+- **Chat marker rail** — a semantic minimap of the transcript: request /
+  answer / change ticks, `⌘`-hover labels, and `⌘↑` / `⌘↓` navigation.
+- New chats inherit the previous chat's working folder, shown immediately
+  in the header.
+
+### Changed
+
+- **Typeface** — UI and prose now use Avenir Next; Geist Mono stays for
+  paths, commits, metrics, code, and the terminal. The light theme is
+  warmed to a cream tone matching the app icon.
+- Your requests now stand out in the transcript (accent stripe + brighter
+  text) so the conversation is easier to scan.
+- Redesigned editor (compact tree, Quiet breadcrumb) and the
+  GitHub / Jira / Sentry inbox solos (lists + detail panes).
+- Hid the scrollbars in the chat, Jira, GitHub, and Sentry lists.
+
+### Removed
+
+- **Dynamic Workflow (DW)** engine — retired in favour of Ledger / Plan.
+
 ## 0.6.0 — 2026-07-06
 
 The Ledger release: a new checklist-driven deep-work engine replaces
