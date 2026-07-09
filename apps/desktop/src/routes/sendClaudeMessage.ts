@@ -59,6 +59,12 @@ export interface SendOpts {
    *  typing mid-turn. When set, the send neither reads nor clears
    *  `input` / `mentions`. */
   prompt?: string;
+  /** Route this send to a SPECIFIC session instead of the active one.
+   *  Background resumes (bg-task done) and quick-send-to-session pass this
+   *  so a programmatic turn lands on its owning chat WITHOUT flipping the
+   *  globally-active session — which used to yank the user out of whatever
+   *  chat/view they were in (and swap the agent cwd underneath them). */
+  sessionId?: string;
 }
 
 export interface SendClaudeMessageDeps {
@@ -93,7 +99,9 @@ const pendingSilentBySession = new Map<string, string>();
  *  inner references resolve to itself, not a stale snapshot. */
 export function createSendClaudeMessage(deps: SendClaudeMessageDeps) {
   const send = async (opts: SendOpts = {}): Promise<void> => {
-    const s = opts.kind
+    const s = opts.sessionId
+      ? sessionsState.list.find((x) => x.id === opts.sessionId) ?? null
+      : opts.kind
       ? sessionsState.list.find((x) => x.id === sessionsState.activeIds[opts.kind!]) ?? null
       : deps.getActiveSession();
     if (!s) return;
@@ -471,11 +479,11 @@ export function createSendClaudeMessage(deps: SendClaudeMessageDeps) {
         pendingSilentBySession.delete(id);
         if (deferred && (sessAfterDrain?.pendingQueue?.length ?? 0) === 0) {
           /* Drain via opts.prompt — routing through `input` here used to
-           * wipe whatever the user typed during the finished turn. */
-          sessionsState.activeClaudeId = id;
-          sessionsState.activeIds.claude = id;
+           * wipe whatever the user typed during the finished turn. Route
+           * by sessionId so the drain stays on THIS session without
+           * flipping the active chat (a background turn must not yank). */
           queueMicrotask(() => {
-            void send({ silent: true, prompt: deferred });
+            void send({ silent: true, sessionId: id, prompt: deferred });
           });
           return;
         }
@@ -490,10 +498,10 @@ export function createSendClaudeMessage(deps: SendClaudeMessageDeps) {
           }
         }
         updateSession(id, { pendingQueue: rest, input: nextEntry.text, mentions: nextEntry.mentions });
-        sessionsState.activeClaudeId = id;
-        sessionsState.activeIds.claude = id;
+        // Route the queue drain by sessionId — keeps it on THIS session
+        // without flipping the active chat out from under the user.
         queueMicrotask(() => {
-          void send();
+          void send({ sessionId: id });
         });
       } else {
         const saved = deps.queueSavedDrafts.get(id);

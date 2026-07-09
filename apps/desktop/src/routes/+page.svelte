@@ -1214,10 +1214,10 @@
       // Prompt travels via opts.prompt — NOT session.input — so an
       // in-progress user draft survives. If the session is busy, the
       // silent branch parks the prompt in `pendingSilentBySession` and
-      // the post-turn drain picks it up.
-      sessionsState.activeIds.claude = session_id;
-      sessionsState.activeClaudeId = session_id;
-      await sendClaudeMessage({ silent: true, kind: 'claude', prompt: promptText });
+      // the post-turn drain picks it up. Routed by `sessionId` so the
+      // resume lands on the owning chat WITHOUT flipping the active
+      // session — a bg task finishing must not yank the user's view.
+      await sendClaudeMessage({ silent: true, sessionId: session_id, prompt: promptText });
     });
     /* Preview-pane bg-task auto-resume. Tasks spawned through the
      *  sidecar's `bg_spawn` MCP tool carry the owning session_id;
@@ -1245,9 +1245,9 @@
         '',
         'Continue from where you were. Run `bg_logs` on the task if you need more.',
       ].join('\n');
-      sessionsState.activeIds.claude = session_id;
-      sessionsState.activeClaudeId = session_id;
-      await sendClaudeMessage({ silent: true, kind: 'claude', prompt: promptText });
+      // Route by sessionId — no active-session flip, so a background task
+      // completing in one chat never pulls the user out of another.
+      await sendClaudeMessage({ silent: true, sessionId: session_id, prompt: promptText });
     });
     /* Window close / dev reload safety net.
      *
@@ -1767,13 +1767,12 @@
       updateSession(sessionId, { pendingQueue: next });
       return;
     }
-    /* Idle — flip activeClaudeId so sendClaudeMessage targets this
-       session, set the input, fire. We do NOT change `view`, so the
-       user stays in the editor / wherever they were. */
-    sessionsState.activeClaudeId = sessionId;
-    sessionsState.activeIds.claude = sessionId;
+    /* Idle — set the input and fire, routed by `sessionId` so the send
+       targets THIS session without flipping the globally-active chat.
+       We change neither `view` nor the active session, so the user stays
+       exactly where they were (editor / another chat / wherever). */
     setSessionInput(sessionId, trimmed);
-    void sendClaudeMessage();
+    void sendClaudeMessage({ sessionId });
   }
 
   /** Click-driven equivalent of the drag→drop pipeline for inbox
