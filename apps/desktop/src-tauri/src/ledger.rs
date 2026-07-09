@@ -46,6 +46,9 @@ const CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 const ITEM_TIMEOUT_SECS: u64 = 600;
 /// Default no-stream-activity window before a worker attempt is stalled.
 const STALL_TIMEOUT_SECS: u64 = 120;
+/// Cap on the total accumulated NOTES chain injected into a worker prompt,
+/// bytes. Keeps the freshest (latest) learnings when over budget.
+const LEARNINGS_TOTAL_CAP: usize = 8_000;
 /// Tail of check output kept on the item (feedback prompt + card UI).
 const CHECK_OUTPUT_TAIL: usize = 4_000;
 /// Per-item budget headroom. The whole-run cap scales with checklist
@@ -741,13 +744,34 @@ fn items_overview(wf: &LedgerWorkflow) -> String {
 /// Accumulated NOTES from every passed item — the knowledge chain
 /// across fresh worker contexts (Anthropic harness "progress file").
 fn learnings(wf: &LedgerWorkflow) -> String {
-    let notes: Vec<String> = wf
-        .items
-        .iter()
-        .filter(|i| i.status == "passed")
-        .filter_map(|i| i.notes.as_ref().map(|n| format!("[{}] {}", i.id, n.trim())))
-        .collect();
-    notes.join("\n")
+    let mut lines: Vec<String> = Vec::new();
+    for i in &wf.items {
+        let Some(n) = i.notes.as_ref() else { continue };
+        let n = n.trim();
+        if n.is_empty() {
+            continue;
+        }
+        match i.status.as_str() {
+            // Passed item — trusted learnings.
+            "passed" => lines.push(format!("[{}] {}", i.id, n)),
+            // Failed item — the APPROACH did not pass, but the facts it found
+            // (paths, commands, gotchas) are still useful to downstream items.
+            "failed" => lines.push(format!(
+                "[{} — from a FAILED attempt; its approach did not pass, but these \
+                 facts may still hold] {}",
+                i.id, n
+            )),
+            _ => {}
+        }
+    }
+    let joined = lines.join("\n");
+    // Items are in execution order, so the tail is the freshest context —
+    // keep it when the chain outgrows the cap.
+    if joined.len() > LEARNINGS_TOTAL_CAP {
+        truncate_tail(&joined, LEARNINGS_TOTAL_CAP)
+    } else {
+        joined
+    }
 }
 
 const NOTES_MARKER: &str = "NOTES:";
@@ -767,7 +791,7 @@ fn build_worker_prompt(
     wf: &LedgerWorkflow,
     item: &LedgerItem,
     feedback: Option<&str>,
-    in_wave: bool,
+    wave_siblings: &[LedgerItem],
 ) -> String {
     let mut p = format!(
         "You are one worker in a sequential, machine-checked workflow (a \"ledger\"). \
@@ -797,11 +821,20 @@ fn build_worker_prompt(
             learned
         ));
     }
-    if in_wave {
+    if !wave_siblings.is_empty() {
         p.push_str(
-            "\nYou run IN PARALLEL with workers on other items. Touch ONLY files \
-             within your item's scope — overlapping edits will conflict on merge.\n",
+            "\nYou run IN PARALLEL (isolated worktree, merged after) with these sibling \
+             items — you will NOT see their changes and they will not see yours. Touch \
+             ONLY files in your item's scope, never theirs; overlapping edits conflict on merge:\n",
         );
+        for s in wave_siblings {
+            p.push_str(&format!(
+                "- {}: {}{}\n",
+                s.id,
+                s.title,
+                s.detail.as_deref().map(|d| format!(" — {}", d)).unwrap_or_default()
+            ));
+        }
     }
     match &item.check_cmd {
         Some(cmd) => {
@@ -841,9 +874,18 @@ fn build_grader_prompt(wf: &LedgerWorkflow, item: &LedgerItem, diff: &str) -> St
     } else {
         format!("\n\nPlan / contract (judge against this intent):\n{}", wf.plan.trim())
     };
+    let learned = learnings(wf);
+    let learn_ctx = if learned.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\n\nLearnings from earlier items (context the change may build on):\n{}",
+            learned
+        )
+    };
     format!(
         "You are an independent verifier. You did NOT write this change. Requirement:\n\
-         {title}\n{detail}\n\nOverall task context:\n{task}{plan_ctx}\n\nThe diff produced for \
+         {title}\n{detail}\n\nOverall task context:\n{task}{plan_ctx}{learn_ctx}\n\nThe diff produced for \
          this requirement:\n```diff\n{diff}\n```\n\nVerdict: does the diff fully satisfy \
          the requirement? Reply with STRICT JSON only, no fences, no prose:\n\
          {{\"pass\": true|false, \"reason\": \"one short sentence\"}}",
@@ -851,6 +893,7 @@ fn build_grader_prompt(wf: &LedgerWorkflow, item: &LedgerItem, diff: &str) -> St
         detail = item.detail.as_deref().unwrap_or(""),
         task = wf.task,
         plan_ctx = plan_ctx,
+        learn_ctx = learn_ctx,
         diff = truncate_tail(diff, 60_000),
     )
 }
@@ -982,6 +1025,7 @@ fn is_container(wf: &LedgerWorkflow, id: &str) -> bool {
 
 /// Outcome of scanning for the next runnable item — pure, so the run
 /// loop's termination is unit-testable without the async machinery.
+#[derive(Debug)]
 enum ItemPick {
     /// A queued leaf with satisfied deps — run it.
     Run(LedgerItem),
@@ -1273,7 +1317,7 @@ async fn run_ledger(app: &AppHandle, reg: &Arc<LedgerRegistry>, wf_id: &str) -> 
             };
 
             // 1. Fresh-context worker turn (streamed — live feed).
-            let prompt = build_worker_prompt(&wf_now, &item, feedback_now.as_deref(), false);
+            let prompt = build_worker_prompt(&wf_now, &item, feedback_now.as_deref(), &[]);
             let (text, usage) = match run_worker_streaming(
                 app,
                 reg,
@@ -1315,9 +1359,9 @@ async fn run_ledger(app: &AppHandle, reg: &Arc<LedgerRegistry>, wf_id: &str) -> 
                                     ));
                                 }
                             }
-                            w.status = "failed".to_string();
+                            recompute_blocked(w);
+                            rollup_containers(w);
                             w.current_item = None;
-                            w.completed_at = Some(unix_ms());
                         });
                         if let Some(w) = reg.get(wf_id) {
                             let _ = app.emit(
@@ -1328,9 +1372,9 @@ async fn run_ledger(app: &AppHandle, reg: &Arc<LedgerRegistry>, wf_id: &str) -> 
                                     "status": "failed",
                                 }),
                             );
-                            let _ = app.emit("ledger:workflow_done", &w);
+                            let _ = app.emit("ledger:updated", &w);
                         }
-                        return Ok(());
+                        break;
                     }
                     feedback = Some(reason);
                     continue;
@@ -1460,13 +1504,16 @@ async fn run_ledger(app: &AppHandle, reg: &Arc<LedgerRegistry>, wf_id: &str) -> 
                         if it.id == item.id {
                             it.status = "failed".to_string();
                             it.check_output = Some(check_out.clone());
+                            it.notes = extract_notes(&text);
                             it.error =
                                 Some(format!("check failed after {} attempts", attempt));
                         }
                     }
-                    w.status = "failed".to_string();
+                    // One failed item blocks only its dependents — independent
+                    // items keep running; the run parks at review, apply gated.
+                    recompute_blocked(w);
+                    rollup_containers(w);
                     w.current_item = None;
-                    w.completed_at = Some(unix_ms());
                 });
                 if let Some(w) = reg.get(wf_id) {
                     let _ = app.emit(
@@ -1477,9 +1524,9 @@ async fn run_ledger(app: &AppHandle, reg: &Arc<LedgerRegistry>, wf_id: &str) -> 
                             "status": "failed",
                         }),
                     );
-                    let _ = app.emit("ledger:workflow_done", &w);
+                    let _ = app.emit("ledger:updated", &w);
                 }
-                return Ok(());
+                break;
             }
             feedback = Some(check_out);
         }
@@ -1548,6 +1595,10 @@ async fn run_wave(
 ) -> Result<(), String> {
     let wf_now = reg.get(wf_id).ok_or("workflow disappeared")?;
 
+    // The loop below moves `wave`; keep a copy so each worker can be told
+    // about its parallel siblings.
+    let wave_all = wave.clone();
+
     // Mark the whole wave working up front so the card shows the burst.
     reg.mutate_persist(app, wf_id, |w| {
         for it in w.items.iter_mut() {
@@ -1585,7 +1636,9 @@ async fn run_wave(
                 continue;
             }
         };
-        let prompt = build_worker_prompt(&wf_now, &item, item.check_output.as_deref(), true);
+        let siblings: Vec<LedgerItem> =
+            wave_all.iter().filter(|x| x.id != item.id).cloned().collect();
+        let prompt = build_worker_prompt(&wf_now, &item, item.check_output.as_deref(), &siblings);
         let (app_t, reg_t, wf_t, model_t) =
             (app.clone(), reg.clone(), wf_id.to_string(), model.to_string());
         let timeout_t = wf_now.item_timeout_secs.unwrap_or(ITEM_TIMEOUT_SECS);
@@ -2310,6 +2363,22 @@ pub async fn ledger_apply(app: AppHandle, workflow_id: String) -> Result<(), Str
     if wf.status != "awaiting_review" {
         return Err(format!("ledger not reviewable from status {}", wf.status));
     }
+    // A run can now park at review with some items failed (one bad item no
+    // longer aborts the whole run). Refuse to apply an incomplete branch —
+    // the user must retry or skip the failed items first.
+    let failed: Vec<String> = wf
+        .items
+        .iter()
+        .filter(|i| i.status == "failed")
+        .map(|i| i.id.clone())
+        .collect();
+    if !failed.is_empty() {
+        return Err(format!(
+            "cannot apply — {} item(s) failed ({}); retry or skip them first",
+            failed.len(),
+            failed.join(", ")
+        ));
+    }
     // Janitor gate: a configured final-check must be green before the
     // branch can land — blocks applying a diff that passes every item but
     // breaks the integrated build.
@@ -2806,7 +2875,7 @@ mod tests {
         let mut it = item("item-1", "queued");
         it.check_cmd = Some("pnpm test".into());
         let w = wf(vec![it.clone()]);
-        let p = build_worker_prompt(&w, &it, Some("2 tests failed"), false);
+        let p = build_worker_prompt(&w, &it, Some("2 tests failed"), &[]);
         assert!(p.contains("pnpm test"));
         assert!(p.contains("2 tests failed"));
         assert!(p.contains("do NOT run `git commit`"));
@@ -2822,7 +2891,7 @@ mod tests {
         done.notes = Some(n);
         let next = item("item-2", "queued");
         let w = wf(vec![done, next.clone()]);
-        let p = build_worker_prompt(&w, &next, None, false);
+        let p = build_worker_prompt(&w, &next, None, &[]);
         assert!(p.contains("Learnings left by previous workers"));
         assert!(p.contains("pnpm check"));
     }
@@ -2830,8 +2899,9 @@ mod tests {
     #[test]
     fn wave_prompt_warns_about_scope() {
         let it = item("item-1", "queued");
-        let w = wf(vec![it.clone()]);
-        let p = build_worker_prompt(&w, &it, None, true);
+        let sib = item("item-2", "queued");
+        let w = wf(vec![it.clone(), sib.clone()]);
+        let p = build_worker_prompt(&w, &it, None, std::slice::from_ref(&sib));
         assert!(p.contains("IN PARALLEL"));
     }
 
@@ -2908,6 +2978,47 @@ mod tests {
     }
     fn status_of<'a>(w: &'a LedgerWorkflow, id: &str) -> &'a str {
         w.items.iter().find(|i| i.id == id).unwrap().status.as_str()
+    }
+
+    #[test]
+    fn learnings_includes_failed_tagged_and_caps_total() {
+        let mut passed = item("item-1", "passed");
+        passed.notes = Some("build cmd is `pnpm check`".to_string());
+        let mut failed = item("item-2", "failed");
+        failed.notes = Some("tried approach X, config lives in src/lib.rs".to_string());
+        let w = wf(vec![passed, failed]);
+        let l = learnings(&w);
+        assert!(l.contains("pnpm check"), "passed notes present");
+        assert!(l.contains("src/lib.rs"), "failed notes present");
+        assert!(l.contains("FAILED"), "failed notes are tagged");
+    }
+
+    #[test]
+    fn failed_item_blocks_dependents_but_independent_runs() {
+        // item-1 failed; item-2 depends on item-1; item-3 independent queued.
+        let mut w = wf(vec![
+            item("item-1", "failed"),
+            dep_item("item-2", "queued", &["item-1"]),
+            item("item-3", "queued"),
+        ]);
+        recompute_blocked(&mut w);
+        assert_eq!(status_of(&w, "item-2"), "blocked", "dependent of failed is blocked");
+        match next_ready_item(&w) {
+            ItemPick::Run(i) => assert_eq!(i.id, "item-3", "independent item still runs"),
+            other => panic!("expected Run(item-3), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn wave_siblings_listed_in_prompt() {
+        let it = item("item-1", "queued");
+        let mut sib = item("item-2", "queued");
+        sib.title = "touch the router".to_string();
+        let w = wf(vec![it.clone(), sib.clone()]);
+        let p = build_worker_prompt(&w, &it, None, std::slice::from_ref(&sib));
+        assert!(p.contains("IN PARALLEL"), "wave note present");
+        assert!(p.contains("item-2"), "sibling id listed");
+        assert!(p.contains("touch the router"), "sibling title listed");
     }
 
     #[test]

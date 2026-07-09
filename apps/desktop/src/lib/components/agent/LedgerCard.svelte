@@ -519,7 +519,7 @@
               {/each}
             </div>
           {/if}
-          {#if wf.status === 'failed' && item.status === 'failed'}
+          {#if item.status === 'failed'}
             {#if item.error}<p class="lg-err mono">{item.error}</p>{/if}
             <div class="lg-item-actions">
               <button class="lg-btn" disabled={busy} onclick={() => call('ledger_retry_item', { itemId: item.id })}>retry</button>
