@@ -2486,6 +2486,21 @@ impl App {
     }
 
     #[tool(
+        description = "Stop / cancel a RUNNING Ledger workflow by `workflowId`. Use when a run is stuck, misbehaving, or you decide to abort. Cancels in-flight worker turns at the next boundary; already-committed items are kept and the workflow can be resumed later with ledger_run."
+    )]
+    async fn ledger_stop(
+        &self,
+        Parameters(LedgerLaunchParams { workflow_id }): Parameters<LedgerLaunchParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        if workflow_id.trim().is_empty() {
+            return Err(ErrorData::invalid_params("workflowId required", None));
+        }
+        Ok(CallToolResult::success(vec![Content::text(
+            "Stopping the ledger run. In-flight workers are cancelled; committed items are kept — resume later with ledger_run. Stop here.",
+        )]))
+    }
+
+    #[tool(
         description = "Propose switching the current session's working directory. Surfaces an approval card in Woom and BLOCKS until the user approves (cwd switches) or dismisses. The tool's response is the actual outcome — react and continue in this same turn."
     )]
     async fn propose_switch_cwd(

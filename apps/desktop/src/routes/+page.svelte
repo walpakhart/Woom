@@ -2283,6 +2283,10 @@
       void invoke('ledger_run', { workflowId: str('workflow_id') });
       return;
     }
+    if (name === 'mcp__app__ledger_stop') {
+      void invoke('ledger_cancel', { workflowId: str('workflow_id') });
+      return;
+    }
     // parseEdgeSpec moved to ./mcpInputParse.ts (wave-30 split).
     // Inbox/view/instance cases moved to ./appNavigationInbox.ts
     // (wave-32 split). Canvas cases moved to
