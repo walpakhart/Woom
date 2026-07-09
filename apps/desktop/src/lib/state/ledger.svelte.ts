@@ -74,6 +74,10 @@ export interface LedgerWorkflow {
   totalCostUsd: number;
   /** Spend ceiling; run pauses (`paused_budget`) when crossed, raised on resume. */
   budgetCapUsd: number;
+  /** Optional per-workflow worker wall-clock cap (seconds). */
+  itemTimeoutSecs?: number | null;
+  /** Reason a run was refused before dispatching workers (toolchain preflight). */
+  preflightError?: string | null;
   createdAt: number;
   startedAt?: number | null;
   completedAt?: number | null;

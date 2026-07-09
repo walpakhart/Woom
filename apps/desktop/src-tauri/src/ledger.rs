@@ -219,6 +219,11 @@ pub struct LedgerWorkflow {
     /// Optional per-workflow worker wall-clock cap (seconds). None → ITEM_TIMEOUT_SECS.
     #[serde(default)]
     pub item_timeout_secs: Option<u64>,
+    /// Reason a run was refused before any worker was dispatched (toolchain
+    /// preflight block — e.g. active Node ≠ repo's `.nvmrc` and no version
+    /// manager to fix it). Surfaced as a banner on the card. None normally.
+    #[serde(default)]
+    pub preflight_error: Option<String>,
     pub created_at: i64,
     #[serde(default)]
     pub started_at: Option<i64>,
@@ -524,6 +529,7 @@ async fn run_worker_streaming(
     cwd: &Path,
     model: &str,
     item_timeout_secs: u64,
+    inject_bin: Option<&str>,
 ) -> Result<(String, Option<crate::claude::OneshotUsage>), String> {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
@@ -557,6 +563,7 @@ async fn run_worker_streaming(
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null());
     crate::claude::augment_cli_path(&mut cmd);
+    prepend_path(&mut cmd, inject_bin);
 
     let mut child = cmd.spawn().map_err(|e| format!("worker spawn: {}", e))?;
     if let Some(mut stdin) = child.stdin.take() {
@@ -879,10 +886,11 @@ struct GraderVerdict {
 
 /// Run a shell check in the worktree. Ok(true) = exit 0. The String is
 /// the combined output tail (stdout + stderr) for feedback/UI.
-async fn run_shell_check(dir: &str, cmd: &str) -> (bool, String) {
+async fn run_shell_check(dir: &str, cmd: &str, inject_bin: Option<&str>) -> (bool, String) {
     let mut c = tokio::process::Command::new("/bin/sh");
     c.arg("-lc").arg(cmd).current_dir(dir);
     c.env("GIT_TERMINAL_PROMPT", "0");
+    prepend_path(&mut c, inject_bin);
     let fut = c.output();
     match tokio::time::timeout(CHECK_TIMEOUT, fut).await {
         Ok(Ok(out)) => {
@@ -1129,6 +1137,25 @@ async fn run_ledger(app: &AppHandle, reg: &Arc<LedgerRegistry>, wf_id: &str) -> 
     };
     emit_updated(app, reg, wf_id);
 
+    // Toolchain preflight — resolve the repo's declared Node against the
+    // active one BEFORE spending any worker turns. Inject the correct
+    // toolchain onto PATH, or refuse the run with a reason (never dispatch
+    // workers into an environment where `pnpm install` is known to fail).
+    let inject_bin: Option<String> = match resolve_toolchain(Path::new(&wt_path)).await {
+        Preflight::Noop => None,
+        Preflight::Inject(bin) => Some(bin),
+        Preflight::Block(reason) => {
+            reg.mutate_persist(app, wf_id, |w| {
+                w.status = "failed".to_string();
+                w.preflight_error = Some(reason.clone());
+                w.completed_at = Some(unix_ms());
+            });
+            emit_updated(app, reg, wf_id);
+            return Ok(());
+        }
+    };
+    let inject = inject_bin.as_deref();
+
     loop {
         // Re-read fresh state every iteration — retry/skip/cancel/pause
         // commands mutate the registry under us.
@@ -1195,7 +1222,7 @@ async fn run_ledger(app: &AppHandle, reg: &Arc<LedgerRegistry>, wf_id: &str) -> 
                 }
             }
             if wave.len() >= 2 {
-                run_wave(app, reg, wf_id, &wt_path, &model, wave).await?;
+                run_wave(app, reg, wf_id, &wt_path, &model, wave, inject).await?;
                 continue;
             }
         }
@@ -1256,6 +1283,7 @@ async fn run_ledger(app: &AppHandle, reg: &Arc<LedgerRegistry>, wf_id: &str) -> 
                 Path::new(&wt_path),
                 &model,
                 wf_now.item_timeout_secs.unwrap_or(ITEM_TIMEOUT_SECS),
+                inject,
             )
             .await
             {
@@ -1353,7 +1381,7 @@ async fn run_ledger(app: &AppHandle, reg: &Arc<LedgerRegistry>, wf_id: &str) -> 
 
             // 2. Verification — objective shell check, or independent grader.
             let (passed, check_out) = match &item.check_cmd {
-                Some(cmd) => run_shell_check(&wt_path, cmd).await,
+                Some(cmd) => run_shell_check(&wt_path, cmd, inject).await,
                 None => {
                     let diff = worktree::capture_diff(&wt_path).unwrap_or_default();
                     let gp = build_grader_prompt(&wf_now, &item, &diff);
@@ -1464,7 +1492,7 @@ async fn run_ledger(app: &AppHandle, reg: &Arc<LedgerRegistry>, wf_id: &str) -> 
     // green re-check. No gate configured → ok stays true.
     let (fc_ok, fc_out) = match reg.get(wf_id).and_then(|w| w.final_check.clone()) {
         Some(cmd) if !cmd.trim().is_empty() => {
-            let (ok, out) = run_shell_check(&wt_path, &cmd).await;
+            let (ok, out) = run_shell_check(&wt_path, &cmd, inject).await;
             (ok, Some(out))
         }
         _ => (true, None),
@@ -1516,6 +1544,7 @@ async fn run_wave(
     shared: &str,
     model: &str,
     wave: Vec<LedgerItem>,
+    inject: Option<&str>,
 ) -> Result<(), String> {
     let wf_now = reg.get(wf_id).ok_or("workflow disappeared")?;
 
@@ -1560,6 +1589,7 @@ async fn run_wave(
         let (app_t, reg_t, wf_t, model_t) =
             (app.clone(), reg.clone(), wf_id.to_string(), model.to_string());
         let timeout_t = wf_now.item_timeout_secs.unwrap_or(ITEM_TIMEOUT_SECS);
+        let inject_t = inject.map(|s| s.to_string());
         handles.push(tauri::async_runtime::spawn(async move {
             let run = run_worker_streaming(
                 &app_t,
@@ -1570,6 +1600,7 @@ async fn run_wave(
                 Path::new(&wt.path),
                 &model_t,
                 timeout_t,
+                inject_t.as_deref(),
             )
             .await;
             match run {
@@ -1640,7 +1671,7 @@ async fn run_wave(
                 );
             } else {
                 let (passed, check_out) = match &r.item.check_cmd {
-                    Some(cmd) => run_shell_check(shared, cmd).await,
+                    Some(cmd) => run_shell_check(shared, cmd, inject).await,
                     None => {
                         let d = r.diff.clone().unwrap_or_default();
                         let gp = build_grader_prompt(&wf_now, &r.item, &d);
@@ -1738,6 +1769,7 @@ pub async fn ledger_create(
         total_cost_usd: 0.0,
         budget_cap_usd: default_budget_cap(),
         item_timeout_secs: None,
+        preflight_error: None,
         created_at: unix_ms(),
         started_at: None,
         completed_at: None,
@@ -1814,7 +1846,13 @@ pub async fn ledger_recheck(app: AppHandle, workflow_id: String) -> Result<bool,
         .worktree_path
         .clone()
         .ok_or_else(|| "ledger has no worktree".to_string())?;
-    let (ok, out) = run_shell_check(&wt, &cmd).await;
+    // Manual recheck runs outside the run loop, so resolve the toolchain
+    // here too — a passing final-check must use the same Node the workers did.
+    let inject_bin = match resolve_toolchain(Path::new(&wt)).await {
+        Preflight::Inject(bin) => Some(bin),
+        _ => None,
+    };
+    let (ok, out) = run_shell_check(&wt, &cmd, inject_bin.as_deref()).await;
     let updated = registry.inner().mutate_persist(&app, &workflow_id, |w| {
         w.final_check_ok = ok;
         w.final_check_output = Some(out.clone());
@@ -2464,6 +2502,238 @@ pub(crate) fn worker_watchdog(elapsed_secs: u64, idle_secs: u64, lim: WorkerLimi
     }
 }
 
+// ---- Toolchain preflight -----------------------------------------------------
+//
+// Ledger workers run `pnpm install` / `nx lint` / `nx test` in a fresh
+// worktree. If the machine's active Node differs from the repo's declared
+// version (e.g. Node 25 vs `.nvmrc` 22.21.1), native-module builds fail and
+// the worker hangs on a broken install. Before dispatching any worker we
+// resolve the repo's declared Node, compare to the active one, and either
+// inject the correct toolchain onto PATH or refuse the run with a reason —
+// never send workers into a knowingly-broken environment.
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Preflight {
+    /// No declared version, or the active Node already matches — run as-is.
+    Noop,
+    /// Prepend this dir to PATH for every worker + check subprocess.
+    Inject(String),
+    /// Refuse the run; String is the human reason shown on the card.
+    Block(String),
+}
+
+/// Extract the repo's declared Node version from, in priority: `.nvmrc`,
+/// `package.json` engines.node, `.tool-versions` (nodejs line). Returns the
+/// version stripped of a leading `v` / range operators; None if none declared.
+/// Best-effort: takes the first numeric token.
+pub(crate) fn parse_required_node(
+    nvmrc: Option<&str>,
+    engines_node: Option<&str>,
+    tool_versions: Option<&str>,
+) -> Option<String> {
+    fn first_version(s: &str) -> Option<String> {
+        let t = s
+            .trim()
+            .trim_start_matches(['v', 'V', '>', '=', '<', '^', '~', ' ']);
+        let v: String = t
+            .chars()
+            .take_while(|c| c.is_ascii_digit() || *c == '.')
+            .collect();
+        if v.is_empty() {
+            None
+        } else {
+            Some(v)
+        }
+    }
+    if let Some(s) = nvmrc {
+        if let Some(v) = first_version(s) {
+            return Some(v);
+        }
+    }
+    if let Some(s) = engines_node {
+        if let Some(v) = first_version(s) {
+            return Some(v);
+        }
+    }
+    if let Some(s) = tool_versions {
+        for line in s.lines() {
+            if let Some(rest) = line.trim().strip_prefix("nodejs") {
+                if let Some(v) = first_version(rest) {
+                    return Some(v);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Major component of a version string (`"v22.21.1"` → `"22"`).
+fn version_major(v: &str) -> &str {
+    v.trim_start_matches(['v', 'V']).split('.').next().unwrap_or("")
+}
+
+/// Pure preflight decision. `required` = from `parse_required_node`; `active`
+/// = `node -v` output (may carry a leading `v`); `resolved_bin` = Some(dir)
+/// when a version manager can supply `required`. Compares on the major
+/// component so a `.nvmrc` of `22` matches an active `22.21.1`.
+pub(crate) fn preflight_decision(
+    required: Option<&str>,
+    active: Option<&str>,
+    resolved_bin: Option<&str>,
+) -> Preflight {
+    let req = match required {
+        Some(r) => r,
+        None => return Preflight::Noop,
+    };
+    if let Some(a) = active {
+        if version_major(a) == version_major(req) {
+            return Preflight::Noop;
+        }
+    }
+    match resolved_bin {
+        Some(bin) => Preflight::Inject(bin.to_string()),
+        None => Preflight::Block(format!(
+            "Node {} ≠ required {} (.nvmrc/engines.node); workers would fail \
+             `pnpm install` on native modules. Install fnm/nvm/asdf/volta with \
+             Node {}, or switch the active Node, then re-run.",
+            active.unwrap_or("?"),
+            req,
+            version_major(req),
+        )),
+    }
+}
+
+/// Parse `vMAJOR.MINOR.PATCH` into a sortable tuple; missing parts → 0.
+fn semver_tuple(name: &str) -> (u32, u32, u32) {
+    let mut it = name.trim_start_matches(['v', 'V']).split('.');
+    let a = it.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    let b = it.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    let c = it.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    (a, b, c)
+}
+
+/// Given a directory of installed Node version subdirs, return the `bin`
+/// path of the highest-versioned entry whose major matches `major`.
+/// `bin_suffix` is joined onto the version dir (e.g. `bin`,
+/// `installation/bin`).
+fn highest_matching_bin(versions_dir: &Path, major: &str, bin_suffix: &str) -> Option<String> {
+    let mut best: Option<((u32, u32, u32), std::path::PathBuf)> = None;
+    for entry in std::fs::read_dir(versions_dir).ok()?.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if version_major(&name) != major {
+            continue;
+        }
+        let bin = entry.path().join(bin_suffix);
+        if !bin.join("node").exists() {
+            continue;
+        }
+        let ver = semver_tuple(&name);
+        if best.as_ref().map(|(v, _)| ver > *v).unwrap_or(true) {
+            best = Some((ver, bin));
+        }
+    }
+    best.map(|(_, p)| p.to_string_lossy().into_owned())
+}
+
+/// Scan known version-manager layouts for a Node bin dir supplying `required`
+/// (matched on major). Volta auto-selects per-project via its shims, so its
+/// bin dir is returned directly when present. Order: nvm, fnm, asdf, volta.
+fn find_node_bin(required: &str) -> Option<String> {
+    let major = version_major(required);
+    let home = crate::claude::home_dir()?;
+
+    // nvm: $NVM_DIR/versions/node/v<ver>/bin
+    let nvm_root = std::env::var("NVM_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| home.join(".nvm"));
+    if let Some(bin) = highest_matching_bin(&nvm_root.join("versions/node"), major, "bin") {
+        return Some(bin);
+    }
+
+    // fnm: $FNM_DIR (or ~/.local/share/fnm, ~/.fnm)/node-versions/v<ver>/installation/bin
+    let mut fnm_roots: Vec<std::path::PathBuf> = Vec::new();
+    if let Ok(d) = std::env::var("FNM_DIR") {
+        fnm_roots.push(std::path::PathBuf::from(d));
+    }
+    fnm_roots.push(home.join(".local/share/fnm"));
+    fnm_roots.push(home.join(".fnm"));
+    for root in fnm_roots {
+        if let Some(bin) =
+            highest_matching_bin(&root.join("node-versions"), major, "installation/bin")
+        {
+            return Some(bin);
+        }
+    }
+
+    // asdf: ~/.asdf/installs/nodejs/<ver>/bin
+    if let Some(bin) = highest_matching_bin(&home.join(".asdf/installs/nodejs"), major, "bin") {
+        return Some(bin);
+    }
+
+    // volta: shims auto-switch per project pin — inject the shim dir if present.
+    let volta_bin = home.join(".volta/bin");
+    if volta_bin.join("node").exists() {
+        return Some(volta_bin.to_string_lossy().into_owned());
+    }
+
+    None
+}
+
+/// Non-pure probe: read the worktree's declared Node, the active `node -v`,
+/// resolve a matching toolchain, and yield the preflight decision.
+async fn resolve_toolchain(worktree: &Path) -> Preflight {
+    let read = |rel: &str| std::fs::read_to_string(worktree.join(rel)).ok();
+    let nvmrc = read(".nvmrc");
+    let engines = read("package.json").and_then(|pkg| {
+        serde_json::from_str::<serde_json::Value>(&pkg)
+            .ok()
+            .and_then(|v| {
+                v.get("engines")
+                    .and_then(|e| e.get("node"))
+                    .and_then(|n| n.as_str())
+                    .map(str::to_string)
+            })
+    });
+    let tool_versions = read(".tool-versions");
+
+    let required = parse_required_node(
+        nvmrc.as_deref(),
+        engines.as_deref(),
+        tool_versions.as_deref(),
+    );
+    let required = match required {
+        Some(r) => r,
+        None => return Preflight::Noop,
+    };
+
+    let active = tokio::process::Command::new("node")
+        .arg("-v")
+        .output()
+        .await
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+
+    let resolved = find_node_bin(&required);
+    preflight_decision(Some(&required), active.as_deref(), resolved.as_deref())
+}
+
+/// Prepend `bin` (if any) to the front of a Command's PATH so the injected
+/// toolchain wins over the ambient one. Reads the PATH already set on the
+/// command (e.g. by `augment_cli_path`), falling back to the process PATH.
+fn prepend_path(cmd: &mut tokio::process::Command, bin: Option<&str>) {
+    let Some(bin) = bin else { return };
+    let cur = cmd
+        .as_std()
+        .get_envs()
+        .find(|(k, _)| *k == std::ffi::OsStr::new("PATH"))
+        .and_then(|(_, v)| v)
+        .map(|v| v.to_string_lossy().into_owned())
+        .unwrap_or_else(|| std::env::var("PATH").unwrap_or_default());
+    cmd.env("PATH", format!("{bin}:{cur}"));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2515,6 +2785,7 @@ mod tests {
             total_cost_usd: 0.0,
             budget_cap_usd: default_budget_cap(),
             item_timeout_secs: None,
+            preflight_error: None,
             created_at: 0,
             started_at: None,
             completed_at: None,
@@ -2781,5 +3052,58 @@ mod tests {
         assert_eq!(worker_watchdog(601, 1, lim), WorkerTick::Timeout);
         // timeout takes precedence over stall when both trip
         assert_eq!(worker_watchdog(700, 300, lim), WorkerTick::Timeout);
+    }
+
+    #[test]
+    fn parse_required_node_reads_sources_in_order() {
+        // .nvmrc wins
+        assert_eq!(
+            parse_required_node(Some("v22.21.1\n"), None, None).as_deref(),
+            Some("22.21.1")
+        );
+        // engines.node next (range operator stripped)
+        assert_eq!(
+            parse_required_node(None, Some(">=22 <23"), None).as_deref(),
+            Some("22")
+        );
+        // .tool-versions nodejs line last
+        assert_eq!(
+            parse_required_node(None, None, Some("nodejs 22.21.1\npnpm 10.17.1")).as_deref(),
+            Some("22.21.1")
+        );
+        // nothing declared
+        assert_eq!(parse_required_node(None, None, None), None);
+    }
+
+    #[test]
+    fn preflight_decision_covers_inject_block_noop() {
+        // no declared version → Noop regardless of active
+        assert_eq!(
+            preflight_decision(None, Some("25.2.1"), Some("/nvm/22/bin")),
+            Preflight::Noop
+        );
+        // required matches active major → Noop (22 vs v22.21.1)
+        assert_eq!(
+            preflight_decision(Some("22"), Some("v22.21.1"), None),
+            Preflight::Noop
+        );
+        // mismatch + a resolvable bin → Inject
+        assert_eq!(
+            preflight_decision(Some("22"), Some("v25.2.1"), Some("/nvm/22/bin")),
+            Preflight::Inject("/nvm/22/bin".to_string())
+        );
+        // mismatch + no bin → Block naming both versions
+        match preflight_decision(Some("22"), Some("v25.2.1"), None) {
+            Preflight::Block(r) => assert!(r.contains("22") && r.contains("25")),
+            other => panic!("expected Block, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn semver_tuple_sorts_numerically() {
+        // string sort would put "9" > "10"; tuple sort must not
+        assert!(semver_tuple("v22.9.0") < semver_tuple("v22.10.0"));
+        assert_eq!(semver_tuple("v22.21.1"), (22, 21, 1));
+        assert_eq!(semver_tuple("bogus"), (0, 0, 0));
     }
 }

@@ -446,6 +446,13 @@
       <p class="lg-hint" transition:fade={{ duration: 150 }}>paused — resume to continue where it left off.</p>
     {/if}
 
+    {#if wf.preflightError}
+      <div class="lg-preflight mono" transition:fade={{ duration: 150 }}>
+        <span class="lg-preflight-glyph" aria-hidden="true">⚠</span>
+        <span class="lg-preflight-text">{wf.preflightError}</span>
+      </div>
+    {/if}
+
     {#if wf.status === 'building' && wf.items.length === 0}
       <div class="lg-skeleton" aria-hidden="true">
         {#each [0, 1, 2] as i (i)}
@@ -769,6 +776,21 @@
     color: var(--text-2);
     font-style: italic;
   }
+  .lg-preflight {
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+    margin: 6px 0;
+    padding: 8px 10px;
+    font-size: 11px;
+    line-height: 1.45;
+    color: var(--error, #e88264);
+    background: color-mix(in srgb, var(--error, #e88264) 10%, transparent);
+    border-left: 2px solid var(--error, #e88264);
+    border-radius: 4px;
+  }
+  .lg-preflight-glyph { flex: none; }
+  .lg-preflight-text { color: var(--text-1); }
   .lg-skeleton { padding: 4px 0 2px; }
   .lg-skel-row {
     display: flex;
