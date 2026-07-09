@@ -1,9 +1,23 @@
+<script module lang="ts">
+  /* UI toggle state that must OUTLIVE the component instance. Switching the
+     top-level view remounts the whole agent app → chat thread → this card,
+     and every stream delta re-renders it; instance-local `$state` (and a
+     hardcoded `open`) therefore snap back to defaults — which is why a
+     collapsed plan / diff file kept re-expanding and the open item reset on
+     nav. Keying by workflow (+ item + file) id makes each toggle sticky. */
+  const planOpenByWf = new Map<string, boolean>();
+  const expandedByWf = new Map<string, string | null>();
+  const showFullDiffByWf = new Map<string, boolean>();
+  const diffFileOpen = new Map<string, boolean>();
+</script>
+
 <script lang="ts">
   /* Ledger card — chat-inline checklist for the sequential machine-
    * checked workflow. Pre-run the checklist is fully EDITABLE (edit /
    * remove / reorder / add — the approval gate is only as strong as
    * its ability to fix the plan); while running, items stream a live
    * action feed; the review gate exposes the branch diff + Apply. */
+  import { untrack } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import { slide, fade } from 'svelte/transition';
   import { ledgerState, setLedgerSquash, injectLedgerNote, recheckLedger, type LedgerItem } from '$lib/state/ledger.svelte';
@@ -49,8 +63,12 @@
   const isContainer = (id: string): boolean =>
     !!wf && wf.items.some((i) => i.parentId === id);
 
-  let expandedId = $state<string | null>(null);
-  let showFullDiff = $state(false);
+  /* Seeded from the module maps so a remount (view switch) restores the
+     user's last toggle instead of snapping back. Write-through on every
+     change keeps the map current. */
+  let expandedId = $state<string | null>(untrack(() => expandedByWf.get(workflowId) ?? null));
+  let showFullDiff = $state<boolean>(untrack(() => showFullDiffByWf.get(workflowId) ?? false));
+  let planOpen = $state<boolean>(untrack(() => planOpenByWf.get(workflowId) ?? true));
   let busy = $state(false);
   /* Last command failure, surfaced on the card — apply/resume/etc used
      to fail silently (console.warn only), so a broken apply looked like
@@ -334,10 +352,15 @@
   </div>
 {/snippet}
 
-{#snippet diffBlock(text: string, openByDefault: boolean)}
+{#snippet diffBlock(text: string, openByDefault: boolean, keyBase: string)}
   <div class="lg-diffwrap" transition:slide={{ duration: 160 }}>
     {#each splitDiffFiles(text) as f, fi (f.path + fi)}
-      <details class="lg-file" open={openByDefault}>
+      {@const fk = `${keyBase}:${f.path}:${fi}`}
+      <details
+        class="lg-file"
+        open={diffFileOpen.get(fk) ?? openByDefault}
+        ontoggle={(e) => diffFileOpen.set(fk, e.currentTarget.open)}
+      >
         <summary class="lg-file-head mono">
           <span class="lg-file-path">{f.path}</span>
           <span class="lg-file-stat">
@@ -423,7 +446,11 @@
         </div>
       </div>
     {:else if wf.plan}
-      <details class="lg-plan" open>
+      <details
+        class="lg-plan"
+        open={planOpen}
+        ontoggle={(e) => { planOpen = e.currentTarget.open; planOpenByWf.set(workflowId, planOpen); }}
+      >
         <summary class="lg-plan-head">
           <span class="lg-plan-caret" aria-hidden="true">▾</span>
           <span class="lg-plan-label mono">plan</span>
@@ -492,7 +519,7 @@
             <div class="lg-rowline">
               <button
                 class="lg-row"
-                onclick={() => (expandedId = expandedId === item.id ? null : item.id)}
+                onclick={() => { expandedId = expandedId === item.id ? null : item.id; expandedByWf.set(workflowId, expandedId); }}
                 aria-expanded={expandedId === item.id}
               >
                 <span class="lg-num mono">{String(num).padStart(2, '0')}</span>
@@ -537,18 +564,35 @@
           {/if}
           {#if expandedId === item.id && editId !== item.id}
             <div class="lg-detail" transition:slide={{ duration: 160 }}>
-              {#if item.detail}<p class="lg-detail-text">{item.detail}</p>{/if}
+              {#if item.detail}
+                <div class="lg-sec">
+                  <span class="lg-sec-label mono">task</span>
+                  <p class="lg-detail-text">{item.detail}</p>
+                </div>
+              {/if}
               {#if item.notes}
-                <p class="lg-notes mono">notes → {item.notes}</p>
+                <div class="lg-sec">
+                  <span class="lg-sec-label mono">notes</span>
+                  <p class="lg-notes mono">{item.notes}</p>
+                </div>
               {/if}
               {#if item.error}
-                <p class="lg-err mono">{item.error}</p>
+                <div class="lg-sec">
+                  <span class="lg-sec-label mono lg-sec-label--err">error</span>
+                  <p class="lg-err mono">{item.error}</p>
+                </div>
               {/if}
               {#if item.checkOutput}
-                <pre class="lg-pre mono">{item.checkOutput}</pre>
+                <div class="lg-sec">
+                  <span class="lg-sec-label mono">check output</span>
+                  <pre class="lg-pre mono">{item.checkOutput}</pre>
+                </div>
               {/if}
               {#if item.diff}
-                {@render diffBlock(item.diff, true)}
+                <div class="lg-sec">
+                  <span class="lg-sec-label mono">changes</span>
+                  {@render diffBlock(item.diff, true, `${workflowId}:${item.id}`)}
+                </div>
               {/if}
             </div>
           {/if}
@@ -567,7 +611,7 @@
 
     {#if wf.status === 'awaiting_review' && wf.fullDiff}
       <div class="lg-review" transition:slide={{ duration: 160 }}>
-        <button class="lg-difftoggle mono" onclick={() => (showFullDiff = !showFullDiff)}>
+        <button class="lg-difftoggle mono" onclick={() => { showFullDiff = !showFullDiff; showFullDiffByWf.set(workflowId, showFullDiff); }}>
           {showFullDiff ? 'hide' : 'review'} full diff
         </button>
         {#if diffStats}
@@ -586,7 +630,7 @@
         </label>
       </div>
       {#if showFullDiff}
-        {@render diffBlock(wf.fullDiff ?? '', false)}
+        {@render diffBlock(wf.fullDiff ?? '', false, `${workflowId}:full`)}
       {/if}
       {#if wf.finalCheck}
         <div class="lg-janitor" class:lg-janitor--red={!wf.finalCheckOk} class:lg-janitor--ok={wf.finalCheckOk}>
@@ -624,12 +668,12 @@
           {passed}/{wf.items.length} items · {formatCostUsd(wf.totalCostUsd)}{#if diffStats} · <span class="lg-add">+{diffStats.add}</span> <span class="lg-del">−{diffStats.del}</span> in {diffStats.files} {diffStats.files === 1 ? 'file' : 'files'}{/if}
         </span>
         {#if wf.fullDiff}
-          <button class="lg-difftoggle mono" onclick={() => (showFullDiff = !showFullDiff)}>{showFullDiff ? 'hide' : 'review'} diff</button>
+          <button class="lg-difftoggle mono" onclick={() => { showFullDiff = !showFullDiff; showFullDiffByWf.set(workflowId, showFullDiff); }}>{showFullDiff ? 'hide' : 'review'} diff</button>
         {/if}
       </div>
       <p class="lg-hint">applied to {wf.parentCwd}</p>
       {#if showFullDiff && wf.fullDiff}
-        {@render diffBlock(wf.fullDiff, false)}
+        {@render diffBlock(wf.fullDiff, false, `${workflowId}:full`)}
       {/if}
     {/if}
   </div>
@@ -1056,6 +1100,24 @@
     padding: 2px 0 4px 22px;
   }
   .lg-detail { padding: 2px 0 6px 22px; }
+  /* Each facet of an item — task / notes / output / changes — is its own
+     labeled section so the instruction never blurs into the check output
+     or the diff. */
+  .lg-sec {
+    margin: 0 0 8px;
+    padding: 0 0 8px;
+    border-bottom: 1px solid var(--border-hi, rgba(128, 128, 128, 0.14));
+  }
+  .lg-sec:last-child { margin-bottom: 0; padding-bottom: 0; border-bottom: none; }
+  .lg-sec-label {
+    display: block;
+    margin: 0 0 3px;
+    font-size: 9.5px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-3, var(--text-2));
+  }
+  .lg-sec-label--err { color: var(--error, #e88264); }
   .lg-detail-text {
     margin: 2px 0 6px;
     font-size: 11.5px;
